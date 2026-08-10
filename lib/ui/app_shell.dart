@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -19,19 +21,32 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> with WindowListener {
   bool _onboardingShown = false;
+  bool _closeDialogOpen = false;
+  bool? _preventClose;
+  late final AppController _controller;
 
   @override
   void initState() {
     super.initState();
+    _controller = context.read<AppController>();
+    _controller.addListener(_syncCloseProtection);
     windowManager.addListener(this);
-    windowManager.setPreventClose(true);
+    _syncCloseProtection();
     WidgetsBinding.instance.addPostFrameCallback((_) => _showOnboarding());
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_syncCloseProtection);
     windowManager.removeListener(this);
     super.dispose();
+  }
+
+  void _syncCloseProtection() {
+    final shouldPreventClose = _controller.hasActiveWork;
+    if (_preventClose == shouldPreventClose) return;
+    _preventClose = shouldPreventClose;
+    unawaited(windowManager.setPreventClose(shouldPreventClose));
   }
 
   Future<void> _showOnboarding() async {
@@ -68,12 +83,13 @@ class _AppShellState extends State<AppShell> with WindowListener {
 
   @override
   Future<void> onWindowClose() async {
-    final controller = context.read<AppController>();
+    final controller = _controller;
     if (!controller.hasActiveWork) {
-      await windowManager.setPreventClose(false);
       await windowManager.destroy();
       return;
     }
+    if (!mounted || _closeDialogOpen) return;
+    _closeDialogOpen = true;
     final choice = await showDialog<int>(
       context: context,
       builder: (context) => AlertDialog(
@@ -96,9 +112,9 @@ class _AppShellState extends State<AppShell> with WindowListener {
         ],
       ),
     );
+    _closeDialogOpen = false;
     if (choice == null || choice == 0) return;
     if (choice == 2) await controller.cancelRemoteJobsForQuit();
-    await windowManager.setPreventClose(false);
     await windowManager.destroy();
   }
 

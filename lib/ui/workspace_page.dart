@@ -9,6 +9,8 @@ import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'transcript_review.dart';
 
+const double _workspaceSplitBreakpoint = 880;
+
 class WorkspacePage extends StatefulWidget {
   const WorkspacePage({
     super.key,
@@ -274,17 +276,19 @@ class _WorkspaceBody extends StatelessWidget {
           child: LayoutBuilder(
             builder: (context, constraints) {
               final editor = controller.selectedJob?.document != null;
-              final split = constraints.maxWidth > 920;
+              final split = constraints.maxWidth >= _workspaceSplitBreakpoint;
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   SizedBox(
+                    key: const Key('workspace-queue-pane'),
                     width: split ? (editor ? 390 : 520) : constraints.maxWidth,
                     child: _QueueList(dragging: dragging),
                   ),
                   if (split) ...[
                     const SizedBox(width: 14),
                     Expanded(
+                      key: const Key('workspace-detail-pane'),
                       child: editor
                           ? TranscriptReview(jobId: controller.selectedJob!.id)
                           : const _BatchOptionsPanel(),
@@ -318,11 +322,15 @@ class _BatchOptionsPanel extends StatelessWidget {
                 color: Theme.of(context).colorScheme.primary,
               ),
               const SizedBox(width: 10),
-              Text(
-                context.strings.t('details'),
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              Expanded(
+                child: Text(
+                  context.strings.t('details'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                ),
               ),
             ],
           ),
