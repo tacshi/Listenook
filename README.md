@@ -1,0 +1,114 @@
+# MeowSTT
+
+MeowSTT is a batch-first Soniox transcription app for macOS and Windows. Drop
+audio, video, or folders; review the queue before spending API credit; then edit
+speaker-aware transcripts beside synchronized playback and export TXT,
+Markdown, SRT, or WebVTT.
+
+The package name is `meow_stt`. Its permanent desktop identity is
+`app.meowstt.desktop`.
+
+## What is implemented
+
+- Recursive folder and multi-file drag/drop with hidden-file filtering and
+  canonical-path deduplication.
+- FFprobe validation for readability, audio streams, supported media, and the
+  Soniox 300-minute limit.
+- A persisted semaphore-backed queue (1–4 workers, default 2) with explicit
+  start, determinate local progress, cancel/retry, interrupted-upload recovery,
+  remote-poll recovery, and scoped cleanup retries.
+- Streaming Soniox multipart upload with `stt-async-v5`, automatic language
+  identification, always-on diarization, language hints, context terms, stable
+  error mapping, and transient polling backoff.
+- A local, searchable library; source relinking; editable segments and speaker
+  names; video/audio playback; timestamp seeking; transcript search; clipboard
+  copy; and batch re-export.
+- System/light/dark themes and English/Simplified Chinese localization.
+- Secure Soniox credentials in Keychain/Credential Manager. `SONIOX_API_KEY` is
+  used only as a development fallback when secure storage is empty.
+
+## Privacy model
+
+MeowSTT is BYOK and has no application backend. Starting a job uploads its
+media directly to Soniox. Manifests store paths, small metadata, raw transcript
+tokens, edits, and only the remote IDs owned by that job—never media copies or
+the API key. Cleanup deletes only those owned remote file/transcription IDs.
+See [PRIVACY.md](PRIVACY.md).
+
+## Development
+
+Requirements: Flutter stable with macOS and/or Windows desktop enabled. A
+system `ffmpeg`/`ffprobe` is accepted for development; distribution builds use
+the pinned helpers in `packaging/ffmpeg/manifest.json`.
+
+```sh
+flutter pub get
+flutter analyze
+flutter test
+flutter run -d macos
+```
+
+Set `SONIOX_API_KEY` only to opt into live development calls. Normal tests use
+fake local services and never consume Soniox credit.
+
+Keyboard shortcuts: `Cmd/Ctrl+O` opens media and `Cmd/Ctrl+Enter` starts the
+reviewed queue. All primary actions remain reachable without a mouse.
+
+## Packaging
+
+macOS (macOS 12+, arm64 or Intel):
+
+```sh
+scripts/build-debug.sh --arch arm64
+scripts/build-release.sh --arch all
+```
+
+Release builds default to ad-hoc signing. Set
+`MEOWSTT_MAC_SIGN_IDENTITY` to a Developer ID Application identity and
+Set `DEVELOPER_ID_APPLICATION` (or `MEOWSTT_MAC_SIGN_IDENTITY`) to the full
+Developer ID Application identity and `MEOWSTT_NOTARY_PROFILE` to a
+`notarytool` keychain profile for production. The app stores the Soniox API key
+in the encrypted macOS login Keychain without opting into the entitlement-only
+Data Protection Keychain, so direct distributions do not require a provisioning
+profile or the restricted Keychain Sharing entitlement. macOS builds run a real
+Keychain round-trip integration test before packaging.
+
+Windows (Windows 10 22H2+, matching native host):
+
+```powershell
+scripts\build-debug.ps1 -Arch x64
+scripts\build-release.ps1 -Arch arm64
+```
+
+The `.cmd` wrappers accept the same arguments. MSIX defaults to a self-signed
+development certificate. For production set `MEOWSTT_WINDOWS_PFX`, optionally
+`MEOWSTT_WINDOWS_PFX_PASSWORD`, and `MEOWSTT_WINDOWS_PUBLISHER`.
+
+Set `MEOWSTT_FFMPEG_DIR` to a pre-provisioned helper directory to bypass pinned
+downloads. Every script validates executable architecture and writes artifacts
+directly under `dist/`. Filenames include the platform, architecture, and build
+mode; each build also emits a matching `.sha256` manifest. For example:
+
+```text
+dist/MeowSTT-1.0.0-macos-arm64-release.dmg
+dist/MeowSTT-1.0.0-macos-arm64-release.app.zip
+dist/MeowSTT-1.0.0-macos-arm64-release.sha256
+```
+
+macOS release output contains an `.app.zip` and DMG. Windows output contains a
+portable ZIP and MSIX.
+
+## Architecture
+
+UI widgets depend on one Provider/ChangeNotifier controller. The controller
+orchestrates injected contracts for credentials, settings, manifests, media,
+Soniox, playback, and exports. Networking, subprocesses, persistence, and
+formatting live outside the UI. Every job transition is atomically persisted in
+an Application Support job directory, which is the restart-recovery boundary.
+
+## Third-party software
+
+Distribution artifacts contain FFmpeg command-line helpers. Source provenance,
+SHA-256 checksums, and license texts live in `packaging/ffmpeg/` and
+`assets/third_party/`. Soniox is a separate third-party transcription service
+and requires a user-owned account and API key.

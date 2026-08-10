@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "license": "GPL-3.0-or-later",
+  "macos": {
+    "arm64": {
+      "version": "6.0 (packaged in b6.1.1)",
+      "source": "https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1",
+      "ffmpeg": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64",
+        "sha256": "a90e3db6a3fd35f6074b013f948b1aa45b31c6375489d39e572bea3f18336584"
+      },
+      "ffprobe": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-arm64",
+        "sha256": "bb2db6f5d8cef919da12fbf592119a987202a8c060a886f3cab091f9cab90b64"
+      }
+    },
+    "x64": {
+      "version": "6.0 (packaged in b6.1.1)",
+      "source": "https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1",
+      "ffmpeg": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-x64",
+        "sha256": "ebdddc936f61e14049a2d4b549a412b8a40deeff6540e58a9f2a2da9e6b18894"
+      },
+      "ffprobe": {
+        "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-x64",
+        "sha256": "fa3add0ce901f7241abe0dfc0155d958fc834aca3f8ce61f87cc712ae669c1e0"
+      }
+    }
+  },
+  "windows": {
+    "x64": {
+      "version": "8.0-20251031",
+      "source": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2025-10-31-13-40",
+      "archive": {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2025-10-31-13-40/ffmpeg-n8.0-30-g71007e6c12-win64-gpl-8.0.zip",
+        "sha256": "05ecc01bb03ef1f4d908c3c982512f07f888848429be6e9662a5a7c558c60b4f"
+      }
+    },
+    "arm64": {
+      "version": "8.0-20251031",
+      "source": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2025-10-31-13-40",
+      "archive": {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2025-10-31-13-40/ffmpeg-n8.0-30-g71007e6c12-winarm64-gpl-8.0.zip",
+        "sha256": "5276af84b736b279a70514c5b7e236f03961ab5517d911a88371838459b94c40"
+      }
+    }
+  }
+}
