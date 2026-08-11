@@ -8,7 +8,9 @@ import '../state/app_controller.dart';
 import 'workspace_page.dart';
 
 class LibraryPage extends StatefulWidget {
-  const LibraryPage({super.key});
+  const LibraryPage({super.key, this.sidebarToggle});
+
+  final Widget? sidebarToggle;
 
   @override
   State<LibraryPage> createState() => _LibraryPageState();
@@ -29,11 +31,19 @@ class _LibraryPageState extends State<LibraryPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              context.strings.t('library'),
-              style: Theme.of(
-                context,
-              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
+            Row(
+              children: [
+                if (widget.sidebarToggle case final toggle?) ...[
+                  toggle,
+                  const SizedBox(width: 8),
+                ],
+                Text(
+                  context.strings.t('library'),
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             Row(

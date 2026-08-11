@@ -16,7 +16,7 @@ Future<void> main() async {
   await windowManager.ensureInitialized();
   await windowManager.waitUntilReadyToShow(
     const WindowOptions(
-      title: 'MeowSTT',
+      title: '',
       minimumSize: Size(920, 640),
       size: Size(1240, 820),
       center: true,

@@ -14,10 +14,12 @@ class WorkspacePage extends StatefulWidget {
     super.key,
     required this.onAddFiles,
     required this.onAddFolder,
+    this.sidebarToggle,
   });
 
   final VoidCallback onAddFiles;
   final VoidCallback onAddFolder;
+  final Widget? sidebarToggle;
 
   @override
   State<WorkspacePage> createState() => _WorkspacePageState();
@@ -46,6 +48,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 onAddFiles: widget.onAddFiles,
                 onAddFolder: widget.onAddFolder,
                 onNewSession: () => _startNewSession(context, controller),
+                sidebarToggle: widget.sidebarToggle,
               ),
               const SizedBox(height: 12),
               if (controller.workspaceJobs.isEmpty)
@@ -70,81 +73,96 @@ class _Header extends StatelessWidget {
     required this.onAddFiles,
     required this.onAddFolder,
     required this.onNewSession,
+    required this.sidebarToggle,
   });
   final VoidCallback onAddFiles;
   final VoidCallback onAddFolder;
   final VoidCallback onNewSession;
+  final Widget? sidebarToggle;
 
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
-    return Row(
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                context.strings.t('workspace'),
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+    final showFullLabels = MediaQuery.sizeOf(context).width >= 1180;
+    final actions = <Widget>[
+      if (controller.workspaceJobs.isNotEmpty)
+        showFullLabels
+            ? OutlinedButton.icon(
+                key: const Key('new-transcription'),
+                onPressed: controller.canStartNewSession ? onNewSession : null,
+                icon: const Icon(Icons.note_add_outlined),
+                label: Text(context.strings.t('new_transcription')),
+              )
+            : IconButton.outlined(
+                key: const Key('new-transcription'),
+                onPressed: controller.canStartNewSession ? onNewSession : null,
+                tooltip: context.strings.t('new_transcription'),
+                icon: const Icon(Icons.note_add_outlined),
               ),
-              const SizedBox(height: 4),
-              Text(
-                context.strings.t('review_cost'),
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+      OutlinedButton.icon(
+        onPressed: onAddFolder,
+        icon: const Icon(Icons.create_new_folder_outlined),
+        label: Text(context.strings.t('add_folder')),
+      ),
+      OutlinedButton.icon(
+        onPressed: onAddFiles,
+        icon: const Icon(Icons.add_rounded),
+        label: Text(context.strings.t('add_files')),
+      ),
+      FilledButton.icon(
+        onPressed:
+            controller.readyCount > 0 &&
+                controller.keyConfigured &&
+                !controller.processing
+            ? controller.startReady
+            : null,
+        icon: controller.processing
+            ? const SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.auto_awesome_rounded),
+        label: Text(context.strings.t('transcribe')),
+      ),
+      if (controller.workspaceJobs.isNotEmpty)
+        _ExportAllButton(controller: controller, compact: !showFullLabels),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: constraints.maxWidth >= 1180 ? 280 : 220,
+            child: Row(
+              children: [
+                if (sidebarToggle case final toggle?) ...[
+                  toggle,
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
+                  child: Text(
+                    context.strings.t('workspace'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        if (controller.workspaceJobs.isNotEmpty) ...[
-          if (MediaQuery.sizeOf(context).width >= 1180)
-            OutlinedButton.icon(
-              key: const Key('new-transcription'),
-              onPressed: controller.canStartNewSession ? onNewSession : null,
-              icon: const Icon(Icons.note_add_outlined),
-              label: Text(context.strings.t('new_transcription')),
-            )
-          else
-            IconButton.outlined(
-              key: const Key('new-transcription'),
-              onPressed: controller.canStartNewSession ? onNewSession : null,
-              tooltip: context.strings.t('new_transcription'),
-              icon: const Icon(Icons.note_add_outlined),
+              ],
             ),
-          const SizedBox(width: 8),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
+              children: actions,
+            ),
+          ),
         ],
-        OutlinedButton.icon(
-          onPressed: onAddFolder,
-          icon: const Icon(Icons.create_new_folder_outlined),
-          label: Text(context.strings.t('add_folder')),
-        ),
-        const SizedBox(width: 8),
-        OutlinedButton.icon(
-          onPressed: onAddFiles,
-          icon: const Icon(Icons.add_rounded),
-          label: Text(context.strings.t('add_files')),
-        ),
-        const SizedBox(width: 8),
-        FilledButton.icon(
-          onPressed:
-              controller.readyCount > 0 &&
-                  controller.keyConfigured &&
-                  !controller.processing
-              ? controller.startReady
-              : null,
-          icon: controller.processing
-              ? const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.auto_awesome_rounded),
-          label: Text(context.strings.t('transcribe')),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -258,44 +276,129 @@ Future<void> _startNewSession(
   await controller.startNewSession();
 }
 
-class _WorkspaceBody extends StatelessWidget {
+class _WorkspaceBody extends StatefulWidget {
   const _WorkspaceBody({required this.dragging});
 
   final bool dragging;
 
   @override
+  State<_WorkspaceBody> createState() => _WorkspaceBodyState();
+}
+
+class _WorkspaceBodyState extends State<_WorkspaceBody> {
+  static const _queueWidth = 300.0;
+  static const _queueGap = 10.0;
+  static const _queueAnimationDuration = Duration(milliseconds: 240);
+  static const _queueAnimationCurve = Curves.easeInOutCubic;
+
+  bool _queueExpanded = true;
+  bool _autoCollapseApplied = false;
+  bool _queueManuallyChanged = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final reviewing =
+        context.watch<AppController>().selectedJob?.document != null;
+    if (reviewing && !_autoCollapseApplied && !_queueManuallyChanged) {
+      _queueExpanded = false;
+      _autoCollapseApplied = true;
+    }
+  }
+
+  void _setQueueExpanded(bool expanded) {
+    setState(() {
+      _queueExpanded = expanded;
+      _queueManuallyChanged = true;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
-    return Column(
-      children: [
-        _BatchSummary(controller: controller),
-        const SizedBox(height: 10),
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final editor = controller.selectedJob?.document != null;
-              final split = constraints.maxWidth > 760;
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SizedBox(
-                    width: split ? (editor ? 300 : 400) : constraints.maxWidth,
-                    child: _QueueList(dragging: dragging),
-                  ),
-                  if (split) ...[
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: editor
-                          ? TranscriptReview(jobId: controller.selectedJob!.id)
-                          : const _BatchOptionsPanel(),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final editor = controller.selectedJob?.document != null;
+        final split = constraints.maxWidth > 760;
+        final canCollapse = split && editor;
+        if (canCollapse) {
+          return Stack(
+            key: const Key('workspace-review-layout'),
+            clipBehavior: Clip.hardEdge,
+            children: [
+              AnimatedPositioned(
+                key: const Key('file-queue-position'),
+                duration: _queueAnimationDuration,
+                curve: _queueAnimationCurve,
+                left: _queueExpanded ? 0 : -(_queueWidth + _queueGap),
+                top: 0,
+                bottom: 0,
+                width: _queueWidth,
+                child: _QueueList(
+                  dragging: widget.dragging,
+                  onCollapse: () => _setQueueExpanded(false),
+                ),
+              ),
+              AnimatedPositioned(
+                key: const Key('review-pane-position'),
+                duration: _queueAnimationDuration,
+                curve: _queueAnimationCurve,
+                left: _queueExpanded ? _queueWidth + _queueGap : 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+                child: TranscriptReview(jobId: controller.selectedJob!.id),
+              ),
+              Positioned(
+                left: 16,
+                bottom: 16,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  reverseDuration: const Duration(milliseconds: 140),
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: ScaleTransition(
+                      scale: Tween(begin: .85, end: 1.0).animate(animation),
+                      child: child,
                     ),
-                  ],
-                ],
-              );
-            },
-          ),
-        ),
-      ],
+                  ),
+                  child: _queueExpanded
+                      ? const SizedBox.shrink(
+                          key: Key('file-queue-button-hidden'),
+                        )
+                      : _QueueFloatingButton(
+                          onExpand: () => _setQueueExpanded(true),
+                        ),
+                ),
+              ),
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              width: split
+                  ? editor
+                        ? _queueWidth
+                        : 400
+                  : constraints.maxWidth,
+              child: _QueueList(
+                dragging: widget.dragging,
+                onCollapse: canCollapse ? () => _setQueueExpanded(false) : null,
+              ),
+            ),
+            if (split) ...[
+              const SizedBox(width: 10),
+              Expanded(
+                child: editor
+                    ? TranscriptReview(jobId: controller.selectedJob!.id)
+                    : const _BatchOptionsPanel(),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 }
@@ -552,64 +655,18 @@ class _ReviewLine extends StatelessWidget {
   );
 }
 
-class _BatchSummary extends StatelessWidget {
-  const _BatchSummary({required this.controller});
-  final AppController controller;
-
-  @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      child: Row(
-        children: [
-          _Stat(
-            value: controller.readyCount,
-            label: context.strings.t('ready'),
-          ),
-          const SizedBox(width: 24),
-          _Stat(
-            value: controller.completedCount,
-            label: context.strings.t('completed'),
-          ),
-          const SizedBox(width: 24),
-          _Stat(
-            value: controller.failedCount,
-            label: context.strings.t('failed'),
-          ),
-          const Spacer(),
-          const SizedBox(width: 16),
-          _ExportAllButton(controller: controller),
-        ],
-      ),
-    ),
-  );
-}
-
-class _Stat extends StatelessWidget {
-  const _Stat({required this.value, required this.label});
-  final int value;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Text('$value', style: Theme.of(context).textTheme.titleLarge),
-      const SizedBox(width: 6),
-      Text(label, style: Theme.of(context).textTheme.bodySmall),
-    ],
-  );
-}
-
 class _QueueList extends StatelessWidget {
-  const _QueueList({required this.dragging});
+  const _QueueList({required this.dragging, this.onCollapse});
 
   final bool dragging;
+  final VoidCallback? onCollapse;
 
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
     final colors = Theme.of(context).colorScheme;
     return Card(
+      key: const Key('file-queue-panel'),
       color: dragging ? colors.primaryContainer.withValues(alpha: .45) : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -618,20 +675,123 @@ class _QueueList extends StatelessWidget {
             : BorderSide.none,
       ),
       clipBehavior: Clip.antiAlias,
-      child: ReorderableListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        buildDefaultDragHandles: false,
-        itemCount: controller.workspaceJobs.length,
-        onReorderItem: controller.reorderWorkspace,
-        itemBuilder: (context, index) {
-          final job = controller.workspaceJobs[index];
-          return _JobTile(
-            key: ValueKey(job.id),
-            job: job,
-            selected: controller.selectedJobId == job.id,
-            index: index,
-          );
-        },
+      child: Column(
+        children: [
+          Expanded(
+            child: ReorderableListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              buildDefaultDragHandles: false,
+              itemCount: controller.workspaceJobs.length,
+              onReorderItem: controller.reorderWorkspace,
+              itemBuilder: (context, index) {
+                final job = controller.workspaceJobs[index];
+                return _JobTile(
+                  key: ValueKey(job.id),
+                  job: job,
+                  selected: controller.selectedJobId == job.id,
+                  index: index,
+                );
+              },
+            ),
+          ),
+          const Divider(height: 1),
+          Row(
+            key: const Key('file-queue-status-summary'),
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 12, right: 8),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _QueueStat(
+                          key: const Key('queue-ready-status'),
+                          value: controller.readyCount,
+                          label: context.strings.t('ready'),
+                        ),
+                        const SizedBox(width: 16),
+                        _QueueStat(
+                          key: const Key('queue-completed-status'),
+                          value: controller.completedCount,
+                          label: context.strings.t('completed'),
+                        ),
+                        const SizedBox(width: 16),
+                        _QueueStat(
+                          key: const Key('queue-failed-status'),
+                          value: controller.failedCount,
+                          label: context.strings.t('failed'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (onCollapse != null)
+                IconButton(
+                  key: const Key('collapse-file-queue'),
+                  tooltip: context.strings.t('collapse_file_queue'),
+                  onPressed: onCollapse,
+                  icon: const Icon(Icons.chevron_left_rounded),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QueueStat extends StatelessWidget {
+  const _QueueStat({super.key, required this.value, required this.label});
+
+  final int value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: '$label: $value',
+    excludeSemantics: true,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '$value',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(width: 5),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    ),
+  );
+}
+
+class _QueueFloatingButton extends StatelessWidget {
+  const _QueueFloatingButton({required this.onExpand});
+
+  final VoidCallback onExpand;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.watch<AppController>();
+    final colors = Theme.of(context).colorScheme;
+    return Badge.count(
+      key: const Key('file-queue-floating-button'),
+      count: controller.workspaceJobs.length,
+      backgroundColor: colors.primary,
+      textColor: colors.onPrimary,
+      child: FloatingActionButton.small(
+        key: const Key('expand-file-queue'),
+        heroTag: null,
+        tooltip: context.strings.t('expand_file_queue'),
+        onPressed: onExpand,
+        backgroundColor: colors.surfaceContainerHigh,
+        foregroundColor: colors.onSurface,
+        child: const Icon(Icons.view_list_rounded),
       ),
     );
   }
@@ -835,17 +995,30 @@ Future<bool> chooseAndRelink(BuildContext context, String jobId) async {
 }
 
 class _ExportAllButton extends StatelessWidget {
-  const _ExportAllButton({required this.controller});
+  const _ExportAllButton({required this.controller, required this.compact});
   final AppController controller;
+  final bool compact;
 
   @override
-  Widget build(BuildContext context) => OutlinedButton.icon(
-    onPressed: controller.completedCount == 0
+  Widget build(BuildContext context) {
+    final onPressed = controller.completedCount == 0
         ? null
-        : () => showExportDialog(context),
-    icon: const Icon(Icons.ios_share_rounded),
-    label: Text(context.strings.t('export_all')),
-  );
+        : () => showExportDialog(context);
+    if (compact) {
+      return IconButton.outlined(
+        key: const Key('export-all'),
+        tooltip: context.strings.t('export_all'),
+        onPressed: onPressed,
+        icon: const Icon(Icons.ios_share_rounded),
+      );
+    }
+    return OutlinedButton.icon(
+      key: const Key('export-all'),
+      onPressed: onPressed,
+      icon: const Icon(Icons.ios_share_rounded),
+      label: Text(context.strings.t('export_all')),
+    );
+  }
 }
 
 Future<void> showExportDialog(BuildContext context, {String? jobId}) async {

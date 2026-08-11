@@ -7,7 +7,9 @@ import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({super.key, this.sidebarToggle});
+
+  final Widget? sidebarToggle;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -39,11 +41,19 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Text(
-                context.strings.t('settings'),
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Row(
+                children: [
+                  if (widget.sidebarToggle case final toggle?) ...[
+                    toggle,
+                    const SizedBox(width: 8),
+                  ],
+                  Text(
+                    context.strings.t('settings'),
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
               ),
             ),
             Padding(
