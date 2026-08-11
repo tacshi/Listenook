@@ -773,28 +773,67 @@ class _QueueStat extends StatelessWidget {
   );
 }
 
-class _QueueFloatingButton extends StatelessWidget {
+class _QueueFloatingButton extends StatefulWidget {
   const _QueueFloatingButton({required this.onExpand});
 
   final VoidCallback onExpand;
 
   @override
+  State<_QueueFloatingButton> createState() => _QueueFloatingButtonState();
+}
+
+class _QueueFloatingButtonState extends State<_QueueFloatingButton> {
+  static const _idleOpacity = .25;
+
+  late final FocusNode _focusNode;
+  bool _hovered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode(debugLabel: 'Expand file queue')
+      ..addListener(_handleFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _focusNode
+      ..removeListener(_handleFocusChange)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _handleFocusChange() => setState(() {});
+
+  @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
     final colors = Theme.of(context).colorScheme;
-    return Badge.count(
-      key: const Key('file-queue-floating-button'),
-      count: controller.workspaceJobs.length,
-      backgroundColor: colors.primary,
-      textColor: colors.onPrimary,
-      child: FloatingActionButton.small(
-        key: const Key('expand-file-queue'),
-        heroTag: null,
-        tooltip: context.strings.t('expand_file_queue'),
-        onPressed: onExpand,
-        backgroundColor: colors.surfaceContainerHigh,
-        foregroundColor: colors.onSurface,
-        child: const Icon(Icons.view_list_rounded),
+    final emphasized = _hovered || _focusNode.hasFocus;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedOpacity(
+        key: const Key('file-queue-floating-opacity'),
+        opacity: emphasized ? 1 : _idleOpacity,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        child: Badge.count(
+          key: const Key('file-queue-floating-button'),
+          count: controller.workspaceJobs.length,
+          backgroundColor: colors.primary,
+          textColor: colors.onPrimary,
+          child: FloatingActionButton.small(
+            key: const Key('expand-file-queue'),
+            heroTag: null,
+            tooltip: context.strings.t('expand_file_queue'),
+            focusNode: _focusNode,
+            onPressed: widget.onExpand,
+            backgroundColor: colors.surfaceContainerHigh,
+            foregroundColor: colors.onSurface,
+            child: const Icon(Icons.view_list_rounded),
+          ),
+        ),
       ),
     );
   }

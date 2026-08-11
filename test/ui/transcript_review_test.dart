@@ -1564,6 +1564,29 @@ void main() {
       tester.getSize(find.byKey(const Key('expand-file-queue'))),
       const Size.square(48),
     );
+    final queueOpacity = find.byKey(const Key('file-queue-floating-opacity'));
+    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, .25);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const Key('expand-file-queue'))),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, 1);
+    await mouse.moveTo(const Offset(800, 20));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, .25);
+
+    final queueFab = tester.widget<FloatingActionButton>(
+      find.byKey(const Key('expand-file-queue')),
+    );
+    queueFab.focusNode!.requestFocus();
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, 1);
+    queueFab.focusNode!.unfocus();
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, .25);
     final layout = tester.getRect(
       find.byKey(const Key('workspace-review-layout')),
     );
