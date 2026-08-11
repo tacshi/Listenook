@@ -33,6 +33,28 @@ void main() {
     expect(currentTranscriptSegmentIndex(segments, 5000), 1);
   });
 
+  test('sentence repeat restarts outside its playable timing window', () {
+    const valid = TranscriptSegment(
+      id: 'valid',
+      startMs: 100,
+      endMs: 900,
+      text: 'Repeat me',
+    );
+    const invalid = TranscriptSegment(
+      id: 'invalid',
+      startMs: 500,
+      endMs: 500,
+      text: 'No duration',
+    );
+
+    expect(shouldRestartRepeatedSentence(valid, 99), isTrue);
+    expect(shouldRestartRepeatedSentence(valid, 100), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 899), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 900), isTrue);
+    expect(shouldRestartRepeatedSentence(valid, 1200), isTrue);
+    expect(shouldRestartRepeatedSentence(invalid, 500), isFalse);
+  });
+
   group('fullscreen transcript subtitles', () {
     const timedSegments = [
       TranscriptSegment(id: 'first', startMs: 100, endMs: 1000, text: 'First'),
@@ -279,6 +301,82 @@ void main() {
 
     expect(find.text('翻译句子。'), findsOneWidget);
     expect(find.text('Original sentence.'), findsNothing);
+  });
+
+  testWidgets('each translation view shows one repeat control per sentence', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'segment',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Original sentence.',
+            translatedText: 'Translated sentence.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    const repeatKey = ValueKey('segment-repeat-segment');
+    const sourceKey = ValueKey('segment-card-segment');
+    const translatedKey = ValueKey('translated-segment-segment');
+    expect(find.byKey(repeatKey), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(sourceKey),
+        matching: find.byKey(repeatKey),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Translated'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(repeatKey), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(translatedKey),
+        matching: find.byKey(repeatKey),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Bilingual'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(repeatKey), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(sourceKey),
+        matching: find.byKey(repeatKey),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(translatedKey),
+        matching: find.byKey(repeatKey),
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('review header toggles speaker labels and timestamps', (
@@ -996,6 +1094,123 @@ void main() {
     expect(saved, ['Saved sentence']);
     expect(find.text('Saved sentence'), findsOneWidget);
     expect(seeks, 0);
+  });
+
+  testWidgets(
+    'sentence repeat appears on hover and stays visible while active',
+    (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(home: Scaffold(body: _RepeatEditorHarness())),
+      );
+
+      final opacity = find.byType(AnimatedOpacity);
+      const repeatKey = ValueKey('segment-repeat-repeatable');
+      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0);
+      expect(
+        tester.widget<IconButton>(find.byKey(repeatKey)).isSelected,
+        isFalse,
+      );
+
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(
+        tester.getCenter(find.byKey(const ValueKey('segment-card-repeatable'))),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 1);
+
+      await tester.tap(find.byKey(repeatKey));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<IconButton>(find.byKey(repeatKey)).isSelected,
+        isTrue,
+      );
+
+      FocusManager.instance.primaryFocus?.unfocus();
+      await mouse.moveTo(const Offset(-10, -10));
+      await tester.pumpAndSettle();
+      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 1);
+
+      await tester.tap(find.byKey(repeatKey));
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0);
+      expect(
+        tester.widget<IconButton>(find.byKey(repeatKey)).isSelected,
+        isFalse,
+      );
+    },
+  );
+
+  testWidgets('unavailable sentence repeat is disabled', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TranscriptSegmentEditor(
+            segment: const TranscriptSegment(
+              id: 'invalid-repeat',
+              startMs: 500,
+              endMs: 500,
+              text: 'No timing range',
+            ),
+            tokens: const [],
+            positionMs: 0,
+            isCurrent: false,
+            query: '',
+            speakerName: '',
+            showSpeaker: false,
+            showTimestamp: false,
+            isEditing: false,
+            onSeek: _noop,
+            onEdit: _noop,
+            onCancel: _noop,
+            onSave: (_) async {},
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const ValueKey('segment-repeat-invalid-repeat')),
+          )
+          .onPressed,
+      isNull,
+    );
+  });
+
+  testWidgets('active sentence repeat remains accessible while editing', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: _RepeatEditorHarness())),
+    );
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('segment-card-repeatable'))),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('segment-repeat-repeatable')));
+    await tester.tap(find.byKey(const ValueKey('segment-edit-repeatable')));
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('segment-editor-repeatable')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const ValueKey('segment-repeat-repeatable')),
+          )
+          .isSelected,
+      isTrue,
+    );
   });
 
   testWidgets('editor keyboard shortcuts save and cancel drafts', (
@@ -2171,6 +2386,42 @@ class _EditorHarnessState extends State<_EditorHarness> {
         _editing = false;
       });
     },
+  );
+}
+
+class _RepeatEditorHarness extends StatefulWidget {
+  const _RepeatEditorHarness();
+
+  @override
+  State<_RepeatEditorHarness> createState() => _RepeatEditorHarnessState();
+}
+
+class _RepeatEditorHarnessState extends State<_RepeatEditorHarness> {
+  bool _repeating = false;
+  bool _editing = false;
+
+  @override
+  Widget build(BuildContext context) => TranscriptSegmentEditor(
+    segment: const TranscriptSegment(
+      id: 'repeatable',
+      startMs: 100,
+      endMs: 1000,
+      text: 'Repeatable sentence',
+    ),
+    tokens: const [],
+    positionMs: 0,
+    isCurrent: false,
+    query: '',
+    speakerName: '',
+    showSpeaker: false,
+    showTimestamp: false,
+    isEditing: _editing,
+    isRepeating: _repeating,
+    onToggleRepeat: () => setState(() => _repeating = !_repeating),
+    onSeek: _noop,
+    onEdit: () => setState(() => _editing = true),
+    onCancel: () => setState(() => _editing = false),
+    onSave: (_) async => setState(() => _editing = false),
   );
 }
 

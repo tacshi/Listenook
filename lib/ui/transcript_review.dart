@@ -40,12 +40,17 @@ class _TranscriptReviewState extends State<TranscriptReview>
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<bool>? _playingSubscription;
+  StreamSubscription<bool>? _completedSubscription;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
   final _videoKey = GlobalKey<VideoState>();
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   double _videoAspectRatio = 16 / 9;
   bool _playing = false;
+  String? _repeatingSegmentId;
+  bool _repeatRestartPending = false;
+  bool _repeatRestartQueued = false;
+  bool _repeatRestartQueuedResume = false;
   bool _followPlayback = true;
   TranslationViewMode _viewMode = TranslationViewMode.original;
   int _programmaticScrolls = 0;
@@ -85,6 +90,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       if (mounted) setState(() => _duration = value);
     });
     _playingSubscription = player.stream.playing.listen(_handlePlaying);
+    _completedSubscription = player.stream.completed.listen(_handleCompleted);
     _videoParamsSubscription = player.stream.videoParams.listen((value) {
       final aspect =
           value.aspect ??
@@ -111,6 +117,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _duration = Duration.zero;
       _videoAspectRatio = 16 / 9;
       _playing = false;
+      _repeatingSegmentId = null;
+      _repeatRestartQueued = false;
+      _repeatRestartQueuedResume = false;
       _followPlayback = true;
       _editingSegmentId = null;
       _editingTranslationSegmentId = null;
@@ -142,6 +151,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
             value.inMilliseconds,
           );
     setState(() => _position = value);
+    final repeatedSegment = _repeatingSegment;
+    if (_playing &&
+        repeatedSegment != null &&
+        shouldRestartRepeatedSentence(repeatedSegment, value.inMilliseconds)) {
+      _queueRepeatRestart();
+    }
     if (_playing && previousIndex != nextIndex) _queueFocusCurrent();
   }
 
@@ -152,7 +167,28 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _playing = value;
       if (resumed) _followPlayback = true;
     });
+    final repeatedSegment = _repeatingSegment;
+    if (resumed &&
+        repeatedSegment != null &&
+        shouldRestartRepeatedSentence(
+          repeatedSegment,
+          _position.inMilliseconds,
+        )) {
+      _queueRepeatRestart(resumeAfterSeek: true);
+    }
     if (resumed) _queueFocusCurrent(force: true);
+  }
+
+  void _handleCompleted(bool value) {
+    final player = _player;
+    if (!mounted ||
+        !value ||
+        player == null ||
+        !player.state.completed ||
+        _repeatingSegment == null) {
+      return;
+    }
+    _queueRepeatRestart(resumeAfterSeek: true);
   }
 
   TranscriptDocument? get _document => context
@@ -161,6 +197,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
       .where((item) => item.id == widget.jobId)
       .firstOrNull
       ?.document;
+
+  TranscriptSegment? get _repeatingSegment {
+    final segmentId = _repeatingSegmentId;
+    if (segmentId == null) return null;
+    return _document?.segments
+        .where((segment) => segment.id == segmentId)
+        .firstOrNull;
+  }
 
   Future<void> _openSource() async {
     if (!mounted) return;
@@ -177,6 +221,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
         unawaited(_loadWaveform(job));
       }
       await _player!.open(Media(job.sourcePath), play: false);
+      if (mounted) setState(() {});
     }
   }
 
@@ -207,6 +252,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _playingSubscription?.cancel();
+    _completedSubscription?.cancel();
     _videoParamsSubscription?.cancel();
     _player?.dispose();
     super.dispose();
@@ -462,6 +508,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
                               showSpeaker: controller.settings.showSpeakers,
                               showTimestamp: controller.settings.showTimestamps,
                               isEditing: _editingSegmentId == segment.id,
+                              isRepeating: _repeatingSegmentId == segment.id,
+                              onToggleRepeat: _canRepeat(segment)
+                                  ? () => _toggleSentenceRepeat(segment)
+                                  : null,
                               onSeek: () => unawaited(
                                 _seek(Duration(milliseconds: segment.startMs)),
                               ),
@@ -478,6 +528,16 @@ class _TranscriptReviewState extends State<TranscriptReview>
                               showTimestamp: controller.settings.showTimestamps,
                               isEditing:
                                   _editingTranslationSegmentId == segment.id,
+                              showRepeatAction:
+                                  _viewMode == TranslationViewMode.translated,
+                              isRepeating:
+                                  _viewMode == TranslationViewMode.translated &&
+                                  _repeatingSegmentId == segment.id,
+                              onToggleRepeat:
+                                  _viewMode == TranslationViewMode.translated &&
+                                      _canRepeat(segment)
+                                  ? () => _toggleSentenceRepeat(segment)
+                                  : null,
                               onSeek: () => unawaited(
                                 _seek(Duration(milliseconds: segment.startMs)),
                               ),
@@ -525,6 +585,58 @@ class _TranscriptReviewState extends State<TranscriptReview>
     });
     _queueFocusCurrent(force: true);
     await player.seek(position);
+  }
+
+  bool _canRepeat(TranscriptSegment segment) =>
+      _player != null && segment.endMs > segment.startMs;
+
+  void _toggleSentenceRepeat(TranscriptSegment segment) {
+    if (_repeatingSegmentId == segment.id) {
+      setState(() {
+        _repeatingSegmentId = null;
+        _repeatRestartQueued = false;
+        _repeatRestartQueuedResume = false;
+      });
+      return;
+    }
+    if (!_canRepeat(segment)) return;
+    setState(() => _repeatingSegmentId = segment.id);
+    _queueRepeatRestart(resumeAfterSeek: true);
+  }
+
+  void _queueRepeatRestart({bool resumeAfterSeek = false}) {
+    if (_repeatRestartPending) {
+      _repeatRestartQueued = true;
+      _repeatRestartQueuedResume |= resumeAfterSeek;
+      return;
+    }
+    unawaited(_restartRepeatedSentence(resumeAfterSeek: resumeAfterSeek));
+  }
+
+  Future<void> _restartRepeatedSentence({required bool resumeAfterSeek}) async {
+    final player = _player;
+    final segment = _repeatingSegment;
+    if (player == null || segment == null || segment.endMs <= segment.startMs) {
+      return;
+    }
+    final segmentId = segment.id;
+    _repeatRestartPending = true;
+    try {
+      await _seek(Duration(milliseconds: segment.startMs));
+      if (!mounted || _repeatingSegmentId != segmentId) return;
+      if (resumeAfterSeek && !player.state.playing) await player.play();
+    } finally {
+      _repeatRestartPending = false;
+      if (_repeatRestartQueued && mounted && _repeatingSegmentId != null) {
+        final resumeQueued = _repeatRestartQueuedResume;
+        _repeatRestartQueued = false;
+        _repeatRestartQueuedResume = false;
+        _queueRepeatRestart(resumeAfterSeek: resumeQueued);
+      } else {
+        _repeatRestartQueued = false;
+        _repeatRestartQueuedResume = false;
+      }
+    }
   }
 
   Future<void> _seekRelative(Duration offset) async {
@@ -1083,6 +1195,9 @@ class _TranslatedSegmentEditor extends StatefulWidget {
     required this.query,
     required this.showTimestamp,
     required this.isEditing,
+    required this.showRepeatAction,
+    required this.isRepeating,
+    required this.onToggleRepeat,
     required this.onSeek,
     required this.onEdit,
     required this.onCancel,
@@ -1095,6 +1210,9 @@ class _TranslatedSegmentEditor extends StatefulWidget {
   final String query;
   final bool showTimestamp;
   final bool isEditing;
+  final bool showRepeatAction;
+  final bool isRepeating;
+  final VoidCallback? onToggleRepeat;
   final VoidCallback onSeek;
   final VoidCallback onEdit;
   final VoidCallback onCancel;
@@ -1108,6 +1226,8 @@ class _TranslatedSegmentEditor extends StatefulWidget {
 
 class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
   late final TextEditingController _draft;
+  bool _hovered = false;
+  bool _actionFocused = false;
   bool _saving = false;
 
   @override
@@ -1139,90 +1259,147 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
     final colors = Theme.of(context).colorScheme;
     final translated = widget.segment.translatedText?.trim();
     final fallback = translated == null || translated.isEmpty;
-    return Card(
-      key: ValueKey('translated-segment-${widget.segment.id}'),
-      margin: const EdgeInsets.only(top: 4),
-      color: widget.isCurrent
-          ? colors.primaryContainer.withValues(alpha: .35)
-          : colors.surfaceContainerLow,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (widget.showTimestamp)
-              TextButton(
-                onPressed: widget.onSeek,
-                child: Text(formatClock(widget.segment.startMs)),
-              ),
-            Expanded(
-              child: widget.isEditing
-                  ? TextField(
-                      key: ValueKey('translated-field-${widget.segment.id}'),
-                      controller: _draft,
-                      autofocus: true,
-                      minLines: 1,
-                      maxLines: null,
-                    )
-                  : InkWell(
-                      onTap: widget.onSeek,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 8,
-                        ),
-                        child: SearchHighlightedText(
-                          text: fallback ? widget.segment.text : translated,
-                          query: widget.query,
-                          style: TextStyle(
-                            fontStyle: fallback ? FontStyle.italic : null,
-                            color: fallback ? colors.onSurfaceVariant : null,
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Card(
+        key: ValueKey('translated-segment-${widget.segment.id}'),
+        margin: const EdgeInsets.only(top: 4),
+        color: widget.isCurrent
+            ? colors.primaryContainer.withValues(alpha: .35)
+            : colors.surfaceContainerLow,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (widget.showTimestamp)
+                TextButton(
+                  onPressed: widget.onSeek,
+                  child: Text(formatClock(widget.segment.startMs)),
+                ),
+              Expanded(
+                child: widget.isEditing
+                    ? TextField(
+                        key: ValueKey('translated-field-${widget.segment.id}'),
+                        controller: _draft,
+                        autofocus: true,
+                        minLines: 1,
+                        maxLines: null,
+                      )
+                    : InkWell(
+                        onTap: widget.onSeek,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 8,
+                          ),
+                          child: SearchHighlightedText(
+                            text: fallback ? widget.segment.text : translated,
+                            query: widget.query,
+                            style: TextStyle(
+                              fontStyle: fallback ? FontStyle.italic : null,
+                              color: fallback ? colors.onSurfaceVariant : null,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-            ),
-            if (widget.isEditing) ...[
-              IconButton(
-                tooltip: context.strings.t('cancel'),
-                onPressed: _saving ? null : widget.onCancel,
-                icon: const Icon(Icons.close_rounded),
               ),
-              IconButton(
-                tooltip: context.strings.t('save'),
-                onPressed: _saving
-                    ? null
-                    : () async {
-                        setState(() => _saving = true);
-                        await widget.onSave(_draft.text);
-                        if (mounted) setState(() => _saving = false);
-                      },
-                icon: const Icon(Icons.check_rounded),
-              ),
-            ] else
-              PopupMenuButton<String>(
-                tooltip: context.strings.t('more_actions'),
-                onSelected: (value) {
-                  if (value == 'edit') widget.onEdit();
-                  if (value == 'retranslate') widget.onRetranslate?.call();
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    value: 'edit',
-                    child: Text(context.strings.t('edit_translation')),
+              if (widget.isEditing) ...[
+                if (widget.isRepeating)
+                  _SentenceRepeatButton(
+                    segmentId: widget.segment.id,
+                    isRepeating: true,
+                    onPressed: widget.onToggleRepeat,
                   ),
-                  if (widget.onRetranslate != null)
-                    PopupMenuItem(
-                      value: 'retranslate',
-                      child: Text(context.strings.t('retranslate_segment')),
+                IconButton(
+                  tooltip: context.strings.t('cancel'),
+                  onPressed: _saving ? null : widget.onCancel,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+                IconButton(
+                  tooltip: context.strings.t('save'),
+                  onPressed: _saving
+                      ? null
+                      : () async {
+                          setState(() => _saving = true);
+                          await widget.onSave(_draft.text);
+                          if (mounted) setState(() => _saving = false);
+                        },
+                  icon: const Icon(Icons.check_rounded),
+                ),
+              ] else ...[
+                if (widget.showRepeatAction)
+                  Focus(
+                    onFocusChange: (value) =>
+                        setState(() => _actionFocused = value),
+                    child: AnimatedOpacity(
+                      opacity: _hovered || _actionFocused || widget.isRepeating
+                          ? 1
+                          : 0,
+                      duration: const Duration(milliseconds: 120),
+                      child: _SentenceRepeatButton(
+                        segmentId: widget.segment.id,
+                        isRepeating: widget.isRepeating,
+                        onPressed: widget.onToggleRepeat,
+                      ),
                     ),
-                ],
-              ),
-          ],
+                  ),
+                PopupMenuButton<String>(
+                  tooltip: context.strings.t('more_actions'),
+                  onSelected: (value) {
+                    if (value == 'edit') widget.onEdit();
+                    if (value == 'retranslate') widget.onRetranslate?.call();
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'edit',
+                      child: Text(context.strings.t('edit_translation')),
+                    ),
+                    if (widget.onRetranslate != null)
+                      PopupMenuItem(
+                        value: 'retranslate',
+                        child: Text(context.strings.t('retranslate_segment')),
+                      ),
+                  ],
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+class _SentenceRepeatButton extends StatelessWidget {
+  const _SentenceRepeatButton({
+    required this.segmentId,
+    required this.isRepeating,
+    required this.onPressed,
+  });
+
+  final String segmentId;
+  final bool isRepeating;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    key: ValueKey('segment-repeat-$segmentId'),
+    tooltip: context.strings.t(
+      isRepeating ? 'stop_repeating_sentence' : 'repeat_sentence',
+    ),
+    onPressed: onPressed,
+    isSelected: isRepeating,
+    style: isRepeating
+        ? IconButton.styleFrom(
+            foregroundColor: Theme.of(context).colorScheme.onPrimaryContainer,
+            backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+          )
+        : null,
+    visualDensity: VisualDensity.compact,
+    icon: const Icon(Icons.repeat_one_rounded, size: 18),
+  );
 }
 
 class _MediaPane extends StatelessWidget {
@@ -2308,6 +2485,8 @@ class TranscriptSegmentEditor extends StatefulWidget {
     required this.showSpeaker,
     required this.showTimestamp,
     required this.isEditing,
+    this.isRepeating = false,
+    this.onToggleRepeat,
     required this.onSeek,
     required this.onEdit,
     required this.onCancel,
@@ -2323,6 +2502,8 @@ class TranscriptSegmentEditor extends StatefulWidget {
   final bool showSpeaker;
   final bool showTimestamp;
   final bool isEditing;
+  final bool isRepeating;
+  final VoidCallback? onToggleRepeat;
   final VoidCallback onSeek;
   final VoidCallback onEdit;
   final VoidCallback onCancel;
@@ -2513,6 +2694,12 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (widget.isRepeating)
+            _SentenceRepeatButton(
+              segmentId: widget.segment.id,
+              isRepeating: true,
+              onPressed: widget.onToggleRepeat,
+            ),
           IconButton(
             key: ValueKey('segment-cancel-${widget.segment.id}'),
             tooltip: context.strings.t('cancel'),
@@ -2535,18 +2722,28 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
         ],
       );
     }
-    final visible = _hovered || _actionFocused;
+    final visible = _hovered || _actionFocused || widget.isRepeating;
     return Focus(
       onFocusChange: (value) => setState(() => _actionFocused = value),
       child: AnimatedOpacity(
         opacity: visible ? 1 : 0,
         duration: const Duration(milliseconds: 120),
-        child: IconButton(
-          key: ValueKey('segment-edit-${widget.segment.id}'),
-          tooltip: context.strings.t('edit'),
-          onPressed: widget.onEdit,
-          visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.edit_outlined, size: 18),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SentenceRepeatButton(
+              segmentId: widget.segment.id,
+              isRepeating: widget.isRepeating,
+              onPressed: widget.onToggleRepeat,
+            ),
+            IconButton(
+              key: ValueKey('segment-edit-${widget.segment.id}'),
+              tooltip: context.strings.t('edit'),
+              onPressed: widget.onEdit,
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.edit_outlined, size: 18),
+            ),
+          ],
         ),
       ),
     );
@@ -2781,6 +2978,10 @@ List<TextRange?> _alignTokenRanges(String text, List<TranscriptToken> tokens) {
   }
   return result;
 }
+
+bool shouldRestartRepeatedSentence(TranscriptSegment segment, int positionMs) =>
+    segment.endMs > segment.startMs &&
+    (positionMs < segment.startMs || positionMs >= segment.endMs);
 
 int? currentTranscriptSegmentIndex(
   List<TranscriptSegment> segments,
