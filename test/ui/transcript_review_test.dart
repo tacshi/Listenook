@@ -2742,7 +2742,7 @@ void main() {
     expect(find.byKey(const Key('workspace-content')), findsOneWidget);
   });
 
-  testWidgets('fullscreen subtitle highlights only the current word', (
+  testWidgets('fullscreen subtitle highlights without changing word weight', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -2772,12 +2772,11 @@ void main() {
       ),
     );
     final root = richText.text as TextSpan;
-    expect(
-      _descendantSpans(root)
-          .where((span) => span.style?.backgroundColor != null)
-          .map((span) => span.text),
-      ['current'],
-    );
+    final highlighted = _descendantSpans(
+      root,
+    ).where((span) => span.style?.backgroundColor != null).toList();
+    expect(highlighted.map((span) => span.text), ['current']);
+    expect(highlighted.single.style?.fontWeight, isNull);
   });
 
   testWidgets(

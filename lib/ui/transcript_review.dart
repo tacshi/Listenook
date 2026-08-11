@@ -426,6 +426,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     required bool fillHeight,
     double? videoHeight,
   }) {
+    final fullscreenController = _fullscreenController;
     final showFullscreenShortcuts = context
         .read<AppController>()
         .settings
@@ -471,6 +472,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       maxVideoHeight: videoHeight,
       centerInAvailableHeight: fillHeight,
       showFullscreenShortcuts: showFullscreenShortcuts,
+      isFullscreenActive: () => fullscreenController.isActive,
       playing: _playing,
       playbackRate: _playbackRate,
       position: _position,
@@ -480,7 +482,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       onPlayPause: _player!.playOrPause,
       onSeek: _seek,
       onFullscreen: _toggleFullscreen,
-      onExitFullscreen: _fullscreenController.exit,
+      onExitFullscreen: fullscreenController.exit,
       onSeekBackward: () => _seekRelative(-const Duration(seconds: 5)),
       onSeekForward: () => _seekRelative(const Duration(seconds: 5)),
       onPlaybackRateChanged: _setPlaybackRate,
@@ -1740,6 +1742,7 @@ class _MediaPane extends StatelessWidget {
     required this.maxVideoHeight,
     required this.centerInAvailableHeight,
     required this.showFullscreenShortcuts,
+    required this.isFullscreenActive,
     required this.playing,
     required this.playbackRate,
     required this.position,
@@ -1768,6 +1771,7 @@ class _MediaPane extends StatelessWidget {
   final double? maxVideoHeight;
   final bool centerInAvailableHeight;
   final bool showFullscreenShortcuts;
+  final bool Function() isFullscreenActive;
   final bool playing;
   final double playbackRate;
   final Duration position;
@@ -1851,7 +1855,7 @@ class _MediaPane extends StatelessWidget {
                 controller: video,
                 aspectRatio: aspect,
                 fit: BoxFit.contain,
-                controls: (state) => state.isFullscreen()
+                controls: (_) => isFullscreenActive()
                     ? VideoFullscreenKeyboardRegion(
                         subtitle: fullscreenSubtitle,
                         subtitleHighlight: fullscreenSubtitleHighlight,
@@ -2481,7 +2485,6 @@ class _FullscreenSubtitleText extends StatelessWidget {
             style: TextStyle(
               color: colors.onPrimary,
               backgroundColor: colors.primary,
-              fontWeight: FontWeight.w800,
             ),
           ),
           if (range.end < text.length)

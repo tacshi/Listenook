@@ -16,6 +16,7 @@ class ReviewFullscreenController {
 
   void markExited() {
     _active = false;
+    _navigator = null;
   }
 
   Future<void> exit() {
@@ -37,8 +38,10 @@ class ReviewFullscreenController {
   Future<void> _popFullscreen(NavigatorState navigator) async {
     try {
       await navigator.maybePop();
+      await WidgetsBinding.instance.endOfFrame;
     } finally {
       _active = false;
+      _navigator = null;
       _pendingExit = null;
     }
   }
