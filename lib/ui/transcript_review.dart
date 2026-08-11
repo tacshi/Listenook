@@ -3,10 +3,12 @@ import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
+import 'package:scroll_to_index/scroll_to_index.dart';
 
 import '../core/models.dart';
 import '../data/transcript_exporter.dart';
@@ -26,14 +28,22 @@ class _TranscriptReviewState extends State<TranscriptReview> {
   Player? _player;
   VideoController? _video;
   final _search = TextEditingController();
-  final _transcriptScroll = ScrollController();
-  final Map<String, Timer> _editTimers = {};
+  final _transcriptScroll = AutoScrollController(
+    axis: Axis.vertical,
+    suggestedRowHeight: 84,
+  );
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<bool>? _playingSubscription;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _playing = false;
+  bool _followPlayback = true;
+  int _programmaticScrolls = 0;
+  String? _lastScrolledSegmentId;
+  String? _editingSegmentId;
+  TranscriptDocument? _mappedDocument;
+  Map<String, List<TranscriptToken>> _tokensBySegment = const {};
   String _openedPath = '';
   String _waveformSource = '';
   String? _waveformPath;
@@ -50,22 +60,69 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     final player = Player();
     _player = player;
     _video = VideoController(player);
-    _positionSubscription = player.stream.position.listen((value) {
-      if (mounted) setState(() => _position = value);
-    });
+    _positionSubscription = player.stream.position.listen(_handlePosition);
     _durationSubscription = player.stream.duration.listen((value) {
       if (mounted) setState(() => _duration = value);
     });
-    _playingSubscription = player.stream.playing.listen((value) {
-      if (mounted) setState(() => _playing = value);
-    });
+    _playingSubscription = player.stream.playing.listen(_handlePlaying);
   }
 
   @override
   void didUpdateWidget(covariant TranscriptReview oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.jobId != widget.jobId) _openSource();
+    if (oldWidget.jobId != widget.jobId) {
+      _search.clear();
+      _position = Duration.zero;
+      _duration = Duration.zero;
+      _playing = false;
+      _followPlayback = true;
+      _editingSegmentId = null;
+      _lastScrolledSegmentId = null;
+      _mappedDocument = null;
+      _tokensBySegment = const {};
+      _openedPath = '';
+      _waveformSource = '';
+      _waveformPath = null;
+      _waveformLoading = false;
+      _openSource();
+    }
   }
+
+  void _handlePosition(Duration value) {
+    if (!mounted) return;
+    final document = _document;
+    final previousIndex = document == null
+        ? null
+        : currentTranscriptSegmentIndex(
+            document.segments,
+            _position.inMilliseconds,
+          );
+    final nextIndex = document == null
+        ? null
+        : currentTranscriptSegmentIndex(
+            document.segments,
+            value.inMilliseconds,
+          );
+    setState(() => _position = value);
+    if (_playing && previousIndex != nextIndex) _queueFocusCurrent();
+  }
+
+  void _handlePlaying(bool value) {
+    if (!mounted || value == _playing) return;
+    final resumed = value && !_playing;
+    setState(() {
+      _playing = value;
+      if (resumed) _followPlayback = true;
+    });
+    if (resumed) _queueFocusCurrent(force: true);
+  }
+
+  TranscriptDocument? get _document => context
+      .read<AppController>()
+      .allJobs
+      .where((item) => item.id == widget.jobId)
+      .firstOrNull
+      ?.document;
 
   Future<void> _openSource() async {
     if (!mounted) return;
@@ -106,9 +163,6 @@ class _TranscriptReviewState extends State<TranscriptReview> {
 
   @override
   void dispose() {
-    for (final timer in _editTimers.values) {
-      timer.cancel();
-    }
     _search.dispose();
     _transcriptScroll.dispose();
     _positionSubscription?.cancel();
@@ -126,6 +180,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
         .firstOrNull;
     final document = job?.document;
     if (job == null || document == null) return const SizedBox.shrink();
+    _ensureTokenMap(document);
     final query = _search.text.trim().toLowerCase();
     final segments = query.isEmpty
         ? document.segments
@@ -139,6 +194,12 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                         .contains(query),
               )
               .toList();
+    final currentIndex = query.isEmpty
+        ? currentTranscriptSegmentIndex(
+            document.segments,
+            _position.inMilliseconds,
+          )
+        : null;
     return Card(
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -146,7 +207,15 @@ class _TranscriptReviewState extends State<TranscriptReview> {
           _ReviewToolbar(
             job: job,
             search: _search,
-            onSearch: () => setState(() {}),
+            onSearch: () {
+              setState(() {});
+              if (_search.text.trim().isEmpty) {
+                _queueFocusCurrent(force: true);
+              }
+            },
+            onFocusCurrentSentence: document.segments.isEmpty
+                ? null
+                : _focusCurrentSentence,
           ),
           const Divider(height: 1),
           if (!File(job.sourcePath).existsSync())
@@ -165,6 +234,16 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                 ),
               ],
             )
+          else if (_player == null || _video == null)
+            const SizedBox(
+              height: 64,
+              child: Center(
+                child: SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            )
           else
             _MediaPane(
               job: job,
@@ -175,42 +254,65 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               waveformPath: _waveformPath,
               waveformLoading: _waveformLoading,
               onPlayPause: _player!.playOrPause,
-              onSeek: _player!.seek,
+              onSeek: _seek,
             ),
           const Divider(height: 1),
           if (document.speakers.isNotEmpty)
             SpeakerStrip(job: job, document: document),
           Expanded(
-            child: Scrollbar(
-              controller: _transcriptScroll,
-              child: SelectionArea(
-                child: ListView.separated(
-                  key: const Key('transcript-scroll'),
+            child: Listener(
+              onPointerSignal: (event) {
+                if (event is PointerScrollEvent) _suspendFollow();
+              },
+              child: NotificationListener<UserScrollNotification>(
+                onNotification: (notification) {
+                  if (_programmaticScrolls == 0 &&
+                      notification.direction != ScrollDirection.idle) {
+                    _suspendFollow();
+                  }
+                  return false;
+                },
+                child: Scrollbar(
                   controller: _transcriptScroll,
-                  primary: false,
-                  scrollDirection: Axis.vertical,
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                  itemCount: segments.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 6),
-                  itemBuilder: (context, index) {
-                    final segment = segments[index];
-                    return TranscriptSegmentEditor(
-                      key: ValueKey(
-                        '${segment.id}-${document.updatedAt.millisecondsSinceEpoch}',
-                      ),
-                      segment: segment,
-                      query: query,
-                      speakerName: context.strings.speakerName(
-                        document.speakerName(segment.speaker),
-                      ),
-                      showSpeaker: controller.settings.showSpeakers,
-                      showTimestamp: controller.settings.showTimestamps,
-                      onSeek: () => _player?.seek(
-                        Duration(milliseconds: segment.startMs),
-                      ),
-                      onChanged: (text) => _scheduleEdit(segment.id, text),
-                    );
-                  },
+                  child: SelectionArea(
+                    child: ListView.separated(
+                      key: const Key('transcript-scroll'),
+                      controller: _transcriptScroll,
+                      primary: false,
+                      scrollDirection: Axis.vertical,
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                      itemCount: segments.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 6),
+                      itemBuilder: (context, index) {
+                        final segment = segments[index];
+                        return AutoScrollTag(
+                          key: ValueKey('segment-tag-${segment.id}'),
+                          controller: _transcriptScroll,
+                          index: index,
+                          child: TranscriptSegmentEditor(
+                            key: ValueKey(segment.id),
+                            segment: segment,
+                            tokens: _tokensBySegment[segment.id] ?? const [],
+                            positionMs: _position.inMilliseconds,
+                            isCurrent: query.isEmpty && index == currentIndex,
+                            query: query,
+                            speakerName: context.strings.speakerName(
+                              document.speakerName(segment.speaker),
+                            ),
+                            showSpeaker: controller.settings.showSpeakers,
+                            showTimestamp: controller.settings.showTimestamps,
+                            isEditing: _editingSegmentId == segment.id,
+                            onSeek: () => unawaited(
+                              _seek(Duration(milliseconds: segment.startMs)),
+                            ),
+                            onEdit: () => _startEditing(segment.id),
+                            onCancel: () => _cancelEditing(segment.id),
+                            onSave: (text) => _saveSegment(segment.id, text),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -220,17 +322,117 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     );
   }
 
-  void _scheduleEdit(String segmentId, String text) {
-    _editTimers[segmentId]?.cancel();
-    _editTimers[segmentId] = Timer(const Duration(milliseconds: 450), () {
-      if (mounted) {
-        context.read<AppController>().updateSegment(
-          widget.jobId,
-          segmentId,
-          text,
-        );
-      }
+  Future<void> _seek(Duration position) async {
+    final player = _player;
+    if (player == null) return;
+    setState(() {
+      _position = position;
+      _followPlayback = true;
     });
+    _queueFocusCurrent(force: true);
+    await player.seek(position);
+  }
+
+  void _focusCurrentSentence() {
+    _search.clear();
+    setState(() => _followPlayback = true);
+    _queueFocusCurrent(force: true);
+  }
+
+  void _suspendFollow() {
+    if (!mounted || !_followPlayback) return;
+    setState(() => _followPlayback = false);
+  }
+
+  void _queueFocusCurrent({bool force = false}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_scrollToCurrent(force: force));
+    });
+  }
+
+  Future<void> _scrollToCurrent({bool force = false}) async {
+    if (!_followPlayback ||
+        _search.text.trim().isNotEmpty ||
+        !_transcriptScroll.hasClients) {
+      return;
+    }
+    final document = _document;
+    if (document == null || document.segments.isEmpty) return;
+    final index =
+        currentTranscriptSegmentIndex(
+          document.segments,
+          _position.inMilliseconds,
+        ) ??
+        0;
+    final segmentId = document.segments[index].id;
+    if (!force && segmentId == _lastScrolledSegmentId) return;
+    _lastScrolledSegmentId = segmentId;
+    _programmaticScrolls++;
+    try {
+      await _transcriptScroll.scrollToIndex(
+        index,
+        preferPosition: AutoScrollPosition.middle,
+        duration: const Duration(milliseconds: 260),
+      );
+    } finally {
+      _programmaticScrolls--;
+    }
+  }
+
+  void _startEditing(String segmentId) {
+    setState(() {
+      _editingSegmentId = segmentId;
+      _followPlayback = false;
+    });
+  }
+
+  void _cancelEditing(String segmentId) {
+    if (_editingSegmentId == segmentId) {
+      setState(() => _editingSegmentId = null);
+    }
+  }
+
+  Future<void> _saveSegment(String segmentId, String text) async {
+    try {
+      await context.read<AppController>().updateSegment(
+        widget.jobId,
+        segmentId,
+        text,
+      );
+      if (mounted && _editingSegmentId == segmentId) {
+        setState(() => _editingSegmentId = null);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.strings.t('error_unexpected'))),
+      );
+    }
+  }
+
+  void _ensureTokenMap(TranscriptDocument document) {
+    if (identical(_mappedDocument, document)) return;
+    _mappedDocument = document;
+    final result = <String, List<TranscriptToken>>{
+      for (final segment in document.segments) segment.id: [],
+    };
+    var segmentIndex = 0;
+    for (final token in document.tokens) {
+      if (token.startMs == 0 && token.endMs == 0) continue;
+      while (segmentIndex + 1 < document.segments.length &&
+          token.startMs >= document.segments[segmentIndex + 1].startMs) {
+        segmentIndex++;
+      }
+      if (document.segments.isEmpty) break;
+      final segment = document.segments[segmentIndex];
+      if (token.startMs >= segment.startMs && token.startMs <= segment.endMs) {
+        result[segment.id]!.add(token);
+      }
+    }
+    _tokensBySegment = {
+      for (final entry in result.entries)
+        entry.key: List.unmodifiable(entry.value),
+    };
   }
 }
 
@@ -239,11 +441,13 @@ class _ReviewToolbar extends StatelessWidget {
     required this.job,
     required this.search,
     required this.onSearch,
+    required this.onFocusCurrentSentence,
   });
 
   final TranscriptionJob job;
   final TextEditingController search;
   final VoidCallback onSearch;
+  final VoidCallback? onFocusCurrentSentence;
 
   @override
   Widget build(BuildContext context) {
@@ -275,6 +479,12 @@ class _ReviewToolbar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
+          IconButton(
+            key: const Key('focus-current-sentence'),
+            tooltip: context.strings.t('focus_current_sentence'),
+            onPressed: onFocusCurrentSentence,
+            icon: const Icon(Icons.center_focus_strong_rounded),
+          ),
           IconButton(
             tooltip: context.strings.t('copy'),
             onPressed: () async {
@@ -645,7 +855,7 @@ class _SpeakerStripState extends State<SpeakerStrip> {
       );
     },
     child: SizedBox(
-      height: 48,
+      height: 56,
       child: Scrollbar(
         controller: _scroll,
         scrollbarOrientation: ScrollbarOrientation.bottom,
@@ -654,7 +864,7 @@ class _SpeakerStripState extends State<SpeakerStrip> {
           key: const Key('speaker-strip-scroll'),
           controller: _scroll,
           primary: false,
-          padding: const EdgeInsets.fromLTRB(12, 5, 12, 9),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
           scrollDirection: Axis.horizontal,
           itemCount: widget.document.speakers.length,
           separatorBuilder: (_, __) => const SizedBox(width: 8),
@@ -758,108 +968,422 @@ class _RenameSpeakerDialogState extends State<_RenameSpeakerDialog> {
   );
 }
 
-class TranscriptSegmentEditor extends StatelessWidget {
+class TranscriptSegmentEditor extends StatefulWidget {
   const TranscriptSegmentEditor({
     super.key,
     required this.segment,
+    required this.tokens,
+    required this.positionMs,
+    required this.isCurrent,
     required this.query,
     required this.speakerName,
     required this.showSpeaker,
     required this.showTimestamp,
+    required this.isEditing,
     required this.onSeek,
-    required this.onChanged,
+    required this.onEdit,
+    required this.onCancel,
+    required this.onSave,
   });
 
   final TranscriptSegment segment;
+  final List<TranscriptToken> tokens;
+  final int positionMs;
+  final bool isCurrent;
   final String query;
   final String speakerName;
   final bool showSpeaker;
   final bool showTimestamp;
+  final bool isEditing;
   final VoidCallback onSeek;
-  final ValueChanged<String> onChanged;
+  final VoidCallback onEdit;
+  final VoidCallback onCancel;
+  final Future<void> Function(String text) onSave;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-    ),
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (showTimestamp)
-            Padding(
-              padding: EdgeInsets.only(
-                top: showSpeaker && speakerName.isNotEmpty ? 0 : 4,
-              ),
-              child: TextButton(
-                key: ValueKey('segment-timestamp-${segment.id}'),
-                onPressed: onSeek,
-                style: TextButton.styleFrom(
-                  minimumSize: Size.zero,
-                  padding: const EdgeInsets.symmetric(horizontal: 7),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  alignment: Alignment.topCenter,
+  State<TranscriptSegmentEditor> createState() =>
+      _TranscriptSegmentEditorState();
+}
+
+class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
+  late final TextEditingController _draft;
+  late final FocusNode _fieldFocus;
+  bool _hovered = false;
+  bool _actionFocused = false;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _draft = TextEditingController(text: widget.segment.text);
+    _fieldFocus = FocusNode();
+    if (widget.isEditing) _focusEditor();
+  }
+
+  @override
+  void didUpdateWidget(covariant TranscriptSegmentEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.isEditing && widget.segment.text != _draft.text) {
+      _draft.text = widget.segment.text;
+    }
+    if (widget.isEditing && !oldWidget.isEditing) {
+      _draft.text = widget.segment.text;
+      _draft.selection = TextSelection.collapsed(offset: _draft.text.length);
+      _focusEditor();
+    }
+    if (!widget.isEditing && oldWidget.isEditing) {
+      _draft.text = widget.segment.text;
+    }
+  }
+
+  void _focusEditor() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && widget.isEditing) _fieldFocus.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _draft.dispose();
+    _fieldFocus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    await widget.onSave(_draft.text);
+    if (mounted) setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: DecoratedBox(
+        key: ValueKey('segment-card-${widget.segment.id}'),
+        decoration: BoxDecoration(
+          color: widget.isEditing ? colors.surfaceContainerLow : null,
+          borderRadius: BorderRadius.circular(12),
+          border: widget.isEditing
+              ? Border.all(color: colors.outlineVariant)
+              : null,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 6, 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (widget.showTimestamp)
+                Padding(
+                  padding: EdgeInsets.only(
+                    top: widget.showSpeaker && widget.speakerName.isNotEmpty
+                        ? 0
+                        : 4,
+                  ),
+                  child: TextButton(
+                    key: ValueKey('segment-timestamp-${widget.segment.id}'),
+                    onPressed: widget.onSeek,
+                    style: TextButton.styleFrom(
+                      minimumSize: Size.zero,
+                      padding: const EdgeInsets.symmetric(horizontal: 7),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      alignment: Alignment.topCenter,
+                    ),
+                    child: Text(formatClock(widget.segment.startMs)),
+                  ),
+                )
+              else
+                IconButton(
+                  tooltip: formatClock(widget.segment.startMs),
+                  onPressed: widget.onSeek,
+                  icon: const Icon(Icons.play_circle_outline_rounded, size: 20),
                 ),
-                child: Text(formatClock(segment.startMs)),
-              ),
-            )
-          else
-            IconButton(
-              tooltip: formatClock(segment.startMs),
-              onPressed: onSeek,
-              icon: const Icon(Icons.play_circle_outline_rounded, size: 20),
-            ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (showSpeaker && speakerName.isNotEmpty)
-                  Padding(
-                    key: ValueKey('segment-speaker-${segment.id}'),
-                    padding: const EdgeInsets.only(left: 4, bottom: 4),
-                    child: SearchHighlightedText(
-                      text: speakerName,
-                      query: query,
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                if (query.isEmpty)
-                  TextFormField(
-                    key: ValueKey('segment-text-${segment.id}'),
-                    initialValue: segment.text,
-                    minLines: 1,
-                    maxLines: null,
-                    onChanged: onChanged,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      filled: false,
-                      contentPadding: EdgeInsets.all(4),
-                      border: InputBorder.none,
-                    ),
-                  )
-                else
-                  Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: SearchHighlightedText(
-                      text: segment.text,
-                      query: query,
-                      style: Theme.of(context).textTheme.bodyLarge,
-                    ),
-                  ),
-              ],
+              Expanded(child: _buildContent(context)),
+              const SizedBox(width: 4),
+              _buildActions(context),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      if (widget.showSpeaker && widget.speakerName.isNotEmpty)
+        Padding(
+          key: ValueKey('segment-speaker-${widget.segment.id}'),
+          padding: const EdgeInsets.only(left: 4, bottom: 4),
+          child: SearchHighlightedText(
+            text: widget.speakerName,
+            query: widget.query,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: Theme.of(context).colorScheme.primary,
+              fontWeight: FontWeight.w700,
             ),
           ),
-        ],
-      ),
-    ),
+        ),
+      if (widget.isEditing)
+        SelectionContainer.disabled(
+          child: CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.enter, meta: true):
+                  _save,
+              const SingleActivator(LogicalKeyboardKey.enter, control: true):
+                  _save,
+              const SingleActivator(LogicalKeyboardKey.escape): widget.onCancel,
+            },
+            child: TextField(
+              key: ValueKey('segment-editor-${widget.segment.id}'),
+              controller: _draft,
+              focusNode: _fieldFocus,
+              minLines: 1,
+              maxLines: null,
+              keyboardType: TextInputType.multiline,
+              textInputAction: TextInputAction.newline,
+              decoration: const InputDecoration(
+                isDense: true,
+                filled: false,
+                contentPadding: EdgeInsets.all(4),
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+        )
+      else
+        Padding(
+          key: ValueKey('segment-text-${widget.segment.id}'),
+          padding: const EdgeInsets.all(4),
+          child: widget.query.isEmpty
+              ? PlaybackHighlightedText(
+                  text: widget.segment.text,
+                  tokens: widget.tokens,
+                  positionMs: widget.positionMs,
+                  segmentStartMs: widget.segment.startMs,
+                  segmentEndMs: widget.segment.endMs,
+                  enabled: widget.isCurrent,
+                  style: Theme.of(context).textTheme.bodyLarge,
+                )
+              : SearchHighlightedText(
+                  text: widget.segment.text,
+                  query: widget.query,
+                  style: Theme.of(context).textTheme.bodyLarge,
+                ),
+        ),
+    ],
   );
+
+  Widget _buildActions(BuildContext context) {
+    if (widget.isEditing) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            key: ValueKey('segment-cancel-${widget.segment.id}'),
+            tooltip: context.strings.t('cancel'),
+            onPressed: _saving ? null : widget.onCancel,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.close_rounded, size: 18),
+          ),
+          IconButton(
+            key: ValueKey('segment-save-${widget.segment.id}'),
+            tooltip: context.strings.t('save'),
+            onPressed: _saving ? null : _save,
+            visualDensity: VisualDensity.compact,
+            icon: _saving
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.check_rounded, size: 18),
+          ),
+        ],
+      );
+    }
+    final visible = _hovered || _actionFocused;
+    return Focus(
+      onFocusChange: (value) => setState(() => _actionFocused = value),
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 120),
+        child: IconButton(
+          key: ValueKey('segment-edit-${widget.segment.id}'),
+          tooltip: context.strings.t('edit'),
+          onPressed: widget.onEdit,
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.edit_outlined, size: 18),
+        ),
+      ),
+    );
+  }
+}
+
+class PlaybackHighlightedText extends StatelessWidget {
+  const PlaybackHighlightedText({
+    super.key,
+    required this.text,
+    required this.tokens,
+    required this.positionMs,
+    required this.segmentStartMs,
+    required this.segmentEndMs,
+    this.enabled = true,
+    this.style,
+  });
+
+  final String text;
+  final List<TranscriptToken> tokens;
+  final int positionMs;
+  final int segmentStartMs;
+  final int segmentEndMs;
+  final bool enabled;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final ranges = enabled
+        ? _playedTextRanges(
+            text: text,
+            tokens: tokens,
+            positionMs: positionMs,
+            segmentStartMs: segmentStartMs,
+            segmentEndMs: segmentEndMs,
+          )
+        : const <TextRange>[];
+    final selectionColor =
+        DefaultSelectionStyle.of(context).selectionColor ??
+        Theme.of(context).colorScheme.primaryContainer;
+    final highlight = TextStyle(backgroundColor: selectionColor);
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final range in ranges) {
+      if (range.start > cursor) {
+        spans.add(TextSpan(text: text.substring(cursor, range.start)));
+      }
+      spans.add(
+        TextSpan(
+          text: text.substring(range.start, range.end),
+          style: highlight,
+        ),
+      );
+      cursor = range.end;
+    }
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor)));
+    }
+    return Text.rich(TextSpan(style: style, children: spans));
+  }
+}
+
+List<TextRange> _playedTextRanges({
+  required String text,
+  required List<TranscriptToken> tokens,
+  required int positionMs,
+  required int segmentStartMs,
+  required int segmentEndMs,
+}) {
+  if (text.isEmpty || positionMs < segmentStartMs) return const [];
+  if (segmentEndMs > segmentStartMs && positionMs >= segmentEndMs) {
+    return [TextRange(start: 0, end: text.length)];
+  }
+  final timedTokens = tokens
+      .where((token) => token.startMs != 0 || token.endMs != 0)
+      .toList(growable: false);
+  final timedRanges = _alignTokenRanges(text, timedTokens);
+  final played = <TextRange>[];
+  for (
+    var index = 0;
+    index < timedTokens.length && index < timedRanges.length;
+    index++
+  ) {
+    final range = timedRanges[index];
+    if (range != null && timedTokens[index].startMs <= positionMs) {
+      played.add(range);
+    }
+  }
+  return _mergeTextRanges(played);
+}
+
+List<TextRange?> _alignTokenRanges(String text, List<TranscriptToken> tokens) {
+  if (tokens.isEmpty) return const [];
+  final raw = StringBuffer();
+  final rawRanges = <TextRange>[];
+  for (final token in tokens) {
+    final start = raw.length;
+    raw.write(token.text);
+    rawRanges.add(TextRange(start: start, end: raw.length));
+  }
+  final joined = raw.toString();
+  final leading = joined.length - joined.trimLeft().length;
+  final trailing = joined.trimRight().length;
+  final normalized = joined.substring(leading, trailing);
+  if (normalized == text) {
+    return [
+      for (final range in rawRanges)
+        TextRange(
+          start: (range.start - leading).clamp(0, text.length),
+          end: (range.end - leading).clamp(0, text.length),
+        ),
+    ];
+  }
+
+  final normalizedText = text.toLowerCase();
+  final result = <TextRange?>[];
+  var cursor = 0;
+  for (final token in tokens) {
+    final part = token.text.trim();
+    if (part.isEmpty) {
+      result.add(null);
+      continue;
+    }
+    final match = normalizedText.indexOf(part.toLowerCase(), cursor);
+    if (match < 0) {
+      result.add(null);
+      continue;
+    }
+    final end = match + part.length;
+    result.add(TextRange(start: match, end: end));
+    cursor = end;
+  }
+  return result;
+}
+
+List<TextRange> _mergeTextRanges(List<TextRange> ranges) {
+  if (ranges.isEmpty) return const [];
+  final merged = <TextRange>[ranges.first];
+  for (final range in ranges.skip(1)) {
+    final previous = merged.last;
+    if (range.start <= previous.end) {
+      merged[merged.length - 1] = TextRange(
+        start: previous.start,
+        end: range.end > previous.end ? range.end : previous.end,
+      );
+    } else {
+      merged.add(range);
+    }
+  }
+  return merged;
+}
+
+int? currentTranscriptSegmentIndex(
+  List<TranscriptSegment> segments,
+  int positionMs,
+) {
+  if (segments.isEmpty || positionMs < segments.first.startMs) return null;
+  var low = 0;
+  var high = segments.length - 1;
+  while (low <= high) {
+    final middle = (low + high) >> 1;
+    if (segments[middle].startMs <= positionMs) {
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return high;
 }
 
 class SearchHighlightedText extends StatelessWidget {
