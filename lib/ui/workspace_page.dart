@@ -7,6 +7,7 @@ import '../core/models.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
+import 'review_fullscreen_controller.dart';
 import 'transcript_review.dart';
 
 class WorkspacePage extends StatefulWidget {
@@ -14,10 +15,12 @@ class WorkspacePage extends StatefulWidget {
     super.key,
     required this.onAddFiles,
     required this.onAddFolder,
+    this.fullscreenController,
   });
 
   final VoidCallback onAddFiles;
   final VoidCallback onAddFolder;
+  final ReviewFullscreenController? fullscreenController;
 
   @override
   State<WorkspacePage> createState() => _WorkspacePageState();
@@ -25,6 +28,22 @@ class WorkspacePage extends StatefulWidget {
 
 class _WorkspacePageState extends State<WorkspacePage> {
   bool _dragging = false;
+  late final ReviewFullscreenController _localFullscreenController;
+
+  ReviewFullscreenController get _fullscreenController =>
+      widget.fullscreenController ?? _localFullscreenController;
+
+  @override
+  void initState() {
+    super.initState();
+    _localFullscreenController = ReviewFullscreenController();
+  }
+
+  Future<void> _beginNewSession(AppController controller) async {
+    await _fullscreenController.exit();
+    if (!mounted) return;
+    await _startNewSession(context, controller);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +64,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
               _Header(
                 onAddFiles: widget.onAddFiles,
                 onAddFolder: widget.onAddFolder,
-                onNewSession: () => _startNewSession(context, controller),
+                onNewSession: () => _beginNewSession(controller),
               ),
               const SizedBox(height: 12),
               if (controller.workspaceJobs.isEmpty)
@@ -56,7 +75,12 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   ),
                 )
               else
-                Expanded(child: _WorkspaceBody(dragging: _dragging)),
+                Expanded(
+                  child: _WorkspaceBody(
+                    dragging: _dragging,
+                    fullscreenController: _fullscreenController,
+                  ),
+                ),
             ],
           ),
         ),
@@ -274,9 +298,13 @@ Future<void> _startNewSession(
 }
 
 class _WorkspaceBody extends StatefulWidget {
-  const _WorkspaceBody({required this.dragging});
+  const _WorkspaceBody({
+    required this.dragging,
+    required this.fullscreenController,
+  });
 
   final bool dragging;
+  final ReviewFullscreenController fullscreenController;
 
   @override
   State<_WorkspaceBody> createState() => _WorkspaceBodyState();
@@ -310,6 +338,12 @@ class _WorkspaceBodyState extends State<_WorkspaceBody> {
     });
   }
 
+  Future<void> _selectJob(String id) async {
+    final controller = context.read<AppController>();
+    await widget.fullscreenController.exit();
+    if (mounted) controller.selectJob(id);
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
@@ -334,6 +368,8 @@ class _WorkspaceBodyState extends State<_WorkspaceBody> {
                 child: _QueueList(
                   dragging: widget.dragging,
                   onCollapse: () => _setQueueExpanded(false),
+                  onSelectJob: _selectJob,
+                  beforeReviewMutation: widget.fullscreenController.exit,
                 ),
               ),
               AnimatedPositioned(
@@ -344,7 +380,10 @@ class _WorkspaceBodyState extends State<_WorkspaceBody> {
                 top: 0,
                 right: 0,
                 bottom: 0,
-                child: TranscriptReview(jobId: controller.selectedJob!.id),
+                child: TranscriptReview(
+                  jobId: controller.selectedJob!.id,
+                  fullscreenController: widget.fullscreenController,
+                ),
               ),
               Positioned(
                 left: 16,
@@ -384,6 +423,8 @@ class _WorkspaceBodyState extends State<_WorkspaceBody> {
               child: _QueueList(
                 dragging: widget.dragging,
                 onCollapse: canCollapse ? () => _setQueueExpanded(false) : null,
+                onSelectJob: _selectJob,
+                beforeReviewMutation: widget.fullscreenController.exit,
               ),
             ),
             if (split) ...[
@@ -391,7 +432,10 @@ class _WorkspaceBodyState extends State<_WorkspaceBody> {
               Expanded(
                 key: const Key('workspace-detail-pane'),
                 child: editor
-                    ? TranscriptReview(jobId: controller.selectedJob!.id)
+                    ? TranscriptReview(
+                        jobId: controller.selectedJob!.id,
+                        fullscreenController: widget.fullscreenController,
+                      )
                     : const _BatchOptionsPanel(),
               ),
             ],
@@ -676,10 +720,17 @@ class _ReviewLine extends StatelessWidget {
 }
 
 class _QueueList extends StatelessWidget {
-  const _QueueList({required this.dragging, this.onCollapse});
+  const _QueueList({
+    required this.dragging,
+    required this.onSelectJob,
+    required this.beforeReviewMutation,
+    this.onCollapse,
+  });
 
   final bool dragging;
   final VoidCallback? onCollapse;
+  final ValueChanged<String> onSelectJob;
+  final Future<void> Function() beforeReviewMutation;
 
   @override
   Widget build(BuildContext context) {
@@ -710,6 +761,8 @@ class _QueueList extends StatelessWidget {
                   job: job,
                   selected: controller.selectedJobId == job.id,
                   index: index,
+                  onSelect: onSelectJob,
+                  beforeReviewMutation: beforeReviewMutation,
                 );
               },
             ),
@@ -862,22 +915,25 @@ class _JobTile extends StatelessWidget {
     required this.job,
     required this.selected,
     required this.index,
+    required this.onSelect,
+    required this.beforeReviewMutation,
   });
 
   final TranscriptionJob job;
   final bool selected;
   final int index;
+  final ValueChanged<String> onSelect;
+  final Future<void> Function() beforeReviewMutation;
 
   @override
   Widget build(BuildContext context) {
-    final controller = context.read<AppController>();
     final color = Theme.of(context).colorScheme;
     return Material(
       color: selected
           ? color.secondaryContainer.withValues(alpha: .55)
           : Colors.transparent,
       child: InkWell(
-        onTap: () => controller.selectJob(job.id),
+        onTap: () => onSelect(job.id),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
           child: Row(
@@ -931,7 +987,7 @@ class _JobTile extends StatelessWidget {
                   ],
                 ),
               ),
-              _JobMenu(job: job),
+              _JobMenu(job: job, beforeReviewMutation: beforeReviewMutation),
             ],
           ),
         ),
@@ -977,8 +1033,9 @@ class _StatusIcon extends StatelessWidget {
 enum _JobAction { retry, cancel, relink, export, remove }
 
 class _JobMenu extends StatelessWidget {
-  const _JobMenu({required this.job});
+  const _JobMenu({required this.job, required this.beforeReviewMutation});
   final TranscriptionJob job;
+  final Future<void> Function() beforeReviewMutation;
 
   @override
   Widget build(BuildContext context) => PopupMenuButton<_JobAction>(
@@ -1029,6 +1086,8 @@ class _JobMenu extends StatelessWidget {
         await showExportDialog(context, jobId: job.id);
         return;
       case _JobAction.remove:
+        await beforeReviewMutation();
+        if (!context.mounted) return;
         await controller.removeFromWorkspace(job.id);
         return;
     }

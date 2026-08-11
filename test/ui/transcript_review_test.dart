@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +12,7 @@ import 'package:meow_stt/l10n/strings.dart';
 import 'package:meow_stt/state/app_controller.dart';
 import 'package:meow_stt/ui/app_shell.dart';
 import 'package:meow_stt/ui/library_page.dart';
+import 'package:meow_stt/ui/review_fullscreen_controller.dart';
 import 'package:meow_stt/ui/transcript_review.dart';
 import 'package:meow_stt/ui/workspace_page.dart';
 import 'package:provider/provider.dart';
@@ -1690,6 +1693,85 @@ void main() {
     expect(find.byKey(const Key('file-queue-floating-button')), findsOneWidget);
     expect(tester.getRect(find.byType(TranscriptReview)).left, layout.left);
     expect(tester.state(find.byType(TranscriptReview)), same(reviewState));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('queue selection exits fullscreen before replacing the review', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final now = DateTime.now().toUtc();
+    final document = _simpleDocument();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        for (final id in ['first', 'second'])
+          TranscriptionJob(
+            id: id,
+            batchId: 'batch',
+            sourcePath: '/missing/$id.wav',
+            createdAt: now,
+            updatedAt: now,
+            status: JobStatus.completed,
+            document: document,
+          ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller
+      ..reopen('first')
+      ..reopen('second')
+      ..selectJob('first');
+    final fullscreen = ReviewFullscreenController();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: Scaffold(
+            body: WorkspacePage(
+              onAddFiles: _noop,
+              onAddFolder: _noop,
+              fullscreenController: fullscreen,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    fullscreen.markEntered(navigator);
+    unawaited(
+      navigator.push<void>(
+        MaterialPageRoute(
+          builder: (_) => const Scaffold(
+            body: Text('Fullscreen route', key: Key('test-fullscreen-route')),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final secondTile = find.ancestor(
+      of: find.text('second.wav', skipOffstage: false),
+      matching: find.byType(InkWell, skipOffstage: false),
+    );
+    tester.widget<InkWell>(secondTile.first).onTap!();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('test-fullscreen-route')), findsNothing);
+    expect(fullscreen.isActive, isFalse);
+    expect(controller.selectedJobId, 'second');
+    expect(find.byType(TranscriptReview), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
