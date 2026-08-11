@@ -91,9 +91,12 @@ scripts\build-debug.ps1 -Arch x64
 scripts\build-release.ps1 -Arch arm64
 ```
 
-The `.cmd` wrappers accept the same arguments. MSIX defaults to a self-signed
-development certificate. For production set `MEOWSTT_WINDOWS_PFX`, optionally
-`MEOWSTT_WINDOWS_PFX_PASSWORD`, and `MEOWSTT_WINDOWS_PUBLISHER`.
+The `.cmd` wrappers accept the same arguments. Debug builds produce a portable
+ZIP only. Release builds also produce an Inno Setup installer. Install Inno
+Setup 6 or 7, or set `MEOWSTT_ISCC` to `ISCC.exe`. For production code signing,
+set `MEOWSTT_WINDOWS_PFX`, optionally `MEOWSTT_WINDOWS_PFX_PASSWORD`,
+`MEOWSTT_WINDOWS_PUBLISHER`, `MEOWSTT_WINDOWS_TIMESTAMP_URL`, and
+`MEOWSTT_SIGNTOOL`.
 
 Set `MEOWSTT_FFMPEG_DIR` to a pre-provisioned helper directory to bypass pinned
 downloads. Every script validates executable architecture and writes artifacts
@@ -106,8 +109,9 @@ dist/MeowSTT-1.0.0-macos-arm64-release.app.zip
 dist/MeowSTT-1.0.0-macos-arm64-release.sha256
 ```
 
-macOS release output contains an `.app.zip` and DMG. Windows output contains a
-portable ZIP and MSIX.
+macOS release output contains an `.app.zip` and DMG. Windows debug output
+contains a portable ZIP; Windows release output contains a portable ZIP and
+an Inno Setup `-setup.exe` installer.
 
 macOS debug output remains an uncompressed `.app` bundle under `dist/`.
 

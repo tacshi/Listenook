@@ -383,6 +383,7 @@ class _WorkspaceBodyState extends State<_WorkspaceBody> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
+              key: const Key('workspace-queue-pane'),
               width: split
                   ? editor
                         ? _queueWidth
@@ -396,6 +397,7 @@ class _WorkspaceBodyState extends State<_WorkspaceBody> {
             if (split) ...[
               const SizedBox(width: 10),
               Expanded(
+                key: const Key('workspace-detail-pane'),
                 child: editor
                     ? TranscriptReview(jobId: controller.selectedJob!.id)
                     : const _BatchOptionsPanel(),
@@ -452,11 +454,15 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
                 color: Theme.of(context).colorScheme.primary,
               ),
               const SizedBox(width: 10),
-              Text(
-                context.strings.t('details'),
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              Expanded(
+                child: Text(
+                  context.strings.t('details'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                ),
               ),
             ],
           ),

@@ -1858,6 +1858,54 @@ void main() {
     ]);
   });
 
+  testWidgets('workspace keeps two panes at Windows initial content width', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(936, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'job',
+          batchId: 'batch',
+          sourcePath: '/missing/test.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+        ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.reopen('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(
+            body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
+          ),
+        ),
+      ),
+    );
+
+    final queue = find.byKey(const Key('workspace-queue-pane'));
+    final detail = find.byKey(const Key('workspace-detail-pane'));
+    expect(queue, findsOneWidget);
+    expect(detail, findsOneWidget);
+    expect(tester.getRect(queue).right, lessThan(tester.getRect(detail).left));
+  });
+
   testWidgets('waveform supports click and drag seeking', (tester) async {
     final seeks = <Duration>[];
     await tester.pumpWidget(
