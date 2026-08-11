@@ -40,6 +40,8 @@ void main() {
     expect(find.text('Transcription'), findsOneWidget);
     expect(find.text('Appearance'), findsWidgets);
     expect(find.text('System & About'), findsOneWidget);
+    expect(find.byIcon(Icons.transcribe_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
 
     expect(find.byKey(const Key('session-language-hints-field')), findsNothing);
     expect(find.byKey(const Key('session-context-terms-field')), findsNothing);

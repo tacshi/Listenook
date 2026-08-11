@@ -53,7 +53,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 tabAlignment: TabAlignment.start,
                 tabs: [
                   Tab(
-                    icon: const Icon(Icons.tune_rounded),
+                    icon: const Icon(Icons.transcribe_rounded),
                     text: context.strings.t('settings_transcription'),
                   ),
                   Tab(
@@ -61,7 +61,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     text: context.strings.t('appearance'),
                   ),
                   Tab(
-                    icon: const Icon(Icons.memory_rounded),
+                    icon: const Icon(Icons.info_outline_rounded),
                     text: context.strings.t('settings_system_about'),
                   ),
                 ],
