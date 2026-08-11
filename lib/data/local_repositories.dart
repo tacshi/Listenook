@@ -100,7 +100,7 @@ class JsonSettingsRepository implements SettingsRepository {
 
   @override
   Future<void> save(AppSettings settings) =>
-      _atomicWrite(paths.settings, jsonEncode(settings.toJson()));
+      _atomicFileWriter.write(paths.settings, jsonEncode(settings.toJson()));
 }
 
 class LocalJobRepository implements JobRepository {
@@ -133,7 +133,7 @@ class LocalJobRepository implements JobRepository {
   Future<void> save(TranscriptionJob job) async {
     final directory = Directory(p.join(paths.jobs.path, _safeId(job.id)));
     await directory.create(recursive: true);
-    await _atomicWrite(
+    await _atomicFileWriter.write(
       File(p.join(directory.path, 'manifest.json')),
       job.toJsonString(),
     );
@@ -153,10 +153,38 @@ class LocalJobRepository implements JobRepository {
   }
 }
 
-Future<void> _atomicWrite(File target, String contents) async {
-  await target.parent.create(recursive: true);
-  final temporary = File('${target.path}.tmp');
-  await temporary.writeAsString(contents, flush: true);
-  if (await target.exists()) await target.delete();
-  await temporary.rename(target.path);
+final _atomicFileWriter = _AtomicFileWriter();
+
+class _AtomicFileWriter {
+  final Map<String, Future<void>> _pendingWrites = {};
+
+  Future<void> write(File target, String contents) {
+    final key = p.normalize(p.absolute(target.path));
+    final operation = _writeAfter(_pendingWrites[key], target, contents);
+    _pendingWrites[key] = operation;
+    return operation.whenComplete(() {
+      if (identical(_pendingWrites[key], operation)) {
+        _pendingWrites.remove(key);
+      }
+    });
+  }
+
+  Future<void> _writeAfter(
+    Future<void>? previous,
+    File target,
+    String contents,
+  ) async {
+    if (previous != null) {
+      try {
+        await previous;
+      } on Object {
+        // A failed write must not prevent a later state from being persisted.
+      }
+    }
+    await target.parent.create(recursive: true);
+    final temporary = File('${target.path}.tmp');
+    await temporary.writeAsString(contents, flush: true);
+    if (await target.exists()) await target.delete();
+    await temporary.rename(target.path);
+  }
 }

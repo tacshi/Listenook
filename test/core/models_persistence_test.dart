@@ -65,4 +65,41 @@ void main() {
       isFalse,
     );
   });
+
+  test('concurrent progress and stage saves do not collide', () async {
+    final temporary = await Directory.systemTemp.createTemp('meowstt-race-');
+    addTearDown(() => temporary.delete(recursive: true));
+    final repository = LocalJobRepository(AppPaths.forTesting(temporary.path));
+    final now = DateTime.utc(2026, 8, 11);
+    final job = TranscriptionJob(
+      id: 'converting_job',
+      batchId: 'batch',
+      sourcePath: '/tmp/video.mp4',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.converting,
+    );
+    await repository.save(job);
+
+    final updates = List.generate(
+      32,
+      (index) => job.copyWith(
+        status: index == 31 ? JobStatus.uploading : JobStatus.converting,
+        progress: JobProgress(
+          stage: index == 31 ? 'uploading' : 'converting',
+          fraction: index / 31,
+        ),
+      ),
+    );
+    await Future.wait(updates.map(repository.save));
+
+    final loaded = await repository.loadAll();
+    expect(loaded.single.status, JobStatus.uploading);
+    expect(
+      File(
+        '${temporary.path}/jobs/converting_job/manifest.json.tmp',
+      ).existsSync(),
+      isFalse,
+    );
+  });
 }
