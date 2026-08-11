@@ -37,6 +37,11 @@ void main() {
       ),
     );
 
+    final pageTitle = find.byKey(const Key('settings-page-title'));
+    expect(
+      tester.widget<Text>(pageTitle).style?.fontSize,
+      Theme.of(tester.element(pageTitle)).textTheme.titleLarge?.fontSize,
+    );
     expect(find.text('Transcription'), findsOneWidget);
     expect(find.text('Appearance'), findsWidgets);
     expect(find.text('System & About'), findsOneWidget);

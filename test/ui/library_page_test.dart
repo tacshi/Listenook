@@ -61,6 +61,11 @@ void main() {
       ),
     );
 
+    final pageTitle = find.byKey(const Key('library-page-title'));
+    expect(
+      tester.widget<Text>(pageTitle).style?.fontSize,
+      Theme.of(tester.element(pageTitle)).textTheme.titleLarge?.fontSize,
+    );
     expect(find.text('history.wav'), findsOneWidget);
     await tester.tap(find.byKey(const Key('clear-all-history')));
     await tester.pumpAndSettle();

@@ -14,12 +14,10 @@ class WorkspacePage extends StatefulWidget {
     super.key,
     required this.onAddFiles,
     required this.onAddFolder,
-    this.sidebarToggle,
   });
 
   final VoidCallback onAddFiles;
   final VoidCallback onAddFolder;
-  final Widget? sidebarToggle;
 
   @override
   State<WorkspacePage> createState() => _WorkspacePageState();
@@ -48,7 +46,6 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 onAddFiles: widget.onAddFiles,
                 onAddFolder: widget.onAddFolder,
                 onNewSession: () => _startNewSession(context, controller),
-                sidebarToggle: widget.sidebarToggle,
               ),
               const SizedBox(height: 12),
               if (controller.workspaceJobs.isEmpty)
@@ -73,12 +70,10 @@ class _Header extends StatelessWidget {
     required this.onAddFiles,
     required this.onAddFolder,
     required this.onNewSession,
-    required this.sidebarToggle,
   });
   final VoidCallback onAddFiles;
   final VoidCallback onAddFolder;
   final VoidCallback onNewSession;
-  final Widget? sidebarToggle;
 
   @override
   Widget build(BuildContext context) {
@@ -138,23 +133,14 @@ class _Header extends StatelessWidget {
         children: [
           SizedBox(
             width: constraints.maxWidth >= 1180 ? 280 : 220,
-            child: Row(
-              children: [
-                if (sidebarToggle case final toggle?) ...[
-                  toggle,
-                  const SizedBox(width: 8),
-                ],
-                Expanded(
-                  child: Text(
-                    context.strings.t('workspace'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
+            child: Text(
+              context.strings.t('workspace'),
+              key: const Key('workspace-page-title'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
           const SizedBox(width: 16),
@@ -188,7 +174,6 @@ class _EmptyDropZone extends StatelessWidget {
           onTap: onAddFiles,
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(48),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
@@ -198,46 +183,53 @@ class _EmptyDropZone extends StatelessWidget {
                 width: dragging ? 2 : 1,
               ),
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  dragging
-                      ? Icons.file_download_rounded
-                      : Icons.graphic_eq_rounded,
-                  size: 78,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(height: 24),
-                Text(
-                  context.strings.t('drop_title'),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxHeight < 400;
+                return SingleChildScrollView(
+                  padding: EdgeInsets.all(compact ? 24 : 48),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        dragging
+                            ? Icons.file_download_rounded
+                            : Icons.graphic_eq_rounded,
+                        size: compact ? 56 : 78,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      SizedBox(height: compact ? 16 : 24),
+                      Text(
+                        context.strings.t('drop_title'),
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      SizedBox(height: compact ? 8 : 10),
+                      Text(
+                        context.strings.t('drop_subtitle'),
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        context.strings.t('supported'),
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      SizedBox(height: compact ? 16 : 22),
+                      FilledButton.icon(
+                        key: const Key('empty-add-files'),
+                        onPressed: onAddFiles,
+                        icon: const Icon(Icons.add_rounded),
+                        label: Text(context.strings.t('add_files')),
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  context.strings.t('drop_subtitle'),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  context.strings.t('supported'),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 22),
-                FilledButton.icon(
-                  key: const Key('empty-add-files'),
-                  onPressed: onAddFiles,
-                  icon: const Icon(Icons.add_rounded),
-                  label: Text(context.strings.t('add_files')),
-                ),
-              ],
+                );
+              },
             ),
           ),
         ),
@@ -781,28 +773,67 @@ class _QueueStat extends StatelessWidget {
   );
 }
 
-class _QueueFloatingButton extends StatelessWidget {
+class _QueueFloatingButton extends StatefulWidget {
   const _QueueFloatingButton({required this.onExpand});
 
   final VoidCallback onExpand;
 
   @override
+  State<_QueueFloatingButton> createState() => _QueueFloatingButtonState();
+}
+
+class _QueueFloatingButtonState extends State<_QueueFloatingButton> {
+  static const _idleOpacity = .25;
+
+  late final FocusNode _focusNode;
+  bool _hovered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode(debugLabel: 'Expand file queue')
+      ..addListener(_handleFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _focusNode
+      ..removeListener(_handleFocusChange)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _handleFocusChange() => setState(() {});
+
+  @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
     final colors = Theme.of(context).colorScheme;
-    return Badge.count(
-      key: const Key('file-queue-floating-button'),
-      count: controller.workspaceJobs.length,
-      backgroundColor: colors.primary,
-      textColor: colors.onPrimary,
-      child: FloatingActionButton.small(
-        key: const Key('expand-file-queue'),
-        heroTag: null,
-        tooltip: context.strings.t('expand_file_queue'),
-        onPressed: onExpand,
-        backgroundColor: colors.surfaceContainerHigh,
-        foregroundColor: colors.onSurface,
-        child: const Icon(Icons.view_list_rounded),
+    final emphasized = _hovered || _focusNode.hasFocus;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedOpacity(
+        key: const Key('file-queue-floating-opacity'),
+        opacity: emphasized ? 1 : _idleOpacity,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        child: Badge.count(
+          key: const Key('file-queue-floating-button'),
+          count: controller.workspaceJobs.length,
+          backgroundColor: colors.primary,
+          textColor: colors.onPrimary,
+          child: FloatingActionButton.small(
+            key: const Key('expand-file-queue'),
+            heroTag: null,
+            tooltip: context.strings.t('expand_file_queue'),
+            focusNode: _focusNode,
+            onPressed: widget.onExpand,
+            backgroundColor: colors.surfaceContainerHigh,
+            foregroundColor: colors.onSurface,
+            child: const Icon(Icons.view_list_rounded),
+          ),
+        ),
       ),
     );
   }
