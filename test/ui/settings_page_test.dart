@@ -90,6 +90,116 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('FFmpeg diagnostics').hitTestable(), findsOneWidget);
   });
+
+  testWidgets(
+    'translation configuration tests unsaved values and stores one key',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 1400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final translationCredentials = _TranslationCredentials();
+      final translationService = _TranslationService();
+      final settings = _Settings();
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: settings,
+        jobRepository: _Jobs(),
+        mediaService: _Media(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+        translationCredentialStore: translationCredentials,
+        translationService: translationService,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: SettingsPage()),
+          ),
+        ),
+      );
+
+      final baseUrl = find.byKey(const Key('translation-base-url-field'));
+      final model = find.byKey(const Key('translation-model-field'));
+      final key = find.byKey(const Key('translation-key-field'));
+      final provider = find.byKey(
+        const Key('translation-provider-template-field'),
+      );
+      await tester.ensureVisible(baseUrl);
+
+      expect(tester.widget<TextField>(baseUrl).controller?.text, isEmpty);
+      expect(
+        find.text('Test the connection to select a model'),
+        findsOneWidget,
+      );
+
+      await tester.ensureVisible(provider);
+      await tester.tap(provider);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Groq').last);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(baseUrl).controller?.text,
+        'https://api.groq.com/openai/v1',
+      );
+
+      await tester.enterText(baseUrl, 'https://example.test/v1/');
+      await tester.pump();
+      expect(find.text('Custom'), findsOneWidget);
+      await tester.enterText(key, 'candidate-secret');
+      await tester.pump();
+      final testButton = find.byKey(const Key('test-translation-settings'));
+      expect(tester.widget<OutlinedButton>(testButton).onPressed, isNotNull);
+      await tester.ensureVisible(testButton);
+      await tester.tap(testButton);
+      await tester.pumpAndSettle();
+
+      expect(translationService.candidateKey, 'candidate-secret');
+      expect(
+        translationService.testedSettings?.baseUrl,
+        'https://example.test/v1',
+      );
+      expect(translationCredentials.value, isNull);
+      expect(find.text('Select a model'), findsOneWidget);
+
+      await tester.ensureVisible(model);
+      await tester.tap(model);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('suggested-model').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('save-translation-settings')));
+      await tester.pumpAndSettle();
+      expect(translationCredentials.value, 'candidate-secret');
+      expect(
+        settings.value.translationSettings.baseUrl,
+        'https://example.test/v1',
+      );
+      expect(settings.value.translationSettings.model, 'suggested-model');
+
+      await tester.tap(model);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('replacement-model').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('save-translation-settings')));
+      await tester.pumpAndSettle();
+      expect(translationCredentials.value, 'candidate-secret');
+      expect(settings.value.translationSettings.model, 'replacement-model');
+
+      await tester.tap(find.text('Remove').last);
+      await tester.pumpAndSettle();
+      expect(translationCredentials.value, isNull);
+      expect(controller.translationKeyConfigured, isFalse);
+    },
+  );
 }
 
 class _Credentials implements CredentialStore {
@@ -103,6 +213,48 @@ class _Credentials implements CredentialStore {
 
   @override
   Future<void> writeApiKey(String key) async => value = key;
+}
+
+class _TranslationCredentials implements TranslationCredentialStore {
+  String? value;
+
+  @override
+  Future<void> deleteApiKey() async => value = null;
+
+  @override
+  Future<String?> readApiKey() async => value;
+
+  @override
+  Future<void> writeApiKey(String key) async => value = key;
+}
+
+class _TranslationService implements TranslationService {
+  TranslationSettings? testedSettings;
+  String? candidateKey;
+
+  @override
+  Future<List<String>> listModels(
+    TranslationSettings settings, {
+    String? candidateApiKey,
+  }) async {
+    testedSettings = settings;
+    candidateKey = candidateApiKey;
+    return ['suggested-model', 'replacement-model'];
+  }
+
+  @override
+  Future<void> translate({
+    required TranslationSettings settings,
+    required String targetLanguage,
+    required List<TranscriptSegment> segments,
+    required Future<void> Function(
+      Map<String, String> translatedBySegmentId,
+      int completedSegments,
+      int totalSegments,
+    )
+    onBatch,
+    CancelCheck? shouldCancel,
+  }) async {}
 }
 
 class _Settings implements SettingsRepository {

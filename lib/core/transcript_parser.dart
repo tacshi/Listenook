@@ -73,6 +73,10 @@ class TranscriptParser {
           text: _joinSegmentText(previous.text, segment.text),
           speaker: previous.speaker ?? segment.speaker,
           language: previous.language ?? segment.language,
+          translatedText: _joinTranslations(
+            previous.translatedText,
+            segment.translatedText,
+          ),
         );
         changed = true;
       } else {
@@ -140,6 +144,12 @@ class TranscriptParser {
         RegExp(r'[A-Za-z0-9,;:]$').hasMatch(left) &&
         RegExp(r'^[A-Za-z0-9]').hasMatch(right);
     return needsSpace ? '$left $right' : '$left$right';
+  }
+
+  String? _joinTranslations(String? first, String? second) {
+    if (first == null || first.trim().isEmpty) return second;
+    if (second == null || second.trim().isEmpty) return first;
+    return _joinSegmentText(first, second);
   }
 }
 

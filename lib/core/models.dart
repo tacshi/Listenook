@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 1;
+const int manifestVersion = 2;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 enum JobStatus {
@@ -49,6 +49,73 @@ extension JobStatusX on JobStatus {
 }
 
 enum ExportFormat { txt, markdown, srt, webVtt }
+
+enum ExportContentMode { original, translated, bilingual }
+
+enum TranslationViewMode { original, translated, bilingual }
+
+enum TranslationProviderTemplate {
+  custom,
+  openAi,
+  deepSeek,
+  groq,
+  nvidiaNim,
+  togetherAi,
+  mistralAi,
+  lmStudio,
+  ollama,
+  fireworksAi,
+  perplexity,
+  volcengineArk,
+}
+
+extension TranslationProviderTemplateX on TranslationProviderTemplate {
+  String get defaultBaseUrl => switch (this) {
+    TranslationProviderTemplate.custom => '',
+    TranslationProviderTemplate.openAi => 'https://api.openai.com/v1',
+    TranslationProviderTemplate.deepSeek => 'https://api.deepseek.com/v1',
+    TranslationProviderTemplate.groq => 'https://api.groq.com/openai/v1',
+    TranslationProviderTemplate.nvidiaNim =>
+      'https://integrate.api.nvidia.com/v1',
+    TranslationProviderTemplate.togetherAi => 'https://api.together.xyz/v1',
+    TranslationProviderTemplate.mistralAi => 'https://api.mistral.ai/v1',
+    TranslationProviderTemplate.lmStudio => 'http://localhost:1234/v1',
+    TranslationProviderTemplate.ollama => 'http://localhost:11434/v1',
+    TranslationProviderTemplate.fireworksAi =>
+      'https://api.fireworks.ai/inference/v1',
+    TranslationProviderTemplate.perplexity => 'https://api.perplexity.ai',
+    TranslationProviderTemplate.volcengineArk =>
+      'https://ark.cn-beijing.volces.com/api/v3',
+  };
+
+  static TranslationProviderTemplate inferFromBaseUrl(String baseUrl) {
+    final normalized = baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+    for (final template in TranslationProviderTemplate.values) {
+      if (template == TranslationProviderTemplate.custom) continue;
+      if (template.defaultBaseUrl == normalized) return template;
+    }
+    return TranslationProviderTemplate.custom;
+  }
+}
+
+enum TranslationStatus {
+  idle,
+  translating,
+  completed,
+  partial,
+  failed,
+  cancelled,
+  interrupted,
+}
+
+extension TranslationStatusX on TranslationStatus {
+  bool get isActive => this == TranslationStatus.translating;
+  bool get canRetry =>
+      this == TranslationStatus.partial ||
+      this == TranslationStatus.failed ||
+      this == TranslationStatus.cancelled ||
+      this == TranslationStatus.interrupted;
+}
 
 enum AppThemeMode { system, light, dark }
 
@@ -163,6 +230,7 @@ class TranscriptSegment {
     required this.text,
     this.speaker,
     this.language,
+    this.translatedText,
   });
 
   final String id;
@@ -171,11 +239,16 @@ class TranscriptSegment {
   final String text;
   final String? speaker;
   final String? language;
+  final String? translatedText;
+
+  bool get hasTranslation => translatedText?.trim().isNotEmpty ?? false;
 
   TranscriptSegment copyWith({
     String? text,
     String? speaker,
     String? language,
+    String? translatedText,
+    bool clearTranslatedText = false,
   }) => TranscriptSegment(
     id: id,
     startMs: startMs,
@@ -183,6 +256,9 @@ class TranscriptSegment {
     text: text ?? this.text,
     speaker: speaker ?? this.speaker,
     language: language ?? this.language,
+    translatedText: clearTranslatedText
+        ? null
+        : translatedText ?? this.translatedText,
   );
 
   Map<String, dynamic> toJson() => {
@@ -192,6 +268,7 @@ class TranscriptSegment {
     'text': text,
     if (speaker case final value?) 'speaker': value,
     if (language case final value?) 'language': value,
+    if (translatedText case final value?) 'translated_text': value,
   };
 
   factory TranscriptSegment.fromJson(Map<String, dynamic> json) =>
@@ -202,6 +279,7 @@ class TranscriptSegment {
         text: json['text'] as String? ?? '',
         speaker: json['speaker']?.toString(),
         language: json['language'] as String?,
+        translatedText: json['translated_text'] as String?,
       );
 }
 
@@ -296,29 +374,263 @@ class TranscriptionOptions {
       );
 }
 
+class TranslationSettings {
+  const TranslationSettings({
+    this.provider = TranslationProviderTemplate.custom,
+    this.baseUrl = '',
+    this.model = '',
+    this.targetLanguage = '',
+    this.autoTranslate = false,
+  });
+
+  final TranslationProviderTemplate provider;
+  final String baseUrl;
+  final String model;
+  final String targetLanguage;
+  final bool autoTranslate;
+
+  Uri? get uri => Uri.tryParse(baseUrl.trim());
+
+  bool get isLoopback {
+    final host = uri?.host.toLowerCase();
+    return host == 'localhost' || host == '127.0.0.1' || host == '::1';
+  }
+
+  bool get requiresApiKey => !isLoopback;
+
+  String? validationError({bool requireModel = true}) {
+    final value = uri;
+    if (value == null ||
+        value.host.isEmpty ||
+        value.userInfo.isNotEmpty ||
+        value.hasQuery ||
+        value.hasFragment) {
+      return 'translation_invalid_url';
+    }
+    if (value.scheme != 'http' && value.scheme != 'https') {
+      return 'translation_invalid_url';
+    }
+    if (!isLoopback && value.scheme != 'https') {
+      return 'translation_https_required';
+    }
+    if (requireModel && model.trim().isEmpty) {
+      return 'translation_model_required';
+    }
+    return null;
+  }
+
+  bool isConfigured({required bool hasApiKey}) =>
+      validationError() == null && (!requiresApiKey || hasApiKey);
+
+  TranslationSettings copyWith({
+    TranslationProviderTemplate? provider,
+    String? baseUrl,
+    String? model,
+    String? targetLanguage,
+    bool? autoTranslate,
+  }) => TranslationSettings(
+    provider: provider ?? this.provider,
+    baseUrl: baseUrl ?? this.baseUrl,
+    model: model ?? this.model,
+    targetLanguage: targetLanguage ?? this.targetLanguage,
+    autoTranslate: autoTranslate ?? this.autoTranslate,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'provider': provider.name,
+    'base_url': baseUrl,
+    'model': model,
+    'target_language': targetLanguage,
+    'auto_translate': autoTranslate,
+  };
+
+  factory TranslationSettings.fromJson(Map<String, dynamic>? json) {
+    final baseUrl = json?['base_url'] as String? ?? '';
+    final provider =
+        _enumByName(TranslationProviderTemplate.values, json?['provider']) ??
+        TranslationProviderTemplateX.inferFromBaseUrl(baseUrl);
+    return TranslationSettings(
+      provider: provider,
+      baseUrl: baseUrl,
+      model: json?['model'] as String? ?? '',
+      targetLanguage: json?['target_language'] as String? ?? '',
+      autoTranslate: json?['auto_translate'] as bool? ?? false,
+    );
+  }
+}
+
+class TranslationOptions {
+  const TranslationOptions({
+    this.enabled = false,
+    this.targetLanguage = '',
+    this.baseUrl = '',
+    this.model = '',
+  });
+
+  factory TranslationOptions.fromSettings(TranslationSettings settings) =>
+      TranslationOptions(
+        enabled: settings.autoTranslate,
+        targetLanguage: settings.targetLanguage,
+        baseUrl: settings.baseUrl,
+        model: settings.model,
+      );
+
+  final bool enabled;
+  final String targetLanguage;
+  final String baseUrl;
+  final String model;
+
+  TranslationOptions copyWith({
+    bool? enabled,
+    String? targetLanguage,
+    String? baseUrl,
+    String? model,
+  }) => TranslationOptions(
+    enabled: enabled ?? this.enabled,
+    targetLanguage: targetLanguage ?? this.targetLanguage,
+    baseUrl: baseUrl ?? this.baseUrl,
+    model: model ?? this.model,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'target_language': targetLanguage,
+    'base_url': baseUrl,
+    'model': model,
+  };
+
+  factory TranslationOptions.fromJson(Map<String, dynamic>? json) =>
+      TranslationOptions(
+        enabled: json?['enabled'] as bool? ?? false,
+        targetLanguage: json?['target_language'] as String? ?? '',
+        baseUrl: json?['base_url'] as String? ?? '',
+        model: json?['model'] as String? ?? '',
+      );
+}
+
+class TranslationState {
+  const TranslationState({
+    this.status = TranslationStatus.idle,
+    this.targetLanguage = '',
+    this.model = '',
+    this.completedSegments = 0,
+    this.totalSegments = 0,
+    this.errorCode,
+    this.errorMessage,
+  });
+
+  final TranslationStatus status;
+  final String targetLanguage;
+  final String model;
+  final int completedSegments;
+  final int totalSegments;
+  final String? errorCode;
+  final String? errorMessage;
+
+  double get progress =>
+      totalSegments == 0 ? 0 : completedSegments / totalSegments;
+
+  TranslationState copyWith({
+    TranslationStatus? status,
+    String? targetLanguage,
+    String? model,
+    int? completedSegments,
+    int? totalSegments,
+    String? errorCode,
+    String? errorMessage,
+    bool clearError = false,
+  }) => TranslationState(
+    status: status ?? this.status,
+    targetLanguage: targetLanguage ?? this.targetLanguage,
+    model: model ?? this.model,
+    completedSegments: completedSegments ?? this.completedSegments,
+    totalSegments: totalSegments ?? this.totalSegments,
+    errorCode: clearError ? null : errorCode ?? this.errorCode,
+    errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'status': status.name,
+    'target_language': targetLanguage,
+    'model': model,
+    'completed_segments': completedSegments,
+    'total_segments': totalSegments,
+    if (errorCode case final value?) 'error_code': value,
+    if (errorMessage case final value?) 'error_message': value,
+  };
+
+  factory TranslationState.fromJson(Map<String, dynamic>? json) =>
+      TranslationState(
+        status:
+            _enumByName(TranslationStatus.values, json?['status']) ??
+            TranslationStatus.idle,
+        targetLanguage: json?['target_language'] as String? ?? '',
+        model: json?['model'] as String? ?? '',
+        completedSegments: (json?['completed_segments'] as num?)?.toInt() ?? 0,
+        totalSegments: (json?['total_segments'] as num?)?.toInt() ?? 0,
+        errorCode: json?['error_code'] as String?,
+        errorMessage: json?['error_message'] as String?,
+      );
+}
+
+const supportedTranslationLanguageCodes = <String>[
+  'en',
+  'zh-Hans',
+  'zh-Hant',
+  'ja',
+  'ko',
+  'es',
+  'fr',
+  'de',
+  'it',
+  'pt',
+  'ru',
+  'ar',
+  'hi',
+  'vi',
+  'th',
+  'yue',
+  'nl',
+  'pl',
+  'tr',
+  'uk',
+  'cs',
+  'sv',
+  'da',
+  'fi',
+  'el',
+  'he',
+  'id',
+  'ms',
+];
+
 class ExportOptions {
   const ExportOptions({
     this.format = ExportFormat.txt,
     this.showSpeakers = true,
     this.showTimestamps = false,
     this.localeCode = 'en',
+    this.contentMode = ExportContentMode.original,
   });
 
   final ExportFormat format;
   final bool showSpeakers;
   final bool showTimestamps;
   final String localeCode;
+  final ExportContentMode contentMode;
 
   ExportOptions copyWith({
     ExportFormat? format,
     bool? showSpeakers,
     bool? showTimestamps,
     String? localeCode,
+    ExportContentMode? contentMode,
   }) => ExportOptions(
     format: format ?? this.format,
     showSpeakers: showSpeakers ?? this.showSpeakers,
     showTimestamps: showTimestamps ?? this.showTimestamps,
     localeCode: localeCode ?? this.localeCode,
+    contentMode: contentMode ?? this.contentMode,
   );
 
   Map<String, dynamic> toJson() => {
@@ -326,6 +638,7 @@ class ExportOptions {
     'show_speakers': showSpeakers,
     'show_timestamps': showTimestamps,
     'locale_code': localeCode,
+    'content_mode': contentMode.name,
   };
 
   factory ExportOptions.fromJson(Map<String, dynamic>? json) => ExportOptions(
@@ -334,6 +647,9 @@ class ExportOptions {
     showSpeakers: json?['show_speakers'] as bool? ?? true,
     showTimestamps: json?['show_timestamps'] as bool? ?? false,
     localeCode: json?['locale_code'] as String? ?? 'en',
+    contentMode:
+        _enumByName(ExportContentMode.values, json?['content_mode']) ??
+        ExportContentMode.original,
   );
 }
 
@@ -347,6 +663,7 @@ class AppSettings {
     this.exportOptions = const ExportOptions(),
     this.onboardingComplete = false,
     this.ffmpegOverride,
+    this.translationSettings = const TranslationSettings(),
   });
 
   final AppThemeMode themeMode;
@@ -357,6 +674,7 @@ class AppSettings {
   final ExportOptions exportOptions;
   final bool onboardingComplete;
   final String? ffmpegOverride;
+  final TranslationSettings translationSettings;
 
   AppSettings copyWith({
     AppThemeMode? themeMode,
@@ -368,6 +686,7 @@ class AppSettings {
     bool? onboardingComplete,
     String? ffmpegOverride,
     bool clearFfmpegOverride = false,
+    TranslationSettings? translationSettings,
   }) => AppSettings(
     themeMode: themeMode ?? this.themeMode,
     localeMode: localeMode ?? this.localeMode,
@@ -379,6 +698,7 @@ class AppSettings {
     ffmpegOverride: clearFfmpegOverride
         ? null
         : ffmpegOverride ?? this.ffmpegOverride,
+    translationSettings: translationSettings ?? this.translationSettings,
   );
 
   Map<String, dynamic> toJson() => {
@@ -391,6 +711,7 @@ class AppSettings {
     'export_options': exportOptions.toJson(),
     'onboarding_complete': onboardingComplete,
     if (ffmpegOverride case final value?) 'ffmpeg_override': value,
+    'translation_settings': translationSettings.toJson(),
   };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -408,6 +729,9 @@ class AppSettings {
     ),
     onboardingComplete: json['onboarding_complete'] as bool? ?? false,
     ffmpegOverride: json['ffmpeg_override'] as String?,
+    translationSettings: TranslationSettings.fromJson(
+      (json['translation_settings'] as Map?)?.cast<String, dynamic>(),
+    ),
   );
 }
 
@@ -429,6 +753,8 @@ class TranscriptionJob {
     this.remoteFileId,
     this.remoteTranscriptionId,
     this.cleanupState = CleanupState.none,
+    this.translationOptions = const TranslationOptions(),
+    this.translationState = const TranslationState(),
   });
 
   final String id;
@@ -447,6 +773,10 @@ class TranscriptionJob {
   final String? remoteFileId;
   final String? remoteTranscriptionId;
   final CleanupState cleanupState;
+  final TranslationOptions translationOptions;
+  final TranslationState translationState;
+
+  bool get isBusy => status.isActive || translationState.status.isActive;
 
   String get fileName => sourcePath.replaceAll('\\', '/').split('/').last;
 
@@ -463,6 +793,8 @@ class TranscriptionJob {
     String? remoteFileId,
     String? remoteTranscriptionId,
     CleanupState? cleanupState,
+    TranslationOptions? translationOptions,
+    TranslationState? translationState,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
@@ -485,6 +817,8 @@ class TranscriptionJob {
         ? null
         : remoteTranscriptionId ?? this.remoteTranscriptionId,
     cleanupState: cleanupState ?? this.cleanupState,
+    translationOptions: translationOptions ?? this.translationOptions,
+    translationState: translationState ?? this.translationState,
   );
 
   Map<String, dynamic> toJson() => {
@@ -506,6 +840,8 @@ class TranscriptionJob {
     if (remoteTranscriptionId case final value?)
       'remote_transcription_id': value,
     'cleanup_state': cleanupState.name,
+    'translation_options': translationOptions.toJson(),
+    'translation_state': translationState.toJson(),
   };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -544,6 +880,12 @@ class TranscriptionJob {
       cleanupState:
           _enumByName(CleanupState.values, json['cleanup_state']) ??
           CleanupState.none,
+      translationOptions: TranslationOptions.fromJson(
+        (json['translation_options'] as Map?)?.cast<String, dynamic>(),
+      ),
+      translationState: TranslationState.fromJson(
+        (json['translation_state'] as Map?)?.cast<String, dynamic>(),
+      ),
     );
   }
 }

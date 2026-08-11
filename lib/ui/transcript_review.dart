@@ -39,9 +39,11 @@ class _TranscriptReviewState extends State<TranscriptReview> {
   Duration _duration = Duration.zero;
   bool _playing = false;
   bool _followPlayback = true;
+  TranslationViewMode _viewMode = TranslationViewMode.original;
   int _programmaticScrolls = 0;
   String? _lastScrolledSegmentId;
   String? _editingSegmentId;
+  String? _editingTranslationSegmentId;
   TranscriptDocument? _mappedDocument;
   Map<String, List<TranscriptToken>> _tokensBySegment = const {};
   String _openedPath = '';
@@ -77,6 +79,8 @@ class _TranscriptReviewState extends State<TranscriptReview> {
       _playing = false;
       _followPlayback = true;
       _editingSegmentId = null;
+      _editingTranslationSegmentId = null;
+      _viewMode = TranslationViewMode.original;
       _lastScrolledSegmentId = null;
       _mappedDocument = null;
       _tokensBySegment = const {};
@@ -188,6 +192,8 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               .where(
                 (segment) =>
                     segment.text.toLowerCase().contains(query) ||
+                    (segment.translatedText?.toLowerCase().contains(query) ??
+                        false) ||
                     context.strings
                         .speakerName(document.speakerName(segment.speaker))
                         .toLowerCase()
@@ -207,6 +213,8 @@ class _TranscriptReviewState extends State<TranscriptReview> {
           _ReviewToolbar(
             job: job,
             search: _search,
+            viewMode: _viewMode,
+            onViewModeChanged: (value) => setState(() => _viewMode = value),
             onSearch: () {
               setState(() {});
               if (_search.text.trim().isEmpty) {
@@ -289,25 +297,70 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                           key: ValueKey('segment-tag-${segment.id}'),
                           controller: _transcriptScroll,
                           index: index,
-                          child: TranscriptSegmentEditor(
-                            key: ValueKey(segment.id),
-                            segment: segment,
-                            tokens: _tokensBySegment[segment.id] ?? const [],
-                            positionMs: _position.inMilliseconds,
-                            isCurrent: query.isEmpty && index == currentIndex,
-                            query: query,
-                            speakerName: context.strings.speakerName(
-                              document.speakerName(segment.speaker),
-                            ),
-                            showSpeaker: controller.settings.showSpeakers,
-                            showTimestamp: controller.settings.showTimestamps,
-                            isEditing: _editingSegmentId == segment.id,
-                            onSeek: () => unawaited(
-                              _seek(Duration(milliseconds: segment.startMs)),
-                            ),
-                            onEdit: () => _startEditing(segment.id),
-                            onCancel: () => _cancelEditing(segment.id),
-                            onSave: (text) => _saveSegment(segment.id, text),
+                          child: Column(
+                            children: [
+                              if (_viewMode != TranslationViewMode.translated)
+                                TranscriptSegmentEditor(
+                                  key: ValueKey(segment.id),
+                                  segment: segment,
+                                  tokens:
+                                      _tokensBySegment[segment.id] ?? const [],
+                                  positionMs: _position.inMilliseconds,
+                                  isCurrent:
+                                      query.isEmpty && index == currentIndex,
+                                  query: query,
+                                  speakerName: context.strings.speakerName(
+                                    document.speakerName(segment.speaker),
+                                  ),
+                                  showSpeaker: controller.settings.showSpeakers,
+                                  showTimestamp:
+                                      controller.settings.showTimestamps,
+                                  isEditing: _editingSegmentId == segment.id,
+                                  onSeek: () => unawaited(
+                                    _seek(
+                                      Duration(milliseconds: segment.startMs),
+                                    ),
+                                  ),
+                                  onEdit: () => _startEditing(segment.id),
+                                  onCancel: () => _cancelEditing(segment.id),
+                                  onSave: (text) =>
+                                      _saveSegment(segment.id, text),
+                                ),
+                              if (_viewMode != TranslationViewMode.original)
+                                _TranslatedSegmentEditor(
+                                  key: ValueKey('translated-${segment.id}'),
+                                  segment: segment,
+                                  isCurrent:
+                                      query.isEmpty && index == currentIndex,
+                                  query: query,
+                                  showTimestamp:
+                                      controller.settings.showTimestamps,
+                                  isEditing:
+                                      _editingTranslationSegmentId ==
+                                      segment.id,
+                                  onSeek: () => unawaited(
+                                    _seek(
+                                      Duration(milliseconds: segment.startMs),
+                                    ),
+                                  ),
+                                  onEdit: () =>
+                                      _startTranslationEditing(segment.id),
+                                  onCancel: () =>
+                                      _cancelTranslationEditing(segment.id),
+                                  onSave: (text) =>
+                                      _saveTranslation(segment.id, text),
+                                  onRetranslate:
+                                      job.translationState.status.isActive ||
+                                          !controller.translationConfigured
+                                      ? null
+                                      : () => context
+                                            .read<AppController>()
+                                            .retranslateSegment(
+                                              widget.jobId,
+                                              segment.id,
+                                            ),
+                                ),
+                            ],
                           ),
                         );
                       },
@@ -382,6 +435,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
   void _startEditing(String segmentId) {
     setState(() {
       _editingSegmentId = segmentId;
+      _editingTranslationSegmentId = null;
       _followPlayback = false;
     });
   }
@@ -403,6 +457,38 @@ class _TranscriptReviewState extends State<TranscriptReview> {
         setState(() => _editingSegmentId = null);
       }
     } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.strings.t('error_unexpected'))),
+      );
+    }
+  }
+
+  void _startTranslationEditing(String segmentId) {
+    setState(() {
+      _editingSegmentId = null;
+      _editingTranslationSegmentId = segmentId;
+      _followPlayback = false;
+    });
+  }
+
+  void _cancelTranslationEditing(String segmentId) {
+    if (_editingTranslationSegmentId == segmentId) {
+      setState(() => _editingTranslationSegmentId = null);
+    }
+  }
+
+  Future<void> _saveTranslation(String segmentId, String text) async {
+    try {
+      await context.read<AppController>().updateTranslatedSegment(
+        widget.jobId,
+        segmentId,
+        text,
+      );
+      if (mounted && _editingTranslationSegmentId == segmentId) {
+        setState(() => _editingTranslationSegmentId = null);
+      }
+    } on Object {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(context.strings.t('error_unexpected'))),
@@ -440,76 +526,466 @@ class _ReviewToolbar extends StatelessWidget {
   const _ReviewToolbar({
     required this.job,
     required this.search,
+    required this.viewMode,
+    required this.onViewModeChanged,
     required this.onSearch,
     required this.onFocusCurrentSentence,
   });
 
   final TranscriptionJob job;
   final TextEditingController search;
+  final TranslationViewMode viewMode;
+  final ValueChanged<TranslationViewMode> onViewModeChanged;
   final VoidCallback onSearch;
   final VoidCallback? onFocusCurrentSentence;
 
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
+    final translationStarted =
+        job.translationState.status != TranslationStatus.idle ||
+        (job.document?.segments.any((segment) => segment.hasTranslation) ??
+            false);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: Text(
-              job.fileName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-          ),
-          SizedBox(
-            width: 180,
-            child: TextField(
-              controller: search,
-              onChanged: (_) => onSearch(),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: context.strings.t('search_transcript'),
-                prefixIcon: const Icon(Icons.search_rounded, size: 20),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  job.fileName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
+              SizedBox(
+                width: 180,
+                child: TextField(
+                  controller: search,
+                  onChanged: (_) => onSearch(),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: context.strings.t('search_transcript'),
+                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                key: const Key('focus-current-sentence'),
+                tooltip: context.strings.t('focus_current_sentence'),
+                onPressed: onFocusCurrentSentence,
+                icon: const Icon(Icons.center_focus_strong_rounded),
+              ),
+              IconButton(
+                key: const Key('translate-transcript'),
+                tooltip: controller.translationConfigured
+                    ? context.strings.t('translate')
+                    : context.strings.t('auto_translate_requires_config'),
+                onPressed:
+                    controller.translationConfigured &&
+                        !job.translationState.status.isActive
+                    ? () => _showTranslationDialog(context, job)
+                    : null,
+                icon: const Icon(Icons.translate_rounded),
+              ),
+              IconButton(
+                tooltip: context.strings.t('copy'),
+                onPressed: () async {
+                  final options = ExportOptions(
+                    showSpeakers: controller.settings.showSpeakers,
+                    showTimestamps: controller.settings.showTimestamps,
+                    localeCode: Localizations.localeOf(context).languageCode,
+                    contentMode: switch (viewMode) {
+                      TranslationViewMode.original =>
+                        ExportContentMode.original,
+                      TranslationViewMode.translated =>
+                        ExportContentMode.translated,
+                      TranslationViewMode.bilingual =>
+                        ExportContentMode.bilingual,
+                    },
+                  );
+                  await Clipboard.setData(
+                    ClipboardData(text: controller.renderJob(job.id, options)),
+                  );
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(context.strings.t('copied'))),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.copy_all_outlined),
+              ),
+              IconButton(
+                tooltip: context.strings.t('export'),
+                onPressed: () => showExportDialog(context, jobId: job.id),
+                icon: const Icon(Icons.ios_share_rounded),
+              ),
+            ],
+          ),
+          if (translationStarted) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SegmentedButton<TranslationViewMode>(
+                  segments: [
+                    ButtonSegment(
+                      value: TranslationViewMode.original,
+                      label: Text(context.strings.t('original')),
+                    ),
+                    ButtonSegment(
+                      value: TranslationViewMode.translated,
+                      label: Text(context.strings.t('translated')),
+                    ),
+                    ButtonSegment(
+                      value: TranslationViewMode.bilingual,
+                      label: Text(context.strings.t('bilingual')),
+                    ),
+                  ],
+                  selected: {viewMode},
+                  onSelectionChanged: (value) => onViewModeChanged(value.first),
+                ),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 180),
+                  child: _TranslationStatusLabel(job: job),
+                ),
+                if (job.translationState.status.isActive)
+                  TextButton.icon(
+                    onPressed: () => controller.cancelTranslation(job.id),
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    label: Text(context.strings.t('cancel')),
+                  )
+                else if (job.translationState.status.canRetry)
+                  TextButton.icon(
+                    onPressed: controller.translationConfigured
+                        ? () => controller.retryTranslation(job.id)
+                        : null,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: Text(context.strings.t('retry_missing')),
+                  ),
+                if (!job.translationState.status.isActive)
+                  TextButton(
+                    onPressed: controller.translationConfigured
+                        ? () => _confirmRetranslateAll(context, job)
+                        : null,
+                    child: Text(context.strings.t('retranslate_all')),
+                  ),
+              ],
             ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TranslationStatusLabel extends StatelessWidget {
+  const _TranslationStatusLabel({required this.job});
+
+  final TranscriptionJob job;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = job.translationState;
+    final text = switch (state.status) {
+      TranslationStatus.translating =>
+        context.strings
+            .t('translation_progress')
+            .replaceFirst('{done}', '${state.completedSegments}')
+            .replaceFirst('{total}', '${state.totalSegments}'),
+      TranslationStatus.completed => context.strings.t('completed'),
+      TranslationStatus.partial ||
+      TranslationStatus.interrupted => context.strings.t('translation_partial'),
+      TranslationStatus.cancelled => context.strings.t('translation_cancelled'),
+      TranslationStatus.failed => context.strings.error(
+        state.errorCode,
+        englishFallback: state.errorMessage,
+      ),
+      TranslationStatus.idle => '',
+    };
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.bodySmall,
+    );
+  }
+}
+
+Future<void> _showTranslationDialog(
+  BuildContext context,
+  TranscriptionJob job,
+) async {
+  final controller = context.read<AppController>();
+  var target = job.translationState.targetLanguage.isNotEmpty
+      ? job.translationState.targetLanguage
+      : controller.settings.translationSettings.targetLanguage;
+  if (!supportedTranslationLanguageCodes.contains(target)) target = 'en';
+  final selected = await showDialog<String>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: Text(context.strings.t('translation_dialog_title')),
+        content: SizedBox(
+          width: 380,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              DropdownButtonFormField<String>(
+                key: const Key('manual-translation-target'),
+                initialValue: target,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('target_language'),
+                ),
+                items: [
+                  for (final code in supportedTranslationLanguageCodes)
+                    DropdownMenuItem(
+                      value: code,
+                      child: Text(
+                        context.strings.translationLanguageName(code),
+                      ),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => target = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              Text(
+                context.strings
+                    .t('translation_model_label')
+                    .replaceFirst(
+                      '{model}',
+                      controller.settings.translationSettings.model,
+                    ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          IconButton(
-            key: const Key('focus-current-sentence'),
-            tooltip: context.strings.t('focus_current_sentence'),
-            onPressed: onFocusCurrentSentence,
-            icon: const Icon(Icons.center_focus_strong_rounded),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(context.strings.t('cancel')),
           ),
-          IconButton(
-            tooltip: context.strings.t('copy'),
-            onPressed: () async {
-              final options = ExportOptions(
-                showSpeakers: controller.settings.showSpeakers,
-                showTimestamps: controller.settings.showTimestamps,
-                localeCode: Localizations.localeOf(context).languageCode,
-              );
-              await Clipboard.setData(
-                ClipboardData(text: controller.renderJob(job.id, options)),
-              );
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(context.strings.t('copied'))),
-                );
-              }
-            },
-            icon: const Icon(Icons.copy_all_outlined),
-          ),
-          IconButton(
-            tooltip: context.strings.t('export'),
-            onPressed: () => showExportDialog(context, jobId: job.id),
-            icon: const Icon(Icons.ios_share_rounded),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, target),
+            child: Text(context.strings.t('translate')),
           ),
         ],
+      ),
+    ),
+  );
+  if (selected == null || !context.mounted) return;
+  final hasExisting =
+      job.document?.segments.any((segment) => segment.hasTranslation) ?? false;
+  final targetChanged =
+      hasExisting &&
+      job.translationState.targetLanguage.isNotEmpty &&
+      job.translationState.targetLanguage != selected;
+  var replace = false;
+  if (targetChanged) {
+    replace = await _confirmTranslationReplacement(context) ?? false;
+    if (!replace || !context.mounted) return;
+  }
+  await controller.translateJob(
+    job.id,
+    targetLanguage: selected,
+    replaceExisting: replace,
+  );
+}
+
+Future<void> _confirmRetranslateAll(
+  BuildContext context,
+  TranscriptionJob job,
+) async {
+  if (await _confirmTranslationReplacement(context) != true ||
+      !context.mounted) {
+    return;
+  }
+  final controller = context.read<AppController>();
+  final target = job.translationState.targetLanguage.isNotEmpty
+      ? job.translationState.targetLanguage
+      : controller.settings.translationSettings.targetLanguage;
+  await controller.translateJob(
+    job.id,
+    targetLanguage: target,
+    replaceExisting: true,
+  );
+}
+
+Future<bool?> _confirmTranslationReplacement(BuildContext context) =>
+    showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.strings.t('translation_replace_title')),
+        content: Text(context.strings.t('translation_replace_body')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(context.strings.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(context.strings.t('continue')),
+          ),
+        ],
+      ),
+    );
+
+class _TranslatedSegmentEditor extends StatefulWidget {
+  const _TranslatedSegmentEditor({
+    super.key,
+    required this.segment,
+    required this.isCurrent,
+    required this.query,
+    required this.showTimestamp,
+    required this.isEditing,
+    required this.onSeek,
+    required this.onEdit,
+    required this.onCancel,
+    required this.onSave,
+    required this.onRetranslate,
+  });
+
+  final TranscriptSegment segment;
+  final bool isCurrent;
+  final String query;
+  final bool showTimestamp;
+  final bool isEditing;
+  final VoidCallback onSeek;
+  final VoidCallback onEdit;
+  final VoidCallback onCancel;
+  final Future<void> Function(String) onSave;
+  final Future<void> Function()? onRetranslate;
+
+  @override
+  State<_TranslatedSegmentEditor> createState() =>
+      _TranslatedSegmentEditorState();
+}
+
+class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
+  late final TextEditingController _draft;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _draft = TextEditingController(text: widget.segment.translatedText ?? '');
+  }
+
+  @override
+  void didUpdateWidget(covariant _TranslatedSegmentEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.isEditing && widget.segment.translatedText != _draft.text) {
+      _draft.text = widget.segment.translatedText ?? '';
+    }
+    if (widget.isEditing && !oldWidget.isEditing) {
+      _draft.text = widget.segment.translatedText ?? '';
+      _draft.selection = TextSelection.collapsed(offset: _draft.text.length);
+    }
+  }
+
+  @override
+  void dispose() {
+    _draft.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final translated = widget.segment.translatedText?.trim();
+    final fallback = translated == null || translated.isEmpty;
+    return Card(
+      key: ValueKey('translated-segment-${widget.segment.id}'),
+      margin: const EdgeInsets.only(top: 4),
+      color: widget.isCurrent
+          ? colors.primaryContainer.withValues(alpha: .35)
+          : colors.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.showTimestamp)
+              TextButton(
+                onPressed: widget.onSeek,
+                child: Text(formatClock(widget.segment.startMs)),
+              ),
+            Expanded(
+              child: widget.isEditing
+                  ? TextField(
+                      key: ValueKey('translated-field-${widget.segment.id}'),
+                      controller: _draft,
+                      autofocus: true,
+                      minLines: 1,
+                      maxLines: null,
+                    )
+                  : InkWell(
+                      onTap: widget.onSeek,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 8,
+                        ),
+                        child: SearchHighlightedText(
+                          text: fallback ? widget.segment.text : translated,
+                          query: widget.query,
+                          style: TextStyle(
+                            fontStyle: fallback ? FontStyle.italic : null,
+                            color: fallback ? colors.onSurfaceVariant : null,
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
+            if (widget.isEditing) ...[
+              IconButton(
+                tooltip: context.strings.t('cancel'),
+                onPressed: _saving ? null : widget.onCancel,
+                icon: const Icon(Icons.close_rounded),
+              ),
+              IconButton(
+                tooltip: context.strings.t('save'),
+                onPressed: _saving
+                    ? null
+                    : () async {
+                        setState(() => _saving = true);
+                        await widget.onSave(_draft.text);
+                        if (mounted) setState(() => _saving = false);
+                      },
+                icon: const Icon(Icons.check_rounded),
+              ),
+            ] else
+              PopupMenuButton<String>(
+                tooltip: context.strings.t('more_actions'),
+                onSelected: (value) {
+                  if (value == 'edit') widget.onEdit();
+                  if (value == 'retranslate') widget.onRetranslate?.call();
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Text(context.strings.t('edit_translation')),
+                  ),
+                  if (widget.onRetranslate != null)
+                    PopupMenuItem(
+                      value: 'retranslate',
+                      child: Text(context.strings.t('retranslate_segment')),
+                    ),
+                ],
+              ),
+          ],
+        ),
       ),
     );
   }

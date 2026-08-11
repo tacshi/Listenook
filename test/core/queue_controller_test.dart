@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/data/openai_translation_service.dart';
 import 'package:meow_stt/data/process_media_service.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
 import 'package:meow_stt/state/app_controller.dart';
@@ -281,6 +282,150 @@ void main() {
   });
 
   test(
+    'translation failure never changes completed transcription state',
+    () async {
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'completed',
+          batchId: 'batch',
+          sourcePath: '/missing/original.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          document: _document(now),
+        ),
+      ]);
+      final settings = _Settings(
+        const AppSettings(
+          translationSettings: TranslationSettings(
+            provider: TranslationProviderTemplate.openAi,
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'translation-model',
+            targetLanguage: 'zh-Hans',
+          ),
+        ),
+      );
+      final controller = _controller(
+        jobs: jobs,
+        soniox: _Soniox(),
+        settings: settings,
+        translationCredentials: _TranslationCredentials(),
+        translationService: _FailingTranslation(),
+      );
+      await controller.initialize();
+
+      await controller.translateJob('completed', targetLanguage: 'zh-Hans');
+
+      final result = controller.allJobs.single;
+      expect(result.status, JobStatus.completed);
+      expect(result.document, isNotNull);
+      expect(result.translationState.status, TranslationStatus.failed);
+      expect(result.translationState.errorCode, 'translation_rate_limit');
+    },
+  );
+
+  test(
+    'changed remote endpoint needs a new key and local save clears cloud key',
+    () async {
+      final credentials = _TranslationCredentials();
+      final settings = _Settings(
+        const AppSettings(
+          translationSettings: TranslationSettings(
+            provider: TranslationProviderTemplate.openAi,
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'old-model',
+          ),
+        ),
+      );
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        settings: settings,
+        translationCredentials: credentials,
+        translationService: _FailingTranslation(),
+      );
+      await controller.initialize();
+
+      final changedEndpoint = await controller.testTranslationConfiguration(
+        const TranslationSettings(
+          provider: TranslationProviderTemplate.deepSeek,
+          baseUrl: 'https://api.deepseek.com/v1',
+        ),
+      );
+      expect(changedEndpoint.errorCode, 'translation_missing_credentials');
+      expect(credentials.value, 'translation-key');
+
+      final saveError = await controller.saveTranslationConfiguration(
+        const TranslationSettings(
+          provider: TranslationProviderTemplate.ollama,
+          baseUrl: 'http://localhost:11434/v1',
+          model: 'local-model',
+        ),
+      );
+      expect(saveError, isNull);
+      expect(credentials.value, isNull);
+      expect(
+        settings.value.translationSettings.provider,
+        TranslationProviderTemplate.ollama,
+      );
+    },
+  );
+
+  test('editing source invalidates only that segment translation', () async {
+    final now = DateTime.now().toUtc();
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'one',
+          startMs: 0,
+          endMs: 500,
+          text: 'One.',
+          translatedText: '一',
+        ),
+        TranscriptSegment(
+          id: 'two',
+          startMs: 500,
+          endMs: 1000,
+          text: 'Two.',
+          translatedText: '二',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: now,
+    );
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'completed',
+        batchId: 'batch',
+        sourcePath: '/missing/original.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        document: document,
+        translationState: const TranslationState(
+          status: TranslationStatus.completed,
+          targetLanguage: 'zh-Hans',
+          completedSegments: 2,
+          totalSegments: 2,
+        ),
+      ),
+    ]);
+    final controller = _controller(jobs: jobs, soniox: _Soniox());
+    await controller.initialize();
+
+    await controller.updateSegment('completed', 'one', 'Edited one');
+
+    final result = controller.allJobs.single;
+    expect(result.document!.segments.first.translatedText, isNull);
+    expect(result.document!.segments.last.translatedText, '二');
+    expect(result.translationState.status, TranslationStatus.partial);
+    expect(result.translationState.completedSegments, 1);
+    expect(result.status, JobStatus.completed);
+  });
+
+  test(
     'clear inactive history retains active work and repairs selection',
     () async {
       final directory = await Directory.systemTemp.createTemp('meow-clear-');
@@ -347,13 +492,18 @@ AppController _controller({
   required _Jobs jobs,
   required _Soniox soniox,
   MediaService? media,
+  SettingsRepository? settings,
+  TranslationCredentialStore? translationCredentials,
+  TranslationService? translationService,
 }) => AppController(
   credentialStore: _Credentials(),
-  settingsRepository: _Settings(),
+  settingsRepository: settings ?? _Settings(),
   jobRepository: jobs,
   mediaService: media ?? _Media(),
   sonioxClient: soniox,
   exporter: const DefaultTranscriptExporter(),
+  translationCredentialStore: translationCredentials,
+  translationService: translationService,
 );
 
 Future<void> _waitFor(bool Function() condition) async {
@@ -378,13 +528,52 @@ class _Credentials implements CredentialStore {
 }
 
 class _Settings implements SettingsRepository {
-  AppSettings value = const AppSettings(concurrency: 2);
+  _Settings([this.value = const AppSettings(concurrency: 2)]);
+
+  AppSettings value;
 
   @override
   Future<AppSettings> load() async => value;
 
   @override
   Future<void> save(AppSettings settings) async => value = settings;
+}
+
+class _TranslationCredentials implements TranslationCredentialStore {
+  String? value = 'translation-key';
+
+  @override
+  Future<void> deleteApiKey() async => value = null;
+
+  @override
+  Future<String?> readApiKey() async => value;
+
+  @override
+  Future<void> writeApiKey(String key) async => value = key;
+}
+
+class _FailingTranslation implements TranslationService {
+  @override
+  Future<List<String>> listModels(
+    TranslationSettings settings, {
+    String? candidateApiKey,
+  }) async => const [];
+
+  @override
+  Future<void> translate({
+    required TranslationSettings settings,
+    required String targetLanguage,
+    required List<TranscriptSegment> segments,
+    required Future<void> Function(
+      Map<String, String> translatedBySegmentId,
+      int completedSegments,
+      int totalSegments,
+    )
+    onBatch,
+    CancelCheck? shouldCancel,
+  }) async {
+    throw const TranslationException('translation_rate_limit');
+  }
 }
 
 class _Jobs implements JobRepository {

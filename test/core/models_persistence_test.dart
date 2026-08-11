@@ -5,6 +5,19 @@ import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/data/local_repositories.dart';
 
 void main() {
+  test('translation provider defaults blank and migrates known endpoints', () {
+    const defaults = TranslationSettings();
+    expect(defaults.provider, TranslationProviderTemplate.custom);
+    expect(defaults.baseUrl, isEmpty);
+
+    final migrated = TranslationSettings.fromJson({
+      'base_url': 'https://api.groq.com/openai/v1',
+      'model': 'example-model',
+    });
+    expect(migrated.provider, TranslationProviderTemplate.groq);
+    expect(migrated.toJson()['provider'], 'groq');
+  });
+
   test('older manifests migrate with safe defaults', () {
     final job = TranscriptionJob.fromJson({
       'id': 'job_1',
@@ -26,6 +39,57 @@ void main() {
     expect(job.cleanupState, CleanupState.none);
     expect(job.options.languageHints, isEmpty);
     expect(job.document!.segments.single.id, '0');
+    expect(job.document!.segments.single.translatedText, isNull);
+    expect(job.translationState.status, TranslationStatus.idle);
+    expect(job.translationOptions.enabled, isFalse);
+  });
+
+  test('version 2 manifests round-trip translation without credentials', () {
+    final now = DateTime.utc(2026, 8, 11);
+    final job = TranscriptionJob(
+      id: 'translated',
+      batchId: 'batch',
+      sourcePath: '/recording.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      document: TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'one',
+            startMs: 0,
+            endMs: 500,
+            text: 'Hello',
+            translatedText: '你好',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: now,
+      ),
+      translationOptions: const TranslationOptions(
+        enabled: true,
+        targetLanguage: 'zh-Hans',
+        baseUrl: 'https://example.com/v1',
+        model: 'example-model',
+      ),
+      translationState: const TranslationState(
+        status: TranslationStatus.completed,
+        targetLanguage: 'zh-Hans',
+        model: 'example-model',
+        completedSegments: 1,
+        totalSegments: 1,
+      ),
+    );
+
+    final json = job.toJson();
+    final restored = TranscriptionJob.fromJson(json);
+
+    expect(json['manifest_version'], 2);
+    expect(job.toJsonString(), isNot(contains('api_key')));
+    expect(restored.document!.segments.single.translatedText, '你好');
+    expect(restored.translationState.status, TranslationStatus.completed);
+    expect(const AppSettings().toJson().toString(), isNot(contains('api_key')));
   });
 
   test('job persistence is atomic and round-trips edits', () async {

@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
+import '../core/models.dart';
+
 class AppStrings {
   const AppStrings(this.locale);
 
@@ -39,6 +41,40 @@ class AppStrings {
     if (match == null) return storedName;
     return t('speaker_number').replaceFirst('{number}', match.group(1)!);
   }
+
+  String translationLanguageName(String code) =>
+      (isZh ? _translationLanguagesZh[code] : null) ??
+      _translationLanguagesEn[code] ??
+      code;
+
+  String translationProviderName(TranslationProviderTemplate provider) =>
+      switch (provider) {
+        TranslationProviderTemplate.custom => t('provider_custom'),
+        TranslationProviderTemplate.openAi => 'OpenAI',
+        TranslationProviderTemplate.deepSeek => 'DeepSeek',
+        TranslationProviderTemplate.groq => 'Groq',
+        TranslationProviderTemplate.nvidiaNim => 'NVIDIA NIM',
+        TranslationProviderTemplate.togetherAi => 'Together AI',
+        TranslationProviderTemplate.mistralAi => 'Mistral AI',
+        TranslationProviderTemplate.lmStudio =>
+          isZh ? 'LM Studio（本地）' : 'LM Studio (Local)',
+        TranslationProviderTemplate.ollama =>
+          isZh ? 'Ollama OpenAI API（本地）' : 'Ollama OpenAI API (Local)',
+        TranslationProviderTemplate.fireworksAi => 'Fireworks AI',
+        TranslationProviderTemplate.perplexity => 'Perplexity',
+        TranslationProviderTemplate.volcengineArk =>
+          isZh ? '火山方舟（豆包）' : 'Volcengine Ark (Doubao)',
+      };
+
+  String translationProviderHelp(TranslationProviderTemplate provider) =>
+      switch (provider) {
+        TranslationProviderTemplate.lmStudio => t('provider_help_lm_studio'),
+        TranslationProviderTemplate.ollama => t('provider_help_ollama'),
+        TranslationProviderTemplate.volcengineArk => t(
+          'provider_help_volcengine',
+        ),
+        _ => '',
+      };
 
   @visibleForTesting
   static Set<String> get missingChineseKeys =>
@@ -99,6 +135,62 @@ class AppStrings {
     'english': 'English',
     'chinese': '简体中文',
     'soniox_key': 'Soniox API key',
+    'llm_translation': 'LLM Translation',
+    'provider_template': 'Provider template',
+    'provider_custom': 'Custom',
+    'provider_popular': 'Popular',
+    'provider_local': 'Local',
+    'provider_other': 'Other',
+    'provider_help_lm_studio':
+        'Start LM Studio with its local server enabled before testing.',
+    'provider_help_ollama':
+        'Start Ollama locally before testing this OpenAI-compatible endpoint.',
+    'provider_help_volcengine':
+        'Use the endpoint ID from Volcengine Ark as the model name.',
+    'base_url': 'Base URL',
+    'model': 'Model',
+    'api_key': 'API key',
+    'translation_model_hint': 'Required; model ID from your endpoint',
+    'translation_test_to_select_model': 'Test the connection to select a model',
+    'translation_select_model': 'Select a model',
+    'translation_local_no_key':
+        'No API key is required for this local provider.',
+    'translation_key_hint': 'Required for remote endpoints',
+    'translation_key_retained_hint': 'Leave blank to keep the stored key',
+    'translation_configured': 'Translation is configured',
+    'translation_not_configured': 'Choose a provider and test the connection',
+    'translation_connection_ok': 'Connection successful',
+    'translation_connection_failed': 'Connection test failed',
+    'translation_connection_no_models':
+        'Connection successful. Model discovery is unavailable; enter a model manually.',
+    'translation_saved': 'Translation settings saved securely.',
+    'translation_privacy_link': 'How transcript text is shared',
+    'translation_privacy_title': 'Optional LLM translation',
+    'translation_privacy_body':
+        'When you translate, transcript text—not media—is sent to the configured OpenAI-compatible endpoint. That endpoint may have its own retention and privacy policy.',
+    'target_language': 'Target language',
+    'auto_translate': 'Translate automatically after transcription',
+    'auto_translate_requires_config':
+        'Configure the translation endpoint and model in Settings first.',
+    'translate': 'Translate',
+    'retry_missing': 'Retry missing',
+    'retranslate_all': 'Retranslate all',
+    'retranslate_segment': 'Retranslate segment',
+    'edit_translation': 'Edit translation',
+    'translation_progress': 'Translating {done} of {total}',
+    'translation_partial': 'Translation is incomplete',
+    'translation_cancelled': 'Translation cancelled',
+    'translation_dialog_title': 'Translate transcript',
+    'translation_model_label': 'Configured model: {model}',
+    'translation_replace_title': 'Replace existing translation?',
+    'translation_replace_body':
+        'Changing the target language replaces the current translated text. Original text is not changed.',
+    'original': 'Original',
+    'translated': 'Translated',
+    'bilingual': 'Bilingual',
+    'export_content': 'Content',
+    'partial_export_warning':
+        'Some segments are not translated. Original text will be used for those segments.',
     'key_configured': 'Securely stored on this device',
     'key_missing': 'Add your Soniox key to transcribe',
     'key_hint': 'soniox_••••••••••••••••',
@@ -111,7 +203,7 @@ class AppStrings {
         'Could not save the key securely. Check Keychain access and try again.',
     'privacy': 'Privacy',
     'privacy_body':
-        'Media is uploaded directly to Soniox. MeowSTT stores only local paths and transcripts, and deletes only the remote files and transcriptions it created.',
+        'Media is uploaded directly to Soniox. Optional translation sends transcript text to your configured LLM endpoint. MeowSTT stores local paths and transcripts, and deletes only the remote Soniox items it created.',
     'ffmpeg': 'FFmpeg diagnostics',
     'refresh': 'Refresh',
     'available': 'Available',
@@ -122,7 +214,7 @@ class AppStrings {
         'The bundled FFmpeg helpers are distributed under GPL-3.0-or-later. Soniox is a third-party transcription provider. Full helper provenance and license texts are included with each distribution.',
     'welcome_title': 'Your recordings stay yours',
     'welcome_body':
-        'MeowSTT is a bring-your-own-key desktop app. When you start a job, its media is uploaded directly to Soniox for transcription. Local history contains file paths and transcript data—not media copies.',
+        'MeowSTT is a bring-your-own-key desktop app. Media is sent to Soniox only when you transcribe. If you enable translation, transcript text is sent separately to your configured LLM endpoint. Local history contains file paths and transcript data—not media copies.',
     'continue': 'Continue',
     'stay': 'Stay',
     'quit_resume': 'Quit & resume later',
@@ -195,6 +287,37 @@ class AppStrings {
     'error_media_error': 'The media file could not be inspected.',
     'error_cancelled': 'Cancelled by the user.',
     'error_transcription_failed': 'Soniox could not transcribe this file.',
+    'error_translation_invalid_url': 'Enter a valid translation base URL.',
+    'error_translation_https_required':
+        'Remote translation endpoints must use HTTPS.',
+    'error_translation_model_required': 'Enter a model before translating.',
+    'error_translation_missing_credentials':
+        'An API key is required for this translation endpoint.',
+    'error_translation_bad_credentials':
+        'The translation API key was rejected.',
+    'error_translation_endpoint_or_model_not_found':
+        'The translation endpoint or model was not found.',
+    'error_translation_rate_limit':
+        'The translation service is rate-limited. Try again later.',
+    'error_translation_timeout': 'The translation request timed out.',
+    'error_translation_network_error':
+        'Could not reach the translation endpoint.',
+    'error_translation_server_failure':
+        'The translation service is temporarily unavailable.',
+    'error_translation_request_failed': 'The translation request failed.',
+    'error_translation_invalid_response':
+        'The translation endpoint returned an invalid response.',
+    'error_translation_invalid_language':
+        'The selected target language is not supported.',
+    'error_translation_unavailable':
+        'Translation is unavailable in this build.',
+    'error_translation_incomplete_response':
+        'Some translated lines were missing from the response.',
+    'error_translation_interrupted':
+        'Translation was interrupted. Retry missing segments when ready.',
+    'error_translation_cancelled': 'Translation was cancelled.',
+    'error_translation_target_change_confirmation_required':
+        'Confirm before replacing the existing target language.',
     'error_unexpected': 'Something went wrong. Try again.',
     'error_unknown': 'Something went wrong. Try again.',
   };
@@ -249,6 +372,54 @@ class AppStrings {
     'english': '英语',
     'chinese': '简体中文',
     'soniox_key': 'Soniox API 密钥',
+    'llm_translation': 'LLM 翻译',
+    'provider_template': '提供商模板',
+    'provider_custom': '自定义',
+    'provider_popular': '热门',
+    'provider_local': '本地',
+    'provider_other': '其他',
+    'provider_help_lm_studio': '测试前请先在 LM Studio 中启用本地服务器。',
+    'provider_help_ollama': '测试前请先在本地启动 Ollama。',
+    'provider_help_volcengine': '请将火山方舟的接入点 ID 作为模型名称。',
+    'base_url': '基础 URL',
+    'model': '模型',
+    'api_key': 'API 密钥',
+    'translation_model_hint': '必填；填写端点支持的模型 ID',
+    'translation_test_to_select_model': '测试连接后选择模型',
+    'translation_select_model': '选择模型',
+    'translation_local_no_key': '此本地提供商无需 API 密钥。',
+    'translation_key_hint': '远程端点需要 API 密钥',
+    'translation_key_retained_hint': '留空可保留已存储的密钥',
+    'translation_configured': '翻译已配置',
+    'translation_not_configured': '请选择提供商并测试连接',
+    'translation_connection_ok': '连接成功',
+    'translation_connection_failed': '连接测试失败',
+    'translation_connection_no_models': '连接成功，但无法发现模型；请手动填写模型。',
+    'translation_saved': '翻译设置已安全保存。',
+    'translation_privacy_link': '转写文本如何发送',
+    'translation_privacy_title': '可选的 LLM 翻译',
+    'translation_privacy_body':
+        '翻译时，转写文本（不包含媒体）会发送到你配置的 OpenAI 兼容端点。该端点可能有自己的数据保留和隐私政策。',
+    'target_language': '目标语言',
+    'auto_translate': '转写完成后自动翻译',
+    'auto_translate_requires_config': '请先在“设置”中配置翻译端点和模型。',
+    'translate': '翻译',
+    'retry_missing': '重试缺失内容',
+    'retranslate_all': '全部重新翻译',
+    'retranslate_segment': '重新翻译此段',
+    'edit_translation': '编辑翻译',
+    'translation_progress': '正在翻译第 {done}/{total} 段',
+    'translation_partial': '翻译不完整',
+    'translation_cancelled': '翻译已取消',
+    'translation_dialog_title': '翻译转写内容',
+    'translation_model_label': '当前模型：{model}',
+    'translation_replace_title': '替换现有翻译？',
+    'translation_replace_body': '更改目标语言会替换当前译文，但不会修改原文。',
+    'original': '原文',
+    'translated': '译文',
+    'bilingual': '双语',
+    'export_content': '导出内容',
+    'partial_export_warning': '部分段落尚未翻译，这些段落将使用原文。',
     'key_configured': '已安全存储在此设备',
     'key_missing': '添加 Soniox 密钥后即可转写',
     'key_hint': 'soniox_••••••••••••••••',
@@ -260,7 +431,7 @@ class AppStrings {
     'key_save_failed': '无法安全保存密钥。请检查“钥匙串”访问权限后重试。',
     'privacy': '隐私',
     'privacy_body':
-        '媒体会直接上传到 Soniox。MeowSTT 仅保存本地路径和转写内容，并且只删除由本应用创建的远程文件与转写任务。',
+        '媒体会直接上传到 Soniox。可选翻译会把转写文本发送到你配置的 LLM 端点。MeowSTT 保存本地路径和转写内容，并且只删除由本应用创建的 Soniox 远程项目。',
     'ffmpeg': 'FFmpeg 诊断',
     'refresh': '刷新',
     'available': '可用',
@@ -271,7 +442,7 @@ class AppStrings {
         '随附的 FFmpeg 辅助程序按 GPL-3.0-or-later 许可证分发。Soniox 是第三方转写服务提供商。每个发行包均包含辅助程序的完整来源信息和许可证文本。',
     'welcome_title': '你的录音始终属于你',
     'welcome_body':
-        'MeowSTT 使用你自己的 Soniox 密钥。开始任务后，媒体会直接上传到 Soniox。历史记录只保存文件路径和转写数据，不复制原始媒体。',
+        'MeowSTT 使用你自己的 API 密钥。只有开始转写后媒体才会发送到 Soniox；启用翻译后，转写文本会另行发送到你配置的 LLM 端点。历史记录只保存文件路径和转写数据，不复制原始媒体。',
     'continue': '继续',
     'stay': '留在应用',
     'quit_resume': '退出并稍后继续',
@@ -339,8 +510,88 @@ class AppStrings {
     'error_media_error': '无法检查此媒体文件。',
     'error_cancelled': '已由用户取消。',
     'error_transcription_failed': 'Soniox 无法转写此文件。',
+    'error_translation_invalid_url': '请输入有效的翻译基础 URL。',
+    'error_translation_https_required': '远程翻译端点必须使用 HTTPS。',
+    'error_translation_model_required': '请先填写翻译模型。',
+    'error_translation_missing_credentials': '此翻译端点需要 API 密钥。',
+    'error_translation_bad_credentials': '翻译 API 密钥被拒绝。',
+    'error_translation_endpoint_or_model_not_found': '未找到翻译端点或模型。',
+    'error_translation_rate_limit': '翻译服务请求过多，请稍后重试。',
+    'error_translation_timeout': '翻译请求超时。',
+    'error_translation_network_error': '无法连接翻译端点。',
+    'error_translation_server_failure': '翻译服务暂时不可用。',
+    'error_translation_request_failed': '翻译请求失败。',
+    'error_translation_invalid_response': '翻译端点返回了无效响应。',
+    'error_translation_invalid_language': '不支持所选目标语言。',
+    'error_translation_unavailable': '此版本无法使用翻译功能。',
+    'error_translation_incomplete_response': '响应中缺少部分译文。',
+    'error_translation_interrupted': '翻译已中断，可在准备好后重试缺失内容。',
+    'error_translation_cancelled': '翻译已取消。',
+    'error_translation_target_change_confirmation_required': '替换现有目标语言前请先确认。',
     'error_unexpected': '出现问题，请重试。',
     'error_unknown': '出现问题，请重试。',
+  };
+
+  static const _translationLanguagesEn = <String, String>{
+    'en': 'English',
+    'zh-Hans': 'Chinese (Simplified)',
+    'zh-Hant': 'Chinese (Traditional)',
+    'ja': 'Japanese',
+    'ko': 'Korean',
+    'es': 'Spanish',
+    'fr': 'French',
+    'de': 'German',
+    'it': 'Italian',
+    'pt': 'Portuguese',
+    'ru': 'Russian',
+    'ar': 'Arabic',
+    'hi': 'Hindi',
+    'vi': 'Vietnamese',
+    'th': 'Thai',
+    'yue': 'Cantonese',
+    'nl': 'Dutch',
+    'pl': 'Polish',
+    'tr': 'Turkish',
+    'uk': 'Ukrainian',
+    'cs': 'Czech',
+    'sv': 'Swedish',
+    'da': 'Danish',
+    'fi': 'Finnish',
+    'el': 'Greek',
+    'he': 'Hebrew',
+    'id': 'Indonesian',
+    'ms': 'Malay',
+  };
+
+  static const _translationLanguagesZh = <String, String>{
+    'en': '英语',
+    'zh-Hans': '简体中文',
+    'zh-Hant': '繁体中文',
+    'ja': '日语',
+    'ko': '韩语',
+    'es': '西班牙语',
+    'fr': '法语',
+    'de': '德语',
+    'it': '意大利语',
+    'pt': '葡萄牙语',
+    'ru': '俄语',
+    'ar': '阿拉伯语',
+    'hi': '印地语',
+    'vi': '越南语',
+    'th': '泰语',
+    'yue': '粤语',
+    'nl': '荷兰语',
+    'pl': '波兰语',
+    'tr': '土耳其语',
+    'uk': '乌克兰语',
+    'cs': '捷克语',
+    'sv': '瑞典语',
+    'da': '丹麦语',
+    'fi': '芬兰语',
+    'el': '希腊语',
+    'he': '希伯来语',
+    'id': '印度尼西亚语',
+    'ms': '马来语',
   };
 }
 

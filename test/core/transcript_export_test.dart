@@ -107,6 +107,40 @@ void main() {
     expect(vtt, contains('00:00:03.000 --> 00:00:04.200'));
   });
 
+  test('translated and bilingual exports fall back safely when partial', () {
+    final translated = document.copyWith(
+      segments: [
+        document.segments.first.copyWith(translatedText: '你好，世界。'),
+        document.segments.last,
+      ],
+    );
+    final translatedText = exporter.render(
+      translated,
+      const ExportOptions(
+        showSpeakers: false,
+        contentMode: ExportContentMode.translated,
+      ),
+      title: 'Meeting',
+    );
+    expect(translatedText, '你好，世界。\n\n你好。');
+
+    final bilingualSrt = exporter.render(
+      translated,
+      const ExportOptions(
+        format: ExportFormat.srt,
+        showSpeakers: false,
+        contentMode: ExportContentMode.bilingual,
+      ),
+      title: 'Meeting',
+    );
+    expect(bilingualSrt, contains('你好，世界。\nHello world.'));
+    expect(
+      RegExp('你好。').allMatches(bilingualSrt),
+      hasLength(1),
+      reason: 'A missing translation should emit one original fallback cue.',
+    );
+  });
+
   test('Chinese exports localize generated labels and Markdown metadata', () {
     final text = exporter.render(
       document,

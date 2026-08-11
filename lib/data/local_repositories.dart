@@ -83,6 +83,37 @@ class SecureCredentialStore implements CredentialStore {
       _storage.delete(key: _storageKey, mOptions: _options);
 }
 
+class SecureTranslationCredentialStore implements TranslationCredentialStore {
+  SecureTranslationCredentialStore({FlutterSecureStorage? storage})
+    : _storage = storage ?? const FlutterSecureStorage();
+
+  static const _service = 'app.meowstt.desktop';
+  static const _storageKey =
+      'app.meowstt.desktop.openai_compatible_translation_api_key';
+  static const _options = MacOsOptions(
+    accountName: _service,
+    accessibility: KeychainAccessibility.first_unlock,
+    usesDataProtectionKeychain: false,
+  );
+
+  final FlutterSecureStorage _storage;
+
+  @override
+  Future<String?> readApiKey() async {
+    final value = await _storage.read(key: _storageKey, mOptions: _options);
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  @override
+  Future<void> writeApiKey(String key) =>
+      _storage.write(key: _storageKey, value: key.trim(), mOptions: _options);
+
+  @override
+  Future<void> deleteApiKey() =>
+      _storage.delete(key: _storageKey, mOptions: _options);
+}
+
 class JsonSettingsRepository implements SettingsRepository {
   JsonSettingsRepository(this.paths);
   final AppPaths paths;

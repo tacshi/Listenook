@@ -183,6 +183,10 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     ),
+    _TranslationSettingsSection(
+      controller: controller,
+      settings: settings.translationSettings,
+    ),
     _Section(
       title: context.strings.t('details'),
       icon: Icons.tune_rounded,
@@ -390,6 +394,459 @@ class _SettingsPageState extends State<SettingsPage> {
   void _showMessage(String message) {
     final messenger = ScaffoldMessenger.of(context);
     messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _TranslationSettingsSection extends StatefulWidget {
+  const _TranslationSettingsSection({
+    required this.controller,
+    required this.settings,
+  });
+
+  final AppController controller;
+  final TranslationSettings settings;
+
+  @override
+  State<_TranslationSettingsSection> createState() =>
+      _TranslationSettingsSectionState();
+}
+
+class _TranslationSettingsSectionState
+    extends State<_TranslationSettingsSection> {
+  late TranslationProviderTemplate _provider;
+  late final TextEditingController _baseUrl;
+  late final TextEditingController _model;
+  final _apiKey = TextEditingController();
+  bool _obscure = true;
+  bool _saving = false;
+  bool _testing = false;
+  bool? _connectionOk;
+  List<String> _models = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _provider = widget.settings.provider;
+    _baseUrl = TextEditingController(text: widget.settings.baseUrl);
+    _model = TextEditingController(text: widget.settings.model);
+  }
+
+  @override
+  void dispose() {
+    _baseUrl.dispose();
+    _model.dispose();
+    _apiKey.dispose();
+    super.dispose();
+  }
+
+  TranslationSettings get _candidate => TranslationSettings(
+    provider: _provider,
+    baseUrl: _baseUrl.text,
+    model: _model.text,
+    targetLanguage: widget.settings.targetLanguage,
+    autoTranslate: widget.settings.autoTranslate,
+  );
+
+  String get _normalizedBaseUrl =>
+      _baseUrl.text.trim().replaceFirst(RegExp(r'/+$'), '');
+
+  bool get _sameSavedEndpoint =>
+      _normalizedBaseUrl ==
+      widget.settings.baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+
+  bool get _canUseStoredKey =>
+      widget.controller.translationKeyConfigured && _sameSavedEndpoint;
+
+  bool get _canTest {
+    final validation = _candidate.validationError(requireModel: false);
+    if (validation != null) return false;
+    return !_candidate.requiresApiKey ||
+        _apiKey.text.trim().isNotEmpty ||
+        _canUseStoredKey;
+  }
+
+  bool get _canSave {
+    if (_candidate.validationError() != null) return false;
+    return !_candidate.requiresApiKey ||
+        _apiKey.text.trim().isNotEmpty ||
+        _canUseStoredKey;
+  }
+
+  bool get _matchesSavedConfiguration =>
+      _provider == widget.settings.provider &&
+      _sameSavedEndpoint &&
+      _model.text.trim() == widget.settings.model.trim();
+
+  @override
+  Widget build(BuildContext context) {
+    final savedConfigurationReady =
+        widget.controller.translationConfigured && _matchesSavedConfiguration;
+    return _Section(
+      title: context.strings.t('llm_translation'),
+      icon: Icons.translate_rounded,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                _connectionOk == false
+                    ? Icons.error_outline_rounded
+                    : savedConfigurationReady
+                    ? Icons.check_circle_outline_rounded
+                    : Icons.settings_outlined,
+                color: _connectionOk == false
+                    ? Theme.of(context).colorScheme.error
+                    : savedConfigurationReady
+                    ? Colors.green
+                    : Theme.of(context).colorScheme.secondary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _connectionOk == true
+                      ? context.strings.t('translation_connection_ok')
+                      : _connectionOk == false
+                      ? context.strings.t('translation_connection_failed')
+                      : savedConfigurationReady
+                      ? context.strings.t('translation_configured')
+                      : context.strings.t('translation_not_configured'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          KeyedSubtree(
+            key: const Key('translation-provider-template-field'),
+            child: DropdownButtonFormField<String>(
+              key: ValueKey(_provider),
+              initialValue: _provider.name,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: context.strings.t('provider_template'),
+                prefixIcon: const Icon(Icons.hub_outlined),
+              ),
+              items: _providerMenuItems(context),
+              onChanged: (value) {
+                final provider = _providerByName(value);
+                if (provider != null) _applyProvider(provider);
+              },
+            ),
+          ),
+          if (_provider == TranslationProviderTemplate.lmStudio ||
+              _provider == TranslationProviderTemplate.ollama ||
+              _provider == TranslationProviderTemplate.volcengineArk)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                context.strings.translationProviderHelp(_provider),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          const SizedBox(height: 10),
+          TextField(
+            key: const Key('translation-base-url-field'),
+            controller: _baseUrl,
+            keyboardType: TextInputType.url,
+            onChanged: _baseUrlChanged,
+            decoration: InputDecoration(
+              labelText: context.strings.t('base_url'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (_candidate.requiresApiKey)
+            TextField(
+              key: const Key('translation-key-field'),
+              controller: _apiKey,
+              obscureText: _obscure,
+              enableSuggestions: false,
+              autocorrect: false,
+              onChanged: (_) => _invalidateTest(clearModel: false),
+              decoration: InputDecoration(
+                labelText: context.strings.t('api_key'),
+                hintText: _canUseStoredKey
+                    ? context.strings.t('translation_key_retained_hint')
+                    : context.strings.t('translation_key_hint'),
+                suffixIcon: IconButton(
+                  onPressed: () => setState(() => _obscure = !_obscure),
+                  icon: Icon(
+                    _obscure
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                ),
+              ),
+            )
+          else
+            Row(
+              children: [
+                const Icon(Icons.computer_rounded, size: 20),
+                const SizedBox(width: 8),
+                Text(context.strings.t('translation_local_no_key')),
+              ],
+            ),
+          const SizedBox(height: 10),
+          _modelField(context),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (_candidate.requiresApiKey)
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final data = await Clipboard.getData(Clipboard.kTextPlain);
+                    if (data?.text != null && mounted) {
+                      setState(() {
+                        _apiKey.text = data!.text!;
+                        _connectionOk = null;
+                        _models = const [];
+                      });
+                    }
+                  },
+                  icon: const Icon(Icons.content_paste_rounded),
+                  label: Text(context.strings.t('paste')),
+                ),
+              FilledButton.icon(
+                key: const Key('save-translation-settings'),
+                onPressed: _saving || !_canSave ? null : _save,
+                icon: _saving
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_rounded),
+                label: Text(context.strings.t('save')),
+              ),
+              OutlinedButton.icon(
+                key: const Key('test-translation-settings'),
+                onPressed: _testing || !_canTest ? null : _test,
+                icon: _testing
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.network_check_rounded),
+                label: Text(context.strings.t('test')),
+              ),
+              if (widget.controller.translationKeyConfigured &&
+                  _sameSavedEndpoint)
+                TextButton.icon(
+                  onPressed: widget.controller.removeTranslationApiKey,
+                  icon: const Icon(Icons.delete_outline_rounded),
+                  label: Text(context.strings.t('remove')),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _showPrivacyExplanation,
+              icon: const Icon(Icons.privacy_tip_outlined, size: 18),
+              label: Text(context.strings.t('translation_privacy_link')),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<DropdownMenuItem<String>> _providerMenuItems(BuildContext context) => [
+    _providerItem(context, TranslationProviderTemplate.custom),
+    _providerHeader(context, 'provider_popular'),
+    _providerItem(context, TranslationProviderTemplate.openAi),
+    _providerItem(context, TranslationProviderTemplate.deepSeek),
+    _providerItem(context, TranslationProviderTemplate.groq),
+    _providerItem(context, TranslationProviderTemplate.nvidiaNim),
+    _providerItem(context, TranslationProviderTemplate.togetherAi),
+    _providerItem(context, TranslationProviderTemplate.mistralAi),
+    _providerHeader(context, 'provider_local'),
+    _providerItem(context, TranslationProviderTemplate.lmStudio),
+    _providerItem(context, TranslationProviderTemplate.ollama),
+    _providerHeader(context, 'provider_other'),
+    _providerItem(context, TranslationProviderTemplate.fireworksAi),
+    _providerItem(context, TranslationProviderTemplate.perplexity),
+    _providerItem(context, TranslationProviderTemplate.volcengineArk),
+  ];
+
+  DropdownMenuItem<String> _providerItem(
+    BuildContext context,
+    TranslationProviderTemplate provider,
+  ) => DropdownMenuItem(
+    value: provider.name,
+    child: Text(context.strings.translationProviderName(provider)),
+  );
+
+  DropdownMenuItem<String> _providerHeader(BuildContext context, String key) =>
+      DropdownMenuItem(
+        value: 'header-$key',
+        enabled: false,
+        child: Text(
+          context.strings.t(key),
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: Theme.of(context).colorScheme.outline,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+
+  TranslationProviderTemplate? _providerByName(String? name) {
+    for (final provider in TranslationProviderTemplate.values) {
+      if (provider.name == name) return provider;
+    }
+    return null;
+  }
+
+  Widget _modelField(BuildContext context) {
+    if (_connectionOk != true) {
+      final value = _model.text.trim();
+      return InputDecorator(
+        key: const Key('translation-model-field'),
+        decoration: InputDecoration(
+          labelText: context.strings.t('model'),
+          prefixIcon: const Icon(Icons.lock_outline_rounded),
+        ),
+        child: Text(
+          value.isEmpty
+              ? context.strings.t('translation_test_to_select_model')
+              : value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      );
+    }
+    if (_models.isEmpty) {
+      return TextField(
+        key: const Key('translation-model-field'),
+        controller: _model,
+        onChanged: (_) => setState(() {}),
+        decoration: InputDecoration(
+          labelText: context.strings.t('model'),
+          hintText: context.strings.t('translation_model_hint'),
+        ),
+      );
+    }
+    final selected = _models.contains(_model.text) ? _model.text : null;
+    return DropdownButtonFormField<String>(
+      key: const Key('translation-model-field'),
+      initialValue: selected,
+      isExpanded: true,
+      menuMaxHeight: 420,
+      decoration: InputDecoration(
+        labelText: context.strings.t('model'),
+        prefixIcon: const Icon(Icons.smart_toy_outlined),
+      ),
+      hint: Text(context.strings.t('translation_select_model')),
+      items: [
+        for (final model in _models)
+          DropdownMenuItem(
+            value: model,
+            child: Text(model, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: (value) => setState(() => _model.text = value ?? ''),
+    );
+  }
+
+  void _applyProvider(TranslationProviderTemplate provider) {
+    if (provider == _provider) return;
+    setState(() {
+      _provider = provider;
+      _baseUrl.text = provider.defaultBaseUrl;
+      _model.clear();
+      _apiKey.clear();
+      _models = const [];
+      _connectionOk = null;
+    });
+  }
+
+  void _baseUrlChanged(String value) {
+    final inferred = TranslationProviderTemplateX.inferFromBaseUrl(value);
+    setState(() {
+      _provider = inferred;
+      _connectionOk = null;
+      _models = const [];
+      _model.clear();
+    });
+  }
+
+  void _invalidateTest({required bool clearModel}) {
+    setState(() {
+      _connectionOk = null;
+      _models = const [];
+      if (clearModel) _model.clear();
+    });
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      final error = await widget.controller.saveTranslationConfiguration(
+        _candidate,
+        apiKey: _apiKey.text,
+      );
+      if (!mounted) return;
+      if (error == null) {
+        _apiKey.clear();
+        _message(context.strings.t('translation_saved'));
+      } else {
+        _message(context.strings.error(error));
+      }
+    } on Object {
+      if (mounted) _message(context.strings.t('key_save_failed'));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _test() async {
+    setState(() => _testing = true);
+    final result = await widget.controller.testTranslationConfiguration(
+      _candidate,
+      candidateApiKey: _apiKey.text,
+    );
+    if (!mounted) return;
+    setState(() {
+      _testing = false;
+      _connectionOk = result.errorCode == null;
+      _models = result.errorCode == null ? result.models : const [];
+      if (result.errorCode == null &&
+          result.models.isNotEmpty &&
+          !result.models.contains(_model.text)) {
+        _model.clear();
+      }
+    });
+    _message(
+      result.errorCode == null
+          ? result.models.isEmpty
+                ? context.strings.t('translation_connection_no_models')
+                : context.strings.t('translation_connection_ok')
+          : context.strings.error(result.errorCode),
+    );
+  }
+
+  Future<void> _showPrivacyExplanation() => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(context.strings.t('translation_privacy_title')),
+      content: Text(context.strings.t('translation_privacy_body')),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(context.strings.t('continue')),
+        ),
+      ],
+    ),
+  );
+
+  void _message(String message) {
+    ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
   }

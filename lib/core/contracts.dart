@@ -13,6 +13,32 @@ abstract interface class CredentialStore {
   Future<void> deleteApiKey();
 }
 
+abstract interface class TranslationCredentialStore {
+  Future<String?> readApiKey();
+  Future<void> writeApiKey(String key);
+  Future<void> deleteApiKey();
+}
+
+abstract interface class TranslationService {
+  Future<List<String>> listModels(
+    TranslationSettings settings, {
+    String? candidateApiKey,
+  });
+
+  Future<void> translate({
+    required TranslationSettings settings,
+    required String targetLanguage,
+    required List<TranscriptSegment> segments,
+    required Future<void> Function(
+      Map<String, String> translatedBySegmentId,
+      int completedSegments,
+      int totalSegments,
+    )
+    onBatch,
+    CancelCheck? shouldCancel,
+  });
+}
+
 abstract interface class SettingsRepository {
   Future<AppSettings> load();
   Future<void> save(AppSettings settings);

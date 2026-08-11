@@ -408,6 +408,61 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
             onTapOutside: (_) => _saveSessionOptions(controller),
           ),
           const Divider(height: 20),
+          _ReviewLine(
+            icon: controller.translationConfigured
+                ? Icons.translate_rounded
+                : Icons.g_translate_outlined,
+            title: context.strings.t('llm_translation'),
+            value: controller.translationConfigured
+                ? settings.translationSettings.model
+                : context.strings.t('translation_not_configured'),
+            action: controller.translationConfigured
+                ? null
+                : () => controller.setDestination(2),
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            key: const Key('translation-target-language'),
+            initialValue:
+                supportedTranslationLanguageCodes.contains(
+                  settings.translationSettings.targetLanguage,
+                )
+                ? settings.translationSettings.targetLanguage
+                : 'en',
+            decoration: InputDecoration(
+              labelText: context.strings.t('target_language'),
+              prefixIcon: const Icon(Icons.language_rounded),
+            ),
+            items: [
+              for (final code in supportedTranslationLanguageCodes)
+                DropdownMenuItem(
+                  value: code,
+                  child: Text(context.strings.translationLanguageName(code)),
+                ),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              controller.updateTranslationDefaults(
+                settings.translationSettings.copyWith(targetLanguage: value),
+              );
+            },
+          ),
+          SwitchListTile(
+            key: const Key('auto-translate-switch'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text(context.strings.t('auto_translate')),
+            subtitle: controller.translationConfigured
+                ? null
+                : Text(context.strings.t('auto_translate_requires_config')),
+            value: settings.translationSettings.autoTranslate,
+            onChanged: controller.translationConfigured
+                ? (value) => controller.updateTranslationDefaults(
+                    settings.translationSettings.copyWith(autoTranslate: value),
+                  )
+                : null,
+          ),
+          const Divider(height: 20),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
@@ -646,6 +701,14 @@ class _JobTile extends StatelessWidget {
                         borderRadius: BorderRadius.circular(99),
                       ),
                     ],
+                    if (job.translationState.status.isActive) ...[
+                      const SizedBox(height: 5),
+                      LinearProgressIndicator(
+                        value: job.translationState.progress,
+                        minHeight: 4,
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -708,7 +771,7 @@ class _JobMenu extends StatelessWidget {
           value: _JobAction.retry,
           child: Text(context.strings.t('retry')),
         ),
-      if (job.status.isActive)
+      if (job.isBusy)
         PopupMenuItem(
           value: _JobAction.cancel,
           child: Text(context.strings.t('cancel')),
@@ -723,7 +786,7 @@ class _JobMenu extends StatelessWidget {
           value: _JobAction.export,
           child: Text(context.strings.t('export')),
         ),
-      if (!job.status.isActive)
+      if (!job.isBusy)
         PopupMenuItem(
           value: _JobAction.remove,
           child: Text(context.strings.t('remove')),
@@ -827,6 +890,52 @@ Future<void> showExportDialog(BuildContext context, {String? jobId}) async {
                 onChanged: (value) =>
                     setState(() => options = options.copyWith(format: value)),
               ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<ExportContentMode>(
+                key: const Key('export-content-mode'),
+                initialValue: options.contentMode,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('export_content'),
+                  prefixIcon: const Icon(Icons.translate_rounded),
+                ),
+                items: [
+                  DropdownMenuItem(
+                    value: ExportContentMode.original,
+                    child: Text(context.strings.t('original')),
+                  ),
+                  DropdownMenuItem(
+                    value: ExportContentMode.translated,
+                    child: Text(context.strings.t('translated')),
+                  ),
+                  DropdownMenuItem(
+                    value: ExportContentMode.bilingual,
+                    child: Text(context.strings.t('bilingual')),
+                  ),
+                ],
+                onChanged: (value) => setState(
+                  () => options = options.copyWith(contentMode: value),
+                ),
+              ),
+              if (options.contentMode != ExportContentMode.original &&
+                  _hasIncompleteTranslations(controller, jobId))
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        color: Theme.of(context).colorScheme.tertiary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          context.strings.t('partial_export_warning'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(context.strings.t('speaker_labels')),
@@ -912,4 +1021,15 @@ Future<void> showExportDialog(BuildContext context, {String? jobId}) async {
       context,
     ).showSnackBar(SnackBar(content: Text(context.strings.t('exported'))));
   }
+}
+
+bool _hasIncompleteTranslations(AppController controller, String? jobId) {
+  final jobs = jobId == null
+      ? controller.workspaceJobs.where((job) => job.document != null)
+      : controller.allJobs.where((job) => job.id == jobId);
+  return jobs.any(
+    (job) =>
+        job.document?.segments.any((segment) => !segment.hasTranslation) ??
+        false,
+  );
 }

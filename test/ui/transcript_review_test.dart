@@ -31,6 +31,53 @@ void main() {
     expect(currentTranscriptSegmentIndex(segments, 5000), 1);
   });
 
+  testWidgets('translated review mode searches and displays translated text', (
+    tester,
+  ) async {
+    final now = DateTime.now().toUtc();
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'segment',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Original sentence.',
+            translatedText: '翻译句子。',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: now,
+      ),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Original'), findsOneWidget);
+    expect(find.text('Translated'), findsOneWidget);
+    expect(find.text('Bilingual'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, '翻译');
+    await tester.pump();
+    await tester.tap(find.text('Translated'));
+    await tester.pump();
+
+    expect(find.text('翻译句子。'), findsOneWidget);
+    expect(find.text('Original sentence.'), findsNothing);
+  });
+
   testWidgets('saving a speaker name closes the dialog without crashing', (
     tester,
   ) async {
