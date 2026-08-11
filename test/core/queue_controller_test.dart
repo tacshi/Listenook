@@ -11,6 +11,32 @@ import 'package:meow_stt/state/app_controller.dart';
 
 void main() {
   test(
+    'playback position survives destination changes for the app session',
+    () async {
+      final controller = _controller(jobs: _Jobs(), soniox: _Soniox());
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      expect(controller.playbackPositionFor('transcript'), Duration.zero);
+
+      controller.rememberPlaybackPosition(
+        'transcript',
+        const Duration(minutes: 2, seconds: 7),
+      );
+      controller.setDestination(1);
+      controller.setDestination(0);
+
+      expect(
+        controller.playbackPositionFor('transcript'),
+        const Duration(minutes: 2, seconds: 7),
+      );
+
+      controller.rememberPlaybackPosition('transcript', Duration.zero);
+      expect(controller.playbackPositionFor('transcript'), Duration.zero);
+    },
+  );
+
+  test(
     'initialization checks credential metadata without reading secrets',
     () async {
       final credentials = _AvailabilityCredentials();

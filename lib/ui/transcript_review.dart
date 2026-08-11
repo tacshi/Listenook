@@ -50,6 +50,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   StreamSubscription<double>? _rateSubscription;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
   final _videoKey = GlobalKey<VideoState>();
+  late final AppController _appController;
   late final ReviewFullscreenController _localFullscreenController;
   NavigatorState? _rootNavigator;
   Duration _position = Duration.zero;
@@ -62,6 +63,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   bool _repeatRestartQueued = false;
   bool _repeatRestartQueuedResume = false;
   bool _followPlayback = true;
+  bool _searchVisible = false;
   TranslationViewMode _viewMode = TranslationViewMode.original;
   int _programmaticScrolls = 0;
   String? _lastScrolledSegmentId;
@@ -82,6 +84,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
   @override
   void initState() {
     super.initState();
+    _appController = context.read<AppController>();
+    _position = _appController.playbackPositionFor(widget.jobId);
     _localFullscreenController = ReviewFullscreenController();
     windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
@@ -134,9 +138,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
   void didUpdateWidget(covariant TranscriptReview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.jobId != widget.jobId) {
+      _rememberPlaybackPosition(oldWidget.jobId);
       _sourceRequest++;
       _search.clear();
-      _position = Duration.zero;
+      _position = _appController.playbackPositionFor(widget.jobId);
       _duration = Duration.zero;
       _videoAspectRatio = 16 / 9;
       _playing = false;
@@ -144,6 +149,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _repeatRestartQueued = false;
       _repeatRestartQueuedResume = false;
       _followPlayback = true;
+      _searchVisible = false;
       _editingSegmentId = null;
       _editingTranslationSegmentId = null;
       _viewMode = TranslationViewMode.original;
@@ -174,6 +180,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
             value.inMilliseconds,
           );
     setState(() => _position = value);
+    _appController.rememberPlaybackPosition(widget.jobId, value);
     final repeatedSegment = _repeatingSegment;
     if (_playing &&
         repeatedSegment != null &&
@@ -231,9 +238,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   Future<void> _openSource() async {
     if (!mounted) return;
-    final job = context
-        .read<AppController>()
-        .allJobs
+    final job = _appController.allJobs
         .where((item) => item.id == widget.jobId)
         .firstOrNull;
     if (job == null || job.sourcePath == _openedPath) return;
@@ -247,9 +252,23 @@ class _TranscriptReviewState extends State<TranscriptReview>
       if (!(job.metadata?.hasVideo ?? false)) {
         unawaited(_loadWaveform(job));
       }
-      await _player!.open(Media(job.sourcePath), play: false);
+      final resumePosition = _appController.playbackPositionFor(job.id);
+      final player = _player!;
+      await player.open(Media(job.sourcePath), play: false);
+      if (!mounted || request != _sourceRequest || widget.jobId != job.id) {
+        return;
+      }
+      final duration = player.state.duration;
+      final restoredPosition =
+          duration > Duration.zero && resumePosition > duration
+          ? duration
+          : resumePosition;
+      if (restoredPosition > Duration.zero) {
+        await player.seek(restoredPosition);
+      }
       if (mounted && request == _sourceRequest && widget.jobId == job.id) {
-        setState(() {});
+        _appController.rememberPlaybackPosition(job.id, restoredPosition);
+        setState(() => _position = restoredPosition);
       }
     }
   }
@@ -275,6 +294,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   @override
   void dispose() {
+    _rememberPlaybackPosition(widget.jobId);
     windowManager.removeListener(this);
     _search.dispose();
     _transcriptScroll.dispose();
@@ -286,6 +306,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _videoParamsSubscription?.cancel();
     _player?.dispose();
     super.dispose();
+  }
+
+  void _rememberPlaybackPosition(String jobId) {
+    _appController.rememberPlaybackPosition(jobId, _position);
   }
 
   @override
@@ -402,6 +426,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
     required bool fillHeight,
     double? videoHeight,
   }) {
+    final showFullscreenShortcuts = context
+        .read<AppController>()
+        .settings
+        .showFullscreenShortcuts;
     if (!File(job.sourcePath).existsSync()) {
       final banner = MaterialBanner(
         content: Text(context.strings.t('source_missing')),
@@ -442,6 +470,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       videoAspectRatio: _videoAspectRatio,
       maxVideoHeight: videoHeight,
       centerInAvailableHeight: fillHeight,
+      showFullscreenShortcuts: showFullscreenShortcuts,
       playing: _playing,
       playbackRate: _playbackRate,
       position: _position,
@@ -463,7 +492,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (!fillHeight && (job.metadata?.hasVideo ?? false)) {
       return SizedBox(
         height:
-            (videoHeight ?? 180) + 56 + PlaybackShortcutsHint.preferredHeight,
+            (videoHeight ?? 180) +
+            56 +
+            (showFullscreenShortcuts
+                ? PlaybackShortcutsHint.preferredHeight
+                : 0),
         child: pane,
       );
     }
@@ -482,8 +515,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _TranscriptToolbar(
         job: job,
         search: _search,
+        searchVisible: _searchVisible,
         viewMode: _viewMode,
         onViewModeChanged: (value) => setState(() => _viewMode = value),
+        onOpenSearch: () => setState(() => _searchVisible = true),
+        onCloseSearch: _closeTranscriptSearch,
         onSearch: () {
           setState(() {});
           if (_search.text.trim().isEmpty) {
@@ -633,6 +669,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _position = position;
       _followPlayback = true;
     });
+    _appController.rememberPlaybackPosition(widget.jobId, position);
     _queueFocusCurrent(force: true);
     await player.seek(position);
   }
@@ -721,7 +758,16 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   void _focusCurrentSentence() {
     _search.clear();
-    setState(() => _followPlayback = true);
+    setState(() {
+      _searchVisible = false;
+      _followPlayback = true;
+    });
+    _queueFocusCurrent(force: true);
+  }
+
+  void _closeTranscriptSearch() {
+    _search.clear();
+    setState(() => _searchVisible = false);
     _queueFocusCurrent(force: true);
   }
 
@@ -907,7 +953,7 @@ class _ReviewHeader extends StatelessWidget {
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
-          IconButton.filledTonal(
+          IconButton(
             key: const Key('toggle-speaker-labels'),
             tooltip: context.strings.t('speaker_labels'),
             isSelected: settings.showSpeakers,
@@ -920,7 +966,7 @@ class _ReviewHeader extends StatelessWidget {
             selectedIcon: const Icon(Icons.person_rounded),
           ),
           const SizedBox(width: 8),
-          IconButton.filledTonal(
+          IconButton(
             key: const Key('toggle-timestamps'),
             tooltip: context.strings.t('timestamps'),
             isSelected: settings.showTimestamps,
@@ -984,16 +1030,24 @@ class _TranscriptToolbar extends StatelessWidget {
   const _TranscriptToolbar({
     required this.job,
     required this.search,
+    required this.searchVisible,
     required this.viewMode,
     required this.onViewModeChanged,
+    required this.onOpenSearch,
+    required this.onCloseSearch,
     required this.onSearch,
     required this.onFocusCurrentSentence,
   });
 
+  static const _expandedBreakpoint = 680.0;
+
   final TranscriptionJob job;
   final TextEditingController search;
+  final bool searchVisible;
   final TranslationViewMode viewMode;
   final ValueChanged<TranslationViewMode> onViewModeChanged;
+  final VoidCallback onOpenSearch;
+  final VoidCallback onCloseSearch;
   final VoidCallback onSearch;
   final VoidCallback? onFocusCurrentSentence;
 
@@ -1004,88 +1058,253 @@ class _TranscriptToolbar extends StatelessWidget {
         job.translationState.status != TranslationStatus.idle ||
         (job.document?.segments.any((segment) => segment.hasTranslation) ??
             false);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: search,
-                  onChanged: (_) => onSearch(),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    hintText: context.strings.t('search_transcript'),
-                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                  ),
-                ),
+    return LayoutBuilder(
+      builder: (context, constraints) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        child: searchVisible
+            ? _buildSearchRow(context)
+            : _buildToolbarRow(
+                context,
+                controller: controller,
+                translationStarted: translationStarted,
+                compact: constraints.maxWidth < _expandedBreakpoint,
               ),
-              const SizedBox(width: 8),
-              IconButton(
-                key: const Key('focus-current-sentence'),
-                tooltip: context.strings.t('focus_current_sentence'),
-                onPressed: onFocusCurrentSentence,
-                icon: const Icon(Icons.center_focus_strong_rounded),
-              ),
-            ],
-          ),
-          if (translationStarted) ...[
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                SegmentedButton<TranslationViewMode>(
-                  segments: [
-                    ButtonSegment(
-                      value: TranslationViewMode.original,
-                      label: Text(context.strings.t('original')),
-                    ),
-                    ButtonSegment(
-                      value: TranslationViewMode.translated,
-                      label: Text(context.strings.t('translated')),
-                    ),
-                    ButtonSegment(
-                      value: TranslationViewMode.bilingual,
-                      label: Text(context.strings.t('bilingual')),
-                    ),
-                  ],
-                  selected: {viewMode},
-                  onSelectionChanged: (value) => onViewModeChanged(value.first),
-                ),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 180),
-                  child: _TranslationStatusLabel(job: job),
-                ),
-                if (job.translationState.status.isActive)
-                  TextButton.icon(
-                    onPressed: () => controller.cancelTranslation(job.id),
-                    icon: const Icon(Icons.stop_circle_outlined),
-                    label: Text(context.strings.t('cancel')),
-                  )
-                else if (job.translationState.status.canRetry)
-                  TextButton.icon(
-                    onPressed: controller.translationConfigured
-                        ? () => controller.retryTranslation(job.id)
-                        : null,
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: Text(context.strings.t('retry_missing_with_llm')),
-                  ),
-                if (!job.translationState.status.isActive)
-                  TextButton(
-                    onPressed: controller.translationConfigured
-                        ? () => _confirmRetranslateAll(context, job)
-                        : null,
-                    child: Text(context.strings.t('retranslate_all_with_llm')),
-                  ),
-              ],
-            ),
-          ],
-        ],
       ),
+    );
+  }
+
+  Widget _buildSearchRow(BuildContext context) => Row(
+    key: const Key('transcript-toolbar-search-row'),
+    children: [
+      IconButton(
+        key: const Key('close-transcript-search'),
+        tooltip: context.strings.t('close_search'),
+        onPressed: onCloseSearch,
+        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.arrow_back_rounded),
+      ),
+      const SizedBox(width: 4),
+      Expanded(
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): onCloseSearch,
+          },
+          child: TextField(
+            key: const Key('transcript-search-field'),
+            autofocus: true,
+            controller: search,
+            onChanged: (_) => onSearch(),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: context.strings.t('search_transcript'),
+              prefixIcon: const Icon(Icons.search_rounded, size: 20),
+              prefixIconConstraints: const BoxConstraints(minWidth: 36),
+              suffixIconConstraints: const BoxConstraints(minWidth: 36),
+              suffixIcon: search.text.isEmpty
+                  ? null
+                  : IconButton(
+                      key: const Key('clear-transcript-search'),
+                      tooltip: context.strings.t('clear_search'),
+                      onPressed: () {
+                        search.clear();
+                        onSearch();
+                      },
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                    ),
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(width: 4),
+      _focusButton(context),
+    ],
+  );
+
+  Widget _buildToolbarRow(
+    BuildContext context, {
+    required AppController controller,
+    required bool translationStarted,
+    required bool compact,
+  }) {
+    final showStatus =
+        translationStarted &&
+        !compact &&
+        job.translationState.status != TranslationStatus.idle &&
+        job.translationState.status != TranslationStatus.completed;
+    return Row(
+      key: const Key('transcript-toolbar-row'),
+      children: [
+        IconButton(
+          key: const Key('open-transcript-search'),
+          tooltip: context.strings.t('search_transcript'),
+          onPressed: onOpenSearch,
+          constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+          padding: EdgeInsets.zero,
+          icon: const Icon(Icons.search_rounded),
+        ),
+        if (translationStarted) ...[
+          const SizedBox(width: 4),
+          _TranslationViewDropdown(
+            value: viewMode,
+            compact: compact,
+            onChanged: onViewModeChanged,
+          ),
+          const SizedBox(width: 4),
+          _TranslationActionIconButton(job: job, controller: controller),
+        ],
+        if (showStatus) ...[
+          const SizedBox(width: 8),
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 180),
+              child: _TranslationStatusLabel(job: job),
+            ),
+          ),
+        ],
+        const Spacer(),
+        _focusButton(context),
+      ],
+    );
+  }
+
+  Widget _focusButton(BuildContext context) => IconButton(
+    key: const Key('focus-current-sentence'),
+    tooltip: context.strings.t('focus_current_sentence'),
+    onPressed: onFocusCurrentSentence,
+    constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+    padding: EdgeInsets.zero,
+    icon: const Icon(Icons.center_focus_strong_rounded),
+  );
+}
+
+class _TranslationViewDropdown extends StatelessWidget {
+  const _TranslationViewDropdown({
+    required this.value,
+    required this.compact,
+    required this.onChanged,
+  });
+
+  final TranslationViewMode value;
+  final bool compact;
+  final ValueChanged<TranslationViewMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: compact ? 108 : 112,
+    height: 40,
+    padding: const EdgeInsets.only(left: 12, right: 8),
+    decoration: BoxDecoration(
+      color:
+          Theme.of(context).inputDecorationTheme.fillColor ??
+          Theme.of(context).colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: DropdownButtonHideUnderline(
+      child: DropdownButton<TranslationViewMode>(
+        key: const Key('translation-view-mode'),
+        value: value,
+        isDense: true,
+        isExpanded: true,
+        icon: const Icon(Icons.arrow_drop_down_rounded, size: 20),
+        items: [
+          DropdownMenuItem(
+            value: TranslationViewMode.original,
+            child: Text(context.strings.t('original')),
+          ),
+          DropdownMenuItem(
+            value: TranslationViewMode.translated,
+            child: Text(context.strings.t('translated')),
+          ),
+          DropdownMenuItem(
+            value: TranslationViewMode.bilingual,
+            child: Text(context.strings.t('bilingual')),
+          ),
+        ],
+        onChanged: (next) {
+          if (next != null) onChanged(next);
+        },
+      ),
+    ),
+  );
+}
+
+enum _TranslationToolbarAction { retryUnfinished, retranslateAll, cancel }
+
+_TranslationToolbarAction _translationToolbarAction(TranslationStatus status) {
+  if (status.isActive) return _TranslationToolbarAction.cancel;
+  if (status.canRetry) return _TranslationToolbarAction.retryUnfinished;
+  return _TranslationToolbarAction.retranslateAll;
+}
+
+void _runTranslationToolbarAction(
+  BuildContext context,
+  TranscriptionJob job,
+  AppController controller,
+  _TranslationToolbarAction action,
+) {
+  switch (action) {
+    case _TranslationToolbarAction.retryUnfinished:
+      unawaited(controller.retryTranslation(job.id));
+    case _TranslationToolbarAction.retranslateAll:
+      unawaited(_confirmRetranslateAll(context, job));
+    case _TranslationToolbarAction.cancel:
+      controller.cancelTranslation(job.id);
+  }
+}
+
+String _translationToolbarActionLabel(
+  BuildContext context,
+  _TranslationToolbarAction action,
+) => switch (action) {
+  _TranslationToolbarAction.retryUnfinished => context.strings.t(
+    'translate_unfinished_with_llm',
+  ),
+  _TranslationToolbarAction.retranslateAll => context.strings.t(
+    'retranslate_all_with_llm',
+  ),
+  _TranslationToolbarAction.cancel => context.strings.t('cancel'),
+};
+
+IconData _translationToolbarActionIcon(_TranslationToolbarAction action) =>
+    switch (action) {
+      _TranslationToolbarAction.retryUnfinished => Icons.refresh_rounded,
+      _TranslationToolbarAction.retranslateAll => Icons.restart_alt_rounded,
+      _TranslationToolbarAction.cancel => Icons.stop_circle_outlined,
+    };
+
+class _TranslationActionIconButton extends StatelessWidget {
+  const _TranslationActionIconButton({
+    required this.job,
+    required this.controller,
+  });
+
+  final TranscriptionJob job;
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final action = _translationToolbarAction(job.translationState.status);
+    final label = _translationToolbarActionLabel(context, action);
+    final enabled =
+        action == _TranslationToolbarAction.cancel ||
+        controller.translationConfigured;
+    return IconButton(
+      key: const Key('translation-toolbar-action'),
+      style: action == _TranslationToolbarAction.cancel
+          ? IconButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            )
+          : null,
+      tooltip: enabled
+          ? label
+          : context.strings.t('auto_translate_requires_config'),
+      onPressed: enabled
+          ? () => _runTranslationToolbarAction(context, job, controller, action)
+          : null,
+      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      padding: EdgeInsets.zero,
+      icon: Icon(_translationToolbarActionIcon(action)),
     );
   }
 }
@@ -1114,14 +1333,63 @@ class _TranslationStatusLabel extends StatelessWidget {
       ),
       TranslationStatus.idle => '',
     };
-    return Text(
-      text,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: Theme.of(context).textTheme.bodySmall,
+    if (text.isEmpty) return const SizedBox.shrink();
+    final color = _translationStatusColor(context, state.status);
+    final indicator = state.status == TranslationStatus.translating
+        ? SizedBox.square(
+            dimension: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: color),
+          )
+        : Icon(_translationStatusIcon(state.status), size: 17, color: color);
+    return Row(
+      key: const Key('translation-status'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        indicator,
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: color,
+              fontWeight: state.status == TranslationStatus.completed
+                  ? FontWeight.w600
+                  : null,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
+
+Color _translationStatusColor(BuildContext context, TranslationStatus status) {
+  final theme = Theme.of(context);
+  final dark = theme.brightness == Brightness.dark;
+  return switch (status) {
+    TranslationStatus.completed =>
+      dark ? Colors.green.shade300 : Colors.green.shade700,
+    TranslationStatus.partial ||
+    TranslationStatus.interrupted ||
+    TranslationStatus.cancelled =>
+      dark ? Colors.orange.shade300 : Colors.orange.shade700,
+    TranslationStatus.failed => theme.colorScheme.error,
+    TranslationStatus.translating => theme.colorScheme.primary,
+    TranslationStatus.idle => theme.colorScheme.onSurfaceVariant,
+  };
+}
+
+IconData _translationStatusIcon(TranslationStatus status) => switch (status) {
+  TranslationStatus.completed => Icons.check_circle_rounded,
+  TranslationStatus.partial ||
+  TranslationStatus.interrupted ||
+  TranslationStatus.cancelled => Icons.warning_amber_rounded,
+  TranslationStatus.failed => Icons.error_rounded,
+  TranslationStatus.translating => Icons.sync_rounded,
+  TranslationStatus.idle => Icons.info_outline_rounded,
+};
 
 Future<void> _showTranslationDialog(
   BuildContext context,
@@ -1471,6 +1739,7 @@ class _MediaPane extends StatelessWidget {
     required this.videoAspectRatio,
     required this.maxVideoHeight,
     required this.centerInAvailableHeight,
+    required this.showFullscreenShortcuts,
     required this.playing,
     required this.playbackRate,
     required this.position,
@@ -1498,6 +1767,7 @@ class _MediaPane extends StatelessWidget {
   final double videoAspectRatio;
   final double? maxVideoHeight;
   final bool centerInAvailableHeight;
+  final bool showFullscreenShortcuts;
   final bool playing;
   final double playbackRate;
   final Duration position;
@@ -1546,7 +1816,9 @@ class _MediaPane extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         const transportHeight = 56.0;
-        const shortcutsHeight = PlaybackShortcutsHint.preferredHeight;
+        final shortcutsHeight = showFullscreenShortcuts
+            ? PlaybackShortcutsHint.preferredHeight
+            : 0.0;
         final aspect = videoAspectRatio.isFinite && videoAspectRatio > 0
             ? videoAspectRatio
             : 16 / 9;
@@ -1647,7 +1919,7 @@ class _MediaPane extends StatelessWidget {
                 ),
               ),
             ),
-            const PlaybackShortcutsHint(),
+            if (showFullscreenShortcuts) const PlaybackShortcutsHint(),
           ],
         );
       },

@@ -783,6 +783,7 @@ class AppSettings {
     this.concurrency = 2,
     this.showSpeakers = true,
     this.showTimestamps = false,
+    this.showFullscreenShortcuts = true,
     this.exportOptions = const ExportOptions(),
     this.onboardingComplete = false,
     this.ffmpegOverride,
@@ -795,6 +796,7 @@ class AppSettings {
   final int concurrency;
   final bool showSpeakers;
   final bool showTimestamps;
+  final bool showFullscreenShortcuts;
   final ExportOptions exportOptions;
   final bool onboardingComplete;
   final String? ffmpegOverride;
@@ -807,6 +809,7 @@ class AppSettings {
     int? concurrency,
     bool? showSpeakers,
     bool? showTimestamps,
+    bool? showFullscreenShortcuts,
     ExportOptions? exportOptions,
     bool? onboardingComplete,
     String? ffmpegOverride,
@@ -819,6 +822,8 @@ class AppSettings {
     concurrency: (concurrency ?? this.concurrency).clamp(1, 4),
     showSpeakers: showSpeakers ?? this.showSpeakers,
     showTimestamps: showTimestamps ?? this.showTimestamps,
+    showFullscreenShortcuts:
+        showFullscreenShortcuts ?? this.showFullscreenShortcuts,
     exportOptions: exportOptions ?? this.exportOptions,
     onboardingComplete: onboardingComplete ?? this.onboardingComplete,
     ffmpegOverride: clearFfmpegOverride
@@ -835,6 +840,7 @@ class AppSettings {
     'concurrency': concurrency,
     'show_speakers': showSpeakers,
     'show_timestamps': showTimestamps,
+    'show_fullscreen_shortcuts': showFullscreenShortcuts,
     'export_options': exportOptions.toJson(),
     'onboarding_complete': onboardingComplete,
     if (ffmpegOverride case final value?) 'ffmpeg_override': value,
@@ -852,6 +858,7 @@ class AppSettings {
     concurrency: ((json['concurrency'] as num?)?.toInt() ?? 2).clamp(1, 4),
     showSpeakers: json['show_speakers'] as bool? ?? true,
     showTimestamps: json['show_timestamps'] as bool? ?? false,
+    showFullscreenShortcuts: json['show_fullscreen_shortcuts'] as bool? ?? true,
     exportOptions: ExportOptions.fromJson(
       (json['export_options'] as Map?)?.cast<String, dynamic>(),
     ),

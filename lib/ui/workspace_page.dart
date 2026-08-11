@@ -132,23 +132,23 @@ class _Header extends StatelessWidget {
             icon: const Icon(Icons.add_rounded),
             label: Text(context.strings.t('add_files')),
           ),
+          FilledButton.icon(
+            key: const Key('header-transcribe'),
+            onPressed:
+                controller.readyCount > 0 &&
+                    controller.keyConfigured &&
+                    !controller.processing
+                ? controller.startReady
+                : null,
+            icon: controller.processing
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.auto_awesome_rounded),
+            label: Text(context.strings.t('transcribe')),
+          ),
         ],
-        FilledButton.icon(
-          key: const Key('header-transcribe'),
-          onPressed:
-              controller.readyCount > 0 &&
-                  controller.keyConfigured &&
-                  !controller.processing
-              ? controller.startReady
-              : null,
-          icon: controller.processing
-              ? const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.auto_awesome_rounded),
-          label: Text(context.strings.t('transcribe')),
-        ),
         _ExportAllButton(controller: controller, compact: !showFullLabels),
       ],
     ];

@@ -294,16 +294,514 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Original'), findsOneWidget);
-    expect(find.text('Translated'), findsOneWidget);
-    expect(find.text('Bilingual'), findsOneWidget);
-    await tester.enterText(find.byType(TextField).first, '翻译');
+    final viewDropdown = tester.widget<DropdownButton<TranslationViewMode>>(
+      find.byKey(const Key('translation-view-mode')),
+    );
+    expect(
+      viewDropdown.items!.map((item) => item.value),
+      TranslationViewMode.values,
+    );
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const Key('translation-toolbar-action')),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const Key('translation-toolbar-action')),
+          )
+          .tooltip,
+      'Configure the translation endpoint and model in Settings first.',
+    );
+    await _selectTranslationView(tester, 'Translated');
+    await tester.tap(find.byKey(const Key('open-transcript-search')));
     await tester.pump();
-    await tester.tap(find.text('Translated'));
+    await tester.enterText(
+      find.byKey(const Key('transcript-search-field')),
+      '翻译',
+    );
     await tester.pump();
 
     expect(find.text('翻译句子。'), findsOneWidget);
     expect(find.text('Original sentence.'), findsNothing);
+  });
+
+  testWidgets(
+    'completed translation toolbar uses an adjacent localized action icon',
+    (tester) async {
+      _setTestWindow(tester, const Size(900, 620));
+      final controller = await _controllerForDocument(
+        TranscriptDocument(
+          tokens: const [],
+          segments: const [
+            TranscriptSegment(
+              id: 'segment',
+              startMs: 0,
+              endMs: 1000,
+              text: 'Original sentence.',
+              translatedText: '翻译句子。',
+            ),
+          ],
+          speakers: const [],
+          updatedAt: DateTime.now().toUtc(),
+        ),
+        translationState: const TranslationState(
+          status: TranslationStatus.completed,
+          targetLanguage: 'zh-Hans',
+          completedSegments: 1,
+          totalSegments: 1,
+        ),
+        settings: _configuredTranslationAppSettings,
+      );
+      addTearDown(controller.dispose);
+
+      Future<void> pump(Locale locale) => tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: MaterialApp(
+            locale: locale,
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: const [
+              AppStrings.delegate,
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+          ),
+        ),
+      );
+
+      await pump(const Locale('en'));
+      await tester.pumpAndSettle();
+
+      final toolbar = find.byKey(const Key('transcript-toolbar-row'));
+      expect(toolbar, findsOneWidget);
+      expect(
+        find.descendant(
+          of: toolbar,
+          matching: find.byKey(const Key('open-transcript-search')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: toolbar,
+          matching: find.byKey(const Key('translation-view-mode')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: toolbar,
+          matching: find.byKey(const Key('translation-status')),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: toolbar,
+          matching: find.byKey(const Key('translation-toolbar-action')),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byType(SegmentedButton<TranslationViewMode>), findsNothing);
+      expect(find.text('Retranslate all with LLM'), findsNothing);
+      expect(find.text('Completed'), findsNothing);
+      expect(
+        tester
+            .widget<IconButton>(
+              find.byKey(const Key('translation-toolbar-action')),
+            )
+            .tooltip,
+        'Retranslate all with LLM',
+      );
+      expect(
+        tester
+            .widget<IconButton>(
+              find.byKey(const Key('translation-toolbar-action')),
+            )
+            .style,
+        isNull,
+      );
+      expect(find.byIcon(Icons.restart_alt_rounded), findsOneWidget);
+      final dropdown = tester.getRect(
+        find.byKey(const Key('translation-view-mode')),
+      );
+      final action = tester.getRect(
+        find.byKey(const Key('translation-toolbar-action')),
+      );
+      final toolbarRect = tester.getRect(toolbar);
+      final focus = tester.getRect(
+        find.byKey(const Key('focus-current-sentence')),
+      );
+      expect(action.left - dropdown.right, lessThanOrEqualTo(16));
+      expect(action.left, greaterThan(dropdown.left));
+      expect(focus.right, closeTo(toolbarRect.right, 0.1));
+      expect(tester.takeException(), isNull);
+
+      await pump(const Locale('zh'));
+      await tester.pumpAndSettle();
+      expect(find.text('已完成'), findsNothing);
+      expect(find.text('使用 LLM 全部重新翻译'), findsNothing);
+      expect(
+        tester
+            .widget<IconButton>(
+              find.byKey(const Key('translation-toolbar-action')),
+            )
+            .tooltip,
+        '使用 LLM 全部重新翻译',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('retryable translation exposes only its adjacent action icon', (
+    tester,
+  ) async {
+    // TranscriptReview's Card contributes 8px of horizontal margin, leaving
+    // the toolbar at the exact 680px expanded-layout breakpoint.
+    _setTestWindow(tester, const Size(688, 620));
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'translated',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Translated source.',
+            translatedText: '已有译文。',
+          ),
+          TranscriptSegment(
+            id: 'missing',
+            startMs: 1000,
+            endMs: 2000,
+            text: 'Missing translation.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      translationState: const TranslationState(
+        status: TranslationStatus.partial,
+        targetLanguage: 'zh-Hans',
+        completedSegments: 1,
+        totalSegments: 2,
+      ),
+      settings: _configuredTranslationAppSettings,
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Translation is incomplete'), findsOneWidget);
+    expect(find.text('Translate unfinished with LLM'), findsNothing);
+    expect(find.text('Retranslate all with LLM'), findsNothing);
+    expect(find.byKey(const Key('translation-more-actions')), findsNothing);
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const Key('translation-toolbar-action')),
+          )
+          .tooltip,
+      'Translate unfinished with LLM',
+    );
+    expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.text('Translation is incomplete')).style?.color,
+      Colors.orange.shade700,
+    );
+  });
+
+  testWidgets('active translation exposes only the adjacent cancel icon', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(900, 620));
+    final translation = _BlockingTranslation();
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      settings: _configuredTranslationAppSettings,
+      translationService: translation,
+    );
+    addTearDown(controller.dispose);
+    final translationFuture = controller.translateJob(
+      'job',
+      targetLanguage: 'zh-Hans',
+    );
+    await translation.started.future;
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Translating 0 of 1'), findsOneWidget);
+    expect(find.text('Cancel'), findsNothing);
+    expect(find.text('Translate unfinished with LLM'), findsNothing);
+    expect(find.text('Retranslate all with LLM'), findsNothing);
+    expect(find.byKey(const Key('translation-more-actions')), findsNothing);
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const Key('translation-toolbar-action')),
+          )
+          .tooltip,
+      'Cancel',
+    );
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const Key('translation-toolbar-action')),
+          )
+          .style
+          ?.backgroundColor
+          ?.resolve({}),
+      isNull,
+    );
+    expect(find.byIcon(Icons.stop_circle_outlined), findsOneWidget);
+
+    translation.release.complete();
+    await translationFuture;
+  });
+
+  testWidgets('280px completed toolbar keeps the action beside the dropdown', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'segment',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Original sentence.',
+            translatedText: '翻译句子。',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      metadata: _videoMetadata,
+      sourcePath: '/missing/test.mp4',
+      translationState: const TranslationState(
+        status: TranslationStatus.completed,
+        targetLanguage: 'zh-Hans',
+        completedSegments: 1,
+        totalSegments: 1,
+      ),
+      settings: _configuredTranslationAppSettings,
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.drag(
+      find.byKey(const Key('video-transcript-divider')),
+      const Offset(500, 0),
+    );
+    await tester.pump();
+
+    expect(
+      tester
+          .getSize(find.byKey(const Key('video-review-transcript-pane')))
+          .width,
+      closeTo(280, 1),
+    );
+    expect(find.byKey(const Key('translation-more-actions')), findsNothing);
+    expect(find.byKey(const Key('translation-toolbar-action')), findsOneWidget);
+    expect(find.byKey(const Key('translation-status')), findsNothing);
+    expect(find.text('Completed'), findsNothing);
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const Key('translation-toolbar-action')),
+          )
+          .tooltip,
+      'Retranslate all with LLM',
+    );
+    expect(
+      tester.getRect(find.byKey(const Key('focus-current-sentence'))).right,
+      closeTo(
+        tester.getRect(find.byKey(const Key('transcript-toolbar-row'))).right,
+        0.1,
+      ),
+    );
+  });
+
+  testWidgets('search takes over one row and clears on Escape or Back', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'first',
+            startMs: 0,
+            endMs: 1000,
+            text: 'First sentence.',
+          ),
+          TranscriptSegment(
+            id: 'second',
+            startMs: 1000,
+            endMs: 2000,
+            text: 'Second sentence.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('transcript-search-field')), findsNothing);
+    await tester.tap(find.byKey(const Key('open-transcript-search')));
+    await tester.pump();
+    final search = find.byKey(const Key('transcript-search-field'));
+    expect(search, findsOneWidget);
+    expect(find.byKey(const Key('transcript-toolbar-row')), findsNothing);
+
+    await tester.enterText(search, 'Second');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('segment-card-first')), findsNothing);
+    expect(find.byKey(const ValueKey('segment-card-second')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('clear-transcript-search')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('segment-card-first')), findsOneWidget);
+    expect(find.byKey(const ValueKey('segment-card-second')), findsOneWidget);
+
+    await tester.enterText(search, 'Second');
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(search, findsNothing);
+    expect(find.byKey(const Key('open-transcript-search')), findsOneWidget);
+    expect(find.byKey(const ValueKey('segment-card-first')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('open-transcript-search')));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('transcript-search-field')),
+      'Second',
+    );
+    await tester.tap(find.byKey(const Key('close-transcript-search')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('transcript-search-field')), findsNothing);
+    expect(find.byKey(const ValueKey('segment-card-first')), findsOneWidget);
+  });
+
+  testWidgets('changing the reviewed job closes and clears search', (
+    tester,
+  ) async {
+    final now = DateTime.now().toUtc();
+    TranscriptDocument document(String id) => TranscriptDocument(
+      tokens: const [],
+      segments: [
+        TranscriptSegment(
+          id: id,
+          startMs: 0,
+          endMs: 1000,
+          text: '$id sentence.',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: now,
+    );
+    TranscriptionJob job(String id) => TranscriptionJob(
+      id: id,
+      batchId: 'batch',
+      sourcePath: '/missing/$id.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      document: document(id),
+    );
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([job('first'), job('second')]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    Future<void> pump(String jobId) => tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: jobId)),
+        ),
+      ),
+    );
+
+    await pump('first');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('open-transcript-search')));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('transcript-search-field')),
+      'no match',
+    );
+    await tester.pump();
+    expect(find.byKey(const ValueKey('segment-card-first')), findsNothing);
+
+    await pump('second');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('transcript-search-field')), findsNothing);
+    expect(find.byKey(const Key('open-transcript-search')), findsOneWidget);
+    expect(find.byKey(const ValueKey('segment-card-second')), findsOneWidget);
   });
 
   testWidgets('each translation view shows one repeat control per sentence', (
@@ -352,8 +850,7 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(find.text('Translated'));
-    await tester.pumpAndSettle();
+    await _selectTranslationView(tester, 'Translated');
     expect(find.byKey(repeatKey), findsOneWidget);
     expect(
       find.descendant(
@@ -363,8 +860,7 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(find.text('Bilingual'));
-    await tester.pumpAndSettle();
+    await _selectTranslationView(tester, 'Bilingual');
     expect(find.byKey(repeatKey), findsOneWidget);
     expect(
       find.descendant(
@@ -427,6 +923,14 @@ void main() {
     expect(
       tester.widget<IconButton>(find.byKey(timestampToggle)).isSelected,
       isFalse,
+    );
+    expect(
+      tester.widget<IconButton>(find.byKey(speakerToggle)).style,
+      isNull,
+    );
+    expect(
+      tester.widget<IconButton>(find.byKey(timestampToggle)).style,
+      isNull,
     );
     expect(find.byKey(speakerLabel), findsOneWidget);
     expect(find.byType(SpeakerStrip), findsOneWidget);
@@ -500,8 +1004,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('segment-card-empty')), findsNothing);
-    await tester.tap(find.text('Translated'));
-    await tester.pump();
+    await _selectTranslationView(tester, 'Translated');
     expect(find.text('可见译文。'), findsOneWidget);
     expect(find.byKey(const ValueKey('translated-empty')), findsNothing);
   });
@@ -1303,7 +1806,10 @@ void main() {
     const windowChannel = MethodChannel('window_manager');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(windowChannel, (_) async => null);
+    messenger.setMockMethodCallHandler(
+      windowChannel,
+      (call) async => call.method == 'isFullScreen' ? false : null,
+    );
     addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
     final controller = AppController(
       credentialStore: _Credentials(),
@@ -1525,6 +2031,109 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('app-sidebar')), findsOneWidget);
     expect(find.byType(NavigationRail), findsOneWidget);
+
+    final dynamic appShellState = tester.state(find.byType(AppShell));
+    appShellState.onWindowEnterFullScreen();
+    await tester.pump();
+    expect(windowToolbar, findsNothing);
+    expect(
+      find.byKey(const Key('app-window-toolbar-fullscreen-hidden')),
+      findsOneWidget,
+    );
+
+    appShellState.onWindowLeaveFullScreen();
+    await tester.pump();
+    expect(windowToolbar, findsOneWidget);
+  });
+
+  testWidgets('playback position is restored after switching app tabs', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    const windowChannel = MethodChannel('window_manager');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      windowChannel,
+      (call) async => call.method == 'isFullScreen' ? false : null,
+    );
+    addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
+    final now = DateTime.now().toUtc();
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'first',
+            startMs: 0,
+            endMs: 1000,
+            text: 'First sentence.',
+          ),
+          TranscriptSegment(
+            id: 'second',
+            startMs: 1400,
+            endMs: 2400,
+            text: 'Second sentence.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: now,
+      ),
+      settings: const AppSettings(onboardingComplete: true),
+    );
+    addTearDown(controller.dispose);
+    controller
+      ..reopen('job')
+      ..rememberPlaybackPosition('job', const Duration(milliseconds: 1600));
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const AppShell(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final firstReviewState = tester.state(find.byType(TranscriptReview));
+    expect(
+      tester
+          .widget<TranscriptSegmentEditor>(find.byKey(const ValueKey('second')))
+          .isCurrent,
+      isTrue,
+    );
+
+    controller.setDestination(1);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('library-page-title')), findsOneWidget);
+    expect(find.byType(TranscriptReview), findsNothing);
+
+    controller.setDestination(0);
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.state(find.byType(TranscriptReview)),
+      isNot(firstReviewState),
+    );
+    expect(
+      tester
+          .widget<TranscriptSegmentEditor>(find.byKey(const ValueKey('second')))
+          .isCurrent,
+      isTrue,
+    );
+    expect(
+      controller.playbackPositionFor('job'),
+      const Duration(milliseconds: 1600),
+    );
   });
 
   testWidgets('macOS toolbar aligns sidebar toggle with traffic lights', (
@@ -2392,6 +3001,7 @@ void main() {
     expect(find.text('Hello'), findsOneWidget);
     expect(find.byKey(const Key('header-add-folder')), findsNothing);
     expect(find.byKey(const Key('header-add-files')), findsNothing);
+    expect(find.byKey(const Key('header-transcribe')), findsNothing);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.byKey(const Key('new-transcription')));
@@ -2738,7 +3348,9 @@ void main() {
       ),
     );
 
-    final search = find.byType(TextField);
+    await tester.tap(find.byKey(const Key('open-transcript-search')));
+    await tester.pump();
+    final search = find.byKey(const Key('transcript-search-field'));
     final focus = find.byKey(const Key('focus-current-sentence'));
     expect(tester.getCenter(search).dx, lessThan(tester.getCenter(focus).dx));
     await tester.enterText(search, 'Sentence 0');
@@ -2753,7 +3365,8 @@ void main() {
     await tester.tap(focus);
     await tester.pumpAndSettle();
 
-    expect(tester.widget<TextField>(search).controller!.text, isEmpty);
+    expect(search, findsNothing);
+    expect(find.byKey(const Key('open-transcript-search')), findsOneWidget);
     expect(position.pixels, greaterThan(0));
     final currentCard = tester.widget<DecoratedBox>(
       find.byKey(const ValueKey('segment-card-segment-59')),
@@ -2944,11 +3557,14 @@ Future<AppController> _controllerForDocument(
   TranscriptDocument document, {
   MediaMetadata? metadata,
   String sourcePath = '/missing/test.wav',
+  TranslationState translationState = const TranslationState(),
+  AppSettings settings = const AppSettings(),
+  TranslationService? translationService,
 }) async {
   final now = DateTime.now().toUtc();
   final controller = AppController(
     credentialStore: _Credentials(),
-    settingsRepository: _Settings(),
+    settingsRepository: _Settings(settings),
     jobRepository: _Jobs([
       TranscriptionJob(
         id: 'job',
@@ -2959,14 +3575,23 @@ Future<AppController> _controllerForDocument(
         status: JobStatus.completed,
         metadata: metadata,
         document: document,
+        translationState: translationState,
       ),
     ]),
     mediaService: _Media(),
     sonioxClient: _Soniox(),
     exporter: const DefaultTranscriptExporter(),
+    translationService: translationService,
   );
   await controller.initialize();
   return controller;
+}
+
+Future<void> _selectTranslationView(WidgetTester tester, String label) async {
+  await tester.tap(find.byKey(const Key('translation-view-mode')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(label).last);
+  await tester.pumpAndSettle();
 }
 
 void _noop() {}
@@ -2996,6 +3621,14 @@ const _videoMetadata = MediaMetadata(
   hasAudio: true,
   hasVideo: true,
   formatName: 'mp4',
+);
+
+const _configuredTranslationAppSettings = AppSettings(
+  translationSettings: TranslationSettings(
+    baseUrl: 'http://localhost:1234/v1',
+    model: 'test-model',
+    targetLanguage: 'zh-Hans',
+  ),
 );
 
 Future<AppController> _pumpSpeakerStrip(WidgetTester tester) async {
@@ -3063,6 +3696,34 @@ class _Credentials implements CredentialStore {
 
   @override
   Future<void> writeApiKey(String key) async {}
+}
+
+class _BlockingTranslation implements TranslationService {
+  final started = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<List<String>> listModels(
+    TranslationSettings settings, {
+    String? candidateApiKey,
+  }) async => const [];
+
+  @override
+  Future<void> translate({
+    required TranslationSettings settings,
+    required String targetLanguage,
+    required List<TranscriptSegment> segments,
+    required Future<void> Function(
+      Map<String, String> translatedBySegmentId,
+      int completedSegments,
+      int totalSegments,
+    )
+    onBatch,
+    CancelCheck? shouldCancel,
+  }) async {
+    started.complete();
+    await release.future;
+  }
 }
 
 class _Settings implements SettingsRepository {

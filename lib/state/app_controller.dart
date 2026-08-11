@@ -47,6 +47,7 @@ class AppController extends ChangeNotifier {
   final TranscriptParser _parser;
   final Uuid _uuid;
   final Map<String, TranscriptionJob> _jobs = {};
+  final Map<String, Duration> _playbackPositions = {};
   final List<String> _workspaceIds = [];
   final Set<String> _cancelledIds = {};
   final Set<String> _translationCancelledIds = {};
@@ -88,6 +89,17 @@ class AppController extends ChangeNotifier {
 
   TranscriptionJob? get selectedJob =>
       _selectedJobId == null ? null : _jobs[_selectedJobId];
+
+  Duration playbackPositionFor(String jobId) =>
+      _playbackPositions[jobId] ?? Duration.zero;
+
+  void rememberPlaybackPosition(String jobId, Duration position) {
+    if (position <= Duration.zero) {
+      _playbackPositions.remove(jobId);
+      return;
+    }
+    _playbackPositions[jobId] = position;
+  }
 
   int get readyCount =>
       workspaceJobs.where((job) => job.status.canTranscribe).length;
@@ -687,6 +699,7 @@ class AppController extends ChangeNotifier {
     _workspaceIds.remove(id);
     if (job.document == null) {
       _jobs.remove(id);
+      _playbackPositions.remove(id);
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
@@ -702,6 +715,7 @@ class AppController extends ChangeNotifier {
     ];
     for (final id in discardedIds) {
       _jobs.remove(id);
+      _playbackPositions.remove(id);
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
@@ -718,6 +732,7 @@ class AppController extends ChangeNotifier {
     final job = _jobs[id];
     if (job == null || job.isBusy) return;
     _jobs.remove(id);
+    _playbackPositions.remove(id);
     _workspaceIds.remove(id);
     if (_selectedJobId == id) _selectedJobId = null;
     await _media.deleteGeneratedMedia(id);
@@ -735,6 +750,7 @@ class AppController extends ChangeNotifier {
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
       _jobs.remove(id);
+      _playbackPositions.remove(id);
       _workspaceIds.remove(id);
     }
     await _media.clearGeneratedMediaExcept(_jobs.keys.toSet());
