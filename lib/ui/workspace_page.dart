@@ -84,6 +84,7 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
     final showFullLabels = MediaQuery.sizeOf(context).width >= 1180;
+    final isNewTranscription = controller.selectedJob?.document == null;
     final actions = <Widget>[
       if (controller.workspaceJobs.isNotEmpty)
         showFullLabels
@@ -99,16 +100,20 @@ class _Header extends StatelessWidget {
                 tooltip: context.strings.t('new_transcription'),
                 icon: const Icon(Icons.note_add_outlined),
               ),
-      OutlinedButton.icon(
-        onPressed: onAddFolder,
-        icon: const Icon(Icons.create_new_folder_outlined),
-        label: Text(context.strings.t('add_folder')),
-      ),
-      OutlinedButton.icon(
-        onPressed: onAddFiles,
-        icon: const Icon(Icons.add_rounded),
-        label: Text(context.strings.t('add_files')),
-      ),
+      if (isNewTranscription) ...[
+        OutlinedButton.icon(
+          key: const Key('header-add-folder'),
+          onPressed: onAddFolder,
+          icon: const Icon(Icons.create_new_folder_outlined),
+          label: Text(context.strings.t('add_folder')),
+        ),
+        OutlinedButton.icon(
+          key: const Key('header-add-files'),
+          onPressed: onAddFiles,
+          icon: const Icon(Icons.add_rounded),
+          label: Text(context.strings.t('add_files')),
+        ),
+      ],
       FilledButton.icon(
         onPressed:
             controller.readyCount > 0 &&

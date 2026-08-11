@@ -247,62 +247,63 @@ class _SettingsPageState extends State<SettingsPage> {
     AppController controller,
     AppSettings settings,
   ) => _tabList([
-    _Section(
-      title: context.strings.t('appearance'),
-      icon: Icons.palette_outlined,
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(child: Text(context.strings.t('theme'))),
-              DropdownButton<AppThemeMode>(
-                value: settings.themeMode,
-                items: [
-                  DropdownMenuItem(
-                    value: AppThemeMode.system,
-                    child: Text(context.strings.t('system')),
+    Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text(context.strings.t('theme'))),
+                DropdownButton<AppThemeMode>(
+                  value: settings.themeMode,
+                  items: [
+                    DropdownMenuItem(
+                      value: AppThemeMode.system,
+                      child: Text(context.strings.t('system')),
+                    ),
+                    DropdownMenuItem(
+                      value: AppThemeMode.light,
+                      child: Text(context.strings.t('light')),
+                    ),
+                    DropdownMenuItem(
+                      value: AppThemeMode.dark,
+                      child: Text(context.strings.t('dark')),
+                    ),
+                  ],
+                  onChanged: (value) => controller.updateSettings(
+                    settings.copyWith(themeMode: value),
                   ),
-                  DropdownMenuItem(
-                    value: AppThemeMode.light,
-                    child: Text(context.strings.t('light')),
-                  ),
-                  DropdownMenuItem(
-                    value: AppThemeMode.dark,
-                    child: Text(context.strings.t('dark')),
-                  ),
-                ],
-                onChanged: (value) => controller.updateSettings(
-                  settings.copyWith(themeMode: value),
                 ),
-              ),
-            ],
-          ),
-          Row(
-            children: [
-              Expanded(child: Text(context.strings.t('locale'))),
-              DropdownButton<AppLocaleMode>(
-                value: settings.localeMode,
-                items: [
-                  DropdownMenuItem(
-                    value: AppLocaleMode.system,
-                    child: Text(context.strings.t('system')),
+              ],
+            ),
+            Row(
+              children: [
+                Expanded(child: Text(context.strings.t('locale'))),
+                DropdownButton<AppLocaleMode>(
+                  value: settings.localeMode,
+                  items: [
+                    DropdownMenuItem(
+                      value: AppLocaleMode.system,
+                      child: Text(context.strings.t('system')),
+                    ),
+                    DropdownMenuItem(
+                      value: AppLocaleMode.english,
+                      child: Text(context.strings.t('english')),
+                    ),
+                    DropdownMenuItem(
+                      value: AppLocaleMode.simplifiedChinese,
+                      child: Text(context.strings.t('chinese')),
+                    ),
+                  ],
+                  onChanged: (value) => controller.updateSettings(
+                    settings.copyWith(localeMode: value),
                   ),
-                  DropdownMenuItem(
-                    value: AppLocaleMode.english,
-                    child: Text(context.strings.t('english')),
-                  ),
-                  DropdownMenuItem(
-                    value: AppLocaleMode.simplifiedChinese,
-                    child: Text(context.strings.t('chinese')),
-                  ),
-                ],
-                onChanged: (value) => controller.updateSettings(
-                  settings.copyWith(localeMode: value),
                 ),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     ),
   ]);

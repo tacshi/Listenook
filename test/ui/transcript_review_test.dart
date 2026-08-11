@@ -1156,6 +1156,8 @@ void main() {
 
       await tester.tap(find.byKey(const Key('test-sidebar-toggle')));
       expect(sidebarToggles, 1);
+      expect(find.byKey(const Key('header-add-folder')), findsNothing);
+      expect(find.byKey(const Key('header-add-files')), findsNothing);
       expect(find.byKey(const Key('export-all')), findsOneWidget);
       expect(find.text('Export all'), findsOneWidget);
       expect(
@@ -1780,6 +1782,8 @@ void main() {
     );
 
     expect(find.text('Hello'), findsOneWidget);
+    expect(find.byKey(const Key('header-add-folder')), findsNothing);
+    expect(find.byKey(const Key('header-add-files')), findsNothing);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.byKey(const Key('new-transcription')));
@@ -1787,6 +1791,8 @@ void main() {
 
     expect(addFilesCalls, 0);
     expect(controller.workspaceJobs, isEmpty);
+    expect(find.byKey(const Key('header-add-folder')), findsOneWidget);
+    expect(find.byKey(const Key('header-add-files')), findsOneWidget);
     expect(find.byKey(const Key('empty-add-files')), findsOneWidget);
   });
 

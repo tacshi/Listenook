@@ -84,6 +84,7 @@ void main() {
 
     await tester.tap(find.text('Appearance').first);
     await tester.pumpAndSettle();
+    expect(find.text('Appearance'), findsOneWidget);
     expect(find.text('Theme').hitTestable(), findsOneWidget);
 
     await tester.tap(find.text('System & About'));
