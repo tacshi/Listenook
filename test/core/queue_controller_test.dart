@@ -11,6 +11,29 @@ import 'package:meow_stt/state/app_controller.dart';
 
 void main() {
   test(
+    'initialization checks credential metadata without reading secrets',
+    () async {
+      final credentials = _AvailabilityCredentials();
+      final translationCredentials = _AvailabilityTranslationCredentials();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        credentials: credentials,
+        translationCredentials: translationCredentials,
+      );
+
+      await controller.initialize();
+
+      expect(controller.keyConfigured, isTrue);
+      expect(controller.translationKeyConfigured, isTrue);
+      expect(credentials.availabilityChecks, 1);
+      expect(translationCredentials.availabilityChecks, 1);
+      expect(credentials.secretReads, 0);
+      expect(translationCredentials.secretReads, 0);
+    },
+  );
+
+  test(
     'worker pool respects configured concurrency and persists completion',
     () async {
       final directory = await Directory.systemTemp.createTemp('meow-queue-');
@@ -491,12 +514,13 @@ TranscriptDocument _document(DateTime now) => TranscriptDocument(
 AppController _controller({
   required _Jobs jobs,
   required _Soniox soniox,
+  CredentialStore? credentials,
   MediaService? media,
   SettingsRepository? settings,
   TranslationCredentialStore? translationCredentials,
   TranslationService? translationService,
 }) => AppController(
-  credentialStore: _Credentials(),
+  credentialStore: credentials ?? _Credentials(),
   settingsRepository: settings ?? _Settings(),
   jobRepository: jobs,
   mediaService: media ?? _Media(),
@@ -527,6 +551,30 @@ class _Credentials implements CredentialStore {
   Future<void> writeApiKey(String key) async {}
 }
 
+class _AvailabilityCredentials
+    implements CredentialStore, CredentialAvailabilityStore {
+  int availabilityChecks = 0;
+  int secretReads = 0;
+
+  @override
+  Future<bool> hasApiKey() async {
+    availabilityChecks++;
+    return true;
+  }
+
+  @override
+  Future<String?> readApiKey() async {
+    secretReads++;
+    return 'configured';
+  }
+
+  @override
+  Future<void> writeApiKey(String key) async {}
+
+  @override
+  Future<void> deleteApiKey() async {}
+}
+
 class _Settings implements SettingsRepository {
   _Settings([this.value = const AppSettings(concurrency: 2)]);
 
@@ -550,6 +598,30 @@ class _TranslationCredentials implements TranslationCredentialStore {
 
   @override
   Future<void> writeApiKey(String key) async => value = key;
+}
+
+class _AvailabilityTranslationCredentials
+    implements TranslationCredentialStore, CredentialAvailabilityStore {
+  int availabilityChecks = 0;
+  int secretReads = 0;
+
+  @override
+  Future<bool> hasApiKey() async {
+    availabilityChecks++;
+    return true;
+  }
+
+  @override
+  Future<String?> readApiKey() async {
+    secretReads++;
+    return 'translation-key';
+  }
+
+  @override
+  Future<void> writeApiKey(String key) async {}
+
+  @override
+  Future<void> deleteApiKey() async {}
 }
 
 class _FailingTranslation implements TranslationService {

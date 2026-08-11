@@ -19,6 +19,12 @@ abstract interface class TranslationCredentialStore {
   Future<void> deleteApiKey();
 }
 
+/// Allows startup code to check credential availability without reading the
+/// secret itself. On macOS this avoids triggering Keychain authorization UI.
+abstract interface class CredentialAvailabilityStore {
+  Future<bool> hasApiKey();
+}
+
 abstract interface class TranslationService {
   Future<List<String>> listModels(
     TranslationSettings settings, {

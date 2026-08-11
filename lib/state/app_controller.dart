@@ -153,9 +153,14 @@ class AppController extends ChangeNotifier {
         await _jobsRepository.save(job);
       }
     }
-    _keyConfigured = (await _credentials.readApiKey())?.isNotEmpty ?? false;
-    _translationKeyConfigured =
-        (await _translationCredentials?.readApiKey())?.isNotEmpty ?? false;
+    _keyConfigured = await _credentialIsAvailable(
+      _credentials,
+      _credentials.readApiKey,
+    );
+    _translationKeyConfigured = await _credentialIsAvailable(
+      _translationCredentials,
+      _translationCredentials?.readApiKey,
+    );
     _batchId = _uuid.v4();
     final interrupted = loaded.where((job) => job.status.isActive).toList()
       ..sort((a, b) {
@@ -172,6 +177,15 @@ class AppController extends ChangeNotifier {
     unawaited(refreshMediaDiagnostics());
     unawaited(_recover(interrupted));
     unawaited(_retryPendingCleanup(loaded));
+  }
+
+  Future<bool> _credentialIsAvailable(
+    Object? store,
+    Future<String?> Function()? read,
+  ) async {
+    if (store == null || read == null) return false;
+    if (store is CredentialAvailabilityStore) return store.hasApiKey();
+    return (await read())?.isNotEmpty ?? false;
   }
 
   void setDestination(int index) {

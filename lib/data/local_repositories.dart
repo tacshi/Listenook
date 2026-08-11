@@ -30,7 +30,8 @@ class AppPaths {
   }
 }
 
-class SecureCredentialStore implements CredentialStore {
+class SecureCredentialStore
+    implements CredentialStore, CredentialAvailabilityStore {
   SecureCredentialStore({
     FlutterSecureStorage? storage,
     String storageKey = _defaultKey,
@@ -50,6 +51,22 @@ class SecureCredentialStore implements CredentialStore {
   );
   final FlutterSecureStorage _storage;
   final String _storageKey;
+
+  @override
+  Future<bool> hasApiKey() async {
+    if (await _storage.containsKey(key: _storageKey, mOptions: _options)) {
+      return true;
+    }
+    if (Platform.isMacOS &&
+        await _storage.containsKey(
+          key: _storageKey,
+          mOptions: _legacyOptions,
+        )) {
+      return true;
+    }
+    final fallback = Platform.environment['SONIOX_API_KEY']?.trim();
+    return fallback != null && fallback.isNotEmpty;
+  }
 
   @override
   Future<String?> readApiKey() async {
@@ -83,7 +100,8 @@ class SecureCredentialStore implements CredentialStore {
       _storage.delete(key: _storageKey, mOptions: _options);
 }
 
-class SecureTranslationCredentialStore implements TranslationCredentialStore {
+class SecureTranslationCredentialStore
+    implements TranslationCredentialStore, CredentialAvailabilityStore {
   SecureTranslationCredentialStore({FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
 
@@ -97,6 +115,10 @@ class SecureTranslationCredentialStore implements TranslationCredentialStore {
   );
 
   final FlutterSecureStorage _storage;
+
+  @override
+  Future<bool> hasApiKey() =>
+      _storage.containsKey(key: _storageKey, mOptions: _options);
 
   @override
   Future<String?> readApiKey() async {
