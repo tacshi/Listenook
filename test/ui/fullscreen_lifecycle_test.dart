@@ -69,9 +69,19 @@ void main() {
     expect(state.isFullscreen(), isTrue);
     expect(fullscreen.isActive, isTrue);
 
-    await fullscreen.exit();
+    final exit = fullscreen.exit();
+    var exitCompleted = false;
+    exit.whenComplete(() => exitCompleted = true);
+    await tester.idle();
+    expect(
+      exitCompleted,
+      isFalse,
+      reason: 'exit must wait until the fullscreen route is finalized',
+    );
     await tester.pumpAndSettle();
+    await exit;
     expect(state.isFullscreen(), isFalse);
+
     await tester.pumpWidget(
       const MaterialApp(home: Scaffold(body: Text('Next queue item'))),
     );
@@ -112,6 +122,9 @@ Widget _videoApp(
     body: Video(
       key: key,
       controller: controller,
+      controls: (state) => state.isFullscreen()
+          ? const ColoredBox(color: Colors.black)
+          : const SizedBox.shrink(),
       onEnterFullscreen: onEnterFullscreen ?? () async {},
       onExitFullscreen: onExitFullscreen ?? () async {},
     ),
