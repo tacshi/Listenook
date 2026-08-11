@@ -1675,6 +1675,53 @@ void main() {
     expect(find.text('退出全屏'), findsOneWidget);
   });
 
+  testWidgets('video speed button shows and applies a playback rate', (
+    tester,
+  ) async {
+    var rate = 1.0;
+    final selected = <double>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('en'),
+        supportedLocales: AppStrings.supportedLocales,
+        localizationsDelegates: const [AppStrings.delegate],
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => PlaybackSpeedButton(
+              rate: rate,
+              onChanged: (value) async {
+                selected.add(value);
+                setState(() => rate = value);
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    const buttonKey = Key('video-playback-speed');
+    expect(find.text('1×'), findsOneWidget);
+    expect(
+      tester.widget<PopupMenuButton<double>>(find.byKey(buttonKey)).tooltip,
+      'Playback speed',
+    );
+
+    await tester.tap(find.byKey(buttonKey));
+    await tester.pumpAndSettle();
+    final items = tester
+        .widgetList<CheckedPopupMenuItem<double>>(
+          find.byType(CheckedPopupMenuItem<double>),
+        )
+        .toList();
+    expect(items, hasLength(PlaybackSpeedButton.rates.length));
+    expect(items.where((item) => item.checked).single.value, 1);
+
+    await tester.tap(find.byKey(const ValueKey('playback-speed-125')));
+    await tester.pumpAndSettle();
+    expect(selected, [1.25]);
+    expect(find.text('1.25×'), findsOneWidget);
+  });
+
   testWidgets('fullscreen video keyboard controls dispatch every shortcut', (
     tester,
   ) async {

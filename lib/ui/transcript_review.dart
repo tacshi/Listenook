@@ -41,11 +41,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<bool>? _playingSubscription;
   StreamSubscription<bool>? _completedSubscription;
+  StreamSubscription<double>? _rateSubscription;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
   final _videoKey = GlobalKey<VideoState>();
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   double _videoAspectRatio = 16 / 9;
+  double _playbackRate = 1;
   bool _playing = false;
   String? _repeatingSegmentId;
   bool _repeatRestartPending = false;
@@ -91,6 +93,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
     });
     _playingSubscription = player.stream.playing.listen(_handlePlaying);
     _completedSubscription = player.stream.completed.listen(_handleCompleted);
+    _rateSubscription = player.stream.rate.listen((value) {
+      if (!mounted || (value - _playbackRate).abs() < .001) return;
+      setState(() => _playbackRate = value);
+    });
     _videoParamsSubscription = player.stream.videoParams.listen((value) {
       final aspect =
           value.aspect ??
@@ -253,6 +259,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _durationSubscription?.cancel();
     _playingSubscription?.cancel();
     _completedSubscription?.cancel();
+    _rateSubscription?.cancel();
     _videoParamsSubscription?.cancel();
     _player?.dispose();
     super.dispose();
@@ -413,6 +420,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       maxVideoHeight: videoHeight,
       centerInAvailableHeight: fillHeight,
       playing: _playing,
+      playbackRate: _playbackRate,
       position: _position,
       duration: _duration,
       waveformPath: _waveformPath,
@@ -422,6 +430,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       onFullscreen: _toggleFullscreen,
       onSeekBackward: () => _seekRelative(-const Duration(seconds: 5)),
       onSeekForward: () => _seekRelative(const Duration(seconds: 5)),
+      onPlaybackRateChanged: _setPlaybackRate,
       onDecreaseSpeed: () => _changePlaybackRate(-.25),
       onIncreaseSpeed: () => _changePlaybackRate(.25),
     );
@@ -658,6 +667,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final player = _player;
     if (player == null) return;
     final rate = (player.state.rate + step).clamp(.5, 2.0).toDouble();
+    await _setPlaybackRate(rate);
+  }
+
+  Future<void> _setPlaybackRate(double value) async {
+    final player = _player;
+    if (player == null) return;
+    final rate = value.clamp(.5, 2.0).toDouble();
     if ((rate - player.state.rate).abs() < .001) return;
     await player.setRate(rate);
   }
@@ -1413,6 +1429,7 @@ class _MediaPane extends StatelessWidget {
     required this.maxVideoHeight,
     required this.centerInAvailableHeight,
     required this.playing,
+    required this.playbackRate,
     required this.position,
     required this.duration,
     required this.waveformPath,
@@ -1422,6 +1439,7 @@ class _MediaPane extends StatelessWidget {
     required this.onFullscreen,
     required this.onSeekBackward,
     required this.onSeekForward,
+    required this.onPlaybackRateChanged,
     required this.onDecreaseSpeed,
     required this.onIncreaseSpeed,
   });
@@ -1435,6 +1453,7 @@ class _MediaPane extends StatelessWidget {
   final double? maxVideoHeight;
   final bool centerInAvailableHeight;
   final bool playing;
+  final double playbackRate;
   final Duration position;
   final Duration duration;
   final String? waveformPath;
@@ -1444,6 +1463,7 @@ class _MediaPane extends StatelessWidget {
   final Future<void> Function() onFullscreen;
   final Future<void> Function() onSeekBackward;
   final Future<void> Function() onSeekForward;
+  final Future<void> Function(double) onPlaybackRateChanged;
   final Future<void> Function() onDecreaseSpeed;
   final Future<void> Function() onIncreaseSpeed;
 
@@ -1562,6 +1582,10 @@ class _MediaPane extends StatelessWidget {
                       ),
                     ),
                     Text(formatClock(mediaDuration.inMilliseconds)),
+                    PlaybackSpeedButton(
+                      rate: playbackRate,
+                      onChanged: onPlaybackRateChanged,
+                    ),
                     IconButton(
                       key: const Key('video-fullscreen'),
                       tooltip: context.strings.t('fullscreen'),
@@ -1578,6 +1602,51 @@ class _MediaPane extends StatelessWidget {
       },
     );
   }
+}
+
+class PlaybackSpeedButton extends StatelessWidget {
+  const PlaybackSpeedButton({
+    super.key,
+    required this.rate,
+    required this.onChanged,
+  });
+
+  static const rates = <double>[.5, .75, 1, 1.25, 1.5, 1.75, 2];
+
+  final double rate;
+  final Future<void> Function(double rate) onChanged;
+
+  @override
+  Widget build(BuildContext context) => PopupMenuButton<double>(
+    key: const Key('video-playback-speed'),
+    tooltip: context.strings.t('playback_speed'),
+    initialValue: rate,
+    onSelected: (value) => unawaited(onChanged(value)),
+    itemBuilder: (context) => [
+      for (final value in rates)
+        CheckedPopupMenuItem<double>(
+          key: ValueKey('playback-speed-${(value * 100).round()}'),
+          value: value,
+          checked: (value - rate).abs() < .001,
+          child: Text(formatPlaybackRate(value)),
+        ),
+    ],
+    icon: Text(
+      formatPlaybackRate(rate),
+      key: const Key('video-playback-speed-label'),
+      style: Theme.of(context).textTheme.labelLarge,
+    ),
+  );
+}
+
+String formatPlaybackRate(double rate) {
+  final fixed = rate.toStringAsFixed(2);
+  final value = fixed.endsWith('00')
+      ? fixed.substring(0, fixed.length - 3)
+      : fixed.endsWith('0')
+      ? fixed.substring(0, fixed.length - 1)
+      : fixed;
+  return '$value×';
 }
 
 class PlaybackShortcutsHint extends StatelessWidget {
