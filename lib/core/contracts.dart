@@ -76,16 +76,16 @@ abstract interface class MediaService {
 class MediaDiagnostics {
   const MediaDiagnostics({
     required this.available,
-    this.ffmpegPath,
-    this.ffprobePath,
+    this.enginePath,
+    this.encoderPath,
     this.version,
     this.errorCode,
     this.error,
   });
 
   final bool available;
-  final String? ffmpegPath;
-  final String? ffprobePath;
+  final String? enginePath;
+  final String? encoderPath;
   final String? version;
   final String? errorCode;
   final String? error;

@@ -79,29 +79,17 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
     echo "Expected $EXPECTED_MACHO app, found: $APP_ARCHS" >&2; exit 1;
   }
 
-  HELPER_DIR="$($ROOT/scripts/fetch-ffmpeg.sh macos "$CURRENT_ARCH")"
-  HELPER_DEST="$APP/Contents/Resources/ffmpeg"
-  mkdir -p "$HELPER_DEST" "$APP/Contents/Resources/third_party"
-  cp "$HELPER_DIR/ffmpeg" "$HELPER_DEST/ffmpeg"
-  cp "$HELPER_DIR/ffprobe" "$HELPER_DEST/ffprobe"
+  [[ -x /usr/bin/afconvert ]] || { echo "Missing macOS afconvert." >&2; exit 1; }
+  rm -rf "$APP/Contents/Resources/ffmpeg" "$APP/Contents/Resources/flac"
+  mkdir -p "$APP/Contents/Resources/third_party"
+  rm -f "$APP/Contents/Resources/third_party/ffmpeg-manifest.json"
+  rm -f "$APP/Contents/Resources/third_party/flac-manifest.json"
   cp "$ROOT/assets/third_party/"* "$APP/Contents/Resources/third_party/"
-  cp "$ROOT/packaging/ffmpeg/manifest.json" "$APP/Contents/Resources/third_party/ffmpeg-manifest.json"
-  chmod +x "$HELPER_DEST/ffmpeg" "$HELPER_DEST/ffprobe"
   bash "$ROOT/scripts/strip-macos-download-metadata.sh" "$APP"
   SIGN_IDENTITY="${MEOWSTT_MAC_DEBUG_SIGN_IDENTITY:--}"
   if [[ "$MODE" == "release" ]]; then
     SIGN_IDENTITY="${MEOWSTT_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:--}}"
   fi
-  HELPER_SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
-  if [[ "$SIGN_IDENTITY" != "-" ]]; then HELPER_SIGN_ARGS+=(--options runtime --timestamp); fi
-  for TOOL in ffmpeg ffprobe; do
-    TOOL_ARCHS="$(lipo -archs "$HELPER_DEST/$TOOL")"
-    [[ " $TOOL_ARCHS " == *" $EXPECTED_MACHO "* ]] || {
-      echo "Expected $EXPECTED_MACHO $TOOL, found: $TOOL_ARCHS" >&2; exit 1;
-    }
-    codesign "${HELPER_SIGN_ARGS[@]}" "$HELPER_DEST/$TOOL"
-  done
-
   ENTITLEMENTS="$ROOT/macos/Runner/DebugProfile.entitlements"
   if [[ "$MODE" == "release" ]]; then ENTITLEMENTS="$ROOT/macos/Runner/Release.entitlements"; fi
   COMPONENT_SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")

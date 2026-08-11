@@ -786,7 +786,6 @@ class AppSettings {
     this.showFullscreenShortcuts = true,
     this.exportOptions = const ExportOptions(),
     this.onboardingComplete = false,
-    this.ffmpegOverride,
     this.translationSettings = const TranslationSettings(),
     this.sonioxTranslation = const SonioxTranslationOptions(),
   });
@@ -799,7 +798,6 @@ class AppSettings {
   final bool showFullscreenShortcuts;
   final ExportOptions exportOptions;
   final bool onboardingComplete;
-  final String? ffmpegOverride;
   final TranslationSettings translationSettings;
   final SonioxTranslationOptions sonioxTranslation;
 
@@ -812,8 +810,6 @@ class AppSettings {
     bool? showFullscreenShortcuts,
     ExportOptions? exportOptions,
     bool? onboardingComplete,
-    String? ffmpegOverride,
-    bool clearFfmpegOverride = false,
     TranslationSettings? translationSettings,
     SonioxTranslationOptions? sonioxTranslation,
   }) => AppSettings(
@@ -826,9 +822,6 @@ class AppSettings {
         showFullscreenShortcuts ?? this.showFullscreenShortcuts,
     exportOptions: exportOptions ?? this.exportOptions,
     onboardingComplete: onboardingComplete ?? this.onboardingComplete,
-    ffmpegOverride: clearFfmpegOverride
-        ? null
-        : ffmpegOverride ?? this.ffmpegOverride,
     translationSettings: translationSettings ?? this.translationSettings,
     sonioxTranslation: sonioxTranslation ?? this.sonioxTranslation,
   );
@@ -843,7 +836,6 @@ class AppSettings {
     'show_fullscreen_shortcuts': showFullscreenShortcuts,
     'export_options': exportOptions.toJson(),
     'onboarding_complete': onboardingComplete,
-    if (ffmpegOverride case final value?) 'ffmpeg_override': value,
     'translation_settings': translationSettings.toJson(),
     'soniox_translation': sonioxTranslation.toJson(),
   };
@@ -863,7 +855,6 @@ class AppSettings {
       (json['export_options'] as Map?)?.cast<String, dynamic>(),
     ),
     onboardingComplete: json['onboarding_complete'] as bool? ?? false,
-    ffmpegOverride: json['ffmpeg_override'] as String?,
     translationSettings: TranslationSettings.fromJson(
       (json['translation_settings'] as Map?)?.cast<String, dynamic>(),
     ),

@@ -31,13 +31,9 @@ Future<void> main() async {
 
   final paths = await AppPaths.create();
   final settingsRepository = JsonSettingsRepository(paths);
-  final initialSettings = await settingsRepository.load();
   final credentials = SecureCredentialStore();
   final translationCredentials = SecureTranslationCredentialStore();
-  final media = ProcessMediaService(
-    paths,
-    overrideDirectory: initialSettings.ffmpegOverride,
-  );
+  final media = ProcessMediaService(paths);
   final controller = AppController(
     credentialStore: credentials,
     settingsRepository: settingsRepository,

@@ -323,7 +323,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget _systemTab(BuildContext context, AppController controller) =>
       _tabList([
         _Section(
-          title: context.strings.t('ffmpeg'),
+          title: context.strings.t('media_engine'),
           icon: Icons.memory_rounded,
           child: Row(
             children: [

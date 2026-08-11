@@ -144,7 +144,7 @@ void main() {
 
     await tester.tap(find.text('About'));
     await tester.pumpAndSettle();
-    expect(find.text('FFmpeg diagnostics').hitTestable(), findsOneWidget);
+    expect(find.text('Media engine diagnostics').hitTestable(), findsOneWidget);
   });
 
   testWidgets(

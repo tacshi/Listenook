@@ -96,14 +96,29 @@ try {
     throw "Missing native build product: $Build\MeowSTT.exe"
   }
 
-  $Helper = & (Join-Path $PSScriptRoot "fetch-ffmpeg.ps1") -Arch $Arch
-  $HelperDest = Join-Path $Build "ffmpeg"
+  $Encoder = & (Join-Path $PSScriptRoot "fetch-flac.ps1") -Arch $Arch
+  $EncoderDest = Join-Path $Build "flac"
+  $LegacyHelperDest = Join-Path $Build "ffmpeg"
   $NoticeDest = Join-Path $Build "third_party"
-  New-Item -ItemType Directory -Force -Path $HelperDest, $NoticeDest | Out-Null
-  Copy-Item (Join-Path $Helper "ffmpeg.exe") $HelperDest -Force
-  Copy-Item (Join-Path $Helper "ffprobe.exe") $HelperDest -Force
+  if (Test-Path -LiteralPath $LegacyHelperDest -PathType Container) {
+    Remove-Item -LiteralPath $LegacyHelperDest -Recurse -Force
+  }
+  if (Test-Path -LiteralPath $EncoderDest -PathType Container) {
+    Remove-Item -LiteralPath $EncoderDest -Recurse -Force
+  }
+  New-Item -ItemType Directory -Force -Path $EncoderDest, $NoticeDest | Out-Null
+  Copy-Item (Join-Path $Encoder "flac.exe") $EncoderDest -Force
+  $FlacLibrary = Join-Path $Encoder "libFLAC.dll"
+  if (Test-Path -LiteralPath $FlacLibrary -PathType Leaf) {
+    Copy-Item $FlacLibrary $EncoderDest -Force
+  }
   Copy-Item (Join-Path $Root "assets\third_party\*") $NoticeDest -Force
-  Copy-Item (Join-Path $Root "packaging\ffmpeg\manifest.json") (Join-Path $NoticeDest "ffmpeg-manifest.json") -Force
+  $LegacyManifest = Join-Path $NoticeDest "ffmpeg-manifest.json"
+  if (Test-Path -LiteralPath $LegacyManifest -PathType Leaf) {
+    Remove-Item -LiteralPath $LegacyManifest -Force
+  }
+  Copy-Item (Join-Path $Root "packaging\flac\manifest.json") (Join-Path $NoticeDest "flac-manifest.json") -Force
+  Copy-Item (Join-Path $Root ".tools\flac\downloads\1.5.0\flac-1.5.0.tar.xz") $NoticeDest -Force
 
   function Get-PeMachine([string]$Path) {
     $Stream = [System.IO.File]::OpenRead($Path)
@@ -118,22 +133,38 @@ try {
     }
   }
   $ExpectedMachine = if ($Arch -eq "x64") { 0x8664 } else { 0xAA64 }
-  foreach ($Binary in @("MeowSTT.exe", "ffmpeg\ffmpeg.exe", "ffmpeg\ffprobe.exe")) {
+  $NativeBinaries = @("MeowSTT.exe", "flac\flac.exe")
+  if (Test-Path -LiteralPath (Join-Path $Build "flac\libFLAC.dll") -PathType Leaf) {
+    $NativeBinaries += "flac\libFLAC.dll"
+  }
+  foreach ($Binary in $NativeBinaries) {
     $Machine = Get-PeMachine (Join-Path $Build $Binary)
     if ($Machine -ne $ExpectedMachine) {
       throw "Architecture mismatch in $Binary`: expected $([Convert]::ToString($ExpectedMachine, 16)), got $([Convert]::ToString($Machine, 16))."
     }
   }
   if ($Mode -eq "release") {
-    Invoke-CodeSign (Join-Path $Build "MeowSTT.exe")
+    foreach ($Binary in $NativeBinaries) {
+      Invoke-CodeSign (Join-Path $Build $Binary)
+    }
   }
 
   $Out = Join-Path $Root "dist"
   New-Item -ItemType Directory -Force -Path $Out | Out-Null
   $Base = "MeowSTT-$Version-windows-$Arch-$Mode"
   $Zip = Join-Path $Out "$Base-portable.zip"
-  if (Test-Path $Zip) { Remove-Item $Zip -Force }
-  Compress-Archive -Path (Join-Path $Build "*") -DestinationPath $Zip -CompressionLevel Optimal
+  if ($Mode -eq "debug") {
+    $Portable = Join-Path $Out "$Base-portable"
+    $PortableStage = Join-Path $Out ".$Base-portable.staging"
+    if (Test-Path $Zip) { Remove-Item $Zip -Force }
+    if (Test-Path $PortableStage) { Remove-Item $PortableStage -Recurse -Force }
+    Copy-Item -LiteralPath $Build -Destination $PortableStage -Recurse -Force
+    if (Test-Path $Portable) { Remove-Item $Portable -Recurse -Force }
+    Move-Item -LiteralPath $PortableStage -Destination $Portable
+  } else {
+    if (Test-Path $Zip) { Remove-Item $Zip -Force }
+    Compress-Archive -Path (Join-Path $Build "*") -DestinationPath $Zip -CompressionLevel Optimal
+  }
 
   $LegacyMsix = Join-Path $Out "$Base.msix"
   if (Test-Path $LegacyMsix) { Remove-Item $LegacyMsix -Force }
@@ -163,10 +194,14 @@ try {
   }
 
   $Checksums = Join-Path $Out "$Base.sha256"
-  Get-ChildItem $Out -File -Filter "$Base*" | Where-Object { $_.FullName -ne $Checksums } | ForEach-Object {
-    $Hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    "$Hash  $($_.Name)"
-  } | Set-Content $Checksums -Encoding ascii
+  if ($Mode -eq "debug") {
+    if (Test-Path $Checksums) { Remove-Item $Checksums -Force }
+  } else {
+    Get-ChildItem $Out -File -Filter "$Base*" | Where-Object { $_.FullName -ne $Checksums } | ForEach-Object {
+      $Hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+      "$Hash  $($_.Name)"
+    } | Set-Content $Checksums -Encoding ascii
+  }
   Write-Output "Artifacts: $Out"
 } finally {
   Pop-Location

@@ -2,41 +2,42 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/contracts.dart';
 import '../core/models.dart';
 import 'local_repositories.dart';
+import 'waveform_renderer.dart';
 
 class ProcessMediaService implements MediaService {
-  ProcessMediaService(this.paths, {this.overrideDirectory});
+  ProcessMediaService(this.paths);
 
-  static const sonioxDirectExtensions = {
-    '.aac',
-    '.aiff',
-    '.amr',
-    '.asf',
-    '.flac',
-    '.mp3',
-    '.ogg',
-    '.wav',
-    '.webm',
-    '.m4a',
-    '.mp4',
+  static const supportedAudioExtensions = {'.mp3', '.wav', '.m4a', '.ogg'};
+  static const supportedVideoExtensions = {'.mp4', '.mkv', '.avi'};
+  static const supportedExtensions = {
+    ...supportedAudioExtensions,
+    ...supportedVideoExtensions,
   };
 
   final AppPaths paths;
-  final String? overrideDirectory;
-  _ToolPaths? _tools;
+  String? _encoderPath;
 
   @override
   bool canUploadDirectly(String path, MediaMetadata metadata) =>
       !metadata.hasVideo &&
-      sonioxDirectExtensions.contains(p.extension(path).toLowerCase());
+      supportedAudioExtensions.contains(p.extension(path).toLowerCase());
 
   @override
   Future<MediaMetadata> inspect(String sourcePath) async {
     final source = File(sourcePath);
+    final extension = p.extension(sourcePath).toLowerCase();
+    if (!supportedExtensions.contains(extension)) {
+      throw const MediaException(
+        'unsupported_format',
+        'Supported audio: MP3, WAV, M4A, OGG. Supported video: MP4, MKV, AVI.',
+      );
+    }
     if (!await source.exists()) {
       throw const MediaException(
         'missing_source',
@@ -54,46 +55,36 @@ class ProcessMediaService implements MediaService {
     } finally {
       await handle?.close();
     }
-    final tools = await _resolveTools();
-    final result = await Process.run(
-      tools.ffprobe,
-      buildFfprobeArguments(sourcePath),
-    );
-    if (result.exitCode != 0) {
-      throw MediaException(
-        'invalid_media',
-        _cleanProcessError(
-          result.stderr.toString(),
-          'FFprobe could not read this file.',
-        ),
+
+    final player = Player();
+    final native = player.platform;
+    if (native is! NativePlayer) {
+      await player.dispose();
+      throw const MediaException(
+        'media_engine_unavailable',
+        'The native media engine is unavailable.',
       );
     }
+    final errors = <String>[];
+    final errorSubscription = player.stream.error.listen(errors.add);
     try {
-      final json = (jsonDecode(result.stdout.toString()) as Map)
-          .cast<String, dynamic>();
-      final streams = (json['streams'] as List? ?? const []).whereType<Map>();
-      final audio = streams
-          .where((stream) => stream['codec_type'] == 'audio')
-          .firstOrNull;
-      final video = streams
-          .where((stream) => stream['codec_type'] == 'video')
-          .firstOrNull;
-      final format =
-          (json['format'] as Map?)?.cast<String, dynamic>() ?? const {};
-      final durationSeconds =
-          double.tryParse(format['duration']?.toString() ?? '') ??
-          streams
-              .map(
-                (stream) =>
-                    double.tryParse(stream['duration']?.toString() ?? ''),
-              )
-              .whereType<double>()
-              .fold<double>(
-                0,
-                (maximum, value) => value > maximum ? value : maximum,
-              );
-      final durationMs = (durationSeconds * 1000).round();
-      if (audio == null) {
+      await player.open(Media(source.absolute.path), play: false);
+      if (!_hasMediaTracks(player.state.tracks)) {
+        await player.stream.tracks
+            .firstWhere(_hasMediaTracks)
+            .timeout(const Duration(seconds: 10));
+      }
+      if (player.state.duration <= Duration.zero) {
+        await player.stream.duration
+            .firstWhere((value) => value > Duration.zero)
+            .timeout(const Duration(seconds: 10));
+      }
+
+      final tracks = player.state.tracks;
+      final audioTracks = tracks.audio.where(_isRealAudioTrack).toList();
+      final videoTracks = tracks.video.where(_isRealVideoTrack).toList();
+      final durationMs = player.state.duration.inMilliseconds;
+      if (audioTracks.isEmpty) {
         throw const MediaException(
           'no_audio',
           'No audio stream was found in this file.',
@@ -111,22 +102,37 @@ class ProcessMediaService implements MediaService {
           'Soniox supports files up to 300 minutes.',
         );
       }
+      var formatName = extension.substring(1);
+      try {
+        final detected = await native.getProperty('file-format');
+        if (detected.trim().isNotEmpty) formatName = detected.trim();
+      } on Object {
+        // The extension was already restricted and libmpv decoded the file.
+      }
       return MediaMetadata(
         sizeBytes: await source.length(),
         durationMs: durationMs,
         hasAudio: true,
-        hasVideo: video != null,
-        formatName: format['format_name']?.toString() ?? 'unknown',
-        audioCodec: audio['codec_name']?.toString(),
-        videoCodec: video?['codec_name']?.toString(),
+        hasVideo: videoTracks.isNotEmpty,
+        formatName: formatName,
+        audioCodec: audioTracks.first.codec,
+        videoCodec: videoTracks.firstOrNull?.codec,
       );
     } on MediaException {
       rethrow;
-    } on Object {
-      throw const MediaException(
+    } on TimeoutException {
+      throw MediaException(
         'invalid_media',
-        'FFprobe returned unreadable metadata.',
+        _playerError(errors, 'The media metadata could not be read.'),
       );
+    } on Object {
+      throw MediaException(
+        'invalid_media',
+        _playerError(errors, 'The media file could not be inspected.'),
+      );
+    } finally {
+      await errorSubscription.cancel();
+      await player.dispose();
     }
   }
 
@@ -138,50 +144,53 @@ class ProcessMediaService implements MediaService {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
-    final tools = await _resolveTools();
-    final output = p.join(paths.temporary.path, '$jobId.flac');
-    final process = await Process.start(
-      tools.ffmpeg,
-      buildFfmpegExtractionArguments(sourcePath, output),
+    if (shouldCancel?.call() ?? false) {
+      throw const OperationCancelledException();
+    }
+    await paths.temporary.create(recursive: true);
+    final safeKey = _safeCacheKey(jobId);
+    final pcmPath = p.join(paths.temporary.path, '$safeKey-extract.wav');
+    final output = p.join(
+      paths.temporary.path,
+      Platform.isMacOS ? '$safeKey.m4a' : '$safeKey.flac',
     );
-    final stderr = StringBuffer();
-    final stderrDone = process.stderr
-        .transform(utf8.decoder)
-        .listen(stderr.write)
-        .asFuture<void>();
-    await for (final line
-        in process.stdout
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())) {
+    await deleteTemporary(output);
+    try {
+      await _extractPcm(
+        sourcePath,
+        pcmPath,
+        sampleRate: 16000,
+        durationMs: durationMs,
+        onProgress: (fraction, detail) =>
+            onProgress?.call(fraction == null ? null : fraction * 0.85, detail),
+        shouldCancel: shouldCancel,
+      );
       if (shouldCancel?.call() ?? false) {
-        process.kill();
-        await process.exitCode;
-        await stderrDone;
-        await deleteTemporary(output);
         throw const OperationCancelledException();
       }
-      if (!line.startsWith('out_time_')) continue;
-      final raw = int.tryParse(line.substring(line.indexOf('=') + 1));
-      if (raw == null || durationMs <= 0) continue;
-      final milliseconds = line.startsWith('out_time_ms=')
-          ? raw ~/ 1000
-          : raw ~/ 1000;
-      onProgress?.call((milliseconds / durationMs).clamp(0, 1), null);
-    }
-    final exitCode = await process.exitCode;
-    await stderrDone;
-    if (exitCode != 0 || !await File(output).exists()) {
+      onProgress?.call(0.9, null);
+      await _encodeLossless(pcmPath, output, shouldCancel: shouldCancel);
+      final outputFile = File(output);
+      if (!await outputFile.exists() || await outputFile.length() == 0) {
+        throw const MediaException(
+          'conversion_failed',
+          'The lossless audio encoder did not create an output file.',
+        );
+      }
+      onProgress?.call(1, null);
+      return output;
+    } on OperationCancelledException {
       await deleteTemporary(output);
-      throw MediaException(
-        'conversion_failed',
-        _cleanProcessError(
-          stderr.toString(),
-          'FFmpeg could not extract the audio.',
-        ),
-      );
+      rethrow;
+    } on MediaException {
+      await deleteTemporary(output);
+      rethrow;
+    } on Object catch (error) {
+      await deleteTemporary(output);
+      throw MediaException('conversion_failed', error.toString());
+    } finally {
+      await deleteTemporary(pcmPath);
     }
-    onProgress?.call(1, null);
-    return output;
   }
 
   @override
@@ -193,31 +202,244 @@ class ProcessMediaService implements MediaService {
         'The source file is missing.',
       );
     }
-    final safeKey = cacheKey.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    final safeKey = _safeCacheKey(cacheKey);
     final output = File(p.join(paths.temporary.path, '$safeKey-waveform.png'));
     if (await output.exists() &&
         (await output.lastModified()).isAfter(await source.lastModified())) {
       return output.path;
     }
     await output.parent.create(recursive: true);
-    final tools = await _resolveTools();
-    final result = await Process.run(
-      tools.ffmpeg,
-      buildFfmpegWaveformArguments(sourcePath, output.path),
-    );
-    if (result.exitCode != 0 ||
-        !await output.exists() ||
-        await output.length() == 0) {
+    final pcmPath = p.join(paths.temporary.path, '$safeKey-waveform.wav');
+    try {
+      await _extractPcm(sourcePath, pcmPath, sampleRate: 8000);
+      await renderPcmWaveform(pcmPath, output.path);
+      if (!await output.exists() || await output.length() == 0) {
+        throw const MediaException(
+          'waveform_failed',
+          'The waveform image could not be created.',
+        );
+      }
+      return output.path;
+    } on MediaException {
       await deleteTemporary(output.path);
-      throw MediaException(
-        'waveform_failed',
-        _cleanProcessError(
-          result.stderr.toString(),
-          'FFmpeg could not render the waveform.',
-        ),
+      rethrow;
+    } on Object catch (error) {
+      await deleteTemporary(output.path);
+      throw MediaException('waveform_failed', error.toString());
+    } finally {
+      await deleteTemporary(pcmPath);
+    }
+  }
+
+  Future<void> _extractPcm(
+    String sourcePath,
+    String output, {
+    required int sampleRate,
+    int durationMs = 0,
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    await deleteTemporary(output);
+    await File(output).parent.create(recursive: true);
+    final player = Player();
+    final native = player.platform;
+    if (native is! NativePlayer) {
+      await player.dispose();
+      throw const MediaException(
+        'media_engine_unavailable',
+        'The native media engine is unavailable.',
       );
     }
-    return output.path;
+
+    final completion = Completer<void>();
+    final errors = <String>[];
+    final completedSubscription = player.stream.completed.listen((completed) {
+      if (completed && !completion.isCompleted) completion.complete();
+    });
+    final errorSubscription = player.stream.error.listen((error) {
+      errors.add(error);
+      if (!completion.isCompleted) completion.complete();
+    });
+    final positionSubscription = player.stream.position.listen((position) {
+      if (durationMs > 0) {
+        onProgress?.call(
+          (position.inMilliseconds / durationMs).clamp(0.0, 1.0),
+          null,
+        );
+      }
+    });
+
+    try {
+      await native.setProperty('vid', 'no');
+      await native.setProperty('audio-channels', 'mono');
+      await native.setProperty('audio-samplerate', '$sampleRate');
+      await native.setProperty('audio-format', 's16');
+      await native.setProperty('ao', 'pcm');
+      await native.setProperty('ao-pcm-waveheader', 'yes');
+      await native.setProperty('ao-pcm-file', File(output).absolute.path);
+      await native.setProperty('untimed', 'yes');
+      await player.open(Media(File(sourcePath).absolute.path), play: true);
+
+      final timeout = durationMs <= 0
+          ? const Duration(minutes: 30)
+          : Duration(seconds: (durationMs ~/ 10000).clamp(60, 30 * 60));
+      final watch = Stopwatch()..start();
+      while (!completion.isCompleted) {
+        if (shouldCancel?.call() ?? false) {
+          await player.stop();
+          throw const OperationCancelledException();
+        }
+        if (watch.elapsed > timeout) {
+          throw const MediaException(
+            'conversion_failed',
+            'The media decoder timed out.',
+          );
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+      await completion.future;
+      if (errors.isNotEmpty) {
+        throw MediaException('conversion_failed', errors.take(3).join(' '));
+      }
+      await player.stop();
+    } on OperationCancelledException {
+      rethrow;
+    } on MediaException {
+      rethrow;
+    } on Object {
+      throw MediaException(
+        'conversion_failed',
+        _playerError(errors, 'The media engine could not extract the audio.'),
+      );
+    } finally {
+      await completedSubscription.cancel();
+      await errorSubscription.cancel();
+      await positionSubscription.cancel();
+      await player.dispose();
+    }
+
+    final file = File(output);
+    if (!await file.exists() || await file.length() <= 44) {
+      await deleteTemporary(output);
+      throw MediaException(
+        'conversion_failed',
+        _playerError(errors, 'The media engine did not produce PCM audio.'),
+      );
+    }
+  }
+
+  Future<void> _encodeLossless(
+    String pcmPath,
+    String output, {
+    CancelCheck? shouldCancel,
+  }) async {
+    late final String executable;
+    late final List<String> arguments;
+    if (Platform.isWindows) {
+      executable = await _resolveWindowsEncoder();
+      arguments = [
+        '--silent',
+        '--force',
+        '--verify',
+        '--output-name=$output',
+        pcmPath,
+      ];
+    } else if (Platform.isMacOS) {
+      executable = '/usr/bin/afconvert';
+      if (!await File(executable).exists()) {
+        throw const MediaException(
+          'encoder_missing',
+          'The macOS lossless audio encoder is unavailable.',
+        );
+      }
+      arguments = ['-f', 'm4af', '-d', 'alac', pcmPath, output];
+    } else {
+      throw const MediaException(
+        'encoder_missing',
+        'No lossless audio encoder is configured for this platform.',
+      );
+    }
+
+    final process = await Process.start(executable, arguments);
+    final stdout = StringBuffer();
+    final stderr = StringBuffer();
+    final stdoutDone = process.stdout
+        .transform(utf8.decoder)
+        .listen(stdout.write)
+        .asFuture<void>();
+    final stderrDone = process.stderr
+        .transform(utf8.decoder)
+        .listen(stderr.write)
+        .asFuture<void>();
+    final exit = process.exitCode.then(_ProcessExit.new);
+    late final int exitCode;
+    while (true) {
+      final result = await Future.any<Object?>([
+        exit,
+        Future<void>.delayed(const Duration(milliseconds: 25)),
+      ]);
+      if (result is _ProcessExit) {
+        exitCode = result.code;
+        break;
+      }
+      if (shouldCancel?.call() ?? false) {
+        process.kill();
+        exitCode = await process.exitCode;
+        await stdoutDone;
+        await stderrDone;
+        throw const OperationCancelledException();
+      }
+    }
+    await stdoutDone;
+    await stderrDone;
+    if (exitCode != 0) {
+      final detail = stderr.toString().trim().isNotEmpty
+          ? stderr.toString().trim()
+          : stdout.toString().trim();
+      throw MediaException(
+        'conversion_failed',
+        _cleanProcessError(detail, 'The lossless audio encoder failed.'),
+      );
+    }
+  }
+
+  Future<String> _resolveWindowsEncoder({bool refresh = false}) async {
+    if (!refresh && _encoderPath != null) return _encoderPath!;
+    final executableDirectory = File(Platform.resolvedExecutable).parent.path;
+    final override = Platform.environment['MEOWSTT_FLAC_DIR']?.trim();
+    final nativeArch =
+        (Platform.environment['PROCESSOR_ARCHITEW6432'] ??
+                Platform.environment['PROCESSOR_ARCHITECTURE'] ??
+                '')
+            .toUpperCase()
+            .contains('ARM64')
+        ? 'arm64'
+        : 'x64';
+    final candidates = <String>[
+      if (override?.isNotEmpty ?? false) override!,
+      p.join(executableDirectory, 'flac'),
+      p.join(Directory.current.path, '.tools', 'flac', 'windows', nativeArch),
+      if (nativeArch == 'x64')
+        p.join(
+          Directory.current.path,
+          '.tools',
+          'flac',
+          '1.5.0',
+          'extracted',
+          'flac-1.5.0-win',
+          'Win64',
+        ),
+    ];
+    for (final directory in candidates) {
+      final executable = p.join(directory, 'flac.exe');
+      if (await File(executable).exists()) {
+        return _encoderPath = executable;
+      }
+    }
+    throw const MediaException(
+      'encoder_missing',
+      'The bundled FLAC encoder was not found. Open Settings for diagnostics.',
+    );
   }
 
   @override
@@ -228,27 +450,25 @@ class ProcessMediaService implements MediaService {
 
   @override
   Future<void> deleteGeneratedMedia(String cacheKey) async {
-    final safeKey = cacheKey.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
-    await deleteTemporary(p.join(paths.temporary.path, '$safeKey.flac'));
-    await deleteTemporary(
-      p.join(paths.temporary.path, '$safeKey-waveform.png'),
-    );
+    final safeKey = _safeCacheKey(cacheKey);
+    for (final suffix in const [
+      '.flac',
+      '.m4a',
+      '-extract.wav',
+      '-waveform.wav',
+      '-waveform.png',
+    ]) {
+      await deleteTemporary(p.join(paths.temporary.path, '$safeKey$suffix'));
+    }
   }
 
   @override
   Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {
     if (!await paths.temporary.exists()) return;
-    final retained = retainedCacheKeys
-        .map((key) => key.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_'))
-        .toSet();
+    final retained = retainedCacheKeys.map(_safeCacheKey).toSet();
     await for (final entity in paths.temporary.list(followLinks: false)) {
       if (entity is! File) continue;
-      final name = p.basename(entity.path);
-      final cacheKey = name.endsWith('-waveform.png')
-          ? name.substring(0, name.length - '-waveform.png'.length)
-          : name.endsWith('.flac')
-          ? name.substring(0, name.length - '.flac'.length)
-          : null;
+      final cacheKey = generatedMediaCacheKey(p.basename(entity.path));
       if (cacheKey != null && !retained.contains(cacheKey)) {
         await deleteTemporary(entity.path);
       }
@@ -257,16 +477,52 @@ class ProcessMediaService implements MediaService {
 
   @override
   Future<MediaDiagnostics> diagnostics() async {
+    Player? player;
     try {
-      final tools = await _resolveTools(refresh: true);
-      final result = await Process.run(tools.ffmpeg, ['-version']);
+      player = Player();
+      final native = player.platform;
+      if (native is! NativePlayer) {
+        throw const MediaException(
+          'media_engine_unavailable',
+          'The native media engine is unavailable.',
+        );
+      }
+      final mpvVersion = await native.getProperty('mpv-version');
+      String encoderVersion;
+      String encoderPath;
+      if (Platform.isWindows) {
+        encoderPath = await _resolveWindowsEncoder(refresh: true);
+        final result = await Process.run(encoderPath, ['--version']);
+        if (result.exitCode != 0) {
+          throw MediaException(
+            'encoder_unavailable',
+            _cleanProcessError(
+              result.stderr.toString(),
+              'The FLAC encoder diagnostics failed.',
+            ),
+          );
+        }
+        encoderVersion = result.stdout.toString().trim().split('\n').first;
+      } else if (Platform.isMacOS) {
+        encoderPath = '/usr/bin/afconvert';
+        if (!await File(encoderPath).exists()) {
+          throw const MediaException(
+            'encoder_missing',
+            'The macOS lossless audio encoder is unavailable.',
+          );
+        }
+        encoderVersion = 'macOS afconvert (ALAC)';
+      } else {
+        throw const MediaException(
+          'encoder_missing',
+          'No lossless audio encoder is configured for this platform.',
+        );
+      }
       return MediaDiagnostics(
-        available: result.exitCode == 0,
-        ffmpegPath: tools.ffmpeg,
-        ffprobePath: tools.ffprobe,
-        version: result.stdout.toString().split('\n').first,
-        errorCode: result.exitCode == 0 ? null : 'ffmpeg_unavailable',
-        error: result.exitCode == 0 ? null : result.stderr.toString().trim(),
+        available: true,
+        enginePath: 'bundled libmpv',
+        encoderPath: encoderPath,
+        version: '$mpvVersion · $encoderVersion',
       );
     } on MediaException catch (error) {
       return MediaDiagnostics(
@@ -277,67 +533,18 @@ class ProcessMediaService implements MediaService {
     } on Object catch (error) {
       return MediaDiagnostics(
         available: false,
-        errorCode: 'ffmpeg_unavailable',
+        errorCode: 'media_engine_unavailable',
         error: error.toString(),
       );
+    } finally {
+      await player?.dispose();
     }
-  }
-
-  Future<_ToolPaths> _resolveTools({bool refresh = false}) async {
-    if (!refresh && _tools != null) return _tools!;
-    final executableName = Platform.isWindows ? 'ffmpeg.exe' : 'ffmpeg';
-    final probeName = Platform.isWindows ? 'ffprobe.exe' : 'ffprobe';
-    final executableDirectory = File(Platform.resolvedExecutable).parent.path;
-    final candidates = <String>[
-      if (overrideDirectory?.trim().isNotEmpty ?? false)
-        overrideDirectory!.trim(),
-      if (Platform.environment['MEOWSTT_FFMPEG_DIR']?.trim().isNotEmpty ??
-          false)
-        Platform.environment['MEOWSTT_FFMPEG_DIR']!.trim(),
-      if (Platform.isMacOS)
-        p.normalize(p.join(executableDirectory, '..', 'Resources', 'ffmpeg')),
-      p.join(executableDirectory, 'ffmpeg'),
-      p.join(Directory.current.path, '.tools', 'ffmpeg'),
-    ];
-    for (final directory in candidates) {
-      final ffmpeg = p.join(directory, executableName);
-      final ffprobe = p.join(directory, probeName);
-      if (await File(ffmpeg).exists() && await File(ffprobe).exists()) {
-        return _tools = _ToolPaths(ffmpeg, ffprobe);
-      }
-    }
-    final lookup = await Process.run(
-      Platform.isWindows ? 'where.exe' : 'which',
-      [executableName],
-    );
-    final probeLookup = await Process.run(
-      Platform.isWindows ? 'where.exe' : 'which',
-      [probeName],
-    );
-    if (lookup.exitCode == 0 && probeLookup.exitCode == 0) {
-      return _tools = _ToolPaths(
-        lookup.stdout.toString().trim().split(RegExp(r'[\r\n]+')).first,
-        probeLookup.stdout.toString().trim().split(RegExp(r'[\r\n]+')).first,
-      );
-    }
-    throw const MediaException(
-      'ffmpeg_missing',
-      'Bundled FFmpeg and ffprobe were not found. Open Settings for diagnostics.',
-    );
-  }
-
-  String _cleanProcessError(String error, String fallback) {
-    final lines = error.trim().split(RegExp(r'[\r\n]+'));
-    return lines.isEmpty || lines.first.isEmpty
-        ? fallback
-        : lines.take(3).join(' ');
   }
 }
 
-class _ToolPaths {
-  const _ToolPaths(this.ffmpeg, this.ffprobe);
-  final String ffmpeg;
-  final String ffprobe;
+class _ProcessExit {
+  const _ProcessExit(this.code);
+  final int code;
 }
 
 class MediaException implements Exception {
@@ -353,53 +560,42 @@ extension _FirstOrNull<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;
 }
 
-List<String> buildFfprobeArguments(String sourcePath) => [
-  '-v',
-  'error',
-  '-show_format',
-  '-show_streams',
-  '-of',
-  'json',
-  sourcePath,
-];
+bool _isRealAudioTrack(AudioTrack track) =>
+    track.id != 'auto' && track.id != 'no';
 
-List<String> buildFfmpegExtractionArguments(String sourcePath, String output) =>
-    [
-      '-hide_banner',
-      '-nostdin',
-      '-y',
-      '-i',
-      sourcePath,
-      '-vn',
-      '-ac',
-      '1',
-      '-ar',
-      '16000',
-      '-c:a',
-      'flac',
-      '-progress',
-      'pipe:1',
-      '-nostats',
-      output,
-    ];
+bool _isRealVideoTrack(VideoTrack track) =>
+    track.id != 'auto' &&
+    track.id != 'no' &&
+    track.image != true &&
+    track.albumart != true;
 
-List<String> buildFfmpegWaveformArguments(
-  String sourcePath,
-  String output, {
-  int width = 1200,
-  int height = 160,
-}) => [
-  '-hide_banner',
-  '-loglevel',
-  'error',
-  '-nostdin',
-  '-y',
-  '-i',
-  sourcePath,
-  '-filter_complex',
-  'aformat=channel_layouts=mono,showwavespic='
-      's=${width}x$height:colors=white:scale=sqrt',
-  '-frames:v',
-  '1',
-  output,
-];
+bool _hasMediaTracks(Tracks tracks) =>
+    tracks.audio.any(_isRealAudioTrack) || tracks.video.any(_isRealVideoTrack);
+
+String _safeCacheKey(String cacheKey) =>
+    cacheKey.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+
+String? generatedMediaCacheKey(String filename) {
+  for (final suffix in const [
+    '-waveform.png',
+    '-waveform.wav',
+    '-extract.wav',
+    '.flac',
+    '.m4a',
+  ]) {
+    if (filename.endsWith(suffix)) {
+      return filename.substring(0, filename.length - suffix.length);
+    }
+  }
+  return null;
+}
+
+String _playerError(List<String> errors, String fallback) =>
+    errors.isEmpty ? fallback : errors.take(3).join(' ');
+
+String _cleanProcessError(String error, String fallback) {
+  final lines = error.trim().split(RegExp(r'[\r\n]+'));
+  return lines.isEmpty || lines.first.isEmpty
+      ? fallback
+      : lines.take(3).join(' ');
+}
