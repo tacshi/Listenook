@@ -24,9 +24,6 @@ VERSION="$(awk '/^version:/{print $2}' "$ROOT/pubspec.yaml" | cut -d+ -f1)"
 ARCHES=("$ARCH")
 if [[ "$ARCH" == "all" ]]; then ARCHES=(arm64 x64); fi
 
-cd "$ROOT"
-flutter test integration_test/secure_credential_store_test.dart -d macos
-
 for CURRENT_ARCH in "${ARCHES[@]}"; do
   EXPECTED_MACHO="$CURRENT_ARCH"
   if [[ "$CURRENT_ARCH" == "x64" ]]; then EXPECTED_MACHO="x86_64"; fi
@@ -110,16 +107,20 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   if [[ "$SIGN_IDENTITY" != "-" ]]; then SIGN_ARGS+=(--options runtime --timestamp); fi
   codesign "${SIGN_ARGS[@]}" "$APP"
   codesign --verify --deep --strict "$APP"
-  "$ROOT/scripts/verify-macos-app.sh" "$APP"
 
   OUT="$ROOT/dist"
   mkdir -p "$OUT"
   BASE="MeowSTT-$VERSION-macos-$CURRENT_ARCH-$MODE"
-  ZIP="$OUT/$BASE.app.zip"
-  rm -f "$ZIP"
-  ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+  if [[ "$MODE" == "debug" ]]; then
+    DEBUG_APP="$OUT/$BASE.app"
+    rm -f "$OUT/$BASE.app.zip"
+    rm -rf "$DEBUG_APP"
+    ditto "$APP" "$DEBUG_APP"
+  else
+    ZIP="$OUT/$BASE.app.zip"
+    rm -f "$ZIP"
+    ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
-  if [[ "$MODE" == "release" ]]; then
     STAGE="$(mktemp -d)"
     cp -R "$APP" "$STAGE/MeowSTT.app"
     ln -s /Applications "$STAGE/Applications"
@@ -139,6 +140,15 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
 
   CHECKSUMS="$OUT/$BASE.sha256"
   rm -f "$CHECKSUMS"
-  (cd "$OUT" && shasum -a 256 "$BASE"* > "$BASE.sha256")
+  if [[ "$MODE" == "debug" ]]; then
+    (
+      cd "$OUT"
+      find "$BASE.app" -type f -exec shasum -a 256 {} + \
+        | LC_ALL=C sort \
+        > "$BASE.sha256"
+    )
+  else
+    (cd "$OUT" && shasum -a 256 "$BASE"* > "$BASE.sha256")
+  fi
   echo "Artifacts: $OUT"
 done

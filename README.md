@@ -98,6 +98,17 @@ dist/MeowSTT-1.0.0-macos-arm64-release.sha256
 macOS release output contains an `.app.zip` and DMG. Windows output contains a
 portable ZIP and MSIX.
 
+macOS debug output remains an uncompressed `.app` bundle under `dist/`.
+
+The macOS build scripts are non-interactive: they do not access Keychain or
+launch the built app. Run the credential and launch checks explicitly when
+needed:
+
+```bash
+flutter test integration_test/secure_credential_store_test.dart -d macos
+scripts/verify-macos-app.sh build/macos/Build/Products/Debug/MeowSTT.app
+```
+
 ## Architecture
 
 UI widgets depend on one Provider/ChangeNotifier controller. The controller
