@@ -1333,17 +1333,110 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    final windowToolbar = find.byKey(const Key('app-window-toolbar'));
+    final sidebarToggle = find.byKey(const Key('toggle-app-sidebar'));
+    expect(windowToolbar, findsOneWidget);
+    expect(
+      find.descendant(of: windowToolbar, matching: sidebarToggle),
+      findsOneWidget,
+    );
+    final platform = Theme.of(tester.element(windowToolbar)).platform;
+    if (platform == TargetPlatform.macOS) {
+      expect(
+        tester.getCenter(find.byKey(const Key('macos-traffic-light-space'))).dx,
+        lessThan(tester.getCenter(sidebarToggle).dx),
+      );
+    } else if (platform == TargetPlatform.windows) {
+      expect(
+        tester.getCenter(find.byKey(const Key('windows-app-icon'))).dx,
+        lessThan(tester.getCenter(sidebarToggle).dx),
+      );
+      expect(find.byKey(const Key('window-close')), findsOneWidget);
+    }
     expect(find.byKey(const Key('app-sidebar')), findsOneWidget);
     expect(find.byType(NavigationRail), findsOneWidget);
-    await tester.tap(find.byKey(const Key('toggle-app-sidebar')));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('app-sidebar-hidden')), findsOneWidget);
     expect(find.byType(NavigationRail), findsNothing);
 
-    await tester.tap(find.byKey(const Key('toggle-app-sidebar')));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('app-sidebar')), findsOneWidget);
     expect(find.byType(NavigationRail), findsOneWidget);
+
+    await tester.tap(sidebarToggle);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('app-sidebar-hidden')), findsOneWidget);
+
+    await tester.tap(sidebarToggle);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('app-sidebar')), findsOneWidget);
+    expect(find.byType(NavigationRail), findsOneWidget);
+  });
+
+  testWidgets('macOS toolbar aligns sidebar toggle with traffic lights', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.macOS),
+        locale: const Locale('en'),
+        supportedLocales: AppStrings.supportedLocales,
+        localizationsDelegates: const [AppStrings.delegate],
+        home: const Scaffold(
+          body: AppWindowToolbar(sidebarVisible: true, onToggleSidebar: _noop),
+        ),
+      ),
+    );
+
+    final toolbar = find.byKey(const Key('app-window-toolbar'));
+    final toggle = find.byKey(const Key('toggle-app-sidebar'));
+    expect(tester.getSize(toolbar).height, AppWindowToolbar.macOSHeight);
+    expect(tester.getSize(toggle).height, AppWindowToolbar.macOSControlHeight);
+    expect(tester.getTopLeft(toggle).dy, tester.getTopLeft(toolbar).dy);
+    expect(
+      tester.getCenter(toggle).dy,
+      tester.getTopLeft(toolbar).dy + (AppWindowToolbar.macOSControlHeight / 2),
+    );
+    expect(
+      tester.getCenter(find.byKey(const Key('macos-traffic-light-space'))).dx,
+      lessThan(tester.getCenter(toggle).dx),
+    );
+  });
+
+  testWidgets('Windows toolbar places sidebar toggle after the app icon', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.windows),
+        locale: const Locale('en'),
+        supportedLocales: AppStrings.supportedLocales,
+        localizationsDelegates: const [AppStrings.delegate],
+        home: Scaffold(
+          body: AppWindowToolbar(sidebarVisible: true, onToggleSidebar: _noop),
+        ),
+      ),
+    );
+
+    final icon = find.byKey(const Key('windows-app-icon'));
+    final toggle = find.byKey(const Key('toggle-app-sidebar'));
+    expect(
+      tester.getSize(find.byKey(const Key('app-window-toolbar'))).height,
+      AppWindowToolbar.windowsHeight,
+    );
+    expect(tester.getCenter(icon).dx, lessThan(tester.getCenter(toggle).dx));
+    expect(
+      tester.getCenter(toggle).dx,
+      lessThan(tester.getCenter(find.byKey(const Key('window-minimize'))).dx),
+    );
+    expect(find.byKey(const Key('window-maximize')), findsOneWidget);
+    expect(find.byKey(const Key('window-close')), findsOneWidget);
   });
 
   testWidgets(
@@ -1351,7 +1444,6 @@ void main() {
     (tester) async {
       _setTestWindow(tester, const Size(1240, 820));
       final controller = await _controllerForDocument(_simpleDocument());
-      var sidebarToggles = 0;
       addTearDown(controller.dispose);
       controller.reopen('job');
 
@@ -1363,23 +1455,18 @@ void main() {
             supportedLocales: AppStrings.supportedLocales,
             localizationsDelegates: const [AppStrings.delegate],
             home: Scaffold(
-              body: WorkspacePage(
-                onAddFiles: _noop,
-                onAddFolder: _noop,
-                sidebarToggle: IconButton(
-                  key: const Key('test-sidebar-toggle'),
-                  onPressed: () => sidebarToggles++,
-                  icon: const Icon(Icons.menu_rounded),
-                ),
-              ),
+              body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('test-sidebar-toggle')));
-      expect(sidebarToggles, 1);
+      final pageTitle = find.byKey(const Key('workspace-page-title'));
+      expect(
+        tester.widget<Text>(pageTitle).style?.fontSize,
+        Theme.of(tester.element(pageTitle)).textTheme.titleLarge?.fontSize,
+      );
       expect(find.byKey(const Key('header-add-folder')), findsNothing);
       expect(find.byKey(const Key('header-add-files')), findsNothing);
       expect(find.byKey(const Key('export-all')), findsOneWidget);

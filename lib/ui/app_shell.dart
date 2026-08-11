@@ -158,19 +158,13 @@ class _AppShellState extends State<AppShell> with WindowListener {
     }
   }
 
+  void _toggleSidebar() {
+    setState(() => _sidebarVisible = !_sidebarVisible);
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
-    final sidebarToggle = IconButton(
-      key: const Key('toggle-app-sidebar'),
-      tooltip: context.strings.t(
-        _sidebarVisible ? 'hide_sidebar' : 'show_sidebar',
-      ),
-      onPressed: () => setState(() => _sidebarVisible = !_sidebarVisible),
-      icon: Icon(
-        _sidebarVisible ? Icons.menu_open_rounded : Icons.menu_rounded,
-      ),
-    );
     final destinations = [
       NavigationRailDestination(
         icon: const Icon(Icons.space_dashboard_outlined),
@@ -193,6 +187,10 @@ class _AppShellState extends State<AppShell> with WindowListener {
         const SingleActivator(LogicalKeyboardKey.keyO, meta: true): _addFiles,
         const SingleActivator(LogicalKeyboardKey.keyO, control: true):
             _addFiles,
+        const SingleActivator(LogicalKeyboardKey.keyB, meta: true):
+            _toggleSidebar,
+        const SingleActivator(LogicalKeyboardKey.keyB, control: true):
+            _toggleSidebar,
         const SingleActivator(LogicalKeyboardKey.enter, meta: true):
             controller.startReady,
         const SingleActivator(LogicalKeyboardKey.enter, control: true):
@@ -201,70 +199,219 @@ class _AppShellState extends State<AppShell> with WindowListener {
       child: Focus(
         autofocus: true,
         child: Scaffold(
-          body: Row(
+          body: Column(
             children: [
-              ClipRect(
-                child: AnimatedSize(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeInOut,
-                  alignment: Alignment.centerLeft,
-                  child: _sidebarVisible
-                      ? Row(
-                          key: const Key('app-sidebar'),
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            NavigationRail(
-                              minWidth: 64,
-                              minExtendedWidth: 184,
-                              selectedIndex: controller.destinationIndex,
-                              onDestinationSelected: controller.setDestination,
-                              extended:
-                                  MediaQuery.sizeOf(context).width >= 1180,
-                              leading: Padding(
-                                padding: const EdgeInsets.only(
-                                  top: 10,
-                                  bottom: 14,
-                                ),
-                                child: Tooltip(
-                                  message: 'MeowSTT',
-                                  child: Image.asset(
-                                    'assets/branding/meowstt-icon.png',
-                                    width: 38,
-                                    height: 38,
-                                  ),
-                                ),
-                              ),
-                              destinations: destinations,
-                            ),
-                            const VerticalDivider(width: 1),
-                          ],
-                        )
-                      : const SizedBox.shrink(key: Key('app-sidebar-hidden')),
-                ),
+              AppWindowToolbar(
+                sidebarVisible: _sidebarVisible,
+                onToggleSidebar: _toggleSidebar,
               ),
               Expanded(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  child: switch (controller.destinationIndex) {
-                    1 => LibraryPage(
-                      key: const ValueKey('library'),
-                      sidebarToggle: sidebarToggle,
+                child: Row(
+                  children: [
+                    ClipRect(
+                      child: AnimatedSize(
+                        duration: const Duration(milliseconds: 180),
+                        curve: Curves.easeInOut,
+                        alignment: Alignment.centerLeft,
+                        child: _sidebarVisible
+                            ? Row(
+                                key: const Key('app-sidebar'),
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  NavigationRail(
+                                    minWidth: 64,
+                                    minExtendedWidth: 184,
+                                    selectedIndex: controller.destinationIndex,
+                                    onDestinationSelected:
+                                        controller.setDestination,
+                                    extended:
+                                        MediaQuery.sizeOf(context).width >=
+                                        1180,
+                                    leading: Padding(
+                                      padding: const EdgeInsets.only(
+                                        top: 10,
+                                        bottom: 14,
+                                      ),
+                                      child: Tooltip(
+                                        message: 'MeowSTT',
+                                        child: Image.asset(
+                                          'assets/branding/meowstt-icon.png',
+                                          width: 38,
+                                          height: 38,
+                                        ),
+                                      ),
+                                    ),
+                                    destinations: destinations,
+                                  ),
+                                  const VerticalDivider(width: 1),
+                                ],
+                              )
+                            : const SizedBox.shrink(
+                                key: Key('app-sidebar-hidden'),
+                              ),
+                      ),
                     ),
-                    2 => SettingsPage(
-                      key: const ValueKey('settings'),
-                      sidebarToggle: sidebarToggle,
+                    Expanded(
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        child: switch (controller.destinationIndex) {
+                          1 => const LibraryPage(key: ValueKey('library')),
+                          2 => const SettingsPage(key: ValueKey('settings')),
+                          _ => WorkspacePage(
+                            key: const ValueKey('workspace'),
+                            onAddFiles: _addFiles,
+                            onAddFolder: _addFolder,
+                          ),
+                        },
+                      ),
                     ),
-                    _ => WorkspacePage(
-                      key: const ValueKey('workspace'),
-                      onAddFiles: _addFiles,
-                      onAddFolder: _addFolder,
-                      sidebarToggle: sidebarToggle,
-                    ),
-                  },
+                  ],
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class AppWindowToolbar extends StatefulWidget {
+  const AppWindowToolbar({
+    super.key,
+    required this.sidebarVisible,
+    required this.onToggleSidebar,
+  });
+
+  static const macOSHeight = 32.0;
+  static const macOSControlHeight = 32.0;
+  static const windowsHeight = 40.0;
+
+  final bool sidebarVisible;
+  final VoidCallback onToggleSidebar;
+
+  @override
+  State<AppWindowToolbar> createState() => _AppWindowToolbarState();
+}
+
+class _AppWindowToolbarState extends State<AppWindowToolbar>
+    with WindowListener {
+  bool _maximized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  @override
+  void onWindowMaximize() => setState(() => _maximized = true);
+
+  @override
+  void onWindowUnmaximize() => setState(() => _maximized = false);
+
+  @override
+  Widget build(BuildContext context) {
+    final platform = Theme.of(context).platform;
+    final windows = platform == TargetPlatform.windows;
+    final macOS = platform == TargetPlatform.macOS;
+    final height = macOS
+        ? AppWindowToolbar.macOSHeight
+        : AppWindowToolbar.windowsHeight;
+    final controlHeight = macOS
+        ? AppWindowToolbar.macOSControlHeight
+        : AppWindowToolbar.windowsHeight;
+    final brightness = Theme.of(context).brightness;
+    return DecoratedBox(
+      key: const Key('app-window-toolbar'),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        border: Border(
+          bottom: BorderSide(
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
+        ),
+      ),
+      child: SizedBox(
+        height: height,
+        child: Row(
+          crossAxisAlignment: macOS
+              ? CrossAxisAlignment.start
+              : CrossAxisAlignment.center,
+          children: [
+            if (macOS)
+              const SizedBox(key: Key('macos-traffic-light-space'), width: 72),
+            if (windows) ...[
+              Padding(
+                key: const Key('windows-app-icon'),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Image.asset(
+                  'assets/branding/meowstt-icon.png',
+                  width: 20,
+                  height: 20,
+                ),
+              ),
+            ],
+            IconButton(
+              key: const Key('toggle-app-sidebar'),
+              tooltip: context.strings.t(
+                widget.sidebarVisible ? 'hide_sidebar' : 'show_sidebar',
+              ),
+              onPressed: widget.onToggleSidebar,
+              icon: Icon(
+                widget.sidebarVisible
+                    ? Icons.menu_open_rounded
+                    : Icons.menu_rounded,
+              ),
+              padding: EdgeInsets.zero,
+              constraints: BoxConstraints.tightFor(
+                width: 40,
+                height: controlHeight,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Expanded(child: DragToMoveArea(child: SizedBox.expand())),
+            if (windows) ...[
+              Tooltip(
+                message: context.strings.t('minimize_window'),
+                child: WindowCaptionButton.minimize(
+                  key: const Key('window-minimize'),
+                  brightness: brightness,
+                  onPressed: () => unawaited(windowManager.minimize()),
+                ),
+              ),
+              Tooltip(
+                message: context.strings.t(
+                  _maximized ? 'restore_window' : 'maximize_window',
+                ),
+                child: _maximized
+                    ? WindowCaptionButton.unmaximize(
+                        key: const Key('window-restore'),
+                        brightness: brightness,
+                        onPressed: () => unawaited(windowManager.unmaximize()),
+                      )
+                    : WindowCaptionButton.maximize(
+                        key: const Key('window-maximize'),
+                        brightness: brightness,
+                        onPressed: () => unawaited(windowManager.maximize()),
+                      ),
+              ),
+              Tooltip(
+                message: context.strings.t('close_window'),
+                child: WindowCaptionButton.close(
+                  key: const Key('window-close'),
+                  brightness: brightness,
+                  onPressed: () => unawaited(windowManager.close()),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
