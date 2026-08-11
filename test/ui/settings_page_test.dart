@@ -44,9 +44,11 @@ void main() {
     );
     expect(find.text('Transcription'), findsOneWidget);
     expect(find.text('Appearance'), findsWidgets);
-    expect(find.text('System & About'), findsOneWidget);
+    expect(find.text('About'), findsOneWidget);
     expect(find.byIcon(Icons.transcribe_rounded), findsOneWidget);
     expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
+    expect(find.text('Batch options'), findsNothing);
+    expect(find.text('Concurrent jobs'), findsNothing);
 
     expect(find.byKey(const Key('session-language-hints-field')), findsNothing);
     expect(find.byKey(const Key('session-context-terms-field')), findsNothing);
@@ -55,6 +57,11 @@ void main() {
     final sonioxTarget = find.byKey(const Key('soniox-translation-target'));
     final targetField = tester.widget<DropdownButtonFormField<String>>(
       sonioxTarget,
+    );
+    expect(
+      tester.getTopLeft(sonioxTarget).dy -
+          tester.getBottomLeft(sonioxSwitch).dy,
+      greaterThanOrEqualTo(12),
     );
     expect(supportedSonioxTranslationLanguageCodes, hasLength(60));
     expect(supportedSonioxTranslationLanguageCodes, contains('zh'));
@@ -113,13 +120,23 @@ void main() {
     expect(credentials.value, 'candidate-key');
     expect(controller.keyConfigured, isTrue);
     expect(find.text('Soniox key saved securely.'), findsOneWidget);
+    expect(find.text('Securely stored on this device'), findsNothing);
+    final sonioxStatus = find.byKey(const Key('soniox-key-status'));
+    expect(
+      tester.widget<Tooltip>(sonioxStatus).message,
+      'Securely stored on this device',
+    );
+    expect(
+      tester.getCenter(sonioxStatus).dx,
+      greaterThan(tester.getCenter(find.text('Soniox API key')).dx),
+    );
 
     await tester.tap(find.text('Appearance').first);
     await tester.pumpAndSettle();
     expect(find.text('Appearance'), findsOneWidget);
     expect(find.text('Theme').hitTestable(), findsOneWidget);
 
-    await tester.tap(find.text('System & About'));
+    await tester.tap(find.text('About'));
     await tester.pumpAndSettle();
     expect(find.text('FFmpeg diagnostics').hitTestable(), findsOneWidget);
   });
@@ -170,6 +187,19 @@ void main() {
 
       expect(tester.widget<TextField>(baseUrl).controller?.text, isEmpty);
       expect(
+        find.text('Choose a provider and test the connection'),
+        findsNothing,
+      );
+      final translationStatus = find.byKey(const Key('translation-status'));
+      expect(
+        tester.widget<Tooltip>(translationStatus).message,
+        'Choose a provider and test the connection',
+      );
+      expect(
+        tester.getCenter(translationStatus).dx,
+        greaterThan(tester.getCenter(find.text('LLM Translation')).dx),
+      );
+      expect(
         find.text('Test the connection to select a model'),
         findsOneWidget,
       );
@@ -209,7 +239,9 @@ void main() {
       await tester.tap(find.text('suggested-model').last);
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('save-translation-settings')));
+      final saveButton = find.byKey(const Key('save-translation-settings'));
+      expect(tester.widget<FilledButton>(saveButton).onPressed, isNotNull);
+      await tester.tap(saveButton);
       await tester.pumpAndSettle();
       expect(translationCredentials.value, 'candidate-secret');
       expect(
@@ -217,15 +249,18 @@ void main() {
         'https://example.test/v1',
       );
       expect(settings.value.translationSettings.model, 'suggested-model');
+      expect(tester.widget<FilledButton>(saveButton).onPressed, isNull);
 
       await tester.tap(model);
       await tester.pumpAndSettle();
       await tester.tap(find.text('replacement-model').last);
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('save-translation-settings')));
+      expect(tester.widget<FilledButton>(saveButton).onPressed, isNotNull);
+      await tester.tap(saveButton);
       await tester.pumpAndSettle();
       expect(translationCredentials.value, 'candidate-secret');
       expect(settings.value.translationSettings.model, 'replacement-model');
+      expect(tester.widget<FilledButton>(saveButton).onPressed, isNull);
 
       await tester.tap(find.text('Remove').last);
       await tester.pumpAndSettle();

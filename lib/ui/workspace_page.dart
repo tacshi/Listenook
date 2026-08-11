@@ -105,7 +105,7 @@ class _Header extends StatelessWidget {
     final showFullLabels = MediaQuery.sizeOf(context).width >= 1180;
     final isNewTranscription = controller.selectedJob?.document == null;
     final actions = <Widget>[
-      if (controller.workspaceJobs.isNotEmpty)
+      if (controller.workspaceJobs.isNotEmpty) ...[
         showFullLabels
             ? OutlinedButton.icon(
                 key: const Key('new-transcription'),
@@ -119,37 +119,38 @@ class _Header extends StatelessWidget {
                 tooltip: context.strings.t('new_transcription'),
                 icon: const Icon(Icons.note_add_outlined),
               ),
-      if (isNewTranscription) ...[
-        OutlinedButton.icon(
-          key: const Key('header-add-folder'),
-          onPressed: onAddFolder,
-          icon: const Icon(Icons.create_new_folder_outlined),
-          label: Text(context.strings.t('add_folder')),
+        if (isNewTranscription) ...[
+          OutlinedButton.icon(
+            key: const Key('header-add-folder'),
+            onPressed: onAddFolder,
+            icon: const Icon(Icons.create_new_folder_outlined),
+            label: Text(context.strings.t('add_folder')),
+          ),
+          OutlinedButton.icon(
+            key: const Key('header-add-files'),
+            onPressed: onAddFiles,
+            icon: const Icon(Icons.add_rounded),
+            label: Text(context.strings.t('add_files')),
+          ),
+        ],
+        FilledButton.icon(
+          key: const Key('header-transcribe'),
+          onPressed:
+              controller.readyCount > 0 &&
+                  controller.keyConfigured &&
+                  !controller.processing
+              ? controller.startReady
+              : null,
+          icon: controller.processing
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.auto_awesome_rounded),
+          label: Text(context.strings.t('transcribe')),
         ),
-        OutlinedButton.icon(
-          key: const Key('header-add-files'),
-          onPressed: onAddFiles,
-          icon: const Icon(Icons.add_rounded),
-          label: Text(context.strings.t('add_files')),
-        ),
-      ],
-      FilledButton.icon(
-        onPressed:
-            controller.readyCount > 0 &&
-                controller.keyConfigured &&
-                !controller.processing
-            ? controller.startReady
-            : null,
-        icon: controller.processing
-            ? const SizedBox.square(
-                dimension: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.auto_awesome_rounded),
-        label: Text(context.strings.t('transcribe')),
-      ),
-      if (controller.workspaceJobs.isNotEmpty)
         _ExportAllButton(controller: controller, compact: !showFullLabels),
+      ],
     ];
     return LayoutBuilder(
       builder: (context, constraints) => Row(
@@ -229,13 +230,7 @@ class _EmptyDropZone extends StatelessWidget {
                         style: Theme.of(context).textTheme.headlineSmall
                             ?.copyWith(fontWeight: FontWeight.w700),
                       ),
-                      SizedBox(height: compact ? 8 : 10),
-                      Text(
-                        context.strings.t('drop_subtitle'),
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyLarge,
-                      ),
-                      const SizedBox(height: 8),
+                      SizedBox(height: compact ? 8 : 12),
                       Text(
                         context.strings.t('supported'),
                         textAlign: TextAlign.center,

@@ -21,6 +21,12 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> with WindowListener {
+  static const _nativeNavigationChannel = MethodChannel(
+    'app.meowstt.desktop/navigation',
+  );
+  static const _compactSidebarWidth = 64.0;
+  static const _extendedSidebarWidth = 152.0;
+
   bool _onboardingShown = false;
   bool _sidebarVisible = true;
   bool _closeDialogOpen = false;
@@ -34,6 +40,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
     _controller = context.read<AppController>();
     _controller.addListener(_syncCloseProtection);
     windowManager.addListener(this);
+    _nativeNavigationChannel.setMethodCallHandler(_handleNativeNavigation);
     _syncCloseProtection();
     WidgetsBinding.instance.addPostFrameCallback((_) => _showOnboarding());
   }
@@ -42,7 +49,16 @@ class _AppShellState extends State<AppShell> with WindowListener {
   void dispose() {
     _controller.removeListener(_syncCloseProtection);
     windowManager.removeListener(this);
+    _nativeNavigationChannel.setMethodCallHandler(null);
     super.dispose();
+  }
+
+  Future<Object?> _handleNativeNavigation(MethodCall call) async {
+    if (call.method == 'showSettings') {
+      await _setDestination(2);
+      return null;
+    }
+    throw MissingPluginException('Unknown native navigation: ${call.method}');
   }
 
   void _syncCloseProtection() {
@@ -171,28 +187,74 @@ class _AppShellState extends State<AppShell> with WindowListener {
     setState(() => _sidebarVisible = !_sidebarVisible);
   }
 
+  String _shortcutTooltip(BuildContext context, String label, String key) {
+    final modifier = Theme.of(context).platform == TargetPlatform.macOS
+        ? '⌘'
+        : 'Ctrl+';
+    return '$label ($modifier$key)';
+  }
+
+  NavigationRailDestination _destination({
+    required BuildContext context,
+    required String labelKey,
+    required String shortcutKey,
+    required IconData icon,
+    required IconData selectedIcon,
+  }) {
+    final label = context.strings.t(labelKey);
+    final tooltip = _shortcutTooltip(context, label, shortcutKey);
+    return NavigationRailDestination(
+      icon: Tooltip(message: tooltip, child: Icon(icon)),
+      selectedIcon: Tooltip(message: tooltip, child: Icon(selectedIcon)),
+      label: Tooltip(
+        message: tooltip,
+        child: Text(
+          label,
+          key: ValueKey('$labelKey-navigation-label'),
+          style: TextStyle(
+            fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
+    final sidebarExtended = MediaQuery.sizeOf(context).width >= 1180;
     final destinations = [
-      NavigationRailDestination(
-        icon: const Icon(Icons.space_dashboard_outlined),
-        selectedIcon: const Icon(Icons.space_dashboard_rounded),
-        label: Text(context.strings.t('workspace')),
+      _destination(
+        context: context,
+        labelKey: 'workspace',
+        shortcutKey: '1',
+        icon: Icons.space_dashboard_outlined,
+        selectedIcon: Icons.space_dashboard_rounded,
       ),
-      NavigationRailDestination(
-        icon: const Icon(Icons.library_books_outlined),
-        selectedIcon: const Icon(Icons.library_books_rounded),
-        label: Text(context.strings.t('library')),
-      ),
-      NavigationRailDestination(
-        icon: const Icon(Icons.tune_outlined),
-        selectedIcon: const Icon(Icons.tune_rounded),
-        label: Text(context.strings.t('settings')),
+      _destination(
+        context: context,
+        labelKey: 'library',
+        shortcutKey: '2',
+        icon: Icons.library_books_outlined,
+        selectedIcon: Icons.library_books_rounded,
       ),
     ];
+    final settingsLabel = context.strings.t('settings');
+    final settingsTooltip = _shortcutTooltip(context, settingsLabel, ',');
     return CallbackShortcuts(
       bindings: {
+        const SingleActivator(LogicalKeyboardKey.digit1, meta: true): () =>
+            _setDestination(0),
+        const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
+            _setDestination(0),
+        const SingleActivator(LogicalKeyboardKey.digit2, meta: true): () =>
+            _setDestination(1),
+        const SingleActivator(LogicalKeyboardKey.digit2, control: true): () =>
+            _setDestination(1),
+        const SingleActivator(LogicalKeyboardKey.comma, meta: true): () =>
+            _setDestination(2),
+        const SingleActivator(LogicalKeyboardKey.comma, control: true): () =>
+            _setDestination(2),
         const SingleActivator(LogicalKeyboardKey.keyO, meta: true): _addFiles,
         const SingleActivator(LogicalKeyboardKey.keyO, control: true):
             _addFiles,
@@ -227,30 +289,58 @@ class _AppShellState extends State<AppShell> with WindowListener {
                                 key: const Key('app-sidebar'),
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  NavigationRail(
-                                    minWidth: 64,
-                                    minExtendedWidth: 184,
-                                    selectedIndex: controller.destinationIndex,
-                                    onDestinationSelected: (index) =>
-                                        unawaited(_setDestination(index)),
-                                    extended:
-                                        MediaQuery.sizeOf(context).width >=
-                                        1180,
-                                    leading: Padding(
-                                      padding: const EdgeInsets.only(
-                                        top: 10,
-                                        bottom: 14,
-                                      ),
-                                      child: Tooltip(
-                                        message: 'MeowSTT',
-                                        child: Image.asset(
-                                          'assets/branding/meowstt-icon.png',
-                                          width: 38,
-                                          height: 38,
+                                  SizedBox(
+                                    width: sidebarExtended
+                                        ? _extendedSidebarWidth
+                                        : _compactSidebarWidth,
+                                    child: NavigationRail(
+                                      minWidth: _compactSidebarWidth,
+                                      minExtendedWidth: _extendedSidebarWidth,
+                                      selectedIndex:
+                                          controller.destinationIndex < 2
+                                          ? controller.destinationIndex
+                                          : null,
+                                      onDestinationSelected: (index) =>
+                                          unawaited(_setDestination(index)),
+                                      extended: sidebarExtended,
+                                      leading: Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: 10,
+                                          bottom: 14,
+                                        ),
+                                        child: Tooltip(
+                                          message: 'MeowSTT',
+                                          child: Image.asset(
+                                            'assets/branding/meowstt-icon.png',
+                                            width: 38,
+                                            height: 38,
+                                          ),
                                         ),
                                       ),
+                                      trailingAtBottom: true,
+                                      trailing: Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 12,
+                                        ),
+                                        child: _NavigationRailAction(
+                                          key: const Key(
+                                            'settings-navigation-button',
+                                          ),
+                                          extended: sidebarExtended,
+                                          compactWidth: _compactSidebarWidth,
+                                          extendedWidth: _extendedSidebarWidth,
+                                          selected:
+                                              controller.destinationIndex == 2,
+                                          label: settingsLabel,
+                                          tooltip: settingsTooltip,
+                                          icon: Icons.settings_outlined,
+                                          selectedIcon: Icons.settings_rounded,
+                                          onPressed: () =>
+                                              unawaited(_setDestination(2)),
+                                        ),
+                                      ),
+                                      destinations: destinations,
                                     ),
-                                    destinations: destinations,
                                   ),
                                   const VerticalDivider(width: 1),
                                 ],
@@ -279,6 +369,108 @@ class _AppShellState extends State<AppShell> with WindowListener {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NavigationRailAction extends StatefulWidget {
+  const _NavigationRailAction({
+    super.key,
+    required this.extended,
+    required this.compactWidth,
+    required this.extendedWidth,
+    required this.selected,
+    required this.label,
+    required this.tooltip,
+    required this.icon,
+    required this.selectedIcon,
+    required this.onPressed,
+  });
+
+  final bool extended;
+  final double compactWidth;
+  final double extendedWidth;
+  final bool selected;
+  final String label;
+  final String tooltip;
+  final IconData icon;
+  final IconData selectedIcon;
+  final VoidCallback onPressed;
+
+  @override
+  State<_NavigationRailAction> createState() => _NavigationRailActionState();
+}
+
+class _NavigationRailActionState extends State<_NavigationRailAction> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: widget.tooltip,
+      child: Semantics(
+        button: true,
+        selected: widget.selected,
+        label: widget.label,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: widget.onPressed,
+            onHover: (hovered) => setState(() => _hovered = hovered),
+            hoverColor: Colors.transparent,
+            borderRadius: BorderRadius.circular(28),
+            child: SizedBox(
+              width: widget.extended
+                  ? widget.extendedWidth
+                  : widget.compactWidth,
+              height: 56,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: widget.compactWidth,
+                    child: Center(
+                      child: AnimatedContainer(
+                        key: const Key('settings-navigation-indicator'),
+                        duration: kThemeAnimationDuration,
+                        width: 56,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: widget.selected
+                              ? colors.primaryContainer
+                              : _hovered
+                              ? colors.primary.withValues(alpha: .04)
+                              : null,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Icon(
+                          widget.selected ? widget.selectedIcon : widget.icon,
+                          color: widget.selected
+                              ? colors.primary
+                              : colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (widget.extended)
+                    Expanded(
+                      child: Text(
+                        widget.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: widget.selected
+                              ? colors.primary
+                              : colors.onSurface,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -338,6 +530,10 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
         ? AppWindowToolbar.macOSControlHeight
         : AppWindowToolbar.windowsHeight;
     final brightness = Theme.of(context).brightness;
+    final shortcutModifier = macOS ? '⌘' : 'Ctrl+';
+    final sidebarTooltip = context.strings.t(
+      widget.sidebarVisible ? 'hide_sidebar' : 'show_sidebar',
+    );
     return DecoratedBox(
       key: const Key('app-window-toolbar'),
       decoration: BoxDecoration(
@@ -370,9 +566,7 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
             ],
             IconButton(
               key: const Key('toggle-app-sidebar'),
-              tooltip: context.strings.t(
-                widget.sidebarVisible ? 'hide_sidebar' : 'show_sidebar',
-              ),
+              tooltip: '$sidebarTooltip (${shortcutModifier}B)',
               onPressed: widget.onToggleSidebar,
               icon: Icon(
                 widget.sidebarVisible
