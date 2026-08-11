@@ -36,6 +36,8 @@ abstract interface class MediaService {
   });
   Future<String> renderWaveform(String sourcePath, String cacheKey);
   Future<void> deleteTemporary(String path);
+  Future<void> deleteGeneratedMedia(String cacheKey);
+  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys);
   Future<MediaDiagnostics> diagnostics();
 }
 

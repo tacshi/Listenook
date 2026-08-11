@@ -274,6 +274,14 @@ class TranscriptionOptions {
   final List<String> languageHints;
   final List<String> contextTerms;
 
+  TranscriptionOptions copyWith({
+    List<String>? languageHints,
+    List<String>? contextTerms,
+  }) => TranscriptionOptions(
+    languageHints: languageHints ?? this.languageHints,
+    contextTerms: contextTerms ?? this.contextTerms,
+  );
+
   Map<String, dynamic> toJson() => {
     'language_hints': languageHints,
     'context_terms': contextTerms,
@@ -337,8 +345,6 @@ class AppSettings {
     this.showSpeakers = true,
     this.showTimestamps = false,
     this.exportOptions = const ExportOptions(),
-    this.languageHints = const [],
-    this.contextTerms = const [],
     this.onboardingComplete = false,
     this.ffmpegOverride,
   });
@@ -349,8 +355,6 @@ class AppSettings {
   final bool showSpeakers;
   final bool showTimestamps;
   final ExportOptions exportOptions;
-  final List<String> languageHints;
-  final List<String> contextTerms;
   final bool onboardingComplete;
   final String? ffmpegOverride;
 
@@ -361,8 +365,6 @@ class AppSettings {
     bool? showSpeakers,
     bool? showTimestamps,
     ExportOptions? exportOptions,
-    List<String>? languageHints,
-    List<String>? contextTerms,
     bool? onboardingComplete,
     String? ffmpegOverride,
     bool clearFfmpegOverride = false,
@@ -373,8 +375,6 @@ class AppSettings {
     showSpeakers: showSpeakers ?? this.showSpeakers,
     showTimestamps: showTimestamps ?? this.showTimestamps,
     exportOptions: exportOptions ?? this.exportOptions,
-    languageHints: languageHints ?? this.languageHints,
-    contextTerms: contextTerms ?? this.contextTerms,
     onboardingComplete: onboardingComplete ?? this.onboardingComplete,
     ffmpegOverride: clearFfmpegOverride
         ? null
@@ -389,8 +389,6 @@ class AppSettings {
     'show_speakers': showSpeakers,
     'show_timestamps': showTimestamps,
     'export_options': exportOptions.toJson(),
-    'language_hints': languageHints,
-    'context_terms': contextTerms,
     'onboarding_complete': onboardingComplete,
     if (ffmpegOverride case final value?) 'ffmpeg_override': value,
   };
@@ -408,8 +406,6 @@ class AppSettings {
     exportOptions: ExportOptions.fromJson(
       (json['export_options'] as Map?)?.cast<String, dynamic>(),
     ),
-    languageHints: _strings(json['language_hints']),
-    contextTerms: _strings(json['context_terms']),
     onboardingComplete: json['onboarding_complete'] as bool? ?? false,
     ffmpegOverride: json['ffmpeg_override'] as String?,
   );

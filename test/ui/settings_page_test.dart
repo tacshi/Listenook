@@ -37,10 +37,12 @@ void main() {
       ),
     );
 
-    expect(
-      tester.getSize(find.byKey(const Key('context-terms-field'))).height,
-      tester.getSize(find.byKey(const Key('language-hints-field'))).height,
-    );
+    expect(find.text('Transcription'), findsOneWidget);
+    expect(find.text('Appearance'), findsWidgets);
+    expect(find.text('System & About'), findsOneWidget);
+
+    expect(find.byKey(const Key('session-language-hints-field')), findsNothing);
+    expect(find.byKey(const Key('session-context-terms-field')), findsNothing);
 
     expect(
       tester
@@ -77,6 +79,14 @@ void main() {
     expect(credentials.value, 'candidate-key');
     expect(controller.keyConfigured, isTrue);
     expect(find.text('Soniox key saved securely.'), findsOneWidget);
+
+    await tester.tap(find.text('Appearance').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Theme').hitTestable(), findsOneWidget);
+
+    await tester.tap(find.text('System & About'));
+    await tester.pumpAndSettle();
+    expect(find.text('FFmpeg diagnostics').hitTestable(), findsOneWidget);
   });
 }
 
@@ -120,6 +130,12 @@ class _Media implements MediaService {
 
   @override
   Future<void> deleteTemporary(String path) async {}
+
+  @override
+  Future<void> deleteGeneratedMedia(String cacheKey) async {}
+
+  @override
+  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
 
   @override
   Future<MediaDiagnostics> diagnostics() async =>

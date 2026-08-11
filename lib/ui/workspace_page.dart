@@ -38,7 +38,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       },
       child: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(28, 22, 28, 24),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -47,7 +47,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 onAddFolder: widget.onAddFolder,
                 onNewSession: () => _startNewSession(context, controller),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 12),
               if (controller.workspaceJobs.isEmpty)
                 Expanded(
                   child: _EmptyDropZone(
@@ -115,20 +115,20 @@ class _Header extends StatelessWidget {
               tooltip: context.strings.t('new_transcription'),
               icon: const Icon(Icons.note_add_outlined),
             ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
         ],
         OutlinedButton.icon(
           onPressed: onAddFolder,
           icon: const Icon(Icons.create_new_folder_outlined),
           label: Text(context.strings.t('add_folder')),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: 8),
         OutlinedButton.icon(
           onPressed: onAddFiles,
           icon: const Icon(Icons.add_rounded),
           label: Text(context.strings.t('add_files')),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: 8),
         FilledButton.icon(
           onPressed:
               controller.readyCount > 0 &&
@@ -269,21 +269,21 @@ class _WorkspaceBody extends StatelessWidget {
     return Column(
       children: [
         _BatchSummary(controller: controller),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
               final editor = controller.selectedJob?.document != null;
-              final split = constraints.maxWidth > 920;
+              final split = constraints.maxWidth > 760;
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   SizedBox(
-                    width: split ? (editor ? 390 : 520) : constraints.maxWidth,
+                    width: split ? (editor ? 300 : 400) : constraints.maxWidth,
                     child: _QueueList(dragging: dragging),
                   ),
                   if (split) ...[
-                    const SizedBox(width: 14),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: editor
                           ? TranscriptReview(jobId: controller.selectedJob!.id)
@@ -300,8 +300,34 @@ class _WorkspaceBody extends StatelessWidget {
   }
 }
 
-class _BatchOptionsPanel extends StatelessWidget {
+class _BatchOptionsPanel extends StatefulWidget {
   const _BatchOptionsPanel();
+
+  @override
+  State<_BatchOptionsPanel> createState() => _BatchOptionsPanelState();
+}
+
+class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
+  final _languages = TextEditingController();
+  final _terms = TextEditingController();
+  bool _seeded = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_seeded) return;
+    final options = context.read<AppController>().sessionOptions;
+    _languages.text = options.languageHints.join(', ');
+    _terms.text = options.contextTerms.join(', ');
+    _seeded = true;
+  }
+
+  @override
+  void dispose() {
+    _languages.dispose();
+    _terms.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -309,7 +335,7 @@ class _BatchOptionsPanel extends StatelessWidget {
     final settings = controller.settings;
     return Card(
       child: ListView(
-        padding: const EdgeInsets.all(22),
+        padding: const EdgeInsets.all(16),
         children: [
           Row(
             children: [
@@ -326,7 +352,7 @@ class _BatchOptionsPanel extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 12),
           _ReviewLine(
             icon: controller.keyConfigured
                 ? Icons.key_rounded
@@ -339,7 +365,7 @@ class _BatchOptionsPanel extends StatelessWidget {
                 ? null
                 : () => controller.setDestination(2),
           ),
-          const Divider(height: 28),
+          const Divider(height: 20),
           Text(
             context.strings.t('concurrency'),
             style: Theme.of(context).textTheme.labelLarge,
@@ -357,27 +383,34 @@ class _BatchOptionsPanel extends StatelessWidget {
               settings.copyWith(concurrency: value.first),
             ),
           ),
-          const SizedBox(height: 18),
-          _ReviewLine(
-            icon: Icons.translate_rounded,
-            title: context.strings.t('language_hints'),
-            value: settings.languageHints.isEmpty
-                ? context.strings.t('automatic')
-                : settings.languageHints.join(', '),
-            action: () => controller.setDestination(2),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('session-language-hints-field'),
+            controller: _languages,
+            decoration: InputDecoration(
+              labelText: context.strings.t('language_hints'),
+              hintText: context.strings.t('language_hints_hint'),
+              prefixIcon: const Icon(Icons.translate_rounded),
+            ),
+            onSubmitted: (_) => _saveSessionOptions(controller),
+            onTapOutside: (_) => _saveSessionOptions(controller),
           ),
           const SizedBox(height: 10),
-          _ReviewLine(
-            icon: Icons.spellcheck_rounded,
-            title: context.strings.t('context_terms'),
-            value: settings.contextTerms.isEmpty
-                ? context.strings.t('none')
-                : settings.contextTerms.take(6).join(', '),
-            action: () => controller.setDestination(2),
+          TextField(
+            key: const Key('session-context-terms-field'),
+            controller: _terms,
+            decoration: InputDecoration(
+              labelText: context.strings.t('context_terms'),
+              hintText: context.strings.t('context_terms_hint'),
+              prefixIcon: const Icon(Icons.spellcheck_rounded),
+            ),
+            onSubmitted: (_) => _saveSessionOptions(controller),
+            onTapOutside: (_) => _saveSessionOptions(controller),
           ),
-          const Divider(height: 28),
+          const Divider(height: 20),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            dense: true,
             title: Text(context.strings.t('speaker_labels')),
             subtitle: Text(context.strings.t('diarization_reversible')),
             value: settings.showSpeakers,
@@ -387,6 +420,7 @@ class _BatchOptionsPanel extends StatelessWidget {
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            dense: true,
             title: Text(context.strings.t('timestamps')),
             subtitle: Text(context.strings.t('subtitle_timing_kept')),
             value: settings.showTimestamps,
@@ -398,6 +432,21 @@ class _BatchOptionsPanel extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _saveSessionOptions(AppController controller) =>
+      controller.updateSessionOptions(
+        TranscriptionOptions(
+          languageHints: _split(_languages.text),
+          contextTerms: _split(_terms.text),
+        ),
+      );
+
+  List<String> _split(String value) => value
+      .split(RegExp(r'[,\n]'))
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toSet()
+      .toList();
 }
 
 class _ReviewLine extends StatelessWidget {
@@ -455,7 +504,7 @@ class _BatchSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Card(
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         children: [
           _Stat(
@@ -508,14 +557,14 @@ class _QueueList extends StatelessWidget {
     return Card(
       color: dragging ? colors.primaryContainer.withValues(alpha: .45) : null,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         side: dragging
             ? BorderSide(color: colors.primary, width: 2)
             : BorderSide.none,
       ),
       clipBehavior: Clip.antiAlias,
       child: ReorderableListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: 4),
         buildDefaultDragHandles: false,
         itemCount: controller.workspaceJobs.length,
         onReorderItem: controller.reorderWorkspace,
@@ -556,7 +605,7 @@ class _JobTile extends StatelessWidget {
       child: InkWell(
         onTap: () => controller.selectJob(job.id),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+          padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
           child: Row(
             children: [
               ReorderableDragStartListener(
@@ -578,7 +627,7 @@ class _JobTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
                     Text(
                       _jobSubtitle(context, job),
                       maxLines: 1,
@@ -590,7 +639,7 @@ class _JobTile extends StatelessWidget {
                       ),
                     ),
                     if (job.status.isActive) ...[
-                      const SizedBox(height: 7),
+                      const SizedBox(height: 5),
                       LinearProgressIndicator(
                         value: job.progress.fraction,
                         minHeight: 4,
@@ -692,8 +741,7 @@ class _JobMenu extends StatelessWidget {
         await controller.cancelJob(job.id);
         return;
       case _JobAction.relink:
-        final file = await openFile();
-        if (file != null) await controller.relink(job.id, file.path);
+        await chooseAndRelink(context, job.id);
         return;
       case _JobAction.export:
         await showExportDialog(context, jobId: job.id);
@@ -703,6 +751,24 @@ class _JobMenu extends StatelessWidget {
         return;
     }
   }
+}
+
+Future<bool> chooseAndRelink(BuildContext context, String jobId) async {
+  final file = await openFile();
+  if (file == null || !context.mounted) return false;
+  final errorCode = await context.read<AppController>().relink(
+    jobId,
+    file.path,
+  );
+  if (!context.mounted) return errorCode == null;
+  if (errorCode != null) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(context.strings.error(errorCode))));
+    return false;
+  }
+  return true;
 }
 
 class _ExportAllButton extends StatelessWidget {

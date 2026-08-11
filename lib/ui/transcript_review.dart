@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:file_selector/file_selector.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -23,9 +23,10 @@ class TranscriptReview extends StatefulWidget {
 }
 
 class _TranscriptReviewState extends State<TranscriptReview> {
-  late final Player _player;
-  late final VideoController _video;
+  Player? _player;
+  VideoController? _video;
   final _search = TextEditingController();
+  final _transcriptScroll = ScrollController();
   final Map<String, Timer> _editTimers = {};
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _durationSubscription;
@@ -41,18 +42,23 @@ class _TranscriptReviewState extends State<TranscriptReview> {
   @override
   void initState() {
     super.initState();
-    _player = Player();
-    _video = VideoController(_player);
-    _positionSubscription = _player.stream.position.listen((value) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
+  }
+
+  void _ensurePlayer() {
+    if (_player != null) return;
+    final player = Player();
+    _player = player;
+    _video = VideoController(player);
+    _positionSubscription = player.stream.position.listen((value) {
       if (mounted) setState(() => _position = value);
     });
-    _durationSubscription = _player.stream.duration.listen((value) {
+    _durationSubscription = player.stream.duration.listen((value) {
       if (mounted) setState(() => _duration = value);
     });
-    _playingSubscription = _player.stream.playing.listen((value) {
+    _playingSubscription = player.stream.playing.listen((value) {
       if (mounted) setState(() => _playing = value);
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
   }
 
   @override
@@ -71,10 +77,11 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     if (job == null || job.sourcePath == _openedPath) return;
     _openedPath = job.sourcePath;
     if (await File(job.sourcePath).exists()) {
+      _ensurePlayer();
       if (!(job.metadata?.hasVideo ?? false)) {
         unawaited(_loadWaveform(job));
       }
-      await _player.open(Media(job.sourcePath), play: false);
+      await _player!.open(Media(job.sourcePath), play: false);
     }
   }
 
@@ -103,10 +110,11 @@ class _TranscriptReviewState extends State<TranscriptReview> {
       timer.cancel();
     }
     _search.dispose();
+    _transcriptScroll.dispose();
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _playingSubscription?.cancel();
-    _player.dispose();
+    _player?.dispose();
     super.dispose();
   }
 
@@ -148,12 +156,8 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               actions: [
                 TextButton(
                   onPressed: () async {
-                    final file = await openFile();
-                    if (file == null || !context.mounted) return;
-                    await context.read<AppController>().relink(
-                      job.id,
-                      file.path,
-                    );
+                    final linked = await chooseAndRelink(context, job.id);
+                    if (!linked || !context.mounted) return;
                     _openedPath = '';
                     await _openSource();
                   },
@@ -164,42 +168,50 @@ class _TranscriptReviewState extends State<TranscriptReview> {
           else
             _MediaPane(
               job: job,
-              video: _video,
+              video: _video!,
               playing: _playing,
               position: _position,
               duration: _duration,
               waveformPath: _waveformPath,
               waveformLoading: _waveformLoading,
-              onPlayPause: _player.playOrPause,
-              onSeek: _player.seek,
+              onPlayPause: _player!.playOrPause,
+              onSeek: _player!.seek,
             ),
           const Divider(height: 1),
           if (document.speakers.isNotEmpty)
             SpeakerStrip(job: job, document: document),
           Expanded(
-            child: SelectionArea(
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
-                itemCount: segments.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final segment = segments[index];
-                  return _SegmentEditor(
-                    key: ValueKey(
-                      '${segment.id}-${document.updatedAt.millisecondsSinceEpoch}',
-                    ),
-                    segment: segment,
-                    query: query,
-                    speakerName: context.strings.speakerName(
-                      document.speakerName(segment.speaker),
-                    ),
-                    showSpeaker: controller.settings.showSpeakers,
-                    showTimestamp: controller.settings.showTimestamps,
-                    onSeek: () =>
-                        _player.seek(Duration(milliseconds: segment.startMs)),
-                    onChanged: (text) => _scheduleEdit(segment.id, text),
-                  );
-                },
+            child: Scrollbar(
+              controller: _transcriptScroll,
+              child: SelectionArea(
+                child: ListView.separated(
+                  key: const Key('transcript-scroll'),
+                  controller: _transcriptScroll,
+                  primary: false,
+                  scrollDirection: Axis.vertical,
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                  itemCount: segments.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  itemBuilder: (context, index) {
+                    final segment = segments[index];
+                    return TranscriptSegmentEditor(
+                      key: ValueKey(
+                        '${segment.id}-${document.updatedAt.millisecondsSinceEpoch}',
+                      ),
+                      segment: segment,
+                      query: query,
+                      speakerName: context.strings.speakerName(
+                        document.speakerName(segment.speaker),
+                      ),
+                      showSpeaker: controller.settings.showSpeakers,
+                      showTimestamp: controller.settings.showTimestamps,
+                      onSeek: () => _player?.seek(
+                        Duration(milliseconds: segment.startMs),
+                      ),
+                      onChanged: (text) => _scheduleEdit(segment.id, text),
+                    );
+                  },
+                ),
               ),
             ),
           ),
@@ -237,7 +249,7 @@ class _ReviewToolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
       child: Row(
         children: [
           Expanded(
@@ -251,7 +263,7 @@ class _ReviewToolbar extends StatelessWidget {
             ),
           ),
           SizedBox(
-            width: 210,
+            width: 180,
             child: TextField(
               controller: search,
               onChanged: (_) => onSearch(),
@@ -322,32 +334,27 @@ class _MediaPane extends StatelessWidget {
     final mediaDuration = duration.inMilliseconds > 0
         ? duration
         : Duration(milliseconds: job.metadata?.durationMs ?? 0);
+    if (!hasVideo) {
+      return AudioTransport(
+        playing: playing,
+        position: position,
+        duration: mediaDuration,
+        waveformPath: waveformPath,
+        waveformLoading: waveformLoading,
+        onPlayPause: onPlayPause,
+        onSeek: onSeek,
+      );
+    }
     return Column(
       children: [
-        if (hasVideo)
-          Container(
-            color: Colors.black,
-            height: 210,
-            width: double.infinity,
-            child: Video(controller: video, controls: NoVideoControls),
-          )
-        else
-          SizedBox(
-            height: 94,
-            width: double.infinity,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 18),
-              child: WaveformScrubber(
-                path: waveformPath,
-                loading: waveformLoading,
-                position: position,
-                duration: mediaDuration,
-                onSeek: onSeek,
-              ),
-            ),
-          ),
+        Container(
+          color: Colors.black,
+          height: 160,
+          width: double.infinity,
+          child: Video(controller: video, controls: NoVideoControls),
+        ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           child: Row(
             children: [
               IconButton.filledTonal(
@@ -358,21 +365,18 @@ class _MediaPane extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Text(formatClock(position.inMilliseconds)),
-              if (hasVideo)
-                Expanded(
-                  child: Slider(
-                    value: position.inMilliseconds
-                        .clamp(0, mediaDuration.inMilliseconds)
-                        .toDouble(),
-                    max: mediaDuration.inMilliseconds
-                        .clamp(1, double.infinity)
-                        .toDouble(),
-                    onChanged: (value) =>
-                        onSeek(Duration(milliseconds: value.round())),
-                  ),
-                )
-              else
-                const Spacer(),
+              Expanded(
+                child: Slider(
+                  value: position.inMilliseconds
+                      .clamp(0, mediaDuration.inMilliseconds)
+                      .toDouble(),
+                  max: mediaDuration.inMilliseconds
+                      .clamp(1, double.infinity)
+                      .toDouble(),
+                  onChanged: (value) =>
+                      onSeek(Duration(milliseconds: value.round())),
+                ),
+              ),
               Text(formatClock(mediaDuration.inMilliseconds)),
             ],
           ),
@@ -380,6 +384,70 @@ class _MediaPane extends StatelessWidget {
       ],
     );
   }
+}
+
+class AudioTransport extends StatelessWidget {
+  const AudioTransport({
+    super.key,
+    required this.playing,
+    required this.position,
+    required this.duration,
+    required this.waveformPath,
+    required this.waveformLoading,
+    required this.onPlayPause,
+    required this.onSeek,
+  });
+
+  final bool playing;
+  final Duration position;
+  final Duration duration;
+  final String? waveformPath;
+  final bool waveformLoading;
+  final Future<void> Function() onPlayPause;
+  final Future<void> Function(Duration) onSeek;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 64,
+    width: double.infinity,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(
+        children: [
+          IconButton.filledTonal(
+            key: const Key('audio-play-pause'),
+            onPressed: onPlayPause,
+            icon: Icon(
+              playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            formatClock(position.inMilliseconds),
+            key: const Key('audio-current-time'),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: SizedBox(
+              height: 36,
+              child: WaveformScrubber(
+                path: waveformPath,
+                loading: waveformLoading,
+                position: position,
+                duration: duration,
+                onSeek: onSeek,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            formatClock(duration.inMilliseconds),
+            key: const Key('audio-duration'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class WaveformScrubber extends StatelessWidget {
@@ -542,47 +610,84 @@ class _WaveformProgressClipper extends CustomClipper<Rect> {
       oldClipper.progress != progress;
 }
 
-class SpeakerStrip extends StatelessWidget {
+class SpeakerStrip extends StatefulWidget {
   const SpeakerStrip({super.key, required this.job, required this.document});
   final TranscriptionJob job;
   final TranscriptDocument document;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-    height: 56,
-    child: ListView.separated(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-      scrollDirection: Axis.horizontal,
-      itemCount: document.speakers.length,
-      separatorBuilder: (_, __) => const SizedBox(width: 8),
-      itemBuilder: (context, index) {
-        final speaker = document.speakers[index];
-        return ActionChip(
-          avatarBoxConstraints: const BoxConstraints.tightFor(
-            width: 18,
-            height: 18,
-          ),
-          avatar: Container(
-            key: ValueKey('speaker-avatar-${speaker.id}'),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            child: Text(
-              '${index + 1}',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onPrimary,
-                fontWeight: FontWeight.w700,
-                height: 1,
+  State<SpeakerStrip> createState() => _SpeakerStripState();
+}
+
+class _SpeakerStripState extends State<SpeakerStrip> {
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Listener(
+    onPointerSignal: (event) {
+      if (event is! PointerScrollEvent ||
+          event.scrollDelta.dx != 0 ||
+          !_scroll.hasClients) {
+        return;
+      }
+      final position = _scroll.position;
+      _scroll.jumpTo(
+        (position.pixels + event.scrollDelta.dy).clamp(
+          position.minScrollExtent,
+          position.maxScrollExtent,
+        ),
+      );
+    },
+    child: SizedBox(
+      height: 48,
+      child: Scrollbar(
+        controller: _scroll,
+        scrollbarOrientation: ScrollbarOrientation.bottom,
+        interactive: true,
+        child: ListView.separated(
+          key: const Key('speaker-strip-scroll'),
+          controller: _scroll,
+          primary: false,
+          padding: const EdgeInsets.fromLTRB(12, 5, 12, 9),
+          scrollDirection: Axis.horizontal,
+          itemCount: widget.document.speakers.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 8),
+          itemBuilder: (context, index) {
+            final speaker = widget.document.speakers[index];
+            return ActionChip(
+              avatarBoxConstraints: const BoxConstraints.tightFor(
+                width: 18,
+                height: 18,
               ),
-            ),
-          ),
-          label: Text(context.strings.speakerName(speaker.name)),
-          onPressed: () => _rename(context, speaker),
-        );
-      },
+              avatar: Container(
+                key: ValueKey('speaker-avatar-${speaker.id}'),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                child: Text(
+                  '${index + 1}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onPrimary,
+                    fontWeight: FontWeight.w700,
+                    height: 1,
+                  ),
+                ),
+              ),
+              label: Text(context.strings.speakerName(speaker.name)),
+              onPressed: () => _rename(context, speaker),
+            );
+          },
+        ),
+      ),
     ),
   );
 
@@ -595,7 +700,7 @@ class SpeakerStrip extends StatelessWidget {
     );
     if (value != null && value.trim().isNotEmpty && context.mounted) {
       await context.read<AppController>().renameSpeaker(
-        job.id,
+        widget.job.id,
         speaker.id,
         value,
       );
@@ -653,8 +758,8 @@ class _RenameSpeakerDialogState extends State<_RenameSpeakerDialog> {
   );
 }
 
-class _SegmentEditor extends StatelessWidget {
-  const _SegmentEditor({
+class TranscriptSegmentEditor extends StatelessWidget {
+  const TranscriptSegmentEditor({
     super.key,
     required this.segment,
     required this.query,
@@ -677,21 +782,30 @@ class _SegmentEditor extends StatelessWidget {
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(12),
       border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
     ),
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showTimestamp)
-            TextButton(
-              onPressed: onSeek,
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 7),
+            Padding(
+              padding: EdgeInsets.only(
+                top: showSpeaker && speakerName.isNotEmpty ? 0 : 4,
               ),
-              child: Text(formatClock(segment.startMs)),
+              child: TextButton(
+                key: ValueKey('segment-timestamp-${segment.id}'),
+                onPressed: onSeek,
+                style: TextButton.styleFrom(
+                  minimumSize: Size.zero,
+                  padding: const EdgeInsets.symmetric(horizontal: 7),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  alignment: Alignment.topCenter,
+                ),
+                child: Text(formatClock(segment.startMs)),
+              ),
             )
           else
             IconButton(
@@ -705,6 +819,7 @@ class _SegmentEditor extends StatelessWidget {
               children: [
                 if (showSpeaker && speakerName.isNotEmpty)
                   Padding(
+                    key: ValueKey('segment-speaker-${segment.id}'),
                     padding: const EdgeInsets.only(left: 4, bottom: 4),
                     child: SearchHighlightedText(
                       text: speakerName,
@@ -717,6 +832,7 @@ class _SegmentEditor extends StatelessWidget {
                   ),
                 if (query.isEmpty)
                   TextFormField(
+                    key: ValueKey('segment-text-${segment.id}'),
                     initialValue: segment.text,
                     minLines: 1,
                     maxLines: null,

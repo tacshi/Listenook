@@ -50,8 +50,10 @@ class AppController extends ChangeNotifier {
   String? _selectedJobId;
   MediaDiagnostics? _mediaDiagnostics;
   AppSettings _settings = const AppSettings();
+  TranscriptionOptions _sessionOptions = const TranscriptionOptions();
 
   AppSettings get settings => _settings;
+  TranscriptionOptions get sessionOptions => _sessionOptions;
   bool get initializing => _initializing;
   bool get processing => _processing;
   bool get hasActiveWork => _jobs.values.any((job) => job.status.isActive);
@@ -85,6 +87,8 @@ class AppController extends ChangeNotifier {
             job.status == JobStatus.missingSource,
       )
       .length;
+  int get inactiveHistoryCount =>
+      _jobs.values.where((job) => !job.status.isActive).length;
   int get untranscribedWorkspaceCount =>
       workspaceJobs.where((job) => job.document == null).length;
   bool get canStartNewSession =>
@@ -119,6 +123,7 @@ class AppController extends ChangeNotifier {
       });
     if (interrupted.isNotEmpty) {
       _batchId = interrupted.first.batchId;
+      _sessionOptions = interrupted.first.options;
       _workspaceIds.addAll(interrupted.map((job) => job.id));
     }
     _initializing = false;
@@ -183,10 +188,7 @@ class AppController extends ChangeNotifier {
         updatedAt: now,
         status: JobStatus.pending,
         queueIndex: _workspaceIds.length,
-        options: TranscriptionOptions(
-          languageHints: _settings.languageHints,
-          contextTerms: _settings.contextTerms,
-        ),
+        options: _sessionOptions,
       );
       _jobs[job.id] = job;
       _workspaceIds.add(job.id);
@@ -516,17 +518,29 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> relink(String id, String sourcePath) async {
+  Future<String?> relink(String id, String sourcePath) async {
     final job = _jobs[id];
-    if (job == null) return;
-    final updated = await _transition(
-      job,
-      sourcePath: sourcePath,
-      status: JobStatus.pending,
-      progress: const JobProgress(stage: 'pending'),
-      clearError: true,
-    );
-    await _prepare(updated.id);
+    if (job == null) return 'unexpected';
+    try {
+      final metadata = await _media.inspect(sourcePath);
+      await _transition(
+        job,
+        sourcePath: sourcePath,
+        metadata: metadata,
+        status: job.document == null
+            ? (_processing ? JobStatus.paused : JobStatus.ready)
+            : job.status,
+        progress: job.document == null
+            ? JobProgress(stage: _processing ? 'paused' : 'ready', fraction: 0)
+            : job.progress,
+        clearError: true,
+      );
+      return null;
+    } on MediaException catch (error) {
+      return error.code;
+    } on Object {
+      return 'media_error';
+    }
   }
 
   Future<void> removeFromWorkspace(String id) async {
@@ -535,6 +549,7 @@ class AppController extends ChangeNotifier {
     _workspaceIds.remove(id);
     if (job.document == null) {
       _jobs.remove(id);
+      await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
     if (_selectedJobId == id) _selectedJobId = _workspaceIds.firstOrNull;
@@ -549,11 +564,13 @@ class AppController extends ChangeNotifier {
     ];
     for (final id in discardedIds) {
       _jobs.remove(id);
+      await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
     _workspaceIds.clear();
     _selectedJobId = null;
     _batchId = _uuid.v4();
+    _sessionOptions = const TranscriptionOptions();
     notifyListeners();
   }
 
@@ -563,7 +580,27 @@ class AppController extends ChangeNotifier {
     _jobs.remove(id);
     _workspaceIds.remove(id);
     if (_selectedJobId == id) _selectedJobId = null;
+    await _media.deleteGeneratedMedia(id);
     await _jobsRepository.delete(id);
+    notifyListeners();
+  }
+
+  Future<void> clearInactiveHistory() async {
+    final deletable = _jobs.values
+        .where((job) => !job.status.isActive)
+        .map((job) => job.id)
+        .toList(growable: false);
+    if (deletable.isEmpty) return;
+    for (final id in deletable) {
+      await _media.deleteGeneratedMedia(id);
+      await _jobsRepository.delete(id);
+      _jobs.remove(id);
+      _workspaceIds.remove(id);
+    }
+    await _media.clearGeneratedMediaExcept(_jobs.keys.toSet());
+    if (_selectedJobId != null && !_jobs.containsKey(_selectedJobId)) {
+      _selectedJobId = _workspaceIds.firstOrNull;
+    }
     notifyListeners();
   }
 
@@ -611,6 +648,19 @@ class AppController extends ChangeNotifier {
   Future<void> updateSettings(AppSettings value) async {
     _settings = value;
     await _settingsRepository.save(value);
+    notifyListeners();
+  }
+
+  Future<void> updateSessionOptions(TranscriptionOptions value) async {
+    _sessionOptions = value;
+    for (final job in workspaceJobs.where(
+      (job) =>
+          job.status == JobStatus.pending ||
+          job.status == JobStatus.probing ||
+          job.status.canTranscribe,
+    )) {
+      await _transition(job, options: value);
+    }
     notifyListeners();
   }
 
@@ -806,6 +856,7 @@ class AppController extends ChangeNotifier {
     int? queueIndex,
     JobProgress? progress,
     MediaMetadata? metadata,
+    TranscriptionOptions? options,
     TranscriptDocument? document,
     String? errorCode,
     String? errorMessage,
@@ -822,6 +873,7 @@ class AppController extends ChangeNotifier {
       queueIndex: queueIndex,
       progress: progress,
       metadata: metadata,
+      options: options,
       document: document,
       errorCode: errorCode,
       errorMessage: errorMessage,

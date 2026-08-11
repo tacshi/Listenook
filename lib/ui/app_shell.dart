@@ -177,17 +177,19 @@ class _AppShellState extends State<AppShell> with WindowListener {
           body: Row(
             children: [
               NavigationRail(
+                minWidth: 64,
+                minExtendedWidth: 184,
                 selectedIndex: controller.destinationIndex,
                 onDestinationSelected: controller.setDestination,
                 extended: MediaQuery.sizeOf(context).width >= 1180,
                 leading: Padding(
-                  padding: const EdgeInsets.only(top: 14, bottom: 22),
+                  padding: const EdgeInsets.only(top: 10, bottom: 14),
                   child: Tooltip(
                     message: 'MeowSTT',
                     child: Image.asset(
                       'assets/branding/meowstt-icon.png',
-                      width: 46,
-                      height: 46,
+                      width: 38,
+                      height: 38,
                     ),
                   ),
                 ),

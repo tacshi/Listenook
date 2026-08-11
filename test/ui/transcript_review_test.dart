@@ -107,6 +107,128 @@ void main() {
     expect(tester.getCenter(number).dy, tester.getCenter(avatar).dy);
   });
 
+  testWidgets('speaker strip is horizontal and transcript list is vertical', (
+    tester,
+  ) async {
+    final controller = await _pumpSpeakerStrip(tester);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+
+    expect(
+      tester
+          .widget<ListView>(find.byKey(const Key('speaker-strip-scroll')))
+          .scrollDirection,
+      Axis.horizontal,
+    );
+    expect(
+      tester
+          .widget<ListView>(find.byKey(const Key('transcript-scroll')))
+          .scrollDirection,
+      Axis.vertical,
+    );
+
+    final job = controller.allJobs.single;
+    final manySpeakers = job.document!.copyWith(
+      speakers: List.generate(
+        12,
+        (index) =>
+            SpeakerProfile(id: '${index + 1}', name: 'Speaker ${index + 1}'),
+      ),
+    );
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: 260,
+                child: SpeakerStrip(job: job, document: manySpeakers),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    final scrollable = find.descendant(
+      of: find.byKey(const Key('speaker-strip-scroll')),
+      matching: find.byType(Scrollable),
+    );
+    final position = tester.state<ScrollableState>(scrollable).position;
+    expect(position.maxScrollExtent, greaterThan(0));
+    await tester.drag(
+      find.byKey(const Key('speaker-strip-scroll')),
+      const Offset(-180, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(position.pixels, greaterThan(0));
+  });
+
+  testWidgets('timestamp aligns with the speaker or first text line', (
+    tester,
+  ) async {
+    const segment = TranscriptSegment(
+      id: 'aligned',
+      startMs: 2000,
+      endMs: 4000,
+      text: 'First transcript line',
+      speaker: '1',
+    );
+
+    Future<void> pump({required bool showSpeaker}) => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TranscriptSegmentEditor(
+            segment: segment,
+            query: '',
+            speakerName: 'Speaker 1',
+            showSpeaker: showSpeaker,
+            showTimestamp: true,
+            onSeek: () {},
+            onChanged: (_) {},
+          ),
+        ),
+      ),
+    );
+
+    await pump(showSpeaker: true);
+    expect(
+      tester
+          .getTopLeft(find.byKey(const ValueKey('segment-timestamp-aligned')))
+          .dy,
+      closeTo(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('segment-speaker-aligned')))
+            .dy,
+        1,
+      ),
+    );
+
+    await pump(showSpeaker: false);
+    final editable = find.descendant(
+      of: find.byKey(const ValueKey('segment-text-aligned')),
+      matching: find.byType(EditableText),
+    );
+    expect(
+      tester
+          .getTopLeft(find.byKey(const ValueKey('segment-timestamp-aligned')))
+          .dy,
+      closeTo(tester.getTopLeft(editable).dy, 4),
+    );
+  });
+
   testWidgets('library filter chips are ordered and mutually exclusive', (
     tester,
   ) async {
@@ -175,12 +297,77 @@ void main() {
       ),
     );
 
+    expect(find.text('Hello'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
     await tester.tap(find.byKey(const Key('new-transcription')));
     await tester.pumpAndSettle();
 
     expect(addFilesCalls, 0);
     expect(controller.workspaceJobs, isEmpty);
     expect(find.byKey(const Key('empty-add-files')), findsOneWidget);
+  });
+
+  testWidgets('language and context options belong to the workspace session', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'ready',
+          batchId: 'batch',
+          sourcePath: '/missing/ready.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+        ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.reopen('ready');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: Scaffold(
+            body: WorkspacePage(onAddFiles: () {}, onAddFolder: () {}),
+          ),
+        ),
+      ),
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('session-language-hints-field')),
+      'zh, en',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.enterText(
+      find.byKey(const Key('session-context-terms-field')),
+      'MeowSTT, Soniox',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+
+    expect(controller.sessionOptions.languageHints, ['zh', 'en']);
+    expect(controller.sessionOptions.contextTerms, ['MeowSTT', 'Soniox']);
+    expect(controller.workspaceJobs.single.options.languageHints, ['zh', 'en']);
+    expect(controller.workspaceJobs.single.options.contextTerms, [
+      'MeowSTT',
+      'Soniox',
+    ]);
   });
 
   testWidgets('waveform supports click and drag seeking', (tester) async {
@@ -217,6 +404,50 @@ void main() {
       Offset(bounds.width * .25, 0),
     );
     expect(seeks.last, const Duration(seconds: 20));
+  });
+
+  testWidgets('audio controls and waveform share one transport row', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 600,
+              child: AudioTransport(
+                playing: false,
+                position: const Duration(seconds: 2),
+                duration: const Duration(seconds: 33),
+                waveformPath: null,
+                waveformLoading: false,
+                onPlayPause: () async {},
+                onSeek: (_) async {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final play = find.byKey(const Key('audio-play-pause'));
+    final current = find.byKey(const Key('audio-current-time'));
+    final waveform = find.byKey(const Key('waveform-scrubber'));
+    final duration = find.byKey(const Key('audio-duration'));
+    final centerY = tester.getCenter(waveform).dy;
+
+    expect(tester.getCenter(play).dy, closeTo(centerY, 1));
+    expect(tester.getCenter(current).dy, closeTo(centerY, 1));
+    expect(tester.getCenter(duration).dy, closeTo(centerY, 1));
+    expect(tester.getCenter(play).dx, lessThan(tester.getCenter(current).dx));
+    expect(
+      tester.getCenter(current).dx,
+      lessThan(tester.getCenter(waveform).dx),
+    );
+    expect(
+      tester.getCenter(waveform).dx,
+      lessThan(tester.getCenter(duration).dx),
+    );
   });
 
   testWidgets('search highlights every case-insensitive match', (tester) async {
@@ -355,6 +586,12 @@ class _Media implements MediaService {
 
   @override
   Future<void> deleteTemporary(String path) async {}
+
+  @override
+  Future<void> deleteGeneratedMedia(String cacheKey) async {}
+
+  @override
+  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
 
   @override
   Future<MediaDiagnostics> diagnostics() async =>
