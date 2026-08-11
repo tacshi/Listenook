@@ -239,14 +239,14 @@ class AppStrings {
     'privacy': 'Privacy',
     'privacy_body':
         'Media is uploaded directly to Soniox. Optional translation sends transcript text to your configured LLM endpoint. MeowSTT stores local paths and transcripts, and deletes only the remote Soniox items it created.',
-    'ffmpeg': 'FFmpeg diagnostics',
+    'media_engine': 'Media engine diagnostics',
     'refresh': 'Refresh',
     'available': 'Available',
     'unavailable': 'Unavailable',
     'checking': 'Checking…',
     'notices': 'Third-party notices',
     'notices_body':
-        'The bundled FFmpeg helpers are distributed under GPL-3.0-or-later. Soniox is a third-party transcription provider. Full helper provenance and license texts are included with each distribution.',
+        'Playback and extraction use bundled libmpv components. Windows distributions also include the compact FLAC encoder. Soniox is a third-party transcription provider. Provenance and license texts are included with each distribution.',
     'welcome_title': 'Your recordings stay yours',
     'welcome_body':
         'MeowSTT is a bring-your-own-key desktop app. Media is sent to Soniox only when you transcribe. If you enable translation, transcript text is sent separately to your configured LLM endpoint. Local history contains file paths and transcript data—not media copies.',
@@ -314,10 +314,13 @@ class AppStrings {
     'error_unreadable_source': 'The source file cannot be read.',
     'error_no_audio': 'No audio stream was found in this file.',
     'error_duration_limit': 'Files can be up to 300 minutes long.',
-    'error_conversion_failed': 'FFmpeg could not extract the audio.',
-    'error_ffmpeg_missing':
-        'FFmpeg and ffprobe were not found. Open Settings for diagnostics.',
-    'error_ffmpeg_unavailable': 'FFmpeg diagnostics failed.',
+    'error_unsupported_format':
+        'Supported audio: MP3, WAV, M4A, OGG. Supported video: MP4, MKV, AVI.',
+    'error_conversion_failed': 'The audio could not be extracted.',
+    'error_media_engine_unavailable': 'The native media engine is unavailable.',
+    'error_encoder_missing':
+        'The lossless audio encoder was not found. Open Settings for diagnostics.',
+    'error_encoder_unavailable': 'Lossless encoder diagnostics failed.',
     'error_media_error': 'The media file could not be inspected.',
     'error_cancelled': 'Cancelled by the user.',
     'error_transcription_failed': 'Soniox could not transcribe this file.',
@@ -501,14 +504,14 @@ class AppStrings {
     'privacy': '隐私',
     'privacy_body':
         '媒体会直接上传到 Soniox。可选翻译会把转写文本发送到你配置的 LLM 端点。MeowSTT 保存本地路径和转写内容，并且只删除由本应用创建的 Soniox 远程项目。',
-    'ffmpeg': 'FFmpeg 诊断',
+    'media_engine': '媒体引擎诊断',
     'refresh': '刷新',
     'available': '可用',
     'unavailable': '不可用',
     'checking': '正在检查…',
     'notices': '第三方声明',
     'notices_body':
-        '随附的 FFmpeg 辅助程序按 GPL-3.0-or-later 许可证分发。Soniox 是第三方转写服务提供商。每个发行包均包含辅助程序的完整来源信息和许可证文本。',
+        '播放和音频提取使用随附的 libmpv 组件。Windows 发行包还包含精简的 FLAC 编码器。Soniox 是第三方转写服务提供商。每个发行包均包含来源信息和许可证文本。',
     'welcome_title': '你的录音始终属于你',
     'welcome_body':
         'MeowSTT 使用你自己的 API 密钥。只有开始转写后媒体才会发送到 Soniox；启用翻译后，转写文本会另行发送到你配置的 LLM 端点。历史记录只保存文件路径和转写数据，不复制原始媒体。',
@@ -572,9 +575,11 @@ class AppStrings {
     'error_unreadable_source': '无法读取源文件。',
     'error_no_audio': '此文件中未找到音频流。',
     'error_duration_limit': '文件时长不能超过 300 分钟。',
-    'error_conversion_failed': 'FFmpeg 无法提取音频。',
-    'error_ffmpeg_missing': '未找到 FFmpeg 和 ffprobe，请打开“设置”查看诊断。',
-    'error_ffmpeg_unavailable': 'FFmpeg 诊断失败。',
+    'error_unsupported_format': '支持的音频：MP3、WAV、M4A、OGG；支持的视频：MP4、MKV、AVI。',
+    'error_conversion_failed': '无法提取音频。',
+    'error_media_engine_unavailable': '原生媒体引擎不可用。',
+    'error_encoder_missing': '未找到无损音频编码器，请打开“设置”查看诊断。',
+    'error_encoder_unavailable': '无损编码器诊断失败。',
     'error_media_error': '无法检查此媒体文件。',
     'error_cancelled': '已由用户取消。',
     'error_transcription_failed': 'Soniox 无法转写此文件。',

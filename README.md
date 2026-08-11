@@ -14,8 +14,9 @@ The package name is `meow_stt`. Its permanent desktop identity is
 
 - Recursive folder and multi-file drag/drop with hidden-file filtering and
   canonical-path deduplication.
-- FFprobe validation for readability, audio streams, supported media, and the
-  Soniox 300-minute limit.
+- libmpv validation for readability, audio streams, supported media, and the
+  Soniox 300-minute limit. Inputs are limited to MP3, WAV, M4A, OGG, MP4, MKV,
+  and AVI.
 - A persisted semaphore-backed queue (1–4 workers, default 2) with explicit
   start, determinate local progress, cancel/retry, interrupted-upload recovery,
   remote-poll recovery, and scoped cleanup retries.
@@ -52,9 +53,10 @@ See [PRIVACY.md](PRIVACY.md).
 
 ## Development
 
-Requirements: Flutter stable with macOS and/or Windows desktop enabled. A
-system `ffmpeg`/`ffprobe` is accepted for development; distribution builds use
-the pinned helpers in `packaging/ffmpeg/manifest.json`.
+Requirements: Flutter stable with macOS and/or Windows desktop enabled. The
+existing `media_kit_libs_video` dependency supplies libmpv. Windows packaging
+fetches the pinned FLAC 1.5.0 encoder described in
+`packaging/flac/manifest.json`; macOS uses its built-in `afconvert` encoder.
 
 ```sh
 flutter pub get
@@ -62,6 +64,10 @@ flutter analyze
 flutter test
 flutter run -d macos
 ```
+
+Before `flutter run -d windows`, prepare the small native encoder once with
+`scripts\fetch-flac.ps1 -Arch x64` (or `arm64` on a native ARM64 development
+host). Packaging scripts do this automatically.
 
 Set `SONIOX_API_KEY` only to opt into live development calls. Normal tests use
 fake local services and never consume Soniox credit.
@@ -78,8 +84,6 @@ scripts/build-debug.sh --arch arm64
 scripts/build-release.sh --arch all
 ```
 
-Release builds default to ad-hoc signing. Set
-`MEOWSTT_MAC_SIGN_IDENTITY` to a Developer ID Application identity and
 Set `DEVELOPER_ID_APPLICATION` (or `MEOWSTT_MAC_SIGN_IDENTITY`) to the full
 Developer ID Application identity and `MEOWSTT_NOTARY_PROFILE` to a
 `notarytool` keychain profile for production. The app stores the Soniox API key
@@ -95,17 +99,20 @@ scripts\build-debug.ps1 -Arch x64
 scripts\build-release.ps1 -Arch arm64
 ```
 
-The `.cmd` wrappers accept the same arguments. Debug builds produce a portable
-ZIP only. Release builds also produce an Inno Setup installer. Install Inno
+The `.cmd` wrappers accept the same arguments. Debug builds produce an
+uncompressed portable directory. Release builds produce a portable ZIP and an
+Inno Setup installer. Install Inno
 Setup 6 or 7, or set `MEOWSTT_ISCC` to `ISCC.exe`. For production code signing,
 set `MEOWSTT_WINDOWS_PFX`, optionally `MEOWSTT_WINDOWS_PFX_PASSWORD`,
 `MEOWSTT_WINDOWS_PUBLISHER`, `MEOWSTT_WINDOWS_TIMESTAMP_URL`, and
 `MEOWSTT_SIGNTOOL`.
 
-Set `MEOWSTT_FFMPEG_DIR` to a pre-provisioned helper directory to bypass pinned
-downloads. Every script validates executable architecture and writes artifacts
-directly under `dist/`. Filenames include the platform, architecture, and build
-mode; each build also emits a matching `.sha256` manifest. For example:
+Set `MEOWSTT_FLAC_DIR` to a pre-provisioned native Windows FLAC encoder
+directory to bypass the binary download. The matching FLAC source archive is
+still fetched and included for license compliance. Every script validates
+executable architecture and writes artifacts directly under `dist/`. Filenames
+include the platform, architecture, and build mode. Windows release builds and
+macOS builds also emit a matching `.sha256` manifest. For example:
 
 ```text
 dist/MeowSTT-1.0.0-macos-arm64-release.dmg
@@ -114,8 +121,8 @@ dist/MeowSTT-1.0.0-macos-arm64-release.sha256
 ```
 
 macOS release output contains an `.app.zip` and DMG. Windows debug output
-contains a portable ZIP; Windows release output contains a portable ZIP and
-an Inno Setup `-setup.exe` installer.
+remains an uncompressed portable directory under `dist/`; Windows release
+output contains a portable ZIP and an Inno Setup `-setup.exe` installer.
 
 macOS debug output remains an uncompressed `.app` bundle under `dist/`.
 
@@ -139,7 +146,9 @@ which is the restart-recovery boundary.
 
 ## Third-party software
 
-Distribution artifacts contain FFmpeg command-line helpers. Source provenance,
-SHA-256 checksums, and license texts live in `packaging/ffmpeg/` and
+Distribution artifacts retain the libmpv already supplied by
+`media_kit_libs_video`; there are no standalone FFmpeg or FFprobe programs.
+Windows adds the compact FLAC encoder and its corresponding source archive.
+Provenance, SHA-256 checksums, and license texts live in `packaging/flac/` and
 `assets/third_party/`. Soniox is a separate third-party transcription service
 and requires a user-owned account and API key.

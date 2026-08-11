@@ -168,26 +168,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
   Future<void> _addFiles() async {
     final media = XTypeGroup(
       label: context.strings.t('audio_video'),
-      extensions: const [
-        'aac',
-        'aiff',
-        'amr',
-        'asf',
-        'flac',
-        'mp3',
-        'ogg',
-        'wav',
-        'webm',
-        'm4a',
-        'mp4',
-        'mov',
-        'mkv',
-        'avi',
-        'wmv',
-        'm4v',
-        'mpeg',
-        'mpg',
-      ],
+      extensions: const ['mp3', 'wav', 'm4a', 'ogg', 'mp4', 'mkv', 'avi'],
     );
     final files = await openFiles(acceptedTypeGroups: [media]);
     if (files.isNotEmpty && mounted) {
