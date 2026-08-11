@@ -73,6 +73,35 @@ void main() {
     );
   });
 
+  test('parser omits whitespace-only tokens and empty segments', () {
+    final parsed = parser.parse({
+      'tokens': [
+        {'text': '   ', 'start_ms': 0, 'end_ms': 100},
+        {'text': 'Visible.', 'start_ms': 100, 'end_ms': 500},
+      ],
+    });
+    expect(parsed.tokens, hasLength(1));
+    expect(parsed.segments.map((segment) => segment.text), ['Visible.']);
+
+    final repaired = parser.normalizeSegments(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'visible',
+            startMs: 0,
+            endMs: 500,
+            text: 'Visible.',
+          ),
+          TranscriptSegment(id: 'empty', startMs: 500, endMs: 600, text: ''),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+      ),
+    );
+    expect(repaired.segments.map((segment) => segment.id), ['visible']);
+  });
+
   test('TXT and Markdown honor reversible display choices', () {
     expect(
       exporter.render(

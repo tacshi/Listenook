@@ -129,19 +129,34 @@ class AppController extends ChangeNotifier {
       var job = normalized == null || identical(normalized, document)
           ? original
           : original.copyWith(document: normalized);
-      if (job.translationState.status == TranslationStatus.translating) {
-        final completed =
-            job.document?.segments
-                .where((segment) => segment.hasTranslation)
-                .length ??
-            0;
+      if (!identical(job, original) &&
+          job.translationState.status != TranslationStatus.idle) {
+        final progress = _translationProgress(
+          job.document?.segments ?? const [],
+        );
+        final complete = progress.completed == progress.total;
         job = job.copyWith(
           translationState: job.translationState.copyWith(
-            status: completed > 0
+            status: complete
+                ? TranslationStatus.completed
+                : job.translationState.status,
+            completedSegments: progress.completed,
+            totalSegments: progress.total,
+            clearError: complete,
+          ),
+        );
+      }
+      if (job.translationState.status == TranslationStatus.translating) {
+        final progress = _translationProgress(
+          job.document?.segments ?? const [],
+        );
+        job = job.copyWith(
+          translationState: job.translationState.copyWith(
+            status: progress.completed > 0
                 ? TranslationStatus.partial
                 : TranslationStatus.interrupted,
-            completedSegments: completed,
-            totalSegments: job.document?.segments.length ?? 0,
+            completedSegments: progress.completed,
+            totalSegments: progress.total,
             errorCode: 'translation_interrupted',
             errorMessage: 'Translation was interrupted before it finished.',
           ),
@@ -713,9 +728,7 @@ class AppController extends ChangeNotifier {
         else
           segment,
     ];
-    final completed = segments
-        .where((segment) => segment.hasTranslation)
-        .length;
+    final progress = _translationProgress(segments);
     final invalidated = document.segments
         .where((segment) => segment.id == segmentId)
         .any((segment) => segment.hasTranslation);
@@ -724,9 +737,11 @@ class AppController extends ChangeNotifier {
       document: document.copyWith(segments: segments),
       translationState: invalidated
           ? job.translationState.copyWith(
-              status: TranslationStatus.partial,
-              completedSegments: completed,
-              totalSegments: segments.length,
+              status: progress.completed == progress.total
+                  ? TranslationStatus.completed
+                  : TranslationStatus.partial,
+              completedSegments: progress.completed,
+              totalSegments: progress.total,
               clearError: true,
             )
           : null,
@@ -1015,18 +1030,16 @@ class AppController extends ChangeNotifier {
         else
           segment,
     ];
-    final completed = segments
-        .where((segment) => segment.hasTranslation)
-        .length;
+    final progress = _translationProgress(segments);
     await _transition(
       job,
       document: document.copyWith(segments: segments),
       translationState: job.translationState.copyWith(
-        status: completed == segments.length
+        status: progress.completed == progress.total
             ? TranslationStatus.completed
             : TranslationStatus.partial,
-        completedSegments: completed,
-        totalSegments: segments.length,
+        completedSegments: progress.completed,
+        totalSegments: progress.total,
         clearError: true,
       ),
     );
@@ -1052,7 +1065,10 @@ class AppController extends ChangeNotifier {
       await _setTranslationFailure(current, 'translation_unavailable');
       return;
     }
-    final candidates = document.segments
+    final translatableSegments = document.segments
+        .where(_isTranslatableSegment)
+        .toList(growable: false);
+    final candidates = translatableSegments
         .where(
           (segment) => segmentIds == null
               ? !segment.hasTranslation
@@ -1060,19 +1076,17 @@ class AppController extends ChangeNotifier {
         )
         .toList(growable: false);
     if (candidates.isEmpty) {
-      final completed = document.segments
-          .where((segment) => segment.hasTranslation)
-          .length;
+      final progress = _translationProgress(translatableSegments);
       await _transition(
         current,
         translationState: current.translationState.copyWith(
-          status: completed == document.segments.length
+          status: progress.completed == progress.total
               ? TranslationStatus.completed
               : TranslationStatus.partial,
           targetLanguage: targetLanguage,
           model: settings.model,
-          completedSegments: completed,
-          totalSegments: document.segments.length,
+          completedSegments: progress.completed,
+          totalSegments: progress.total,
           clearError: true,
         ),
       );
@@ -1086,10 +1100,8 @@ class AppController extends ChangeNotifier {
         status: TranslationStatus.translating,
         targetLanguage: targetLanguage,
         model: settings.model,
-        completedSegments: document.segments
-            .where((segment) => segment.hasTranslation)
-            .length,
-        totalSegments: document.segments.length,
+        completedSegments: _translationProgress(translatableSegments).completed,
+        totalSegments: translatableSegments.length,
       ),
     );
 
@@ -1110,16 +1122,14 @@ class AppController extends ChangeNotifier {
               else
                 segment,
           ];
-          final completed = segments
-              .where((segment) => segment.hasTranslation)
-              .length;
+          final progress = _translationProgress(segments);
           current = await _transition(
             current,
             document: latest.copyWith(segments: segments),
             translationState: current.translationState.copyWith(
               status: TranslationStatus.translating,
-              completedSegments: completed,
-              totalSegments: segments.length,
+              completedSegments: progress.completed,
+              totalSegments: progress.total,
               clearError: true,
             ),
           );
@@ -1127,37 +1137,33 @@ class AppController extends ChangeNotifier {
       );
       current = _jobs[job.id] ?? current;
       final segments = current.document?.segments ?? const [];
-      final completed = segments
-          .where((segment) => segment.hasTranslation)
-          .length;
+      final progress = _translationProgress(segments);
       await _transition(
         current,
         translationState: current.translationState.copyWith(
-          status: completed == segments.length
+          status: progress.completed == progress.total
               ? TranslationStatus.completed
               : TranslationStatus.partial,
-          completedSegments: completed,
-          totalSegments: segments.length,
-          errorCode: completed == segments.length
+          completedSegments: progress.completed,
+          totalSegments: progress.total,
+          errorCode: progress.completed == progress.total
               ? null
               : 'translation_incomplete_response',
-          clearError: completed == segments.length,
+          clearError: progress.completed == progress.total,
         ),
       );
     } on OperationCancelledException {
       current = _jobs[job.id] ?? current;
       final segments = current.document?.segments ?? const [];
-      final completed = segments
-          .where((segment) => segment.hasTranslation)
-          .length;
+      final progress = _translationProgress(segments);
       await _transition(
         current,
         translationState: current.translationState.copyWith(
-          status: completed > 0
+          status: progress.completed > 0
               ? TranslationStatus.partial
               : TranslationStatus.cancelled,
-          completedSegments: completed,
-          totalSegments: segments.length,
+          completedSegments: progress.completed,
+          totalSegments: progress.total,
           errorCode: 'translation_cancelled',
           errorMessage: 'Translation was cancelled.',
         ),
@@ -1195,19 +1201,17 @@ class AppController extends ChangeNotifier {
     String? message,
   ]) async {
     final segments = job.document?.segments ?? const [];
-    final completed = segments
-        .where((segment) => segment.hasTranslation)
-        .length;
+    final progress = _translationProgress(segments);
     await _transition(
       job,
       translationState: TranslationState(
-        status: completed > 0 && completed < segments.length
+        status: progress.completed > 0 && progress.completed < progress.total
             ? TranslationStatus.partial
             : TranslationStatus.failed,
         targetLanguage: job.translationState.targetLanguage,
         model: job.translationState.model,
-        completedSegments: completed,
-        totalSegments: segments.length,
+        completedSegments: progress.completed,
+        totalSegments: progress.total,
         errorCode: code,
         errorMessage: message == null ? null : _safeError(message),
       ),
@@ -1221,6 +1225,22 @@ class AppController extends ChangeNotifier {
     for (final job in workspaceJobs.where((job) => job.document == null)) {
       await _transition(job, translationOptions: options);
     }
+  }
+
+  bool _isTranslatableSegment(TranscriptSegment segment) =>
+      segment.text.trim().isNotEmpty;
+
+  ({int completed, int total}) _translationProgress(
+    Iterable<TranscriptSegment> segments,
+  ) {
+    var completed = 0;
+    var total = 0;
+    for (final segment in segments) {
+      if (!_isTranslatableSegment(segment)) continue;
+      total++;
+      if (segment.hasTranslation) completed++;
+    }
+    return (completed: completed, total: total);
   }
 
   TranslationSettings _normalizeTranslationSettings(TranslationSettings value) {

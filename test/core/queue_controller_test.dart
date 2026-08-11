@@ -449,6 +449,77 @@ void main() {
   });
 
   test(
+    'retry ignores empty transcript segments and completes partial job',
+    () async {
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'completed',
+          batchId: 'batch',
+          sourcePath: '/missing/original.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: const [
+              TranscriptSegment(
+                id: 'translated',
+                startMs: 0,
+                endMs: 500,
+                text: 'Already translated.',
+                translatedText: '已翻译。',
+              ),
+              TranscriptSegment(
+                id: 'missing',
+                startMs: 500,
+                endMs: 1000,
+                text: '',
+              ),
+            ],
+            speakers: const [],
+            updatedAt: now,
+          ),
+          translationState: const TranslationState(
+            status: TranslationStatus.partial,
+            targetLanguage: 'zh-Hans',
+            completedSegments: 1,
+            totalSegments: 2,
+          ),
+        ),
+      ]);
+      final translation = _SuccessfulTranslation();
+      final controller = _controller(
+        jobs: jobs,
+        soniox: _Soniox(),
+        settings: _Settings(
+          const AppSettings(
+            translationSettings: TranslationSettings(
+              provider: TranslationProviderTemplate.openAi,
+              baseUrl: 'https://api.openai.com/v1',
+              model: 'translation-model',
+              targetLanguage: 'zh-Hans',
+            ),
+          ),
+        ),
+        translationCredentials: _TranslationCredentials(),
+        translationService: translation,
+      );
+      await controller.initialize();
+
+      await controller.retryTranslation('completed');
+
+      final result = controller.allJobs.single;
+      expect(translation.segmentIds, isEmpty);
+      expect(result.translationState.status, TranslationStatus.completed);
+      expect(result.translationState.completedSegments, 1);
+      expect(result.translationState.totalSegments, 1);
+      expect(result.document!.segments, hasLength(1));
+      expect(result.document!.segments.single.translatedText, '已翻译。');
+    },
+  );
+
+  test(
     'clear inactive history retains active work and repairs selection',
     () async {
       final directory = await Directory.systemTemp.createTemp('meow-clear-');
@@ -645,6 +716,40 @@ class _FailingTranslation implements TranslationService {
     CancelCheck? shouldCancel,
   }) async {
     throw const TranslationException('translation_rate_limit');
+  }
+}
+
+class _SuccessfulTranslation implements TranslationService {
+  final segmentIds = <String>[];
+
+  @override
+  Future<List<String>> listModels(
+    TranslationSettings settings, {
+    String? candidateApiKey,
+  }) async => const [];
+
+  @override
+  Future<void> translate({
+    required TranslationSettings settings,
+    required String targetLanguage,
+    required List<TranscriptSegment> segments,
+    required Future<void> Function(
+      Map<String, String> translatedBySegmentId,
+      int completedSegments,
+      int totalSegments,
+    )
+    onBatch,
+    CancelCheck? shouldCancel,
+  }) async {
+    segmentIds.addAll(segments.map((segment) => segment.id));
+    await onBatch(
+      {
+        for (final segment in segments)
+          segment.id: segment.text.trim().isEmpty ? '' : '补充翻译。',
+      },
+      segments.length,
+      segments.length,
+    );
   }
 }
 
