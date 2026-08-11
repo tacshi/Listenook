@@ -2485,7 +2485,6 @@ class _FullscreenSubtitleText extends StatelessWidget {
             style: TextStyle(
               color: colors.onPrimary,
               backgroundColor: colors.primary,
-              fontWeight: FontWeight.w800,
             ),
           ),
           if (range.end < text.length)
