@@ -111,14 +111,40 @@ class AppController extends ChangeNotifier {
 
   Future<void> initialize() async {
     _settings = await _settingsRepository.load();
+    var settingsChanged = false;
     if (_settings.translationSettings.targetLanguage.isEmpty) {
       _settings = _settings.copyWith(
         translationSettings: _settings.translationSettings.copyWith(
           targetLanguage: _initialTargetLanguage(),
         ),
       );
+      settingsChanged = true;
+    }
+    if (!supportedSonioxTranslationLanguageCodes.contains(
+      _settings.sonioxTranslation.targetLanguage,
+    )) {
+      _settings = _settings.copyWith(
+        sonioxTranslation: _settings.sonioxTranslation.copyWith(
+          targetLanguage: _initialSonioxTargetLanguage(),
+        ),
+      );
+      settingsChanged = true;
+    }
+    if (_settings.sonioxTranslation.enabled &&
+        _settings.translationSettings.autoTranslate) {
+      _settings = _settings.copyWith(
+        translationSettings: _settings.translationSettings.copyWith(
+          autoTranslate: false,
+        ),
+      );
+      settingsChanged = true;
+    }
+    if (settingsChanged) {
       await _settingsRepository.save(_settings);
     }
+    _sessionOptions = TranscriptionOptions(
+      sonioxTranslation: _settings.sonioxTranslation,
+    );
     final stored = await _jobsRepository.loadAll();
     final loaded = <TranscriptionJob>[];
     for (final original in stored) {
@@ -431,20 +457,31 @@ class AppController extends ChangeNotifier {
         progress: const JobProgress(stage: 'fetching'),
       );
       final payload = await _soniox.getTranscript(transcriptionId);
-      final document = _parser.parse(payload);
+      final sonioxTranslation = job.options.sonioxTranslation;
+      final document = _parser.parse(
+        payload,
+        sonioxTranslationTargetLanguage: sonioxTranslation.enabled
+            ? sonioxTranslation.targetLanguage
+            : null,
+      );
       final status = document.segments.isEmpty
           ? JobStatus.empty
           : JobStatus.completed;
+      final sonioxTranslationState = sonioxTranslation.enabled
+          ? _sonioxTranslationState(document, sonioxTranslation.targetLanguage)
+          : null;
       job = await _transition(
         job,
         status: status,
         document: document,
+        translationState: sonioxTranslationState,
         progress: const JobProgress(stage: 'complete', fraction: 1),
         clearError: true,
       );
       await _cleanup(job);
       job = _jobs[id] ?? job;
       if (status == JobStatus.completed &&
+          !job.options.sonioxTranslation.enabled &&
           job.translationOptions.enabled &&
           job.translationOptions.targetLanguage.isNotEmpty) {
         await _runTranslation(
@@ -671,7 +708,9 @@ class AppController extends ChangeNotifier {
     _workspaceIds.clear();
     _selectedJobId = null;
     _batchId = _uuid.v4();
-    _sessionOptions = const TranscriptionOptions();
+    _sessionOptions = TranscriptionOptions(
+      sonioxTranslation: _settings.sonioxTranslation,
+    );
     notifyListeners();
   }
 
@@ -907,9 +946,43 @@ class AppController extends ChangeNotifier {
         !settings.isConfigured(hasApiKey: _translationKeyConfigured)) {
       return settings.validationError() ?? 'translation_missing_credentials';
     }
-    _settings = _settings.copyWith(translationSettings: settings);
+    final sonioxTranslation = settings.autoTranslate
+        ? _settings.sonioxTranslation.copyWith(enabled: false)
+        : _settings.sonioxTranslation;
+    _settings = _settings.copyWith(
+      translationSettings: settings,
+      sonioxTranslation: sonioxTranslation,
+    );
+    if (settings.autoTranslate) {
+      _sessionOptions = _sessionOptions.copyWith(
+        sonioxTranslation: sonioxTranslation,
+      );
+    }
     await _settingsRepository.save(_settings);
     await _updateQueuedTranslationOptions();
+    if (settings.autoTranslate) await _updateQueuedSonioxTranslationOptions();
+    notifyListeners();
+    return null;
+  }
+
+  Future<String?> updateSonioxTranslation(
+    SonioxTranslationOptions value,
+  ) async {
+    final targetLanguage = value.targetLanguage.trim().toLowerCase();
+    final options = value.copyWith(targetLanguage: targetLanguage);
+    final validation = options.validationError();
+    if (validation != null) return validation;
+    final translationSettings = options.enabled
+        ? _settings.translationSettings.copyWith(autoTranslate: false)
+        : _settings.translationSettings;
+    _settings = _settings.copyWith(
+      sonioxTranslation: options,
+      translationSettings: translationSettings,
+    );
+    _sessionOptions = _sessionOptions.copyWith(sonioxTranslation: options);
+    await _settingsRepository.save(_settings);
+    await _updateQueuedSonioxTranslationOptions();
+    if (options.enabled) await _updateQueuedTranslationOptions();
     notifyListeners();
     return null;
   }
@@ -1085,6 +1158,7 @@ class AppController extends ChangeNotifier {
               : TranslationStatus.partial,
           targetLanguage: targetLanguage,
           model: settings.model,
+          origin: TranslationOrigin.llm,
           completedSegments: progress.completed,
           totalSegments: progress.total,
           clearError: true,
@@ -1100,6 +1174,7 @@ class AppController extends ChangeNotifier {
         status: TranslationStatus.translating,
         targetLanguage: targetLanguage,
         model: settings.model,
+        origin: TranslationOrigin.llm,
         completedSegments: _translationProgress(translatableSegments).completed,
         totalSegments: translatableSegments.length,
       ),
@@ -1210,6 +1285,7 @@ class AppController extends ChangeNotifier {
             : TranslationStatus.failed,
         targetLanguage: job.translationState.targetLanguage,
         model: job.translationState.model,
+        origin: job.translationState.origin,
         completedSegments: progress.completed,
         totalSegments: progress.total,
         errorCode: code,
@@ -1222,9 +1298,43 @@ class AppController extends ChangeNotifier {
     final options = TranslationOptions.fromSettings(
       _settings.translationSettings,
     );
-    for (final job in workspaceJobs.where((job) => job.document == null)) {
+    for (final job in workspaceJobs.where(
+      (job) => job.document == null && job.remoteTranscriptionId == null,
+    )) {
       await _transition(job, translationOptions: options);
     }
+  }
+
+  Future<void> _updateQueuedSonioxTranslationOptions() async {
+    for (final job in workspaceJobs.where(
+      (job) => job.document == null && job.remoteTranscriptionId == null,
+    )) {
+      await _transition(
+        job,
+        options: job.options.copyWith(
+          sonioxTranslation: _settings.sonioxTranslation,
+        ),
+      );
+    }
+  }
+
+  TranslationState _sonioxTranslationState(
+    TranscriptDocument document,
+    String targetLanguage,
+  ) {
+    final progress = _translationProgress(document.segments);
+    final complete = progress.completed == progress.total;
+    return TranslationState(
+      status: complete
+          ? TranslationStatus.completed
+          : TranslationStatus.partial,
+      targetLanguage: targetLanguage,
+      model: SonioxApiClient.model,
+      origin: TranslationOrigin.soniox,
+      completedSegments: progress.completed,
+      totalSegments: progress.total,
+      errorCode: complete ? null : 'translation_incomplete_response',
+    );
   }
 
   bool _isTranslatableSegment(TranscriptSegment segment) =>
@@ -1261,6 +1371,15 @@ class AppController extends ChangeNotifier {
     }
     final base = locale.split('-').first;
     return supportedTranslationLanguageCodes.contains(base) ? base : 'en';
+  }
+
+  String _initialSonioxTargetLanguage() {
+    final base = Platform.localeName
+        .replaceAll('_', '-')
+        .toLowerCase()
+        .split('-')
+        .first;
+    return supportedSonioxTranslationLanguageCodes.contains(base) ? base : 'en';
   }
 
   Future<void> refreshMediaDiagnostics() async {

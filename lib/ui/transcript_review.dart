@@ -894,7 +894,7 @@ class _ReviewHeader extends StatelessWidget {
           IconButton(
             key: const Key('translate-transcript'),
             tooltip: controller.translationConfigured
-                ? context.strings.t('translate')
+                ? context.strings.t('translate_with_llm')
                 : context.strings.t('auto_translate_requires_config'),
             onPressed:
                 controller.translationConfigured &&
@@ -1031,14 +1031,14 @@ class _TranscriptToolbar extends StatelessWidget {
                         ? () => controller.retryTranslation(job.id)
                         : null,
                     icon: const Icon(Icons.refresh_rounded),
-                    label: Text(context.strings.t('retry_missing')),
+                    label: Text(context.strings.t('retry_missing_with_llm')),
                   ),
                 if (!job.translationState.status.isActive)
                   TextButton(
                     onPressed: controller.translationConfigured
                         ? () => _confirmRetranslateAll(context, job)
                         : null,
-                    child: Text(context.strings.t('retranslate_all')),
+                    child: Text(context.strings.t('retranslate_all_with_llm')),
                   ),
               ],
             ),
@@ -1095,7 +1095,7 @@ Future<void> _showTranslationDialog(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
-        title: Text(context.strings.t('translation_dialog_title')),
+        title: Text(context.strings.t('translate_with_llm')),
         content: SizedBox(
           width: 380,
           child: Column(
@@ -1140,7 +1140,7 @@ Future<void> _showTranslationDialog(
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, target),
-            child: Text(context.strings.t('translate')),
+            child: Text(context.strings.t('translate_with_llm')),
           ),
         ],
       ),
@@ -1375,7 +1375,9 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
                     if (widget.onRetranslate != null)
                       PopupMenuItem(
                         value: 'retranslate',
-                        child: Text(context.strings.t('retranslate_segment')),
+                        child: Text(
+                          context.strings.t('retranslate_segment_with_llm'),
+                        ),
                       ),
                   ],
                 ),

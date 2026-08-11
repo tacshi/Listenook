@@ -15,7 +15,7 @@ class SonioxApiClient implements SonioxClient {
           .toString()
           .replaceFirst(RegExp(r'/$'), '');
 
-  static const _model = 'stt-async-v5';
+  static const model = 'stt-async-v5';
   final CredentialStore _credentials;
   final http.Client _http;
   final String _base;
@@ -92,16 +92,28 @@ class SonioxApiClient implements SonioxClient {
     String fileId,
     TranscriptionOptions options,
   ) async {
+    final translationError = options.sonioxTranslation.validationError();
+    if (translationError != null) {
+      throw const SonioxException(
+        code: 'soniox_translation_invalid_language',
+        message: 'The selected Soniox translation language is not supported.',
+      );
+    }
     final context = <String, dynamic>{
       if (options.contextTerms.isNotEmpty) 'terms': options.contextTerms,
     };
     final body = <String, dynamic>{
-      'model': _model,
+      'model': model,
       'file_id': fileId,
       'enable_language_identification': true,
       'enable_speaker_diarization': true,
       if (options.languageHints.isNotEmpty)
         'language_hints': options.languageHints,
+      if (options.sonioxTranslation.enabled)
+        'translation': {
+          'type': 'one_way',
+          'target_language': options.sonioxTranslation.targetLanguage,
+        },
       if (context.isNotEmpty) 'context': context,
     };
     final response = await _http

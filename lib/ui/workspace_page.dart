@@ -514,60 +514,76 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
             onTapOutside: (_) => _saveSessionOptions(controller),
           ),
           const Divider(height: 20),
-          _ReviewLine(
-            icon: controller.translationConfigured
-                ? Icons.translate_rounded
-                : Icons.g_translate_outlined,
-            title: context.strings.t('llm_translation'),
-            value: controller.translationConfigured
-                ? settings.translationSettings.model
-                : context.strings.t('translation_not_configured'),
-            action: controller.translationConfigured
-                ? null
-                : () => controller.setDestination(2),
-          ),
-          const SizedBox(height: 10),
-          DropdownButtonFormField<String>(
-            key: const Key('translation-target-language'),
-            initialValue:
-                supportedTranslationLanguageCodes.contains(
-                  settings.translationSettings.targetLanguage,
-                )
-                ? settings.translationSettings.targetLanguage
-                : 'en',
-            decoration: InputDecoration(
-              labelText: context.strings.t('target_language'),
-              prefixIcon: const Icon(Icons.language_rounded),
-            ),
-            items: [
-              for (final code in supportedTranslationLanguageCodes)
-                DropdownMenuItem(
-                  value: code,
-                  child: Text(context.strings.translationLanguageName(code)),
+          if (settings.sonioxTranslation.enabled)
+            KeyedSubtree(
+              key: const Key('soniox-translation-summary'),
+              child: _ReviewLine(
+                icon: Icons.translate_rounded,
+                title: context.strings.t('soniox_translation'),
+                value: context.strings.translationLanguageName(
+                  settings.sonioxTranslation.targetLanguage,
                 ),
-            ],
-            onChanged: (value) {
-              if (value == null) return;
-              controller.updateTranslationDefaults(
-                settings.translationSettings.copyWith(targetLanguage: value),
-              );
-            },
-          ),
-          SwitchListTile(
-            key: const Key('auto-translate-switch'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(context.strings.t('auto_translate')),
-            subtitle: controller.translationConfigured
-                ? null
-                : Text(context.strings.t('auto_translate_requires_config')),
-            value: settings.translationSettings.autoTranslate,
-            onChanged: controller.translationConfigured
-                ? (value) => controller.updateTranslationDefaults(
-                    settings.translationSettings.copyWith(autoTranslate: value),
+                action: () => controller.setDestination(2),
+              ),
+            )
+          else ...[
+            _ReviewLine(
+              icon: controller.translationConfigured
+                  ? Icons.translate_rounded
+                  : Icons.g_translate_outlined,
+              title: context.strings.t('llm_translation'),
+              value: controller.translationConfigured
+                  ? settings.translationSettings.model
+                  : context.strings.t('translation_not_configured'),
+              action: controller.translationConfigured
+                  ? null
+                  : () => controller.setDestination(2),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              key: const Key('translation-target-language'),
+              initialValue:
+                  supportedTranslationLanguageCodes.contains(
+                    settings.translationSettings.targetLanguage,
                   )
-                : null,
-          ),
+                  ? settings.translationSettings.targetLanguage
+                  : 'en',
+              decoration: InputDecoration(
+                labelText: context.strings.t('target_language'),
+                prefixIcon: const Icon(Icons.language_rounded),
+              ),
+              items: [
+                for (final code in supportedTranslationLanguageCodes)
+                  DropdownMenuItem(
+                    value: code,
+                    child: Text(context.strings.translationLanguageName(code)),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value == null) return;
+                controller.updateTranslationDefaults(
+                  settings.translationSettings.copyWith(targetLanguage: value),
+                );
+              },
+            ),
+            SwitchListTile(
+              key: const Key('auto-translate-switch'),
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: Text(context.strings.t('auto_translate')),
+              subtitle: controller.translationConfigured
+                  ? null
+                  : Text(context.strings.t('auto_translate_requires_config')),
+              value: settings.translationSettings.autoTranslate,
+              onChanged: controller.translationConfigured
+                  ? (value) => controller.updateTranslationDefaults(
+                      settings.translationSettings.copyWith(
+                        autoTranslate: value,
+                      ),
+                    )
+                  : null,
+            ),
+          ],
           const Divider(height: 20),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -599,6 +615,7 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
         TranscriptionOptions(
           languageHints: _split(_languages.text),
           contextTerms: _split(_terms.text),
+          sonioxTranslation: controller.sessionOptions.sonioxTranslation,
         ),
       );
 

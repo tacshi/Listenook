@@ -102,6 +102,77 @@ void main() {
     expect(repaired.segments.map((segment) => segment.id), ['visible']);
   });
 
+  test('parser pairs Soniox original and translation token runs', () {
+    final parsed = parser.parse({
+      'tokens': [
+        {
+          'text': 'Good',
+          'start_ms': 100,
+          'end_ms': 300,
+          'speaker': '1',
+          'language': 'en',
+          'translation_status': 'original',
+        },
+        {
+          'text': ' morning.',
+          'start_ms': 300,
+          'end_ms': 800,
+          'speaker': '1',
+          'language': 'en',
+          'translation_status': 'original',
+        },
+        {
+          'text': 'Guten',
+          'language': 'de',
+          'source_language': 'en',
+          'translation_status': 'translation',
+        },
+        {
+          'text': ' Morgen.',
+          'language': 'de',
+          'source_language': 'en',
+          'translation_status': 'translation',
+        },
+        {
+          'text': 'Schon gut.',
+          'start_ms': 1000,
+          'end_ms': 1500,
+          'speaker': '2',
+          'language': 'de',
+          'translation_status': 'none',
+        },
+      ],
+    }, sonioxTranslationTargetLanguage: 'de');
+
+    expect(parsed.segments, hasLength(2));
+    expect(parsed.segments.first.text, 'Good morning.');
+    expect(parsed.segments.first.translatedText, 'Guten Morgen.');
+    expect(parsed.segments.first.startMs, 100);
+    expect(parsed.segments.first.endMs, 800);
+    expect(parsed.segments.last.text, 'Schon gut.');
+    expect(parsed.segments.last.translatedText, 'Schon gut.');
+    expect(parsed.speakers.map((speaker) => speaker.id), ['1', '2']);
+    expect(parsed.tokens[2].translationStatus, 'translation');
+    expect(parsed.tokens[2].sourceLanguage, 'en');
+    expect(parsed.tokens[2].startMs, 0);
+  });
+
+  test('parser leaves untranslated non-target Soniox speech partial', () {
+    final parsed = parser.parse({
+      'tokens': [
+        {
+          'text': 'Sin traducción.',
+          'start_ms': 0,
+          'end_ms': 600,
+          'language': 'es',
+          'translation_status': 'original',
+        },
+      ],
+    }, sonioxTranslationTargetLanguage: 'en');
+
+    expect(parsed.segments.single.translatedText, isNull);
+  });
+
   test('TXT and Markdown honor reversible display choices', () {
     expect(
       exporter.render(

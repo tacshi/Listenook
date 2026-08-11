@@ -185,13 +185,60 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
             ],
           ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            key: const Key('soniox-translation-switch'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text(context.strings.t('soniox_translation')),
+            subtitle: Text(context.strings.t('soniox_translation_description')),
+            value: settings.sonioxTranslation.enabled,
+            onChanged: (value) async {
+              final error = await controller.updateSonioxTranslation(
+                settings.sonioxTranslation.copyWith(enabled: value),
+              );
+              if (error != null && context.mounted) {
+                _showMessage(context.strings.error(error));
+              }
+            },
+          ),
+          DropdownButtonFormField<String>(
+            key: const Key('soniox-translation-target'),
+            initialValue: settings.sonioxTranslation.targetLanguage,
+            isExpanded: true,
+            decoration: InputDecoration(
+              labelText: context.strings.t('soniox_translation_target'),
+              prefixIcon: const Icon(Icons.language_rounded),
+            ),
+            items: [
+              for (final code in supportedSonioxTranslationLanguageCodes)
+                DropdownMenuItem(
+                  value: code,
+                  child: Text(context.strings.translationLanguageName(code)),
+                ),
+            ],
+            onChanged: settings.sonioxTranslation.enabled
+                ? (value) async {
+                    if (value == null) return;
+                    final error = await controller.updateSonioxTranslation(
+                      settings.sonioxTranslation.copyWith(
+                        targetLanguage: value,
+                      ),
+                    );
+                    if (error != null && context.mounted) {
+                      _showMessage(context.strings.error(error));
+                    }
+                  }
+                : null,
+          ),
         ],
       ),
     ),
-    _TranslationSettingsSection(
-      controller: controller,
-      settings: settings.translationSettings,
-    ),
+    if (!settings.sonioxTranslation.enabled)
+      _TranslationSettingsSection(
+        controller: controller,
+        settings: settings.translationSettings,
+      ),
     _Section(
       title: context.strings.t('details'),
       icon: Icons.tune_rounded,

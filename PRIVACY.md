@@ -10,12 +10,17 @@ or a terminal error—it attempts to delete exactly those resources. Failed
 cleanup remains marked locally and is retried later. The app never lists or
 deletes unrelated resources in your Soniox account.
 
-Translation is optional and uses the single OpenAI-compatible endpoint that you
-configure. When you manually translate or enable automatic translation, MeowSTT
-sends transcript text—not the original media—to that endpoint using its text
-Chat Completions API. The endpoint operator may apply its own retention and
-privacy policy. Changing or removing the translation configuration does not
-delete translations already stored locally.
+Translation is optional. When Soniox built-in translation is enabled, the
+selected target language is included in the original Soniox transcription
+request and Soniox returns the transcript and translation together. No second
+service receives the media for that mode.
+
+LLM translation uses the single OpenAI-compatible endpoint that you configure.
+When you manually translate or enable automatic LLM translation, MeowSTT sends
+transcript text—not the original media—to that endpoint using its text Chat
+Completions API. The endpoint operator may apply its own retention and privacy
+policy. Changing or removing either translation configuration does not delete
+translations already stored locally.
 
 Both API keys are stored by the operating system's secure credential service
 and are never written to settings or job manifests. Local Application Support

@@ -2239,6 +2239,67 @@ void main() {
     ]);
   });
 
+  testWidgets('workspace replaces LLM controls with Soniox translation', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(
+        const AppSettings(
+          sonioxTranslation: SonioxTranslationOptions(
+            enabled: true,
+            targetLanguage: 'zh',
+          ),
+          translationSettings: TranslationSettings(
+            baseUrl: 'https://example.test/v1',
+            model: 'configured-llm',
+          ),
+        ),
+      ),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'ready',
+          batchId: 'batch',
+          sourcePath: '/missing/ready.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+        ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.reopen('ready');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(
+            body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('soniox-translation-summary')), findsOneWidget);
+    expect(find.text('Soniox built-in translation'), findsOneWidget);
+    expect(find.text('Chinese'), findsOneWidget);
+    expect(find.text('LLM Translation'), findsNothing);
+    expect(find.byKey(const Key('translation-target-language')), findsNothing);
+    expect(find.byKey(const Key('auto-translate-switch')), findsNothing);
+  });
+
   testWidgets('workspace keeps two panes at Windows initial content width', (
     tester,
   ) async {
@@ -2764,11 +2825,15 @@ class _Credentials implements CredentialStore {
 }
 
 class _Settings implements SettingsRepository {
-  @override
-  Future<AppSettings> load() async => const AppSettings();
+  _Settings([this.value = const AppSettings()]);
+
+  AppSettings value;
 
   @override
-  Future<void> save(AppSettings settings) async {}
+  Future<AppSettings> load() async => value;
+
+  @override
+  Future<void> save(AppSettings settings) async => value = settings;
 }
 
 class _Jobs implements JobRepository {
