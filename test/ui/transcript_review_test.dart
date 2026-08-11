@@ -1299,6 +1299,7 @@ void main() {
   testWidgets('app sidebar toggle hides and restores navigation', (
     tester,
   ) async {
+    _setTestWindow(tester, const Size(1240, 820));
     const windowChannel = MethodChannel('window_manager');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -1321,10 +1322,11 @@ void main() {
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
         value: controller,
-        child: const MaterialApp(
-          locale: Locale('en'),
+        child: MaterialApp(
+          theme: ThemeData(platform: TargetPlatform.macOS),
+          locale: const Locale('en'),
           supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [
+          localizationsDelegates: const [
             AppStrings.delegate,
             GlobalMaterialLocalizations.delegate,
             GlobalWidgetsLocalizations.delegate,
@@ -1358,12 +1360,155 @@ void main() {
     }
     expect(find.byKey(const Key('app-sidebar')), findsOneWidget);
     expect(find.byType(NavigationRail), findsOneWidget);
+    final sidebar = find.byKey(const Key('app-sidebar'));
+    final settingsNavigation = find.byKey(
+      const Key('settings-navigation-button'),
+    );
+    final settingsIndicator = find.byKey(
+      const Key('settings-navigation-indicator'),
+    );
+    final navigationRail = tester.widget<NavigationRail>(
+      find.byType(NavigationRail),
+    );
+    expect(navigationRail.minExtendedWidth, 152);
+    final settingsLabel = tester.widget<Text>(
+      find.descendant(of: settingsNavigation, matching: find.text('Settings')),
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('workspace-navigation-label')))
+          .style
+          ?.fontSize,
+      settingsLabel.style?.fontSize,
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('library-navigation-label')))
+          .style
+          ?.fontSize,
+      settingsLabel.style?.fontSize,
+    );
+    expect(tester.getSize(sidebar).width, lessThanOrEqualTo(186));
+    expect(tester.getSize(settingsIndicator).width, 56);
+    expect(
+      tester.getSize(settingsIndicator).width,
+      lessThan(tester.getSize(settingsNavigation).width),
+    );
+    expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
+    expect(
+      tester.getBottomLeft(sidebar).dy -
+          tester.getBottomLeft(settingsNavigation).dy,
+      lessThanOrEqualTo(12),
+    );
+    expect(
+      tester.getTopLeft(settingsNavigation).dy,
+      greaterThan(tester.getBottomLeft(find.text('Library')).dy),
+    );
+    final tooltipMessages = tester
+        .widgetList<Tooltip>(find.byType(Tooltip))
+        .map((tooltip) => tooltip.message);
+    expect(
+      tooltipMessages,
+      containsAll(['Workspace (⌘1)', 'Library (⌘2)', 'Settings (⌘,)']),
+    );
+    expect(
+      tester.widget<IconButton>(sidebarToggle).tooltip,
+      'Hide sidebar (⌘B)',
+    );
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(controller.destinationIndex, 1);
+    expect(find.byKey(const Key('library-page-title')), findsOneWidget);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.comma);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(controller.destinationIndex, 2);
+    expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('soniox-key-field')));
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(controller.destinationIndex, 0);
+    expect(find.byKey(const Key('workspace-page-title')), findsOneWidget);
+
+    await messenger.handlePlatformMessage(
+      'app.meowstt.desktop/navigation',
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('showSettings'),
+      ),
+      null,
+    );
+    await tester.pumpAndSettle();
+    expect(controller.destinationIndex, 2);
+    expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(controller.destinationIndex, 0);
+
+    await tester.tap(settingsNavigation);
+    await tester.pumpAndSettle();
+    expect(controller.destinationIndex, 2);
+    expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(controller.destinationIndex, 0);
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(settingsNavigation));
+    await tester.pump(const Duration(seconds: 1));
+    expect(
+      (tester.widget<AnimatedContainer>(settingsIndicator).decoration
+              as BoxDecoration)
+          .color,
+      isNotNull,
+    );
+    expect(
+      tester
+          .widget<InkWell>(
+            find.descendant(
+              of: settingsNavigation,
+              matching: find.byType(InkWell),
+            ),
+          )
+          .hoverColor,
+      Colors.transparent,
+    );
+    await mouse.moveTo(
+      tester.getCenter(find.byIcon(Icons.space_dashboard_rounded)),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Workspace (⌘1)'), findsOneWidget);
+    await mouse.moveTo(tester.getCenter(sidebarToggle));
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Hide sidebar (⌘B)'), findsOneWidget);
+    await mouse.removePointer();
+    await tester.pumpAndSettle();
+
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('app-sidebar-hidden')), findsOneWidget);
     expect(find.byType(NavigationRail), findsNothing);
+    expect(
+      tester.widget<IconButton>(sidebarToggle).tooltip,
+      'Show sidebar (⌘B)',
+    );
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
@@ -2254,9 +2399,19 @@ void main() {
 
     expect(addFilesCalls, 0);
     expect(controller.workspaceJobs, isEmpty);
-    expect(find.byKey(const Key('header-add-folder')), findsOneWidget);
-    expect(find.byKey(const Key('header-add-files')), findsOneWidget);
+    expect(find.byKey(const Key('new-transcription')), findsNothing);
+    expect(find.byKey(const Key('header-add-folder')), findsNothing);
+    expect(find.byKey(const Key('header-add-files')), findsNothing);
+    expect(find.byKey(const Key('header-transcribe')), findsNothing);
     expect(find.byKey(const Key('empty-add-files')), findsOneWidget);
+    expect(
+      find.text('Review everything before MeowSTT uploads anything.'),
+      findsNothing,
+    );
+    expect(
+      find.text('Batch drop · recursive folders · up to 5 hours each'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('language and context options belong to the workspace session', (
@@ -2299,6 +2454,10 @@ void main() {
         ),
       ),
     );
+
+    expect(find.byKey(const Key('header-add-folder')), findsOneWidget);
+    expect(find.byKey(const Key('header-add-files')), findsOneWidget);
+    expect(find.byKey(const Key('header-transcribe')), findsOneWidget);
 
     await tester.enterText(
       find.byKey(const Key('session-language-hints-field')),

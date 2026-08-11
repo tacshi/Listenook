@@ -101,20 +101,19 @@ class _SettingsPageState extends State<SettingsPage> {
     _Section(
       title: context.strings.t('soniox_key'),
       icon: Icons.key_rounded,
+      trailing: controller.keyConfigured
+          ? Tooltip(
+              key: const Key('soniox-key-status'),
+              message: context.strings.t('key_configured'),
+              child: const Icon(
+                Icons.verified_user_outlined,
+                color: Colors.green,
+              ),
+            )
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (controller.keyConfigured)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Row(
-                children: [
-                  const Icon(Icons.verified_user_outlined, color: Colors.green),
-                  const SizedBox(width: 8),
-                  Text(context.strings.t('key_configured')),
-                ],
-              ),
-            ),
           TextField(
             key: const Key('soniox-key-field'),
             controller: _key,
@@ -202,6 +201,7 @@ class _SettingsPageState extends State<SettingsPage> {
               }
             },
           ),
+          const SizedBox(height: 12),
           DropdownButtonFormField<String>(
             key: const Key('soniox-translation-target'),
             initialValue: settings.sonioxTranslation.targetLanguage,
@@ -239,49 +239,6 @@ class _SettingsPageState extends State<SettingsPage> {
         controller: controller,
         settings: settings.translationSettings,
       ),
-    _Section(
-      title: context.strings.t('details'),
-      icon: Icons.tune_rounded,
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(child: Text(context.strings.t('concurrency'))),
-              SegmentedButton<int>(
-                segments: const [
-                  ButtonSegment(value: 1, label: Text('1')),
-                  ButtonSegment(value: 2, label: Text('2')),
-                  ButtonSegment(value: 3, label: Text('3')),
-                  ButtonSegment(value: 4, label: Text('4')),
-                ],
-                selected: {settings.concurrency},
-                onSelectionChanged: (value) => controller.updateSettings(
-                  settings.copyWith(concurrency: value.first),
-                ),
-              ),
-            ],
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(context.strings.t('speaker_labels')),
-            value: settings.showSpeakers,
-            onChanged: (value) => controller.updateSettings(
-              settings.copyWith(showSpeakers: value),
-            ),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(context.strings.t('timestamps')),
-            value: settings.showTimestamps,
-            onChanged: (value) => controller.updateSettings(
-              settings.copyWith(showTimestamps: value),
-            ),
-          ),
-        ],
-      ),
-    ),
   ]);
 
   Widget _appearanceTab(
@@ -522,6 +479,7 @@ class _TranslationSettingsSectionState
 
   bool get _canSave {
     if (_candidate.validationError() != null) return false;
+    if (_matchesSavedConfiguration && _apiKey.text.trim().isEmpty) return false;
     return !_candidate.requiresApiKey ||
         _apiKey.text.trim().isNotEmpty ||
         _canUseStoredKey;
@@ -536,41 +494,35 @@ class _TranslationSettingsSectionState
   Widget build(BuildContext context) {
     final savedConfigurationReady =
         widget.controller.translationConfigured && _matchesSavedConfiguration;
+    final statusLabel = _connectionOk == true
+        ? context.strings.t('translation_connection_ok')
+        : _connectionOk == false
+        ? context.strings.t('translation_connection_failed')
+        : savedConfigurationReady
+        ? context.strings.t('translation_configured')
+        : context.strings.t('translation_not_configured');
     return _Section(
       title: context.strings.t('llm_translation'),
       icon: Icons.translate_rounded,
+      trailing: Tooltip(
+        key: const Key('translation-status'),
+        message: statusLabel,
+        child: Icon(
+          _connectionOk == false
+              ? Icons.error_outline_rounded
+              : savedConfigurationReady
+              ? Icons.check_circle_outline_rounded
+              : Icons.settings_outlined,
+          color: _connectionOk == false
+              ? Theme.of(context).colorScheme.error
+              : savedConfigurationReady
+              ? Colors.green
+              : Theme.of(context).colorScheme.secondary,
+        ),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Icon(
-                _connectionOk == false
-                    ? Icons.error_outline_rounded
-                    : savedConfigurationReady
-                    ? Icons.check_circle_outline_rounded
-                    : Icons.settings_outlined,
-                color: _connectionOk == false
-                    ? Theme.of(context).colorScheme.error
-                    : savedConfigurationReady
-                    ? Colors.green
-                    : Theme.of(context).colorScheme.secondary,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _connectionOk == true
-                      ? context.strings.t('translation_connection_ok')
-                      : _connectionOk == false
-                      ? context.strings.t('translation_connection_failed')
-                      : savedConfigurationReady
-                      ? context.strings.t('translation_configured')
-                      : context.strings.t('translation_not_configured'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
           KeyedSubtree(
             key: const Key('translation-provider-template-field'),
             child: DropdownButtonFormField<String>(
@@ -910,10 +862,12 @@ class _Section extends StatelessWidget {
     required this.title,
     required this.icon,
     required this.child,
+    this.trailing,
   });
   final String title;
   final IconData icon;
   final Widget child;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -928,12 +882,15 @@ class _Section extends StatelessWidget {
               children: [
                 Icon(icon, color: Theme.of(context).colorScheme.primary),
                 const SizedBox(width: 10),
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
+                if (trailing != null) ...[const SizedBox(width: 12), trailing!],
               ],
             ),
             const SizedBox(height: 12),
