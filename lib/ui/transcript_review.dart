@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:file_selector/file_selector.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
+import 'package:scroll_to_index/scroll_to_index.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../core/models.dart';
 import '../data/transcript_exporter.dart';
@@ -22,44 +25,142 @@ class TranscriptReview extends StatefulWidget {
   State<TranscriptReview> createState() => _TranscriptReviewState();
 }
 
-class _TranscriptReviewState extends State<TranscriptReview> {
-  late final Player _player;
-  late final VideoController _video;
+class _TranscriptReviewState extends State<TranscriptReview>
+    with WindowListener {
+  static const _reviewDividerWidth = 9.0;
+  static const _minimumReviewPaneWidth = 280.0;
+
+  Player? _player;
+  VideoController? _video;
   final _search = TextEditingController();
-  final Map<String, Timer> _editTimers = {};
+  final _transcriptScroll = AutoScrollController(
+    axis: Axis.vertical,
+    suggestedRowHeight: 84,
+  );
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<bool>? _playingSubscription;
+  StreamSubscription<VideoParams>? _videoParamsSubscription;
+  final _videoKey = GlobalKey<VideoState>();
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  double _videoAspectRatio = 16 / 9;
   bool _playing = false;
+  bool _followPlayback = true;
+  TranslationViewMode _viewMode = TranslationViewMode.original;
+  int _programmaticScrolls = 0;
+  String? _lastScrolledSegmentId;
+  String? _editingSegmentId;
+  String? _editingTranslationSegmentId;
+  TranscriptDocument? _mappedDocument;
+  Map<String, List<TranscriptToken>> _tokensBySegment = const {};
   String _openedPath = '';
   String _waveformSource = '';
   String? _waveformPath;
   bool _waveformLoading = false;
+  double _videoPaneFraction = .55;
 
   @override
   void initState() {
     super.initState();
-    _player = Player();
-    _video = VideoController(_player);
-    _positionSubscription = _player.stream.position.listen((value) {
-      if (mounted) setState(() => _position = value);
-    });
-    _durationSubscription = _player.stream.duration.listen((value) {
+    windowManager.addListener(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
+  }
+
+  @override
+  void onWindowLeaveFullScreen() {
+    final videoState = _videoKey.currentState;
+    if (videoState != null && videoState.isFullscreen()) {
+      unawaited(videoState.exitFullscreen());
+    }
+  }
+
+  void _ensurePlayer() {
+    if (_player != null) return;
+    final player = Player();
+    _player = player;
+    _video = VideoController(player);
+    _positionSubscription = player.stream.position.listen(_handlePosition);
+    _durationSubscription = player.stream.duration.listen((value) {
       if (mounted) setState(() => _duration = value);
     });
-    _playingSubscription = _player.stream.playing.listen((value) {
-      if (mounted) setState(() => _playing = value);
+    _playingSubscription = player.stream.playing.listen(_handlePlaying);
+    _videoParamsSubscription = player.stream.videoParams.listen((value) {
+      final aspect =
+          value.aspect ??
+          ((value.dw ?? 0) > 0 && (value.dh ?? 0) > 0
+              ? value.dw! / value.dh!
+              : null);
+      if (!mounted ||
+          aspect == null ||
+          !aspect.isFinite ||
+          aspect <= 0 ||
+          (aspect - _videoAspectRatio).abs() < .001) {
+        return;
+      }
+      setState(() => _videoAspectRatio = aspect);
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
   }
 
   @override
   void didUpdateWidget(covariant TranscriptReview oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.jobId != widget.jobId) _openSource();
+    if (oldWidget.jobId != widget.jobId) {
+      _search.clear();
+      _position = Duration.zero;
+      _duration = Duration.zero;
+      _videoAspectRatio = 16 / 9;
+      _playing = false;
+      _followPlayback = true;
+      _editingSegmentId = null;
+      _editingTranslationSegmentId = null;
+      _viewMode = TranslationViewMode.original;
+      _lastScrolledSegmentId = null;
+      _mappedDocument = null;
+      _tokensBySegment = const {};
+      _openedPath = '';
+      _waveformSource = '';
+      _waveformPath = null;
+      _waveformLoading = false;
+      _openSource();
+    }
   }
+
+  void _handlePosition(Duration value) {
+    if (!mounted) return;
+    final document = _document;
+    final previousIndex = document == null
+        ? null
+        : currentTranscriptSegmentIndex(
+            document.segments,
+            _position.inMilliseconds,
+          );
+    final nextIndex = document == null
+        ? null
+        : currentTranscriptSegmentIndex(
+            document.segments,
+            value.inMilliseconds,
+          );
+    setState(() => _position = value);
+    if (_playing && previousIndex != nextIndex) _queueFocusCurrent();
+  }
+
+  void _handlePlaying(bool value) {
+    if (!mounted || value == _playing) return;
+    final resumed = value && !_playing;
+    setState(() {
+      _playing = value;
+      if (resumed) _followPlayback = true;
+    });
+    if (resumed) _queueFocusCurrent(force: true);
+  }
+
+  TranscriptDocument? get _document => context
+      .read<AppController>()
+      .allJobs
+      .where((item) => item.id == widget.jobId)
+      .firstOrNull
+      ?.document;
 
   Future<void> _openSource() async {
     if (!mounted) return;
@@ -71,10 +172,11 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     if (job == null || job.sourcePath == _openedPath) return;
     _openedPath = job.sourcePath;
     if (await File(job.sourcePath).exists()) {
+      _ensurePlayer();
       if (!(job.metadata?.hasVideo ?? false)) {
         unawaited(_loadWaveform(job));
       }
-      await _player.open(Media(job.sourcePath), play: false);
+      await _player!.open(Media(job.sourcePath), play: false);
     }
   }
 
@@ -99,14 +201,14 @@ class _TranscriptReviewState extends State<TranscriptReview> {
 
   @override
   void dispose() {
-    for (final timer in _editTimers.values) {
-      timer.cancel();
-    }
+    windowManager.removeListener(this);
     _search.dispose();
+    _transcriptScroll.dispose();
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _playingSubscription?.cancel();
-    _player.dispose();
+    _videoParamsSubscription?.cancel();
+    _player?.dispose();
     super.dispose();
   }
 
@@ -118,6 +220,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
         .firstOrNull;
     final document = job?.document;
     if (job == null || document == null) return const SizedBox.shrink();
+    _ensureTokenMap(document);
     final query = _search.text.trim().toLowerCase();
     final segments = query.isEmpty
         ? document.segments
@@ -125,82 +228,83 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               .where(
                 (segment) =>
                     segment.text.toLowerCase().contains(query) ||
+                    (segment.translatedText?.toLowerCase().contains(query) ??
+                        false) ||
                     context.strings
                         .speakerName(document.speakerName(segment.speaker))
                         .toLowerCase()
                         .contains(query),
               )
               .toList();
+    final currentIndex = query.isEmpty
+        ? currentTranscriptSegmentIndex(
+            document.segments,
+            _position.inMilliseconds,
+          )
+        : null;
     return Card(
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
-          _ReviewToolbar(
-            job: job,
-            search: _search,
-            onSearch: () => setState(() {}),
-          ),
+          _ReviewHeader(job: job, viewMode: _viewMode),
           const Divider(height: 1),
-          if (!File(job.sourcePath).existsSync())
-            MaterialBanner(
-              content: Text(context.strings.t('source_missing')),
-              leading: const Icon(Icons.link_off_rounded),
-              actions: [
-                TextButton(
-                  onPressed: () async {
-                    final file = await openFile();
-                    if (file == null || !context.mounted) return;
-                    await context.read<AppController>().relink(
-                      job.id,
-                      file.path,
-                    );
-                    _openedPath = '';
-                    await _openSource();
-                  },
-                  child: Text(context.strings.t('relink')),
-                ),
-              ],
-            )
-          else
-            _MediaPane(
-              job: job,
-              video: _video,
-              playing: _playing,
-              position: _position,
-              duration: _duration,
-              waveformPath: _waveformPath,
-              waveformLoading: _waveformLoading,
-              onPlayPause: _player.playOrPause,
-              onSeek: _player.seek,
-            ),
-          const Divider(height: 1),
-          if (document.speakers.isNotEmpty)
-            SpeakerStrip(job: job, document: document),
           Expanded(
-            child: SelectionArea(
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
-                itemCount: segments.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final segment = segments[index];
-                  return _SegmentEditor(
-                    key: ValueKey(
-                      '${segment.id}-${document.updatedAt.millisecondsSinceEpoch}',
-                    ),
-                    segment: segment,
-                    query: query,
-                    speakerName: context.strings.speakerName(
-                      document.speakerName(segment.speaker),
-                    ),
-                    showSpeaker: controller.settings.showSpeakers,
-                    showTimestamp: controller.settings.showTimestamps,
-                    onSeek: () =>
-                        _player.seek(Duration(milliseconds: segment.startMs)),
-                    onChanged: (text) => _scheduleEdit(segment.id, text),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final hasVideo = job.metadata?.hasVideo ?? false;
+                final sideBySide = hasVideo && constraints.maxWidth >= 840;
+                final transcript = _buildTranscriptPane(
+                  controller: controller,
+                  job: job,
+                  document: document,
+                  query: query,
+                  segments: segments,
+                  currentIndex: currentIndex,
+                );
+                if (sideBySide) {
+                  final availableWidth =
+                      constraints.maxWidth - _reviewDividerWidth;
+                  final maximumVideoWidth =
+                      availableWidth - _minimumReviewPaneWidth;
+                  final videoWidth = (availableWidth * _videoPaneFraction)
+                      .clamp(_minimumReviewPaneWidth, maximumVideoWidth)
+                      .toDouble();
+                  return Row(
+                    key: const Key('video-review-split'),
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(
+                        key: const Key('video-review-media-pane'),
+                        width: videoWidth,
+                        child: _buildMediaArea(job, fillHeight: true),
+                      ),
+                      _ReviewSplitDivider(
+                        onDragUpdate: (delta) =>
+                            _resizeReviewPanes(delta, availableWidth),
+                      ),
+                      Expanded(
+                        key: const Key('video-review-transcript-pane'),
+                        child: transcript,
+                      ),
+                    ],
                   );
-                },
-              ),
+                }
+                final stackedVideoHeight = hasVideo
+                    ? (constraints.maxHeight * .4).clamp(180.0, 300.0)
+                    : null;
+                return Column(
+                  key: const Key('video-review-stacked'),
+                  children: [
+                    _buildMediaArea(
+                      job,
+                      fillHeight: false,
+                      videoHeight: stackedVideoHeight,
+                    ),
+                    const Divider(height: 1),
+                    Expanded(child: transcript),
+                  ],
+                );
+              },
             ),
           ),
         ],
@@ -208,36 +312,420 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     );
   }
 
-  void _scheduleEdit(String segmentId, String text) {
-    _editTimers[segmentId]?.cancel();
-    _editTimers[segmentId] = Timer(const Duration(milliseconds: 450), () {
-      if (mounted) {
-        context.read<AppController>().updateSegment(
-          widget.jobId,
-          segmentId,
-          text,
-        );
-      }
+  void _resizeReviewPanes(double delta, double availableWidth) {
+    final maximumVideoWidth = availableWidth - _minimumReviewPaneWidth;
+    final currentWidth = availableWidth * _videoPaneFraction;
+    final nextWidth = (currentWidth + delta)
+        .clamp(_minimumReviewPaneWidth, maximumVideoWidth)
+        .toDouble();
+    setState(() => _videoPaneFraction = nextWidth / availableWidth);
+  }
+
+  Widget _buildMediaArea(
+    TranscriptionJob job, {
+    required bool fillHeight,
+    double? videoHeight,
+  }) {
+    if (!File(job.sourcePath).existsSync()) {
+      final banner = MaterialBanner(
+        content: Text(context.strings.t('source_missing')),
+        leading: const Icon(Icons.link_off_rounded),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final linked = await chooseAndRelink(context, job.id);
+              if (!linked || !context.mounted) return;
+              _openedPath = '';
+              await _openSource();
+            },
+            child: Text(context.strings.t('relink')),
+          ),
+        ],
+      );
+      return fillHeight
+          ? Align(alignment: Alignment.topCenter, child: banner)
+          : banner;
+    }
+    if (_player == null || _video == null) {
+      return SizedBox(
+        height: fillHeight ? null : 64,
+        child: const Center(
+          child: SizedBox.square(
+            dimension: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+    final pane = _MediaPane(
+      job: job,
+      document: job.document!,
+      viewMode: _viewMode,
+      video: _video!,
+      videoKey: _videoKey,
+      videoAspectRatio: _videoAspectRatio,
+      maxVideoHeight: videoHeight,
+      centerInAvailableHeight: fillHeight,
+      playing: _playing,
+      position: _position,
+      duration: _duration,
+      waveformPath: _waveformPath,
+      waveformLoading: _waveformLoading,
+      onPlayPause: _player!.playOrPause,
+      onSeek: _seek,
+      onFullscreen: _toggleFullscreen,
+      onSeekBackward: () => _seekRelative(-const Duration(seconds: 5)),
+      onSeekForward: () => _seekRelative(const Duration(seconds: 5)),
+      onDecreaseSpeed: () => _changePlaybackRate(-.25),
+      onIncreaseSpeed: () => _changePlaybackRate(.25),
+    );
+    if (!fillHeight && (job.metadata?.hasVideo ?? false)) {
+      return SizedBox(
+        height:
+            (videoHeight ?? 180) + 56 + PlaybackShortcutsHint.preferredHeight,
+        child: pane,
+      );
+    }
+    return pane;
+  }
+
+  Widget _buildTranscriptPane({
+    required AppController controller,
+    required TranscriptionJob job,
+    required TranscriptDocument document,
+    required String query,
+    required List<TranscriptSegment> segments,
+    required int? currentIndex,
+  }) => Column(
+    children: [
+      _TranscriptToolbar(
+        job: job,
+        search: _search,
+        viewMode: _viewMode,
+        onViewModeChanged: (value) => setState(() => _viewMode = value),
+        onSearch: () {
+          setState(() {});
+          if (_search.text.trim().isEmpty) {
+            _queueFocusCurrent(force: true);
+          }
+        },
+        onFocusCurrentSentence: document.segments.isEmpty
+            ? null
+            : _focusCurrentSentence,
+      ),
+      const Divider(height: 1),
+      if (controller.settings.showSpeakers && document.speakers.isNotEmpty)
+        SpeakerStrip(job: job, document: document),
+      Expanded(
+        child: Listener(
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent) _suspendFollow();
+          },
+          child: NotificationListener<UserScrollNotification>(
+            onNotification: (notification) {
+              if (_programmaticScrolls == 0 &&
+                  notification.direction != ScrollDirection.idle) {
+                _suspendFollow();
+              }
+              return false;
+            },
+            child: Scrollbar(
+              controller: _transcriptScroll,
+              child: SelectionArea(
+                child: ListView.separated(
+                  key: const Key('transcript-scroll'),
+                  controller: _transcriptScroll,
+                  primary: false,
+                  scrollDirection: Axis.vertical,
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                  itemCount: segments.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  itemBuilder: (context, index) {
+                    final segment = segments[index];
+                    return AutoScrollTag(
+                      key: ValueKey('segment-tag-${segment.id}'),
+                      controller: _transcriptScroll,
+                      index: index,
+                      child: Column(
+                        children: [
+                          if (_viewMode != TranslationViewMode.translated)
+                            TranscriptSegmentEditor(
+                              key: ValueKey(segment.id),
+                              segment: segment,
+                              tokens: _tokensBySegment[segment.id] ?? const [],
+                              positionMs: _position.inMilliseconds,
+                              isCurrent: query.isEmpty && index == currentIndex,
+                              query: query,
+                              speakerName: context.strings.speakerName(
+                                document.speakerName(segment.speaker),
+                              ),
+                              showSpeaker: controller.settings.showSpeakers,
+                              showTimestamp: controller.settings.showTimestamps,
+                              isEditing: _editingSegmentId == segment.id,
+                              onSeek: () => unawaited(
+                                _seek(Duration(milliseconds: segment.startMs)),
+                              ),
+                              onEdit: () => _startEditing(segment.id),
+                              onCancel: () => _cancelEditing(segment.id),
+                              onSave: (text) => _saveSegment(segment.id, text),
+                            ),
+                          if (_viewMode != TranslationViewMode.original)
+                            _TranslatedSegmentEditor(
+                              key: ValueKey('translated-${segment.id}'),
+                              segment: segment,
+                              isCurrent: query.isEmpty && index == currentIndex,
+                              query: query,
+                              showTimestamp: controller.settings.showTimestamps,
+                              isEditing:
+                                  _editingTranslationSegmentId == segment.id,
+                              onSeek: () => unawaited(
+                                _seek(Duration(milliseconds: segment.startMs)),
+                              ),
+                              onEdit: () =>
+                                  _startTranslationEditing(segment.id),
+                              onCancel: () =>
+                                  _cancelTranslationEditing(segment.id),
+                              onSave: (text) =>
+                                  _saveTranslation(segment.id, text),
+                              onRetranslate:
+                                  job.translationState.status.isActive ||
+                                      !controller.translationConfigured
+                                  ? null
+                                  : () => context
+                                        .read<AppController>()
+                                        .retranslateSegment(
+                                          widget.jobId,
+                                          segment.id,
+                                        ),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+
+  Future<void> _toggleFullscreen() async {
+    final videoState = _videoKey.currentState;
+    if (videoState != null) await videoState.toggleFullscreen();
+  }
+
+  Future<void> _seek(Duration position) async {
+    final player = _player;
+    if (player == null) return;
+    setState(() {
+      _position = position;
+      _followPlayback = true;
     });
+    _queueFocusCurrent(force: true);
+    await player.seek(position);
+  }
+
+  Future<void> _seekRelative(Duration offset) async {
+    final player = _player;
+    if (player == null) return;
+    final state = player.state;
+    final durationMs = state.duration.inMilliseconds;
+    final requestedMs = state.position.inMilliseconds + offset.inMilliseconds;
+    final upperBound = durationMs > 0
+        ? durationMs
+        : requestedMs > 0
+        ? requestedMs
+        : 0;
+    final targetMs = requestedMs.clamp(0, upperBound).toInt();
+    await _seek(Duration(milliseconds: targetMs));
+  }
+
+  Future<void> _changePlaybackRate(double step) async {
+    final player = _player;
+    if (player == null) return;
+    final rate = (player.state.rate + step).clamp(.5, 2.0).toDouble();
+    if ((rate - player.state.rate).abs() < .001) return;
+    await player.setRate(rate);
+  }
+
+  void _focusCurrentSentence() {
+    _search.clear();
+    setState(() => _followPlayback = true);
+    _queueFocusCurrent(force: true);
+  }
+
+  void _suspendFollow() {
+    if (!mounted || !_followPlayback) return;
+    setState(() => _followPlayback = false);
+  }
+
+  void _queueFocusCurrent({bool force = false}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_scrollToCurrent(force: force));
+    });
+  }
+
+  Future<void> _scrollToCurrent({bool force = false}) async {
+    if (!_followPlayback ||
+        _search.text.trim().isNotEmpty ||
+        !_transcriptScroll.hasClients) {
+      return;
+    }
+    final document = _document;
+    if (document == null || document.segments.isEmpty) return;
+    final index =
+        currentTranscriptSegmentIndex(
+          document.segments,
+          _position.inMilliseconds,
+        ) ??
+        0;
+    final segmentId = document.segments[index].id;
+    if (!force && segmentId == _lastScrolledSegmentId) return;
+    _lastScrolledSegmentId = segmentId;
+    _programmaticScrolls++;
+    try {
+      await _transcriptScroll.scrollToIndex(
+        index,
+        preferPosition: AutoScrollPosition.middle,
+        duration: const Duration(milliseconds: 260),
+      );
+    } finally {
+      _programmaticScrolls--;
+    }
+  }
+
+  void _startEditing(String segmentId) {
+    setState(() {
+      _editingSegmentId = segmentId;
+      _editingTranslationSegmentId = null;
+      _followPlayback = false;
+    });
+  }
+
+  void _cancelEditing(String segmentId) {
+    if (_editingSegmentId == segmentId) {
+      setState(() => _editingSegmentId = null);
+    }
+  }
+
+  Future<void> _saveSegment(String segmentId, String text) async {
+    try {
+      await context.read<AppController>().updateSegment(
+        widget.jobId,
+        segmentId,
+        text,
+      );
+      if (mounted && _editingSegmentId == segmentId) {
+        setState(() => _editingSegmentId = null);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.strings.t('error_unexpected'))),
+      );
+    }
+  }
+
+  void _startTranslationEditing(String segmentId) {
+    setState(() {
+      _editingSegmentId = null;
+      _editingTranslationSegmentId = segmentId;
+      _followPlayback = false;
+    });
+  }
+
+  void _cancelTranslationEditing(String segmentId) {
+    if (_editingTranslationSegmentId == segmentId) {
+      setState(() => _editingTranslationSegmentId = null);
+    }
+  }
+
+  Future<void> _saveTranslation(String segmentId, String text) async {
+    try {
+      await context.read<AppController>().updateTranslatedSegment(
+        widget.jobId,
+        segmentId,
+        text,
+      );
+      if (mounted && _editingTranslationSegmentId == segmentId) {
+        setState(() => _editingTranslationSegmentId = null);
+      }
+    } on Object {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.strings.t('error_unexpected'))),
+      );
+    }
+  }
+
+  void _ensureTokenMap(TranscriptDocument document) {
+    if (identical(_mappedDocument, document)) return;
+    _mappedDocument = document;
+    final result = <String, List<TranscriptToken>>{
+      for (final segment in document.segments) segment.id: [],
+    };
+    var segmentIndex = 0;
+    for (final token in document.tokens) {
+      if (token.startMs == 0 && token.endMs == 0) continue;
+      while (segmentIndex + 1 < document.segments.length &&
+          token.startMs >= document.segments[segmentIndex + 1].startMs) {
+        segmentIndex++;
+      }
+      if (document.segments.isEmpty) break;
+      final segment = document.segments[segmentIndex];
+      if (token.startMs >= segment.startMs && token.startMs <= segment.endMs) {
+        result[segment.id]!.add(token);
+      }
+    }
+    _tokensBySegment = {
+      for (final entry in result.entries)
+        entry.key: List.unmodifiable(entry.value),
+    };
   }
 }
 
-class _ReviewToolbar extends StatelessWidget {
-  const _ReviewToolbar({
-    required this.job,
-    required this.search,
-    required this.onSearch,
-  });
+class _ReviewSplitDivider extends StatelessWidget {
+  const _ReviewSplitDivider({required this.onDragUpdate});
+
+  final ValueChanged<double> onDragUpdate;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: context.strings.t('resize_review_panels'),
+    child: MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      child: GestureDetector(
+        key: const Key('video-transcript-divider'),
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragUpdate: (details) => onDragUpdate(details.delta.dx),
+        child: SizedBox(
+          width: _TranscriptReviewState._reviewDividerWidth,
+          child: Center(
+            child: VerticalDivider(
+              width: 1,
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _ReviewHeader extends StatelessWidget {
+  const _ReviewHeader({required this.job, required this.viewMode});
 
   final TranscriptionJob job;
-  final TextEditingController search;
-  final VoidCallback onSearch;
+  final TranslationViewMode viewMode;
 
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
+    final settings = controller.settings;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
       child: Row(
         children: [
           Expanded(
@@ -250,26 +738,56 @@ class _ReviewToolbar extends StatelessWidget {
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
-          SizedBox(
-            width: 210,
-            child: TextField(
-              controller: search,
-              onChanged: (_) => onSearch(),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: context.strings.t('search_transcript'),
-                prefixIcon: const Icon(Icons.search_rounded, size: 20),
+          IconButton.filledTonal(
+            key: const Key('toggle-speaker-labels'),
+            tooltip: context.strings.t('speaker_labels'),
+            isSelected: settings.showSpeakers,
+            onPressed: () => unawaited(
+              controller.updateSettings(
+                settings.copyWith(showSpeakers: !settings.showSpeakers),
               ),
             ),
+            icon: const Icon(Icons.person_outline_rounded),
+            selectedIcon: const Icon(Icons.person_rounded),
           ),
           const SizedBox(width: 8),
+          IconButton.filledTonal(
+            key: const Key('toggle-timestamps'),
+            tooltip: context.strings.t('timestamps'),
+            isSelected: settings.showTimestamps,
+            onPressed: () => unawaited(
+              controller.updateSettings(
+                settings.copyWith(showTimestamps: !settings.showTimestamps),
+              ),
+            ),
+            icon: const Icon(Icons.schedule_outlined),
+            selectedIcon: const Icon(Icons.schedule_rounded),
+          ),
+          IconButton(
+            key: const Key('translate-transcript'),
+            tooltip: controller.translationConfigured
+                ? context.strings.t('translate')
+                : context.strings.t('auto_translate_requires_config'),
+            onPressed:
+                controller.translationConfigured &&
+                    !job.translationState.status.isActive
+                ? () => _showTranslationDialog(context, job)
+                : null,
+            icon: const Icon(Icons.translate_rounded),
+          ),
           IconButton(
             tooltip: context.strings.t('copy'),
             onPressed: () async {
               final options = ExportOptions(
-                showSpeakers: controller.settings.showSpeakers,
-                showTimestamps: controller.settings.showTimestamps,
+                showSpeakers: settings.showSpeakers,
+                showTimestamps: settings.showTimestamps,
                 localeCode: Localizations.localeOf(context).languageCode,
+                contentMode: switch (viewMode) {
+                  TranslationViewMode.original => ExportContentMode.original,
+                  TranslationViewMode.translated =>
+                    ExportContentMode.translated,
+                  TranslationViewMode.bilingual => ExportContentMode.bilingual,
+                },
               );
               await Clipboard.setData(
                 ClipboardData(text: controller.renderJob(job.id, options)),
@@ -293,10 +811,1122 @@ class _ReviewToolbar extends StatelessWidget {
   }
 }
 
+class _TranscriptToolbar extends StatelessWidget {
+  const _TranscriptToolbar({
+    required this.job,
+    required this.search,
+    required this.viewMode,
+    required this.onViewModeChanged,
+    required this.onSearch,
+    required this.onFocusCurrentSentence,
+  });
+
+  final TranscriptionJob job;
+  final TextEditingController search;
+  final TranslationViewMode viewMode;
+  final ValueChanged<TranslationViewMode> onViewModeChanged;
+  final VoidCallback onSearch;
+  final VoidCallback? onFocusCurrentSentence;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.watch<AppController>();
+    final translationStarted =
+        job.translationState.status != TranslationStatus.idle ||
+        (job.document?.segments.any((segment) => segment.hasTranslation) ??
+            false);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: search,
+                  onChanged: (_) => onSearch(),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: context.strings.t('search_transcript'),
+                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                key: const Key('focus-current-sentence'),
+                tooltip: context.strings.t('focus_current_sentence'),
+                onPressed: onFocusCurrentSentence,
+                icon: const Icon(Icons.center_focus_strong_rounded),
+              ),
+            ],
+          ),
+          if (translationStarted) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SegmentedButton<TranslationViewMode>(
+                  segments: [
+                    ButtonSegment(
+                      value: TranslationViewMode.original,
+                      label: Text(context.strings.t('original')),
+                    ),
+                    ButtonSegment(
+                      value: TranslationViewMode.translated,
+                      label: Text(context.strings.t('translated')),
+                    ),
+                    ButtonSegment(
+                      value: TranslationViewMode.bilingual,
+                      label: Text(context.strings.t('bilingual')),
+                    ),
+                  ],
+                  selected: {viewMode},
+                  onSelectionChanged: (value) => onViewModeChanged(value.first),
+                ),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 180),
+                  child: _TranslationStatusLabel(job: job),
+                ),
+                if (job.translationState.status.isActive)
+                  TextButton.icon(
+                    onPressed: () => controller.cancelTranslation(job.id),
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    label: Text(context.strings.t('cancel')),
+                  )
+                else if (job.translationState.status.canRetry)
+                  TextButton.icon(
+                    onPressed: controller.translationConfigured
+                        ? () => controller.retryTranslation(job.id)
+                        : null,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: Text(context.strings.t('retry_missing')),
+                  ),
+                if (!job.translationState.status.isActive)
+                  TextButton(
+                    onPressed: controller.translationConfigured
+                        ? () => _confirmRetranslateAll(context, job)
+                        : null,
+                    child: Text(context.strings.t('retranslate_all')),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TranslationStatusLabel extends StatelessWidget {
+  const _TranslationStatusLabel({required this.job});
+
+  final TranscriptionJob job;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = job.translationState;
+    final text = switch (state.status) {
+      TranslationStatus.translating =>
+        context.strings
+            .t('translation_progress')
+            .replaceFirst('{done}', '${state.completedSegments}')
+            .replaceFirst('{total}', '${state.totalSegments}'),
+      TranslationStatus.completed => context.strings.t('completed'),
+      TranslationStatus.partial ||
+      TranslationStatus.interrupted => context.strings.t('translation_partial'),
+      TranslationStatus.cancelled => context.strings.t('translation_cancelled'),
+      TranslationStatus.failed => context.strings.error(
+        state.errorCode,
+        englishFallback: state.errorMessage,
+      ),
+      TranslationStatus.idle => '',
+    };
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.bodySmall,
+    );
+  }
+}
+
+Future<void> _showTranslationDialog(
+  BuildContext context,
+  TranscriptionJob job,
+) async {
+  final controller = context.read<AppController>();
+  var target = job.translationState.targetLanguage.isNotEmpty
+      ? job.translationState.targetLanguage
+      : controller.settings.translationSettings.targetLanguage;
+  if (!supportedTranslationLanguageCodes.contains(target)) target = 'en';
+  final selected = await showDialog<String>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: Text(context.strings.t('translation_dialog_title')),
+        content: SizedBox(
+          width: 380,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              DropdownButtonFormField<String>(
+                key: const Key('manual-translation-target'),
+                initialValue: target,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('target_language'),
+                ),
+                items: [
+                  for (final code in supportedTranslationLanguageCodes)
+                    DropdownMenuItem(
+                      value: code,
+                      child: Text(
+                        context.strings.translationLanguageName(code),
+                      ),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => target = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              Text(
+                context.strings
+                    .t('translation_model_label')
+                    .replaceFirst(
+                      '{model}',
+                      controller.settings.translationSettings.model,
+                    ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(context.strings.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, target),
+            child: Text(context.strings.t('translate')),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (selected == null || !context.mounted) return;
+  final hasExisting =
+      job.document?.segments.any((segment) => segment.hasTranslation) ?? false;
+  final targetChanged =
+      hasExisting &&
+      job.translationState.targetLanguage.isNotEmpty &&
+      job.translationState.targetLanguage != selected;
+  var replace = false;
+  if (targetChanged) {
+    replace = await _confirmTranslationReplacement(context) ?? false;
+    if (!replace || !context.mounted) return;
+  }
+  await controller.translateJob(
+    job.id,
+    targetLanguage: selected,
+    replaceExisting: replace,
+  );
+}
+
+Future<void> _confirmRetranslateAll(
+  BuildContext context,
+  TranscriptionJob job,
+) async {
+  if (await _confirmTranslationReplacement(context) != true ||
+      !context.mounted) {
+    return;
+  }
+  final controller = context.read<AppController>();
+  final target = job.translationState.targetLanguage.isNotEmpty
+      ? job.translationState.targetLanguage
+      : controller.settings.translationSettings.targetLanguage;
+  await controller.translateJob(
+    job.id,
+    targetLanguage: target,
+    replaceExisting: true,
+  );
+}
+
+Future<bool?> _confirmTranslationReplacement(BuildContext context) =>
+    showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.strings.t('translation_replace_title')),
+        content: Text(context.strings.t('translation_replace_body')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(context.strings.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(context.strings.t('continue')),
+          ),
+        ],
+      ),
+    );
+
+class _TranslatedSegmentEditor extends StatefulWidget {
+  const _TranslatedSegmentEditor({
+    super.key,
+    required this.segment,
+    required this.isCurrent,
+    required this.query,
+    required this.showTimestamp,
+    required this.isEditing,
+    required this.onSeek,
+    required this.onEdit,
+    required this.onCancel,
+    required this.onSave,
+    required this.onRetranslate,
+  });
+
+  final TranscriptSegment segment;
+  final bool isCurrent;
+  final String query;
+  final bool showTimestamp;
+  final bool isEditing;
+  final VoidCallback onSeek;
+  final VoidCallback onEdit;
+  final VoidCallback onCancel;
+  final Future<void> Function(String) onSave;
+  final Future<void> Function()? onRetranslate;
+
+  @override
+  State<_TranslatedSegmentEditor> createState() =>
+      _TranslatedSegmentEditorState();
+}
+
+class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
+  late final TextEditingController _draft;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _draft = TextEditingController(text: widget.segment.translatedText ?? '');
+  }
+
+  @override
+  void didUpdateWidget(covariant _TranslatedSegmentEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.isEditing && widget.segment.translatedText != _draft.text) {
+      _draft.text = widget.segment.translatedText ?? '';
+    }
+    if (widget.isEditing && !oldWidget.isEditing) {
+      _draft.text = widget.segment.translatedText ?? '';
+      _draft.selection = TextSelection.collapsed(offset: _draft.text.length);
+    }
+  }
+
+  @override
+  void dispose() {
+    _draft.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final translated = widget.segment.translatedText?.trim();
+    final fallback = translated == null || translated.isEmpty;
+    return Card(
+      key: ValueKey('translated-segment-${widget.segment.id}'),
+      margin: const EdgeInsets.only(top: 4),
+      color: widget.isCurrent
+          ? colors.primaryContainer.withValues(alpha: .35)
+          : colors.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.showTimestamp)
+              TextButton(
+                onPressed: widget.onSeek,
+                child: Text(formatClock(widget.segment.startMs)),
+              ),
+            Expanded(
+              child: widget.isEditing
+                  ? TextField(
+                      key: ValueKey('translated-field-${widget.segment.id}'),
+                      controller: _draft,
+                      autofocus: true,
+                      minLines: 1,
+                      maxLines: null,
+                    )
+                  : InkWell(
+                      onTap: widget.onSeek,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 8,
+                        ),
+                        child: SearchHighlightedText(
+                          text: fallback ? widget.segment.text : translated,
+                          query: widget.query,
+                          style: TextStyle(
+                            fontStyle: fallback ? FontStyle.italic : null,
+                            color: fallback ? colors.onSurfaceVariant : null,
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
+            if (widget.isEditing) ...[
+              IconButton(
+                tooltip: context.strings.t('cancel'),
+                onPressed: _saving ? null : widget.onCancel,
+                icon: const Icon(Icons.close_rounded),
+              ),
+              IconButton(
+                tooltip: context.strings.t('save'),
+                onPressed: _saving
+                    ? null
+                    : () async {
+                        setState(() => _saving = true);
+                        await widget.onSave(_draft.text);
+                        if (mounted) setState(() => _saving = false);
+                      },
+                icon: const Icon(Icons.check_rounded),
+              ),
+            ] else
+              PopupMenuButton<String>(
+                tooltip: context.strings.t('more_actions'),
+                onSelected: (value) {
+                  if (value == 'edit') widget.onEdit();
+                  if (value == 'retranslate') widget.onRetranslate?.call();
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Text(context.strings.t('edit_translation')),
+                  ),
+                  if (widget.onRetranslate != null)
+                    PopupMenuItem(
+                      value: 'retranslate',
+                      child: Text(context.strings.t('retranslate_segment')),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _MediaPane extends StatelessWidget {
   const _MediaPane({
     required this.job,
+    required this.document,
+    required this.viewMode,
     required this.video,
+    required this.videoKey,
+    required this.videoAspectRatio,
+    required this.maxVideoHeight,
+    required this.centerInAvailableHeight,
+    required this.playing,
+    required this.position,
+    required this.duration,
+    required this.waveformPath,
+    required this.waveformLoading,
+    required this.onPlayPause,
+    required this.onSeek,
+    required this.onFullscreen,
+    required this.onSeekBackward,
+    required this.onSeekForward,
+    required this.onDecreaseSpeed,
+    required this.onIncreaseSpeed,
+  });
+
+  final TranscriptionJob job;
+  final TranscriptDocument document;
+  final TranslationViewMode viewMode;
+  final VideoController video;
+  final GlobalKey<VideoState> videoKey;
+  final double videoAspectRatio;
+  final double? maxVideoHeight;
+  final bool centerInAvailableHeight;
+  final bool playing;
+  final Duration position;
+  final Duration duration;
+  final String? waveformPath;
+  final bool waveformLoading;
+  final Future<void> Function() onPlayPause;
+  final Future<void> Function(Duration) onSeek;
+  final Future<void> Function() onFullscreen;
+  final Future<void> Function() onSeekBackward;
+  final Future<void> Function() onSeekForward;
+  final Future<void> Function() onDecreaseSpeed;
+  final Future<void> Function() onIncreaseSpeed;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasVideo = job.metadata?.hasVideo ?? false;
+    final mediaDuration = duration.inMilliseconds > 0
+        ? duration
+        : Duration(milliseconds: job.metadata?.durationMs ?? 0);
+    if (!hasVideo) {
+      return AudioTransport(
+        playing: playing,
+        position: position,
+        duration: mediaDuration,
+        waveformPath: waveformPath,
+        waveformLoading: waveformLoading,
+        onPlayPause: onPlayPause,
+        onSeek: onSeek,
+      );
+    }
+    final fullscreenSubtitle = fullscreenTranscriptSubtitle(
+      document.segments,
+      position.inMilliseconds,
+      viewMode,
+    );
+    final fullscreenSubtitleHighlight = fullscreenTranscriptWordRange(
+      document,
+      position.inMilliseconds,
+      viewMode,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const transportHeight = 56.0;
+        const shortcutsHeight = PlaybackShortcutsHint.preferredHeight;
+        final aspect = videoAspectRatio.isFinite && videoAspectRatio > 0
+            ? videoAspectRatio
+            : 16 / 9;
+        final heightFromWidth = constraints.maxWidth / aspect;
+        final availableHeight = constraints.maxHeight.isFinite
+            ? (constraints.maxHeight - transportHeight - shortcutsHeight).clamp(
+                0.0,
+                double.infinity,
+              )
+            : heightFromWidth;
+        final heightLimit = maxVideoHeight == null
+            ? availableHeight
+            : availableHeight.clamp(0.0, maxVideoHeight!);
+        final viewportHeight = heightFromWidth.clamp(0.0, heightLimit);
+        return Column(
+          mainAxisSize: centerInAvailableHeight
+              ? MainAxisSize.max
+              : MainAxisSize.min,
+          mainAxisAlignment: centerInAvailableHeight
+              ? MainAxisAlignment.center
+              : MainAxisAlignment.start,
+          children: [
+            Container(
+              key: const Key('video-viewport'),
+              color: Colors.black,
+              height: viewportHeight,
+              width: double.infinity,
+              child: Video(
+                key: videoKey,
+                controller: video,
+                aspectRatio: aspect,
+                fit: BoxFit.contain,
+                controls: (state) => state.isFullscreen()
+                    ? VideoFullscreenKeyboardRegion(
+                        subtitle: fullscreenSubtitle,
+                        subtitleHighlight: fullscreenSubtitleHighlight,
+                        playing: playing,
+                        position: position,
+                        duration: mediaDuration,
+                        onExit: () => unawaited(state.exitFullscreen()),
+                        onPlayPause: () => unawaited(onPlayPause()),
+                        onSeek: (value) => unawaited(onSeek(value)),
+                        onSeekBackward: () => unawaited(onSeekBackward()),
+                        onSeekForward: () => unawaited(onSeekForward()),
+                        onDecreaseSpeed: () => unawaited(onDecreaseSpeed()),
+                        onIncreaseSpeed: () => unawaited(onIncreaseSpeed()),
+                        child: const SizedBox.expand(),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ),
+            SizedBox(
+              key: const Key('video-transport'),
+              height: transportHeight,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                child: Row(
+                  children: [
+                    IconButton.filledTonal(
+                      onPressed: onPlayPause,
+                      icon: Icon(
+                        playing
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(formatClock(position.inMilliseconds)),
+                    Expanded(
+                      child: Slider(
+                        value: position.inMilliseconds
+                            .clamp(0, mediaDuration.inMilliseconds)
+                            .toDouble(),
+                        max: mediaDuration.inMilliseconds
+                            .clamp(1, double.infinity)
+                            .toDouble(),
+                        onChanged: (value) =>
+                            onSeek(Duration(milliseconds: value.round())),
+                      ),
+                    ),
+                    Text(formatClock(mediaDuration.inMilliseconds)),
+                    IconButton(
+                      key: const Key('video-fullscreen'),
+                      tooltip: context.strings.t('fullscreen'),
+                      onPressed: () => unawaited(onFullscreen()),
+                      icon: const Icon(Icons.fullscreen_rounded),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const PlaybackShortcutsHint(),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class PlaybackShortcutsHint extends StatelessWidget {
+  const PlaybackShortcutsHint({super.key});
+
+  static const preferredHeight = 128.0;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    key: const Key('playback-shortcuts'),
+    height: preferredHeight,
+    child: Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 620),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                context.strings.t('fullscreen_shortcuts'),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final columns = constraints.maxWidth >= 520 ? 3 : 2;
+                  const spacing = 12.0;
+                  final itemWidth =
+                      (constraints.maxWidth - spacing * (columns - 1)) /
+                      columns;
+                  return Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: spacing,
+                    runSpacing: 8,
+                    children: [
+                      _ShortcutHint(
+                        id: 'play-pause',
+                        width: itemWidth,
+                        keyLabel: 'Space',
+                        description: context.strings.t('shortcut_play_pause'),
+                      ),
+                      _ShortcutHint(
+                        id: 'seek-backward',
+                        width: itemWidth,
+                        keyLabel: '←',
+                        description: context.strings.t(
+                          'shortcut_seek_backward',
+                        ),
+                      ),
+                      _ShortcutHint(
+                        id: 'seek-forward',
+                        width: itemWidth,
+                        keyLabel: '→',
+                        description: context.strings.t('shortcut_seek_forward'),
+                      ),
+                      _ShortcutHint(
+                        id: 'decrease-speed',
+                        width: itemWidth,
+                        keyLabel: 'X',
+                        description: context.strings.t(
+                          'shortcut_decrease_speed',
+                        ),
+                      ),
+                      _ShortcutHint(
+                        id: 'increase-speed',
+                        width: itemWidth,
+                        keyLabel: 'C',
+                        description: context.strings.t(
+                          'shortcut_increase_speed',
+                        ),
+                      ),
+                      _ShortcutHint(
+                        id: 'exit-fullscreen',
+                        width: itemWidth,
+                        keyLabel: 'Esc',
+                        description: context.strings.t('exit_fullscreen'),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _ShortcutHint extends StatelessWidget {
+  const _ShortcutHint({
+    required this.id,
+    required this.width,
+    required this.keyLabel,
+    required this.description,
+  });
+
+  final String id;
+  final double width;
+  final String keyLabel;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: width,
+      child: Semantics(
+        label: '$keyLabel: $description',
+        child: Row(
+          children: [
+            Container(
+              key: ValueKey('shortcut-key-$id'),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: colors.outlineVariant),
+              ),
+              child: Text(
+                keyLabel,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: colors.onSurfaceVariant,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(width: 5),
+            Expanded(
+              child: Text(
+                description,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class VideoFullscreenKeyboardRegion extends StatefulWidget {
+  const VideoFullscreenKeyboardRegion({
+    super.key,
+    this.subtitle,
+    this.subtitleHighlight,
+    required this.playing,
+    required this.position,
+    required this.duration,
+    required this.onExit,
+    required this.onPlayPause,
+    required this.onSeek,
+    required this.onSeekBackward,
+    required this.onSeekForward,
+    required this.onDecreaseSpeed,
+    required this.onIncreaseSpeed,
+    required this.child,
+  });
+
+  static const controlsAutoHideDelay = Duration(seconds: 3);
+  static const controlsTransitionDuration = Duration(milliseconds: 180);
+
+  final String? subtitle;
+  final TextRange? subtitleHighlight;
+  final bool playing;
+  final Duration position;
+  final Duration duration;
+  final VoidCallback onExit;
+  final VoidCallback onPlayPause;
+  final ValueChanged<Duration> onSeek;
+  final VoidCallback onSeekBackward;
+  final VoidCallback onSeekForward;
+  final VoidCallback onDecreaseSpeed;
+  final VoidCallback onIncreaseSpeed;
+  final Widget child;
+
+  @override
+  State<VideoFullscreenKeyboardRegion> createState() =>
+      _VideoFullscreenKeyboardRegionState();
+}
+
+class _VideoFullscreenKeyboardRegionState
+    extends State<VideoFullscreenKeyboardRegion> {
+  static const _controlsClearance = 72.0;
+
+  Timer? _hideTimer;
+  bool _controlsVisible = true;
+  bool _scrubbing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _restartHideTimer();
+  }
+
+  @override
+  void didUpdateWidget(VideoFullscreenKeyboardRegion oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.playing) {
+      _hideTimer?.cancel();
+      _controlsVisible = true;
+    } else if (!oldWidget.playing) {
+      _controlsVisible = true;
+      _restartHideTimer();
+    }
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    super.dispose();
+  }
+
+  void _restartHideTimer() {
+    _hideTimer?.cancel();
+    if (!widget.playing || _scrubbing) return;
+    _hideTimer = Timer(VideoFullscreenKeyboardRegion.controlsAutoHideDelay, () {
+      if (!mounted || !widget.playing || _scrubbing) return;
+      setState(() => _controlsVisible = false);
+    });
+  }
+
+  void _showControls({bool restartTimer = true}) {
+    _hideTimer?.cancel();
+    if (!_controlsVisible) setState(() => _controlsVisible = true);
+    if (restartTimer) _restartHideTimer();
+  }
+
+  void _runWithVisibleControls(VoidCallback action) {
+    _showControls();
+    action();
+  }
+
+  void _beginScrubbing(double _) {
+    _scrubbing = true;
+    _showControls(restartTimer: false);
+  }
+
+  void _seekTo(double value) {
+    widget.onSeek(Duration(milliseconds: value.round()));
+  }
+
+  void _finishScrubbing(double _) {
+    _scrubbing = false;
+    _showControls();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = widget.subtitle?.trim();
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): widget.onExit,
+        const SingleActivator(LogicalKeyboardKey.space): () =>
+            _runWithVisibleControls(widget.onPlayPause),
+        const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+            _runWithVisibleControls(widget.onSeekBackward),
+        const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+            _runWithVisibleControls(widget.onSeekForward),
+        const SingleActivator(LogicalKeyboardKey.keyX): () =>
+            _runWithVisibleControls(widget.onDecreaseSpeed),
+        const SingleActivator(LogicalKeyboardKey.keyC): () =>
+            _runWithVisibleControls(widget.onIncreaseSpeed),
+      },
+      child: Focus(
+        autofocus: true,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final fontSize = (constraints.maxWidth / 40).clamp(18.0, 32.0);
+            final bottomPadding = (constraints.maxHeight * .06).clamp(
+              24.0,
+              72.0,
+            );
+            return MouseRegion(
+              key: const Key('fullscreen-pointer-region'),
+              cursor: _controlsVisible
+                  ? SystemMouseCursors.basic
+                  : SystemMouseCursors.none,
+              onEnter: (_) => _showControls(),
+              onHover: (_) => _showControls(),
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) => _showControls(),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    widget.child,
+                    if (text != null && text.isNotEmpty)
+                      IgnorePointer(
+                        child: AnimatedPadding(
+                          key: const Key('fullscreen-subtitle-padding'),
+                          duration: VideoFullscreenKeyboardRegion
+                              .controlsTransitionDuration,
+                          curve: Curves.easeInOut,
+                          padding: EdgeInsets.only(
+                            bottom: _controlsVisible ? _controlsClearance : 0,
+                          ),
+                          child: SafeArea(
+                            minimum: EdgeInsets.only(bottom: bottomPadding),
+                            child: Align(
+                              alignment: Alignment.bottomCenter,
+                              child: FractionallySizedBox(
+                                widthFactor: .84,
+                                child: Center(
+                                  widthFactor: 1,
+                                  heightFactor: 1,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 960,
+                                    ),
+                                    child: DecoratedBox(
+                                      key: const Key('fullscreen-subtitle'),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withValues(
+                                          alpha: .72,
+                                        ),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 10,
+                                        ),
+                                        child: _FullscreenSubtitleText(
+                                          text: text,
+                                          highlight: widget.subtitleHighlight,
+                                          fontSize: fontSize,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: ExcludeSemantics(
+                        excluding: !_controlsVisible,
+                        child: ExcludeFocus(
+                          excluding: !_controlsVisible,
+                          child: IgnorePointer(
+                            ignoring: !_controlsVisible,
+                            child: AnimatedSlide(
+                              offset: _controlsVisible
+                                  ? Offset.zero
+                                  : const Offset(0, .12),
+                              duration: VideoFullscreenKeyboardRegion
+                                  .controlsTransitionDuration,
+                              curve: Curves.easeInOut,
+                              child: AnimatedOpacity(
+                                key: const Key('fullscreen-controls-opacity'),
+                                opacity: _controlsVisible ? 1 : 0,
+                                duration: VideoFullscreenKeyboardRegion
+                                    .controlsTransitionDuration,
+                                curve: Curves.easeInOut,
+                                child: _buildControls(context),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControls(BuildContext context) {
+    final durationMs = widget.duration.inMilliseconds;
+    final hasDuration = durationMs > 0;
+    final positionMs = hasDuration
+        ? widget.position.inMilliseconds.clamp(0, durationMs).toDouble()
+        : 0.0;
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: Colors.transparent,
+      child: DecoratedBox(
+        key: const Key('fullscreen-controls'),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.transparent, Color(0xB3000000)],
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          minimum: const EdgeInsets.fromLTRB(16, 28, 12, 10),
+          child: Row(
+            key: const Key('fullscreen-controls-bar'),
+            children: [
+              IconButton(
+                key: const Key('fullscreen-play-pause'),
+                tooltip: context.strings.t(widget.playing ? 'pause' : 'play'),
+                onPressed: () => _runWithVisibleControls(widget.onPlayPause),
+                color: Colors.white,
+                iconSize: 30,
+                icon: Icon(
+                  widget.playing
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                formatClock(positionMs.round()),
+                key: const Key('fullscreen-position'),
+                style: const TextStyle(color: Colors.white),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: colors.primaryContainer,
+                    inactiveTrackColor: Colors.white38,
+                    thumbColor: Colors.white,
+                    overlayColor: Colors.white24,
+                    trackHeight: 3,
+                  ),
+                  child: Slider(
+                    key: const Key('fullscreen-seek'),
+                    value: positionMs,
+                    max: hasDuration ? durationMs.toDouble() : 1,
+                    onChangeStart: hasDuration ? _beginScrubbing : null,
+                    onChanged: hasDuration ? _seekTo : null,
+                    onChangeEnd: hasDuration ? _finishScrubbing : null,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                formatClock(hasDuration ? durationMs : 0),
+                key: const Key('fullscreen-duration'),
+                style: const TextStyle(color: Colors.white),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                key: const Key('fullscreen-exit'),
+                tooltip: context.strings.t('exit_fullscreen'),
+                onPressed: () => _runWithVisibleControls(widget.onExit),
+                color: Colors.white,
+                iconSize: 30,
+                icon: const Icon(Icons.fullscreen_exit_rounded),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FullscreenSubtitleText extends StatelessWidget {
+  const _FullscreenSubtitleText({
+    required this.text,
+    required this.highlight,
+    required this.fontSize,
+  });
+
+  final String text;
+  final TextRange? highlight;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(
+      color: Colors.white,
+      fontSize: fontSize,
+      fontWeight: FontWeight.w600,
+      height: 1.25,
+      shadows: const [
+        Shadow(color: Colors.black, blurRadius: 3, offset: Offset(0, 1)),
+      ],
+    );
+    final range = highlight;
+    if (range == null ||
+        !range.isValid ||
+        range.isCollapsed ||
+        range.end > text.length) {
+      return Text(text, textAlign: TextAlign.center, style: style);
+    }
+    final colors = Theme.of(context).colorScheme;
+    return Text.rich(
+      TextSpan(
+        style: style,
+        children: [
+          if (range.start > 0) TextSpan(text: text.substring(0, range.start)),
+          TextSpan(
+            text: text.substring(range.start, range.end),
+            style: TextStyle(
+              color: colors.onPrimary,
+              backgroundColor: colors.primary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          if (range.end < text.length)
+            TextSpan(text: text.substring(range.end)),
+        ],
+      ),
+      textAlign: TextAlign.center,
+    );
+  }
+}
+
+class AudioTransport extends StatelessWidget {
+  const AudioTransport({
+    super.key,
     required this.playing,
     required this.position,
     required this.duration,
@@ -306,8 +1936,6 @@ class _MediaPane extends StatelessWidget {
     required this.onSeek,
   });
 
-  final TranscriptionJob job;
-  final VideoController video;
   final bool playing;
   final Duration position;
   final Duration duration;
@@ -317,69 +1945,47 @@ class _MediaPane extends StatelessWidget {
   final Future<void> Function(Duration) onSeek;
 
   @override
-  Widget build(BuildContext context) {
-    final hasVideo = job.metadata?.hasVideo ?? false;
-    final mediaDuration = duration.inMilliseconds > 0
-        ? duration
-        : Duration(milliseconds: job.metadata?.durationMs ?? 0);
-    return Column(
-      children: [
-        if (hasVideo)
-          Container(
-            color: Colors.black,
-            height: 210,
-            width: double.infinity,
-            child: Video(controller: video, controls: NoVideoControls),
-          )
-        else
-          SizedBox(
-            height: 94,
-            width: double.infinity,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 18),
+  Widget build(BuildContext context) => SizedBox(
+    height: 64,
+    width: double.infinity,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(
+        children: [
+          IconButton.filledTonal(
+            key: const Key('audio-play-pause'),
+            onPressed: onPlayPause,
+            icon: Icon(
+              playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            formatClock(position.inMilliseconds),
+            key: const Key('audio-current-time'),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: SizedBox(
+              height: 36,
               child: WaveformScrubber(
                 path: waveformPath,
                 loading: waveformLoading,
                 position: position,
-                duration: mediaDuration,
+                duration: duration,
                 onSeek: onSeek,
               ),
             ),
           ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: Row(
-            children: [
-              IconButton.filledTonal(
-                onPressed: onPlayPause,
-                icon: Icon(
-                  playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(formatClock(position.inMilliseconds)),
-              if (hasVideo)
-                Expanded(
-                  child: Slider(
-                    value: position.inMilliseconds
-                        .clamp(0, mediaDuration.inMilliseconds)
-                        .toDouble(),
-                    max: mediaDuration.inMilliseconds
-                        .clamp(1, double.infinity)
-                        .toDouble(),
-                    onChanged: (value) =>
-                        onSeek(Duration(milliseconds: value.round())),
-                  ),
-                )
-              else
-                const Spacer(),
-              Text(formatClock(mediaDuration.inMilliseconds)),
-            ],
+          const SizedBox(width: 10),
+          Text(
+            formatClock(duration.inMilliseconds),
+            key: const Key('audio-duration'),
           ),
-        ),
-      ],
-    );
-  }
+        ],
+      ),
+    ),
+  );
 }
 
 class WaveformScrubber extends StatelessWidget {
@@ -542,47 +2148,84 @@ class _WaveformProgressClipper extends CustomClipper<Rect> {
       oldClipper.progress != progress;
 }
 
-class SpeakerStrip extends StatelessWidget {
+class SpeakerStrip extends StatefulWidget {
   const SpeakerStrip({super.key, required this.job, required this.document});
   final TranscriptionJob job;
   final TranscriptDocument document;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-    height: 56,
-    child: ListView.separated(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-      scrollDirection: Axis.horizontal,
-      itemCount: document.speakers.length,
-      separatorBuilder: (_, __) => const SizedBox(width: 8),
-      itemBuilder: (context, index) {
-        final speaker = document.speakers[index];
-        return ActionChip(
-          avatarBoxConstraints: const BoxConstraints.tightFor(
-            width: 18,
-            height: 18,
-          ),
-          avatar: Container(
-            key: ValueKey('speaker-avatar-${speaker.id}'),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            child: Text(
-              '${index + 1}',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onPrimary,
-                fontWeight: FontWeight.w700,
-                height: 1,
+  State<SpeakerStrip> createState() => _SpeakerStripState();
+}
+
+class _SpeakerStripState extends State<SpeakerStrip> {
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Listener(
+    onPointerSignal: (event) {
+      if (event is! PointerScrollEvent ||
+          event.scrollDelta.dx != 0 ||
+          !_scroll.hasClients) {
+        return;
+      }
+      final position = _scroll.position;
+      _scroll.jumpTo(
+        (position.pixels + event.scrollDelta.dy).clamp(
+          position.minScrollExtent,
+          position.maxScrollExtent,
+        ),
+      );
+    },
+    child: SizedBox(
+      height: 56,
+      child: Scrollbar(
+        controller: _scroll,
+        scrollbarOrientation: ScrollbarOrientation.bottom,
+        interactive: true,
+        child: ListView.separated(
+          key: const Key('speaker-strip-scroll'),
+          controller: _scroll,
+          primary: false,
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          scrollDirection: Axis.horizontal,
+          itemCount: widget.document.speakers.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 8),
+          itemBuilder: (context, index) {
+            final speaker = widget.document.speakers[index];
+            return ActionChip(
+              avatarBoxConstraints: const BoxConstraints.tightFor(
+                width: 18,
+                height: 18,
               ),
-            ),
-          ),
-          label: Text(context.strings.speakerName(speaker.name)),
-          onPressed: () => _rename(context, speaker),
-        );
-      },
+              avatar: Container(
+                key: ValueKey('speaker-avatar-${speaker.id}'),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                child: Text(
+                  '${index + 1}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onPrimary,
+                    fontWeight: FontWeight.w700,
+                    height: 1,
+                  ),
+                ),
+              ),
+              label: Text(context.strings.speakerName(speaker.name)),
+              onPressed: () => _rename(context, speaker),
+            );
+          },
+        ),
+      ),
     ),
   );
 
@@ -595,7 +2238,7 @@ class SpeakerStrip extends StatelessWidget {
     );
     if (value != null && value.trim().isNotEmpty && context.mounted) {
       await context.read<AppController>().renameSpeaker(
-        job.id,
+        widget.job.id,
         speaker.id,
         value,
       );
@@ -653,96 +2296,563 @@ class _RenameSpeakerDialogState extends State<_RenameSpeakerDialog> {
   );
 }
 
-class _SegmentEditor extends StatelessWidget {
-  const _SegmentEditor({
+class TranscriptSegmentEditor extends StatefulWidget {
+  const TranscriptSegmentEditor({
     super.key,
     required this.segment,
+    required this.tokens,
+    required this.positionMs,
+    required this.isCurrent,
     required this.query,
     required this.speakerName,
     required this.showSpeaker,
     required this.showTimestamp,
+    required this.isEditing,
     required this.onSeek,
-    required this.onChanged,
+    required this.onEdit,
+    required this.onCancel,
+    required this.onSave,
   });
 
   final TranscriptSegment segment;
+  final List<TranscriptToken> tokens;
+  final int positionMs;
+  final bool isCurrent;
   final String query;
   final String speakerName;
   final bool showSpeaker;
   final bool showTimestamp;
+  final bool isEditing;
   final VoidCallback onSeek;
-  final ValueChanged<String> onChanged;
+  final VoidCallback onEdit;
+  final VoidCallback onCancel;
+  final Future<void> Function(String text) onSave;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-    ),
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (showTimestamp)
-            TextButton(
-              onPressed: onSeek,
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 7),
-              ),
-              child: Text(formatClock(segment.startMs)),
-            )
-          else
-            IconButton(
-              tooltip: formatClock(segment.startMs),
-              onPressed: onSeek,
-              icon: const Icon(Icons.play_circle_outline_rounded, size: 20),
-            ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (showSpeaker && speakerName.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4, bottom: 4),
-                    child: SearchHighlightedText(
-                      text: speakerName,
-                      query: query,
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+  State<TranscriptSegmentEditor> createState() =>
+      _TranscriptSegmentEditorState();
+}
+
+class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
+  late final TextEditingController _draft;
+  late final FocusNode _fieldFocus;
+  bool _hovered = false;
+  bool _actionFocused = false;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _draft = TextEditingController(text: widget.segment.text);
+    _fieldFocus = FocusNode();
+    if (widget.isEditing) _focusEditor();
+  }
+
+  @override
+  void didUpdateWidget(covariant TranscriptSegmentEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.isEditing && widget.segment.text != _draft.text) {
+      _draft.text = widget.segment.text;
+    }
+    if (widget.isEditing && !oldWidget.isEditing) {
+      _draft.text = widget.segment.text;
+      _draft.selection = TextSelection.collapsed(offset: _draft.text.length);
+      _focusEditor();
+    }
+    if (!widget.isEditing && oldWidget.isEditing) {
+      _draft.text = widget.segment.text;
+    }
+  }
+
+  void _focusEditor() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && widget.isEditing) _fieldFocus.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _draft.dispose();
+    _fieldFocus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    await widget.onSave(_draft.text);
+    if (mounted) setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: DecoratedBox(
+        key: ValueKey('segment-card-${widget.segment.id}'),
+        decoration: BoxDecoration(
+          color: widget.isEditing ? colors.surfaceContainerLow : null,
+          borderRadius: BorderRadius.circular(12),
+          border: widget.isEditing
+              ? Border.all(color: colors.outlineVariant)
+              : null,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 6, 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (widget.showTimestamp)
+                Padding(
+                  padding: EdgeInsets.only(
+                    top: widget.showSpeaker && widget.speakerName.isNotEmpty
+                        ? 0
+                        : 4,
                   ),
-                if (query.isEmpty)
-                  TextFormField(
-                    initialValue: segment.text,
-                    minLines: 1,
-                    maxLines: null,
-                    onChanged: onChanged,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      filled: false,
-                      contentPadding: EdgeInsets.all(4),
-                      border: InputBorder.none,
+                  child: TextButton(
+                    key: ValueKey('segment-timestamp-${widget.segment.id}'),
+                    onPressed: widget.onSeek,
+                    style: TextButton.styleFrom(
+                      minimumSize: Size.zero,
+                      padding: const EdgeInsets.symmetric(horizontal: 7),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      alignment: Alignment.topCenter,
                     ),
-                  )
-                else
-                  Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: SearchHighlightedText(
-                      text: segment.text,
-                      query: query,
-                      style: Theme.of(context).textTheme.bodyLarge,
-                    ),
+                    child: Text(formatClock(widget.segment.startMs)),
                   ),
-              ],
+                )
+              else
+                IconButton(
+                  tooltip: formatClock(widget.segment.startMs),
+                  onPressed: widget.onSeek,
+                  icon: const Icon(Icons.play_circle_outline_rounded, size: 20),
+                ),
+              Expanded(child: _buildContent(context)),
+              const SizedBox(width: 4),
+              _buildActions(context),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      if (widget.showSpeaker && widget.speakerName.isNotEmpty)
+        Padding(
+          key: ValueKey('segment-speaker-${widget.segment.id}'),
+          padding: const EdgeInsets.only(left: 4, bottom: 4),
+          child: SearchHighlightedText(
+            text: widget.speakerName,
+            query: widget.query,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: Theme.of(context).colorScheme.primary,
+              fontWeight: FontWeight.w700,
             ),
           ),
+        ),
+      if (widget.isEditing)
+        SelectionContainer.disabled(
+          child: CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.enter, meta: true):
+                  _save,
+              const SingleActivator(LogicalKeyboardKey.enter, control: true):
+                  _save,
+              const SingleActivator(LogicalKeyboardKey.escape): widget.onCancel,
+            },
+            child: TextField(
+              key: ValueKey('segment-editor-${widget.segment.id}'),
+              controller: _draft,
+              focusNode: _fieldFocus,
+              minLines: 1,
+              maxLines: null,
+              keyboardType: TextInputType.multiline,
+              textInputAction: TextInputAction.newline,
+              decoration: const InputDecoration(
+                isDense: true,
+                filled: false,
+                contentPadding: EdgeInsets.all(4),
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+        )
+      else
+        InkWell(
+          key: ValueKey('segment-text-${widget.segment.id}'),
+          onTap: widget.onSeek,
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: widget.query.isEmpty
+                ? PlaybackHighlightedText(
+                    text: widget.segment.text,
+                    tokens: widget.tokens,
+                    positionMs: widget.positionMs,
+                    segmentStartMs: widget.segment.startMs,
+                    segmentEndMs: widget.segment.endMs,
+                    enabled: widget.isCurrent,
+                    style: Theme.of(context).textTheme.bodyLarge,
+                  )
+                : SearchHighlightedText(
+                    text: widget.segment.text,
+                    query: widget.query,
+                    style: Theme.of(context).textTheme.bodyLarge,
+                  ),
+          ),
+        ),
+    ],
+  );
+
+  Widget _buildActions(BuildContext context) {
+    if (widget.isEditing) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            key: ValueKey('segment-cancel-${widget.segment.id}'),
+            tooltip: context.strings.t('cancel'),
+            onPressed: _saving ? null : widget.onCancel,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.close_rounded, size: 18),
+          ),
+          IconButton(
+            key: ValueKey('segment-save-${widget.segment.id}'),
+            tooltip: context.strings.t('save'),
+            onPressed: _saving ? null : _save,
+            visualDensity: VisualDensity.compact,
+            icon: _saving
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.check_rounded, size: 18),
+          ),
         ],
+      );
+    }
+    final visible = _hovered || _actionFocused;
+    return Focus(
+      onFocusChange: (value) => setState(() => _actionFocused = value),
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 120),
+        child: IconButton(
+          key: ValueKey('segment-edit-${widget.segment.id}'),
+          tooltip: context.strings.t('edit'),
+          onPressed: widget.onEdit,
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.edit_outlined, size: 18),
+        ),
       ),
-    ),
+    );
+  }
+}
+
+class PlaybackHighlightedText extends StatelessWidget {
+  const PlaybackHighlightedText({
+    super.key,
+    required this.text,
+    required this.tokens,
+    required this.positionMs,
+    required this.segmentStartMs,
+    required this.segmentEndMs,
+    this.enabled = true,
+    this.style,
+  });
+
+  final String text;
+  final List<TranscriptToken> tokens;
+  final int positionMs;
+  final int segmentStartMs;
+  final int segmentEndMs;
+  final bool enabled;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final currentRange = enabled
+        ? _currentTimedTextRange(
+            text: text,
+            tokens: tokens,
+            positionMs: positionMs,
+            segmentStartMs: segmentStartMs,
+            segmentEndMs: segmentEndMs,
+          )
+        : null;
+    final selectionColor =
+        DefaultSelectionStyle.of(context).selectionColor ??
+        Theme.of(context).colorScheme.primaryContainer;
+    final highlight = TextStyle(backgroundColor: selectionColor);
+    final spans = <InlineSpan>[];
+    if (currentRange == null) {
+      spans.add(TextSpan(text: text));
+    } else {
+      if (currentRange.start > 0) {
+        spans.add(TextSpan(text: text.substring(0, currentRange.start)));
+      }
+      spans.add(
+        TextSpan(
+          text: text.substring(currentRange.start, currentRange.end),
+          style: highlight,
+        ),
+      );
+      if (currentRange.end < text.length) {
+        spans.add(TextSpan(text: text.substring(currentRange.end)));
+      }
+    }
+    return Text.rich(TextSpan(style: style, children: spans));
+  }
+}
+
+TextRange? _currentTimedTextRange({
+  required String text,
+  required List<TranscriptToken> tokens,
+  required int positionMs,
+  required int segmentStartMs,
+  required int segmentEndMs,
+}) {
+  if (text.isEmpty || positionMs < segmentStartMs) return null;
+  if (segmentEndMs > segmentStartMs && positionMs >= segmentEndMs) return null;
+  final timedTokens = tokens
+      .where(
+        (token) =>
+            (token.startMs != 0 || token.endMs != 0) &&
+            token.startMs >= segmentStartMs &&
+            (segmentEndMs <= segmentStartMs || token.startMs < segmentEndMs),
+      )
+      .toList(growable: false);
+  final timedRanges = _alignTokenRanges(text, timedTokens);
+  int? currentIndex;
+  for (
+    var index = 0;
+    index < timedTokens.length && index < timedRanges.length;
+    index++
+  ) {
+    final range = timedRanges[index];
+    if (timedTokens[index].startMs > positionMs) break;
+    if (range != null) currentIndex = index;
+  }
+  if (currentIndex == null) return null;
+
+  var currentRange = _trimTextRange(text, timedRanges[currentIndex]!);
+  if (currentRange.isCollapsed) return null;
+  if (_isPunctuationToken(timedTokens[currentIndex].text)) {
+    TextRange? previousWordRange;
+    for (var index = currentIndex - 1; index >= 0; index--) {
+      final previous = timedRanges[index];
+      if (previous == null) continue;
+      final previousRange = _trimTextRange(text, previous);
+      if (previousRange.isCollapsed) continue;
+      if (_isPunctuationToken(timedTokens[index].text)) continue;
+      previousWordRange = previousRange;
+      break;
+    }
+    if (previousWordRange == null) return null;
+    currentRange = previousWordRange;
+  }
+  final expandedRange = _expandToWholeLatinWord(text, currentRange);
+  final highlightRange = _trimPunctuationEdges(text, expandedRange);
+  return highlightRange.isCollapsed ? null : highlightRange;
+}
+
+TextRange _trimTextRange(String text, TextRange range) {
+  var start = range.start.clamp(0, text.length);
+  var end = range.end.clamp(start, text.length);
+  while (start < end && text.substring(start, start + 1).trim().isEmpty) {
+    start++;
+  }
+  while (end > start && text.substring(end - 1, end).trim().isEmpty) {
+    end--;
+  }
+  return TextRange(start: start, end: end);
+}
+
+bool _isPunctuationToken(String text) {
+  final value = text.trim();
+  return value.isNotEmpty && value.codeUnits.every(_isPunctuationCodeUnit);
+}
+
+TextRange _trimPunctuationEdges(String text, TextRange range) {
+  var start = range.start.clamp(0, text.length);
+  var end = range.end.clamp(start, text.length);
+  while (start < end &&
+      (_isWhitespaceCodeUnit(text.codeUnitAt(start)) ||
+          _isPunctuationCodeUnit(text.codeUnitAt(start)))) {
+    start++;
+  }
+  while (end > start &&
+      (_isWhitespaceCodeUnit(text.codeUnitAt(end - 1)) ||
+          _isPunctuationCodeUnit(text.codeUnitAt(end - 1)))) {
+    end--;
+  }
+  return TextRange(start: start, end: end);
+}
+
+bool _isWhitespaceCodeUnit(int codeUnit) =>
+    String.fromCharCode(codeUnit).trim().isEmpty;
+
+bool _isPunctuationCodeUnit(int codeUnit) =>
+    (codeUnit >= 0x21 && codeUnit <= 0x2f) ||
+    (codeUnit >= 0x3a && codeUnit <= 0x40) ||
+    (codeUnit >= 0x5b && codeUnit <= 0x60) ||
+    (codeUnit >= 0x7b && codeUnit <= 0x7e) ||
+    (codeUnit >= 0x2000 && codeUnit <= 0x206f) ||
+    (codeUnit >= 0x2e00 && codeUnit <= 0x2e7f) ||
+    (codeUnit >= 0x3000 && codeUnit <= 0x303f) ||
+    (codeUnit >= 0xfe10 && codeUnit <= 0xfe1f) ||
+    (codeUnit >= 0xfe30 && codeUnit <= 0xfe4f) ||
+    (codeUnit >= 0xff01 && codeUnit <= 0xff0f) ||
+    (codeUnit >= 0xff1a && codeUnit <= 0xff20) ||
+    (codeUnit >= 0xff3b && codeUnit <= 0xff40) ||
+    (codeUnit >= 0xff5b && codeUnit <= 0xff65);
+
+TextRange _expandToWholeLatinWord(String text, TextRange range) {
+  final selected = text.substring(range.start, range.end);
+  if (!selected.codeUnits.any(_isLatinLetterOrDigit)) return range;
+  var start = range.start;
+  var end = range.end;
+  while (start > 0 && _isLatinWordCodeUnit(text.codeUnitAt(start - 1))) {
+    start--;
+  }
+  while (end < text.length && _isLatinWordCodeUnit(text.codeUnitAt(end))) {
+    end++;
+  }
+  return TextRange(start: start, end: end);
+}
+
+bool _isLatinLetterOrDigit(int codeUnit) =>
+    (codeUnit >= 0x30 && codeUnit <= 0x39) ||
+    (codeUnit >= 0x41 && codeUnit <= 0x5a) ||
+    (codeUnit >= 0x61 && codeUnit <= 0x7a) ||
+    (codeUnit >= 0x00c0 && codeUnit <= 0x024f);
+
+bool _isLatinWordCodeUnit(int codeUnit) =>
+    _isLatinLetterOrDigit(codeUnit) ||
+    (codeUnit >= 0x0300 && codeUnit <= 0x036f) ||
+    codeUnit == 0x27 ||
+    codeUnit == 0x2019 ||
+    codeUnit == 0x2d;
+
+List<TextRange?> _alignTokenRanges(String text, List<TranscriptToken> tokens) {
+  if (tokens.isEmpty) return const [];
+  final raw = StringBuffer();
+  final rawRanges = <TextRange>[];
+  for (final token in tokens) {
+    final start = raw.length;
+    raw.write(token.text);
+    rawRanges.add(TextRange(start: start, end: raw.length));
+  }
+  final joined = raw.toString();
+  final leading = joined.length - joined.trimLeft().length;
+  final trailing = joined.trimRight().length;
+  final normalized = joined.substring(leading, trailing);
+  if (normalized == text) {
+    return [
+      for (final range in rawRanges)
+        TextRange(
+          start: (range.start - leading).clamp(0, text.length),
+          end: (range.end - leading).clamp(0, text.length),
+        ),
+    ];
+  }
+
+  final normalizedText = text.toLowerCase();
+  final result = <TextRange?>[];
+  var cursor = 0;
+  for (final token in tokens) {
+    final part = token.text.trim();
+    if (part.isEmpty) {
+      result.add(null);
+      continue;
+    }
+    final match = normalizedText.indexOf(part.toLowerCase(), cursor);
+    if (match < 0) {
+      result.add(null);
+      continue;
+    }
+    final end = match + part.length;
+    result.add(TextRange(start: match, end: end));
+    cursor = end;
+  }
+  return result;
+}
+
+int? currentTranscriptSegmentIndex(
+  List<TranscriptSegment> segments,
+  int positionMs,
+) {
+  if (segments.isEmpty || positionMs < segments.first.startMs) return null;
+  var low = 0;
+  var high = segments.length - 1;
+  while (low <= high) {
+    final middle = (low + high) >> 1;
+    if (segments[middle].startMs <= positionMs) {
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return high;
+}
+
+String? fullscreenTranscriptSubtitle(
+  List<TranscriptSegment> segments,
+  int positionMs,
+  TranslationViewMode viewMode,
+) {
+  final index = currentTranscriptSegmentIndex(segments, positionMs);
+  if (index == null) return null;
+  final segment = segments[index];
+  if (positionMs < segment.startMs || positionMs >= segment.endMs) return null;
+
+  final original = segment.text.trim();
+  final translated = segment.translatedText?.trim() ?? '';
+  final lines = switch (viewMode) {
+    TranslationViewMode.original => [original],
+    TranslationViewMode.translated => [
+      translated.isNotEmpty ? translated : original,
+    ],
+    TranslationViewMode.bilingual => [original, translated],
+  }.where((line) => line.isNotEmpty).toList();
+  return lines.isEmpty ? null : lines.join('\n');
+}
+
+TextRange? fullscreenTranscriptWordRange(
+  TranscriptDocument document,
+  int positionMs,
+  TranslationViewMode viewMode,
+) {
+  final index = currentTranscriptSegmentIndex(document.segments, positionMs);
+  if (index == null) return null;
+  final segment = document.segments[index];
+  if (positionMs < segment.startMs || positionMs >= segment.endMs) return null;
+
+  final original = segment.text.trim();
+  final translated = segment.translatedText?.trim() ?? '';
+  final originalIsVisible = switch (viewMode) {
+    TranslationViewMode.original => original.isNotEmpty,
+    TranslationViewMode.translated => translated.isEmpty && original.isNotEmpty,
+    TranslationViewMode.bilingual => original.isNotEmpty,
+  };
+  if (!originalIsVisible) return null;
+
+  final tokens = document.tokens
+      .where(
+        (token) =>
+            token.startMs >= segment.startMs && token.startMs < segment.endMs,
+      )
+      .toList(growable: false);
+  return _currentTimedTextRange(
+    text: original,
+    tokens: tokens,
+    positionMs: positionMs,
+    segmentStartMs: segment.startMs,
+    segmentEndMs: segment.endMs,
   );
 }
 

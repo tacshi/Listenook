@@ -4,10 +4,35 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/data/openai_translation_service.dart';
+import 'package:meow_stt/data/process_media_service.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
 import 'package:meow_stt/state/app_controller.dart';
 
 void main() {
+  test(
+    'initialization checks credential metadata without reading secrets',
+    () async {
+      final credentials = _AvailabilityCredentials();
+      final translationCredentials = _AvailabilityTranslationCredentials();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        credentials: credentials,
+        translationCredentials: translationCredentials,
+      );
+
+      await controller.initialize();
+
+      expect(controller.keyConfigured, isTrue);
+      expect(controller.translationKeyConfigured, isTrue);
+      expect(credentials.availabilityChecks, 1);
+      expect(translationCredentials.availabilityChecks, 1);
+      expect(credentials.secretReads, 0);
+      expect(translationCredentials.secretReads, 0);
+    },
+  );
+
   test(
     'worker pool respects configured concurrency and persists completion',
     () async {
@@ -129,8 +154,16 @@ void main() {
       final jobs = _Jobs();
       final controller = _controller(jobs: jobs, soniox: _Soniox());
       await controller.initialize();
+      await controller.updateSessionOptions(
+        const TranscriptionOptions(
+          languageHints: ['zh'],
+          contextTerms: ['MeowSTT'],
+        ),
+      );
       await controller.addSources([completedFile.path]);
       await _waitFor(() => controller.readyCount == 1);
+      expect(controller.workspaceJobs.single.options.languageHints, ['zh']);
+      expect(controller.workspaceJobs.single.options.contextTerms, ['MeowSTT']);
       await controller.startReady();
       final completed = controller.workspaceJobs.single;
 
@@ -143,10 +176,14 @@ void main() {
       expect(controller.workspaceJobs, isEmpty);
       expect(controller.allJobs.map((job) => job.id), [completed.id]);
       expect(jobs.saved.keys, [completed.id]);
+      expect(controller.sessionOptions.languageHints, isEmpty);
+      expect(controller.sessionOptions.contextTerms, isEmpty);
 
       await controller.addSources([nextFile.path]);
       await _waitFor(() => controller.readyCount == 1);
       expect(controller.workspaceJobs.single.batchId, isNot(completed.batchId));
+      expect(controller.workspaceJobs.single.options.languageHints, isEmpty);
+      expect(controller.workspaceJobs.single.options.contextTerms, isEmpty);
     },
   );
 
@@ -203,17 +240,366 @@ void main() {
       expect(jobs.saved['legacy']!.document!.segments, hasLength(1));
     },
   );
+
+  test(
+    'relinking a completed transcript preserves its completed state',
+    () async {
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'completed',
+          batchId: 'batch',
+          sourcePath: '/missing/original.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          progress: const JobProgress(stage: 'completed', fraction: 1),
+          document: _document(now),
+          cleanupState: CleanupState.complete,
+        ),
+      ]);
+      final controller = _controller(jobs: jobs, soniox: _Soniox());
+      await controller.initialize();
+      controller.reopen('completed');
+
+      final error = await controller.relink('completed', '/replacement.wav');
+
+      expect(error, isNull);
+      final linked = controller.selectedJob!;
+      expect(linked.status, JobStatus.completed);
+      expect(linked.sourcePath, '/replacement.wav');
+      expect(linked.document, isNotNull);
+      expect(linked.cleanupState, CleanupState.complete);
+      expect(linked.metadata?.durationMs, 1000);
+      expect(controller.workspaceJobs.single.id, 'completed');
+      expect(controller.selectedJobId, 'completed');
+    },
+  );
+
+  test('an invalid relink leaves the completed transcript unchanged', () async {
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'completed',
+        batchId: 'batch',
+        sourcePath: '/missing/original.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        document: _document(now),
+      ),
+    ]);
+    final controller = _controller(
+      jobs: jobs,
+      soniox: _Soniox(),
+      media: _FailingMedia(),
+    );
+    await controller.initialize();
+
+    final error = await controller.relink('completed', '/invalid.wav');
+
+    expect(error, 'invalid_media');
+    expect(controller.allJobs.single.sourcePath, '/missing/original.wav');
+    expect(controller.allJobs.single.status, JobStatus.completed);
+    expect(controller.allJobs.single.document, isNotNull);
+  });
+
+  test(
+    'translation failure never changes completed transcription state',
+    () async {
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'completed',
+          batchId: 'batch',
+          sourcePath: '/missing/original.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          document: _document(now),
+        ),
+      ]);
+      final settings = _Settings(
+        const AppSettings(
+          translationSettings: TranslationSettings(
+            provider: TranslationProviderTemplate.openAi,
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'translation-model',
+            targetLanguage: 'zh-Hans',
+          ),
+        ),
+      );
+      final controller = _controller(
+        jobs: jobs,
+        soniox: _Soniox(),
+        settings: settings,
+        translationCredentials: _TranslationCredentials(),
+        translationService: _FailingTranslation(),
+      );
+      await controller.initialize();
+
+      await controller.translateJob('completed', targetLanguage: 'zh-Hans');
+
+      final result = controller.allJobs.single;
+      expect(result.status, JobStatus.completed);
+      expect(result.document, isNotNull);
+      expect(result.translationState.status, TranslationStatus.failed);
+      expect(result.translationState.errorCode, 'translation_rate_limit');
+    },
+  );
+
+  test(
+    'changed remote endpoint needs a new key and local save clears cloud key',
+    () async {
+      final credentials = _TranslationCredentials();
+      final settings = _Settings(
+        const AppSettings(
+          translationSettings: TranslationSettings(
+            provider: TranslationProviderTemplate.openAi,
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'old-model',
+          ),
+        ),
+      );
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        settings: settings,
+        translationCredentials: credentials,
+        translationService: _FailingTranslation(),
+      );
+      await controller.initialize();
+
+      final changedEndpoint = await controller.testTranslationConfiguration(
+        const TranslationSettings(
+          provider: TranslationProviderTemplate.deepSeek,
+          baseUrl: 'https://api.deepseek.com/v1',
+        ),
+      );
+      expect(changedEndpoint.errorCode, 'translation_missing_credentials');
+      expect(credentials.value, 'translation-key');
+
+      final saveError = await controller.saveTranslationConfiguration(
+        const TranslationSettings(
+          provider: TranslationProviderTemplate.ollama,
+          baseUrl: 'http://localhost:11434/v1',
+          model: 'local-model',
+        ),
+      );
+      expect(saveError, isNull);
+      expect(credentials.value, isNull);
+      expect(
+        settings.value.translationSettings.provider,
+        TranslationProviderTemplate.ollama,
+      );
+    },
+  );
+
+  test('editing source invalidates only that segment translation', () async {
+    final now = DateTime.now().toUtc();
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'one',
+          startMs: 0,
+          endMs: 500,
+          text: 'One.',
+          translatedText: '一',
+        ),
+        TranscriptSegment(
+          id: 'two',
+          startMs: 500,
+          endMs: 1000,
+          text: 'Two.',
+          translatedText: '二',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: now,
+    );
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'completed',
+        batchId: 'batch',
+        sourcePath: '/missing/original.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        document: document,
+        translationState: const TranslationState(
+          status: TranslationStatus.completed,
+          targetLanguage: 'zh-Hans',
+          completedSegments: 2,
+          totalSegments: 2,
+        ),
+      ),
+    ]);
+    final controller = _controller(jobs: jobs, soniox: _Soniox());
+    await controller.initialize();
+
+    await controller.updateSegment('completed', 'one', 'Edited one');
+
+    final result = controller.allJobs.single;
+    expect(result.document!.segments.first.translatedText, isNull);
+    expect(result.document!.segments.last.translatedText, '二');
+    expect(result.translationState.status, TranslationStatus.partial);
+    expect(result.translationState.completedSegments, 1);
+    expect(result.status, JobStatus.completed);
+  });
+
+  test(
+    'retry ignores empty transcript segments and completes partial job',
+    () async {
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'completed',
+          batchId: 'batch',
+          sourcePath: '/missing/original.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: const [
+              TranscriptSegment(
+                id: 'translated',
+                startMs: 0,
+                endMs: 500,
+                text: 'Already translated.',
+                translatedText: '已翻译。',
+              ),
+              TranscriptSegment(
+                id: 'missing',
+                startMs: 500,
+                endMs: 1000,
+                text: '',
+              ),
+            ],
+            speakers: const [],
+            updatedAt: now,
+          ),
+          translationState: const TranslationState(
+            status: TranslationStatus.partial,
+            targetLanguage: 'zh-Hans',
+            completedSegments: 1,
+            totalSegments: 2,
+          ),
+        ),
+      ]);
+      final translation = _SuccessfulTranslation();
+      final controller = _controller(
+        jobs: jobs,
+        soniox: _Soniox(),
+        settings: _Settings(
+          const AppSettings(
+            translationSettings: TranslationSettings(
+              provider: TranslationProviderTemplate.openAi,
+              baseUrl: 'https://api.openai.com/v1',
+              model: 'translation-model',
+              targetLanguage: 'zh-Hans',
+            ),
+          ),
+        ),
+        translationCredentials: _TranslationCredentials(),
+        translationService: translation,
+      );
+      await controller.initialize();
+
+      await controller.retryTranslation('completed');
+
+      final result = controller.allJobs.single;
+      expect(translation.segmentIds, isEmpty);
+      expect(result.translationState.status, TranslationStatus.completed);
+      expect(result.translationState.completedSegments, 1);
+      expect(result.translationState.totalSegments, 1);
+      expect(result.document!.segments, hasLength(1));
+      expect(result.document!.segments.single.translatedText, '已翻译。');
+    },
+  );
+
+  test(
+    'clear inactive history retains active work and repairs selection',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('meow-clear-');
+      addTearDown(() => directory.delete(recursive: true));
+      final activeFile = File('${directory.path}/active.wav');
+      await activeFile.writeAsBytes([1]);
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'history',
+          batchId: 'old-batch',
+          sourcePath: '/missing/history.wav',
+          createdAt: now.subtract(const Duration(days: 1)),
+          updatedAt: now,
+          status: JobStatus.completed,
+          document: _document(now),
+        ),
+      ]);
+      final media = _Media();
+      final controller = _controller(
+        jobs: jobs,
+        soniox: _Soniox(uploadDelay: const Duration(milliseconds: 100)),
+        media: media,
+      );
+      await controller.initialize();
+      controller.reopen('history');
+      await controller.addSources([activeFile.path]);
+      await _waitFor(() => controller.readyCount == 1);
+      final activeId = controller.workspaceJobs.last.id;
+      final run = controller.startReady();
+      await _waitFor(
+        () => controller.workspaceJobs.last.status == JobStatus.uploading,
+      );
+
+      expect(controller.inactiveHistoryCount, 1);
+      await controller.clearInactiveHistory();
+
+      expect(jobs.saved.containsKey('history'), isFalse);
+      expect(media.deletedGeneratedMedia, contains('history'));
+      expect(media.retainedGeneratedMedia, {activeId});
+      expect(controller.workspaceJobs.single.id, activeId);
+      expect(controller.selectedJobId, activeId);
+      expect(controller.workspaceJobs.single.status, JobStatus.uploading);
+      await run;
+    },
+  );
 }
 
-AppController _controller({required _Jobs jobs, required _Soniox soniox}) =>
-    AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: jobs,
-      mediaService: _Media(),
-      sonioxClient: soniox,
-      exporter: const DefaultTranscriptExporter(),
-    );
+TranscriptDocument _document(DateTime now) => TranscriptDocument(
+  tokens: const [],
+  segments: const [
+    TranscriptSegment(
+      id: 'segment',
+      startMs: 0,
+      endMs: 1000,
+      text: 'Transcript',
+    ),
+  ],
+  speakers: const [],
+  updatedAt: now,
+);
+
+AppController _controller({
+  required _Jobs jobs,
+  required _Soniox soniox,
+  CredentialStore? credentials,
+  MediaService? media,
+  SettingsRepository? settings,
+  TranslationCredentialStore? translationCredentials,
+  TranslationService? translationService,
+}) => AppController(
+  credentialStore: credentials ?? _Credentials(),
+  settingsRepository: settings ?? _Settings(),
+  jobRepository: jobs,
+  mediaService: media ?? _Media(),
+  sonioxClient: soniox,
+  exporter: const DefaultTranscriptExporter(),
+  translationCredentialStore: translationCredentials,
+  translationService: translationService,
+);
 
 Future<void> _waitFor(bool Function() condition) async {
   final deadline = DateTime.now().add(const Duration(seconds: 3));
@@ -236,14 +622,135 @@ class _Credentials implements CredentialStore {
   Future<void> writeApiKey(String key) async {}
 }
 
+class _AvailabilityCredentials
+    implements CredentialStore, CredentialAvailabilityStore {
+  int availabilityChecks = 0;
+  int secretReads = 0;
+
+  @override
+  Future<bool> hasApiKey() async {
+    availabilityChecks++;
+    return true;
+  }
+
+  @override
+  Future<String?> readApiKey() async {
+    secretReads++;
+    return 'configured';
+  }
+
+  @override
+  Future<void> writeApiKey(String key) async {}
+
+  @override
+  Future<void> deleteApiKey() async {}
+}
+
 class _Settings implements SettingsRepository {
-  AppSettings value = const AppSettings(concurrency: 2);
+  _Settings([this.value = const AppSettings(concurrency: 2)]);
+
+  AppSettings value;
 
   @override
   Future<AppSettings> load() async => value;
 
   @override
   Future<void> save(AppSettings settings) async => value = settings;
+}
+
+class _TranslationCredentials implements TranslationCredentialStore {
+  String? value = 'translation-key';
+
+  @override
+  Future<void> deleteApiKey() async => value = null;
+
+  @override
+  Future<String?> readApiKey() async => value;
+
+  @override
+  Future<void> writeApiKey(String key) async => value = key;
+}
+
+class _AvailabilityTranslationCredentials
+    implements TranslationCredentialStore, CredentialAvailabilityStore {
+  int availabilityChecks = 0;
+  int secretReads = 0;
+
+  @override
+  Future<bool> hasApiKey() async {
+    availabilityChecks++;
+    return true;
+  }
+
+  @override
+  Future<String?> readApiKey() async {
+    secretReads++;
+    return 'translation-key';
+  }
+
+  @override
+  Future<void> writeApiKey(String key) async {}
+
+  @override
+  Future<void> deleteApiKey() async {}
+}
+
+class _FailingTranslation implements TranslationService {
+  @override
+  Future<List<String>> listModels(
+    TranslationSettings settings, {
+    String? candidateApiKey,
+  }) async => const [];
+
+  @override
+  Future<void> translate({
+    required TranslationSettings settings,
+    required String targetLanguage,
+    required List<TranscriptSegment> segments,
+    required Future<void> Function(
+      Map<String, String> translatedBySegmentId,
+      int completedSegments,
+      int totalSegments,
+    )
+    onBatch,
+    CancelCheck? shouldCancel,
+  }) async {
+    throw const TranslationException('translation_rate_limit');
+  }
+}
+
+class _SuccessfulTranslation implements TranslationService {
+  final segmentIds = <String>[];
+
+  @override
+  Future<List<String>> listModels(
+    TranslationSettings settings, {
+    String? candidateApiKey,
+  }) async => const [];
+
+  @override
+  Future<void> translate({
+    required TranslationSettings settings,
+    required String targetLanguage,
+    required List<TranscriptSegment> segments,
+    required Future<void> Function(
+      Map<String, String> translatedBySegmentId,
+      int completedSegments,
+      int totalSegments,
+    )
+    onBatch,
+    CancelCheck? shouldCancel,
+  }) async {
+    segmentIds.addAll(segments.map((segment) => segment.id));
+    await onBatch(
+      {
+        for (final segment in segments)
+          segment.id: segment.text.trim().isEmpty ? '' : '补充翻译。',
+      },
+      segments.length,
+      segments.length,
+    );
+  }
 }
 
 class _Jobs implements JobRepository {
@@ -266,11 +773,22 @@ class _Jobs implements JobRepository {
 }
 
 class _Media implements MediaService {
+  final deletedGeneratedMedia = <String>[];
+  Set<String>? retainedGeneratedMedia;
+
   @override
   bool canUploadDirectly(String path, MediaMetadata metadata) => true;
 
   @override
   Future<void> deleteTemporary(String path) async {}
+
+  @override
+  Future<void> deleteGeneratedMedia(String cacheKey) async =>
+      deletedGeneratedMedia.add(cacheKey);
+
+  @override
+  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async =>
+      retainedGeneratedMedia = retainedCacheKeys;
 
   @override
   Future<MediaDiagnostics> diagnostics() async =>
@@ -296,6 +814,12 @@ class _Media implements MediaService {
 
   @override
   Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
+}
+
+class _FailingMedia extends _Media {
+  @override
+  Future<MediaMetadata> inspect(String sourcePath) =>
+      throw const MediaException('invalid_media', 'Invalid media.');
 }
 
 class _Soniox implements SonioxClient {

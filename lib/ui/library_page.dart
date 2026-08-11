@@ -1,4 +1,3 @@
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -9,7 +8,9 @@ import '../state/app_controller.dart';
 import 'workspace_page.dart';
 
 class LibraryPage extends StatefulWidget {
-  const LibraryPage({super.key});
+  const LibraryPage({super.key, this.sidebarToggle});
+
+  final Widget? sidebarToggle;
 
   @override
   State<LibraryPage> createState() => _LibraryPageState();
@@ -26,17 +27,25 @@ class _LibraryPageState extends State<LibraryPage> {
     final jobs = controller.allJobs.where(_matches).toList();
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(28, 22, 28, 24),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              context.strings.t('library'),
-              style: Theme.of(
-                context,
-              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
+            Row(
+              children: [
+                if (widget.sidebarToggle case final toggle?) ...[
+                  toggle,
+                  const SizedBox(width: 8),
+                ],
+                Text(
+                  context.strings.t('library'),
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
@@ -70,33 +79,50 @@ class _LibraryPageState extends State<LibraryPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ChoiceChip(
-                  label: Text(context.strings.t('all')),
-                  selected: _filter == 'all',
-                  onSelected: (_) => setState(() => _filter = 'all'),
+                Expanded(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: Text(context.strings.t('all')),
+                        selected: _filter == 'all',
+                        onSelected: (_) => setState(() => _filter = 'all'),
+                      ),
+                      ChoiceChip(
+                        label: Text(context.strings.t('last_7_days')),
+                        selected: _filter == 'recent',
+                        onSelected: (_) => setState(() => _filter = 'recent'),
+                      ),
+                      ChoiceChip(
+                        label: Text(context.strings.t('under_30m')),
+                        selected: _filter == 'short',
+                        onSelected: (_) => setState(() => _filter = 'short'),
+                      ),
+                      ChoiceChip(
+                        label: Text(context.strings.t('over_30m')),
+                        selected: _filter == 'long',
+                        onSelected: (_) => setState(() => _filter = 'long'),
+                      ),
+                    ],
+                  ),
                 ),
-                ChoiceChip(
-                  label: Text(context.strings.t('last_7_days')),
-                  selected: _filter == 'recent',
-                  onSelected: (_) => setState(() => _filter = 'recent'),
-                ),
-                ChoiceChip(
-                  label: Text(context.strings.t('under_30m')),
-                  selected: _filter == 'short',
-                  onSelected: (_) => setState(() => _filter = 'short'),
-                ),
-                ChoiceChip(
-                  label: Text(context.strings.t('over_30m')),
-                  selected: _filter == 'long',
-                  onSelected: (_) => setState(() => _filter = 'long'),
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  key: const Key('clear-all-history'),
+                  onPressed: controller.inactiveHistoryCount == 0
+                      ? null
+                      : () => _confirmClearAll(context, controller),
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  label: Text(context.strings.t('clear_all')),
                 ),
               ],
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
             Expanded(
               child: jobs.isEmpty
                   ? Center(
@@ -115,7 +141,7 @@ class _LibraryPageState extends State<LibraryPage> {
                     )
                   : ListView.separated(
                       itemCount: jobs.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (context, index) =>
                           _HistoryCard(job: jobs[index]),
                     ),
@@ -124,6 +150,41 @@ class _LibraryPageState extends State<LibraryPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _confirmClearAll(
+    BuildContext context,
+    AppController controller,
+  ) async {
+    final count = controller.inactiveHistoryCount;
+    if (count == 0) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.strings.t('clear_history_title')),
+        content: Text(
+          context.strings
+              .t('clear_history_body')
+              .replaceFirst('{count}', '$count'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(context.strings.t('cancel')),
+          ),
+          FilledButton(
+            key: const Key('confirm-clear-all-history'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(context.strings.t('clear_all')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await controller.clearInactiveHistory();
   }
 
   bool _matches(TranscriptionJob job) {
@@ -161,7 +222,7 @@ class _HistoryCard extends StatelessWidget {
     final controller = context.read<AppController>();
     return Card(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         child: Row(
           children: [
             CircleAvatar(
@@ -172,7 +233,7 @@ class _HistoryCard extends StatelessWidget {
                     : Icons.audio_file_outlined,
               ),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -193,10 +254,7 @@ class _HistoryCard extends StatelessWidget {
             ),
             if (job.status == JobStatus.missingSource)
               TextButton.icon(
-                onPressed: () async {
-                  final file = await openFile();
-                  if (file != null) await controller.relink(job.id, file.path);
-                },
+                onPressed: () => chooseAndRelink(context, job.id),
                 icon: const Icon(Icons.link_rounded),
                 label: Text(context.strings.t('relink')),
               ),

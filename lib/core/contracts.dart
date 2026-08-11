@@ -13,6 +13,38 @@ abstract interface class CredentialStore {
   Future<void> deleteApiKey();
 }
 
+abstract interface class TranslationCredentialStore {
+  Future<String?> readApiKey();
+  Future<void> writeApiKey(String key);
+  Future<void> deleteApiKey();
+}
+
+/// Allows startup code to check credential availability without reading the
+/// secret itself. On macOS this avoids triggering Keychain authorization UI.
+abstract interface class CredentialAvailabilityStore {
+  Future<bool> hasApiKey();
+}
+
+abstract interface class TranslationService {
+  Future<List<String>> listModels(
+    TranslationSettings settings, {
+    String? candidateApiKey,
+  });
+
+  Future<void> translate({
+    required TranslationSettings settings,
+    required String targetLanguage,
+    required List<TranscriptSegment> segments,
+    required Future<void> Function(
+      Map<String, String> translatedBySegmentId,
+      int completedSegments,
+      int totalSegments,
+    )
+    onBatch,
+    CancelCheck? shouldCancel,
+  });
+}
+
 abstract interface class SettingsRepository {
   Future<AppSettings> load();
   Future<void> save(AppSettings settings);
@@ -36,6 +68,8 @@ abstract interface class MediaService {
   });
   Future<String> renderWaveform(String sourcePath, String cacheKey);
   Future<void> deleteTemporary(String path);
+  Future<void> deleteGeneratedMedia(String cacheKey);
+  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys);
   Future<MediaDiagnostics> diagnostics();
 }
 

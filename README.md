@@ -3,7 +3,8 @@
 MeowSTT is a batch-first Soniox transcription app for macOS and Windows. Drop
 audio, video, or folders; review the queue before spending API credit; then edit
 speaker-aware transcripts beside synchronized playback and export TXT,
-Markdown, SRT, or WebVTT.
+Markdown, SRT, or WebVTT. Transcripts can optionally be translated through one
+user-configured OpenAI-compatible text endpoint.
 
 The package name is `meow_stt`. Its permanent desktop identity is
 `app.meowstt.desktop`.
@@ -23,16 +24,26 @@ The package name is `meow_stt`. Its permanent desktop identity is
 - A local, searchable library; source relinking; editable segments and speaker
   names; video/audio playback; timestamp seeking; transcript search; clipboard
   copy; and batch re-export.
+- Manual or optional automatic LLM translation with editable bilingual review,
+  partial-result recovery, retry-missing and per-segment retranslation, and
+  Original/Translated/Bilingual copy and exports.
+- A single editable translation configuration with VoiceTale-style provider
+  templates. Custom starts blank; templates only prefill the Base URL, and
+  model selection is enabled after a successful connection test.
 - System/light/dark themes and English/Simplified Chinese localization.
-- Secure Soniox credentials in Keychain/Credential Manager. `SONIOX_API_KEY` is
-  used only as a development fallback when secure storage is empty.
+- Secure Soniox and translation credentials in Keychain/Credential Manager.
+  `SONIOX_API_KEY` is used only as a development fallback for Soniox when secure
+  storage is empty.
 
 ## Privacy model
 
 MeowSTT is BYOK and has no application backend. Starting a job uploads its
-media directly to Soniox. Manifests store paths, small metadata, raw transcript
-tokens, edits, and only the remote IDs owned by that job—never media copies or
-the API key. Cleanup deletes only those owned remote file/transcription IDs.
+media directly to Soniox. Translation is separate and optional: when requested,
+transcript text—not media—is sent to the single OpenAI-compatible endpoint saved
+in Settings. Manifests store paths, small metadata, raw transcript tokens,
+original and translated edits, translation progress, and only the remote IDs
+owned by that job—never media copies or API keys. Cleanup deletes only those
+owned Soniox file/transcription IDs.
 See [PRIVACY.md](PRIVACY.md).
 
 ## Development
@@ -102,13 +113,25 @@ macOS release output contains an `.app.zip` and DMG. Windows debug output
 contains a portable ZIP; Windows release output contains a portable ZIP and
 an Inno Setup `-setup.exe` installer.
 
+macOS debug output remains an uncompressed `.app` bundle under `dist/`.
+
+The macOS build scripts are non-interactive: they do not access Keychain or
+launch the built app. Run the credential and launch checks explicitly when
+needed:
+
+```bash
+flutter test integration_test/secure_credential_store_test.dart -d macos
+scripts/verify-macos-app.sh build/macos/Build/Products/Debug/MeowSTT.app
+```
+
 ## Architecture
 
 UI widgets depend on one Provider/ChangeNotifier controller. The controller
 orchestrates injected contracts for credentials, settings, manifests, media,
-Soniox, playback, and exports. Networking, subprocesses, persistence, and
-formatting live outside the UI. Every job transition is atomically persisted in
-an Application Support job directory, which is the restart-recovery boundary.
+Soniox, OpenAI-compatible text translation, playback, and exports. Networking,
+subprocesses, persistence, and formatting live outside the UI. Every job
+transition is atomically persisted in an Application Support job directory,
+which is the restart-recovery boundary.
 
 ## Third-party software
 

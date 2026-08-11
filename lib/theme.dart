@@ -22,19 +22,24 @@ class MeowTheme {
           ? const Color(0xFF111015)
           : const Color(0xFFF8F6FA),
       fontFamily: '.SF Pro Text',
-      visualDensity: VisualDensity.standard,
+      visualDensity: VisualDensity.compact,
       cardTheme: CardThemeData(
         elevation: 0,
         color: dark
             ? const Color(0xFF1B191F)
             : Colors.white.withValues(alpha: .92),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       inputDecorationTheme: InputDecorationTheme(
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 12,
+        ),
         filled: true,
         fillColor: dark ? const Color(0xFF242127) : const Color(0xFFF1EDF5),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,
         ),
       ),
@@ -47,9 +52,17 @@ class MeowTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          minimumSize: const Size(44, 44),
+          minimumSize: const Size(40, 40),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size(40, 40),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
           ),
         ),
       ),

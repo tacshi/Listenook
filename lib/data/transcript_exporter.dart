@@ -87,7 +87,8 @@ class DefaultTranscriptExporter implements TranscriptExporter {
           if (options.showSpeakers)
             _speakerName(document, segment.speaker, options),
         ].where((part) => part.isNotEmpty).join(' ');
-        return prefix.isEmpty ? segment.text : '$prefix: ${segment.text}';
+        final content = _content(segment, options.contentMode);
+        return prefix.isEmpty ? content : '$prefix: $content';
       })
       .join('\n\n');
 
@@ -116,10 +117,24 @@ class DefaultTranscriptExporter implements TranscriptExporter {
         if (options.showTimestamps) formatClock(segment.startMs),
       ].where((part) => part.isNotEmpty).join(' · ');
       if (labels.isNotEmpty) buffer.writeln('**$labels**');
-      buffer
-        ..writeln()
-        ..writeln(segment.text)
-        ..writeln();
+      buffer.writeln();
+      if (options.contentMode == ExportContentMode.bilingual) {
+        if (segment.translatedText?.trim().isNotEmpty ?? false) {
+          buffer
+            ..writeln(segment.translatedText!.trim())
+            ..writeln()
+            ..writeln('*${segment.text}*')
+            ..writeln();
+        } else {
+          buffer
+            ..writeln(segment.text)
+            ..writeln();
+        }
+      } else {
+        buffer
+          ..writeln(_content(segment, options.contentMode))
+          ..writeln();
+      }
     }
     return buffer.toString().trimRight();
   }
@@ -140,12 +155,24 @@ class DefaultTranscriptExporter implements TranscriptExporter {
       final speaker = options.showSpeakers
           ? _speakerName(document, segment.speaker, options)
           : '';
-      buffer.writeln(
-        speaker.isEmpty ? segment.text : '<v $speaker>${segment.text}',
-      );
+      final content = _content(segment, options.contentMode);
+      buffer.writeln(speaker.isEmpty ? content : '<v $speaker>$content');
       buffer.writeln();
     }
     return buffer.toString().trimRight();
+  }
+
+  String _content(TranscriptSegment segment, ExportContentMode mode) {
+    final translated = segment.translatedText?.trim();
+    return switch (mode) {
+      ExportContentMode.original => segment.text,
+      ExportContentMode.translated =>
+        translated?.isNotEmpty ?? false ? translated! : segment.text,
+      ExportContentMode.bilingual =>
+        translated?.isNotEmpty ?? false
+            ? '$translated\n${segment.text}'
+            : segment.text,
+    };
   }
 
   String _speakerName(

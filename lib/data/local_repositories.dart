@@ -30,7 +30,8 @@ class AppPaths {
   }
 }
 
-class SecureCredentialStore implements CredentialStore {
+class SecureCredentialStore
+    implements CredentialStore, CredentialAvailabilityStore {
   SecureCredentialStore({
     FlutterSecureStorage? storage,
     String storageKey = _defaultKey,
@@ -50,6 +51,22 @@ class SecureCredentialStore implements CredentialStore {
   );
   final FlutterSecureStorage _storage;
   final String _storageKey;
+
+  @override
+  Future<bool> hasApiKey() async {
+    if (await _storage.containsKey(key: _storageKey, mOptions: _options)) {
+      return true;
+    }
+    if (Platform.isMacOS &&
+        await _storage.containsKey(
+          key: _storageKey,
+          mOptions: _legacyOptions,
+        )) {
+      return true;
+    }
+    final fallback = Platform.environment['SONIOX_API_KEY']?.trim();
+    return fallback != null && fallback.isNotEmpty;
+  }
 
   @override
   Future<String?> readApiKey() async {
@@ -83,6 +100,42 @@ class SecureCredentialStore implements CredentialStore {
       _storage.delete(key: _storageKey, mOptions: _options);
 }
 
+class SecureTranslationCredentialStore
+    implements TranslationCredentialStore, CredentialAvailabilityStore {
+  SecureTranslationCredentialStore({FlutterSecureStorage? storage})
+    : _storage = storage ?? const FlutterSecureStorage();
+
+  static const _service = 'app.meowstt.desktop';
+  static const _storageKey =
+      'app.meowstt.desktop.openai_compatible_translation_api_key';
+  static const _options = MacOsOptions(
+    accountName: _service,
+    accessibility: KeychainAccessibility.first_unlock,
+    usesDataProtectionKeychain: false,
+  );
+
+  final FlutterSecureStorage _storage;
+
+  @override
+  Future<bool> hasApiKey() =>
+      _storage.containsKey(key: _storageKey, mOptions: _options);
+
+  @override
+  Future<String?> readApiKey() async {
+    final value = await _storage.read(key: _storageKey, mOptions: _options);
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  @override
+  Future<void> writeApiKey(String key) =>
+      _storage.write(key: _storageKey, value: key.trim(), mOptions: _options);
+
+  @override
+  Future<void> deleteApiKey() =>
+      _storage.delete(key: _storageKey, mOptions: _options);
+}
+
 class JsonSettingsRepository implements SettingsRepository {
   JsonSettingsRepository(this.paths);
   final AppPaths paths;
@@ -100,7 +153,7 @@ class JsonSettingsRepository implements SettingsRepository {
 
   @override
   Future<void> save(AppSettings settings) =>
-      _atomicWrite(paths.settings, jsonEncode(settings.toJson()));
+      _atomicFileWriter.write(paths.settings, jsonEncode(settings.toJson()));
 }
 
 class LocalJobRepository implements JobRepository {
@@ -133,7 +186,7 @@ class LocalJobRepository implements JobRepository {
   Future<void> save(TranscriptionJob job) async {
     final directory = Directory(p.join(paths.jobs.path, _safeId(job.id)));
     await directory.create(recursive: true);
-    await _atomicWrite(
+    await _atomicFileWriter.write(
       File(p.join(directory.path, 'manifest.json')),
       job.toJsonString(),
     );
@@ -153,10 +206,38 @@ class LocalJobRepository implements JobRepository {
   }
 }
 
-Future<void> _atomicWrite(File target, String contents) async {
-  await target.parent.create(recursive: true);
-  final temporary = File('${target.path}.tmp');
-  await temporary.writeAsString(contents, flush: true);
-  if (await target.exists()) await target.delete();
-  await temporary.rename(target.path);
+final _atomicFileWriter = _AtomicFileWriter();
+
+class _AtomicFileWriter {
+  final Map<String, Future<void>> _pendingWrites = {};
+
+  Future<void> write(File target, String contents) {
+    final key = p.normalize(p.absolute(target.path));
+    final operation = _writeAfter(_pendingWrites[key], target, contents);
+    _pendingWrites[key] = operation;
+    return operation.whenComplete(() {
+      if (identical(_pendingWrites[key], operation)) {
+        _pendingWrites.remove(key);
+      }
+    });
+  }
+
+  Future<void> _writeAfter(
+    Future<void>? previous,
+    File target,
+    String contents,
+  ) async {
+    if (previous != null) {
+      try {
+        await previous;
+      } on Object {
+        // A failed write must not prevent a later state from being persisted.
+      }
+    }
+    await target.parent.create(recursive: true);
+    final temporary = File('${target.path}.tmp');
+    await temporary.writeAsString(contents, flush: true);
+    if (await target.exists()) await target.delete();
+    await temporary.rename(target.path);
+  }
 }

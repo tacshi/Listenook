@@ -14,7 +14,7 @@ class TranscriptParser {
     final tokens = rawTokens
         .whereType<Map>()
         .map((json) => TranscriptToken.fromJson(json.cast<String, dynamic>()))
-        .where((token) => token.text.isNotEmpty)
+        .where((token) => token.text.trim().isNotEmpty)
         .toList(growable: false);
     final segments = _segments(tokens);
     final speakerIds =
@@ -41,11 +41,16 @@ class TranscriptParser {
   /// Repairs documents produced by older parser versions that split a single
   /// sentence at an arbitrary duration boundary or emitted punctuation alone.
   TranscriptDocument normalizeSegments(TranscriptDocument document) {
-    if (document.segments.length < 2) return document;
+    final sourceSegments = document.segments
+        .where((segment) => segment.text.trim().isNotEmpty)
+        .toList(growable: false);
+    var changed = sourceSegments.length != document.segments.length;
+    if (sourceSegments.length < 2) {
+      return changed ? document.copyWith(segments: sourceSegments) : document;
+    }
 
     final normalized = <TranscriptSegment>[];
-    var changed = false;
-    for (final segment in document.segments) {
+    for (final segment in sourceSegments) {
       if (normalized.isEmpty) {
         normalized.add(segment);
         continue;
@@ -73,6 +78,10 @@ class TranscriptParser {
           text: _joinSegmentText(previous.text, segment.text),
           speaker: previous.speaker ?? segment.speaker,
           language: previous.language ?? segment.language,
+          translatedText: _joinTranslations(
+            previous.translatedText,
+            segment.translatedText,
+          ),
         );
         changed = true;
       } else {
@@ -140,6 +149,12 @@ class TranscriptParser {
         RegExp(r'[A-Za-z0-9,;:]$').hasMatch(left) &&
         RegExp(r'^[A-Za-z0-9]').hasMatch(right);
     return needsSpace ? '$left $right' : '$left$right';
+  }
+
+  String? _joinTranslations(String? first, String? second) {
+    if (first == null || first.trim().isEmpty) return second;
+    if (second == null || second.trim().isEmpty) return first;
+    return _joinSegmentText(first, second);
   }
 }
 

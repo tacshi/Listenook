@@ -73,6 +73,35 @@ void main() {
     );
   });
 
+  test('parser omits whitespace-only tokens and empty segments', () {
+    final parsed = parser.parse({
+      'tokens': [
+        {'text': '   ', 'start_ms': 0, 'end_ms': 100},
+        {'text': 'Visible.', 'start_ms': 100, 'end_ms': 500},
+      ],
+    });
+    expect(parsed.tokens, hasLength(1));
+    expect(parsed.segments.map((segment) => segment.text), ['Visible.']);
+
+    final repaired = parser.normalizeSegments(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'visible',
+            startMs: 0,
+            endMs: 500,
+            text: 'Visible.',
+          ),
+          TranscriptSegment(id: 'empty', startMs: 500, endMs: 600, text: ''),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+      ),
+    );
+    expect(repaired.segments.map((segment) => segment.id), ['visible']);
+  });
+
   test('TXT and Markdown honor reversible display choices', () {
     expect(
       exporter.render(
@@ -105,6 +134,40 @@ void main() {
     );
     expect(vtt, startsWith('WEBVTT'));
     expect(vtt, contains('00:00:03.000 --> 00:00:04.200'));
+  });
+
+  test('translated and bilingual exports fall back safely when partial', () {
+    final translated = document.copyWith(
+      segments: [
+        document.segments.first.copyWith(translatedText: '你好，世界。'),
+        document.segments.last,
+      ],
+    );
+    final translatedText = exporter.render(
+      translated,
+      const ExportOptions(
+        showSpeakers: false,
+        contentMode: ExportContentMode.translated,
+      ),
+      title: 'Meeting',
+    );
+    expect(translatedText, '你好，世界。\n\n你好。');
+
+    final bilingualSrt = exporter.render(
+      translated,
+      const ExportOptions(
+        format: ExportFormat.srt,
+        showSpeakers: false,
+        contentMode: ExportContentMode.bilingual,
+      ),
+      title: 'Meeting',
+    );
+    expect(bilingualSrt, contains('你好，世界。\nHello world.'));
+    expect(
+      RegExp('你好。').allMatches(bilingualSrt),
+      hasLength(1),
+      reason: 'A missing translation should emit one original fallback cue.',
+    );
   });
 
   test('Chinese exports localize generated labels and Markdown metadata', () {

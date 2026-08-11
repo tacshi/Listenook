@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../core/contracts.dart';
 import '../core/models.dart';
 import '../core/transcript_parser.dart';
+import '../data/openai_translation_service.dart';
 import '../data/process_media_service.dart';
 import '../data/soniox_api_client.dart';
 
@@ -20,6 +21,8 @@ class AppController extends ChangeNotifier {
     required MediaService mediaService,
     required SonioxClient sonioxClient,
     required TranscriptExporter exporter,
+    TranslationCredentialStore? translationCredentialStore,
+    TranslationService? translationService,
     TranscriptParser parser = const TranscriptParser(),
     Uuid uuid = const Uuid(),
   }) : _credentials = credentialStore,
@@ -28,6 +31,8 @@ class AppController extends ChangeNotifier {
        _media = mediaService,
        _soniox = sonioxClient,
        _exporter = exporter,
+       _translationCredentials = translationCredentialStore,
+       _translationService = translationService,
        _parser = parser,
        _uuid = uuid;
 
@@ -37,25 +42,35 @@ class AppController extends ChangeNotifier {
   final MediaService _media;
   final SonioxClient _soniox;
   final TranscriptExporter _exporter;
+  final TranslationCredentialStore? _translationCredentials;
+  final TranslationService? _translationService;
   final TranscriptParser _parser;
   final Uuid _uuid;
   final Map<String, TranscriptionJob> _jobs = {};
   final List<String> _workspaceIds = [];
   final Set<String> _cancelledIds = {};
+  final Set<String> _translationCancelledIds = {};
   String _batchId = '';
   bool _processing = false;
   bool _initializing = true;
   bool _keyConfigured = false;
+  bool _translationKeyConfigured = false;
   int _destinationIndex = 0;
   String? _selectedJobId;
   MediaDiagnostics? _mediaDiagnostics;
   AppSettings _settings = const AppSettings();
+  TranscriptionOptions _sessionOptions = const TranscriptionOptions();
 
   AppSettings get settings => _settings;
+  TranscriptionOptions get sessionOptions => _sessionOptions;
   bool get initializing => _initializing;
   bool get processing => _processing;
-  bool get hasActiveWork => _jobs.values.any((job) => job.status.isActive);
+  bool get hasActiveWork => _jobs.values.any((job) => job.isBusy);
   bool get keyConfigured => _keyConfigured;
+  bool get translationKeyConfigured => _translationKeyConfigured;
+  bool get translationConfigured => _settings.translationSettings.isConfigured(
+    hasApiKey: _translationKeyConfigured,
+  );
   int get destinationIndex => _destinationIndex;
   String? get selectedJobId => _selectedJobId;
   MediaDiagnostics? get mediaDiagnostics => _mediaDiagnostics;
@@ -85,15 +100,25 @@ class AppController extends ChangeNotifier {
             job.status == JobStatus.missingSource,
       )
       .length;
+  int get inactiveHistoryCount =>
+      _jobs.values.where((job) => !job.isBusy).length;
   int get untranscribedWorkspaceCount =>
       workspaceJobs.where((job) => job.document == null).length;
   bool get canStartNewSession =>
       workspaceJobs.isNotEmpty &&
       !_processing &&
-      !workspaceJobs.any((job) => job.status.isActive);
+      !workspaceJobs.any((job) => job.isBusy);
 
   Future<void> initialize() async {
     _settings = await _settingsRepository.load();
+    if (_settings.translationSettings.targetLanguage.isEmpty) {
+      _settings = _settings.copyWith(
+        translationSettings: _settings.translationSettings.copyWith(
+          targetLanguage: _initialTargetLanguage(),
+        ),
+      );
+      await _settingsRepository.save(_settings);
+    }
     final stored = await _jobsRepository.loadAll();
     final loaded = <TranscriptionJob>[];
     for (final original in stored) {
@@ -101,16 +126,56 @@ class AppController extends ChangeNotifier {
       final normalized = document == null
           ? null
           : _parser.normalizeSegments(document);
-      final job = normalized == null || identical(normalized, document)
+      var job = normalized == null || identical(normalized, document)
           ? original
           : original.copyWith(document: normalized);
+      if (!identical(job, original) &&
+          job.translationState.status != TranslationStatus.idle) {
+        final progress = _translationProgress(
+          job.document?.segments ?? const [],
+        );
+        final complete = progress.completed == progress.total;
+        job = job.copyWith(
+          translationState: job.translationState.copyWith(
+            status: complete
+                ? TranslationStatus.completed
+                : job.translationState.status,
+            completedSegments: progress.completed,
+            totalSegments: progress.total,
+            clearError: complete,
+          ),
+        );
+      }
+      if (job.translationState.status == TranslationStatus.translating) {
+        final progress = _translationProgress(
+          job.document?.segments ?? const [],
+        );
+        job = job.copyWith(
+          translationState: job.translationState.copyWith(
+            status: progress.completed > 0
+                ? TranslationStatus.partial
+                : TranslationStatus.interrupted,
+            completedSegments: progress.completed,
+            totalSegments: progress.total,
+            errorCode: 'translation_interrupted',
+            errorMessage: 'Translation was interrupted before it finished.',
+          ),
+        );
+      }
       _jobs[job.id] = job;
       loaded.add(job);
       if (!identical(job, original)) {
         await _jobsRepository.save(job);
       }
     }
-    _keyConfigured = (await _credentials.readApiKey())?.isNotEmpty ?? false;
+    _keyConfigured = await _credentialIsAvailable(
+      _credentials,
+      _credentials.readApiKey,
+    );
+    _translationKeyConfigured = await _credentialIsAvailable(
+      _translationCredentials,
+      _translationCredentials?.readApiKey,
+    );
     _batchId = _uuid.v4();
     final interrupted = loaded.where((job) => job.status.isActive).toList()
       ..sort((a, b) {
@@ -119,6 +184,7 @@ class AppController extends ChangeNotifier {
       });
     if (interrupted.isNotEmpty) {
       _batchId = interrupted.first.batchId;
+      _sessionOptions = interrupted.first.options;
       _workspaceIds.addAll(interrupted.map((job) => job.id));
     }
     _initializing = false;
@@ -126,6 +192,15 @@ class AppController extends ChangeNotifier {
     unawaited(refreshMediaDiagnostics());
     unawaited(_recover(interrupted));
     unawaited(_retryPendingCleanup(loaded));
+  }
+
+  Future<bool> _credentialIsAvailable(
+    Object? store,
+    Future<String?> Function()? read,
+  ) async {
+    if (store == null || read == null) return false;
+    if (store is CredentialAvailabilityStore) return store.hasApiKey();
+    return (await read())?.isNotEmpty ?? false;
   }
 
   void setDestination(int index) {
@@ -183,9 +258,9 @@ class AppController extends ChangeNotifier {
         updatedAt: now,
         status: JobStatus.pending,
         queueIndex: _workspaceIds.length,
-        options: TranscriptionOptions(
-          languageHints: _settings.languageHints,
-          contextTerms: _settings.contextTerms,
+        options: _sessionOptions,
+        translationOptions: TranslationOptions.fromSettings(
+          _settings.translationSettings,
         ),
       );
       _jobs[job.id] = job;
@@ -368,6 +443,20 @@ class AppController extends ChangeNotifier {
         clearError: true,
       );
       await _cleanup(job);
+      job = _jobs[id] ?? job;
+      if (status == JobStatus.completed &&
+          job.translationOptions.enabled &&
+          job.translationOptions.targetLanguage.isNotEmpty) {
+        await _runTranslation(
+          job,
+          settings: TranslationSettings(
+            baseUrl: job.translationOptions.baseUrl,
+            model: job.translationOptions.model,
+            targetLanguage: job.translationOptions.targetLanguage,
+          ),
+          targetLanguage: job.translationOptions.targetLanguage,
+        );
+      }
     } on OperationCancelledException {
       job = _jobs[id] ?? job;
       await _transition(
@@ -442,6 +531,10 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> cancelJob(String id) async {
+    if (_jobs[id]?.translationState.status.isActive ?? false) {
+      _translationCancelledIds.add(id);
+      return;
+    }
     _cancelledIds.add(id);
     final job = _jobs[id];
     if (job != null && !job.status.isActive) {
@@ -459,20 +552,30 @@ class AppController extends ChangeNotifier {
     for (final job in workspaceJobs.where((item) => item.status.isActive)) {
       _cancelledIds.add(job.id);
     }
+    for (final job in workspaceJobs.where(
+      (item) => item.translationState.status.isActive,
+    )) {
+      _translationCancelledIds.add(job.id);
+    }
   }
 
   Future<void> cancelRemoteJobsForQuit() async {
-    final active = workspaceJobs.where((job) => job.status.isActive).toList();
+    final active = workspaceJobs.where((job) => job.isBusy).toList();
     for (final job in active) {
-      _cancelledIds.add(job.id);
-      await _cleanup(job);
-      await _transition(
-        _jobs[job.id] ?? job,
-        status: JobStatus.cancelled,
-        progress: const JobProgress(stage: 'cancelled'),
-        errorCode: 'cancelled',
-        errorMessage: 'Cancelled while quitting.',
-      );
+      if (job.translationState.status.isActive) {
+        _translationCancelledIds.add(job.id);
+      }
+      if (job.status.isActive) {
+        _cancelledIds.add(job.id);
+        await _cleanup(job);
+        await _transition(
+          _jobs[job.id] ?? job,
+          status: JobStatus.cancelled,
+          progress: const JobProgress(stage: 'cancelled'),
+          errorCode: 'cancelled',
+          errorMessage: 'Cancelled while quitting.',
+        );
+      }
     }
   }
 
@@ -516,25 +619,38 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> relink(String id, String sourcePath) async {
+  Future<String?> relink(String id, String sourcePath) async {
     final job = _jobs[id];
-    if (job == null) return;
-    final updated = await _transition(
-      job,
-      sourcePath: sourcePath,
-      status: JobStatus.pending,
-      progress: const JobProgress(stage: 'pending'),
-      clearError: true,
-    );
-    await _prepare(updated.id);
+    if (job == null) return 'unexpected';
+    try {
+      final metadata = await _media.inspect(sourcePath);
+      await _transition(
+        job,
+        sourcePath: sourcePath,
+        metadata: metadata,
+        status: job.document == null
+            ? (_processing ? JobStatus.paused : JobStatus.ready)
+            : job.status,
+        progress: job.document == null
+            ? JobProgress(stage: _processing ? 'paused' : 'ready', fraction: 0)
+            : job.progress,
+        clearError: true,
+      );
+      return null;
+    } on MediaException catch (error) {
+      return error.code;
+    } on Object {
+      return 'media_error';
+    }
   }
 
   Future<void> removeFromWorkspace(String id) async {
     final job = _jobs[id];
-    if (job == null || job.status.isActive) return;
+    if (job == null || job.isBusy) return;
     _workspaceIds.remove(id);
     if (job.document == null) {
       _jobs.remove(id);
+      await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
     if (_selectedJobId == id) _selectedJobId = _workspaceIds.firstOrNull;
@@ -549,21 +665,43 @@ class AppController extends ChangeNotifier {
     ];
     for (final id in discardedIds) {
       _jobs.remove(id);
+      await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
     _workspaceIds.clear();
     _selectedJobId = null;
     _batchId = _uuid.v4();
+    _sessionOptions = const TranscriptionOptions();
     notifyListeners();
   }
 
   Future<void> deleteHistory(String id) async {
     final job = _jobs[id];
-    if (job == null || job.status.isActive) return;
+    if (job == null || job.isBusy) return;
     _jobs.remove(id);
     _workspaceIds.remove(id);
     if (_selectedJobId == id) _selectedJobId = null;
+    await _media.deleteGeneratedMedia(id);
     await _jobsRepository.delete(id);
+    notifyListeners();
+  }
+
+  Future<void> clearInactiveHistory() async {
+    final deletable = _jobs.values
+        .where((job) => !job.isBusy)
+        .map((job) => job.id)
+        .toList(growable: false);
+    if (deletable.isEmpty) return;
+    for (final id in deletable) {
+      await _media.deleteGeneratedMedia(id);
+      await _jobsRepository.delete(id);
+      _jobs.remove(id);
+      _workspaceIds.remove(id);
+    }
+    await _media.clearGeneratedMediaExcept(_jobs.keys.toSet());
+    if (_selectedJobId != null && !_jobs.containsKey(_selectedJobId)) {
+      _selectedJobId = _workspaceIds.firstOrNull;
+    }
     notifyListeners();
   }
 
@@ -585,9 +723,29 @@ class AppController extends ChangeNotifier {
     if (job == null || document == null) return;
     final segments = [
       for (final segment in document.segments)
-        if (segment.id == segmentId) segment.copyWith(text: text) else segment,
+        if (segment.id == segmentId)
+          segment.copyWith(text: text, clearTranslatedText: true)
+        else
+          segment,
     ];
-    await _transition(job, document: document.copyWith(segments: segments));
+    final progress = _translationProgress(segments);
+    final invalidated = document.segments
+        .where((segment) => segment.id == segmentId)
+        .any((segment) => segment.hasTranslation);
+    await _transition(
+      job,
+      document: document.copyWith(segments: segments),
+      translationState: invalidated
+          ? job.translationState.copyWith(
+              status: progress.completed == progress.total
+                  ? TranslationStatus.completed
+                  : TranslationStatus.partial,
+              completedSegments: progress.completed,
+              totalSegments: progress.total,
+              clearError: true,
+            )
+          : null,
+    );
   }
 
   Future<void> renameSpeaker(
@@ -614,6 +772,19 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> updateSessionOptions(TranscriptionOptions value) async {
+    _sessionOptions = value;
+    for (final job in workspaceJobs.where(
+      (job) =>
+          job.status == JobStatus.pending ||
+          job.status == JobStatus.probing ||
+          job.status.canTranscribe,
+    )) {
+      await _transition(job, options: value);
+    }
+    notifyListeners();
+  }
+
   Future<void> saveApiKey(String value) async {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return;
@@ -637,6 +808,459 @@ class AppController extends ChangeNotifier {
     } on Object {
       return 'unexpected';
     }
+  }
+
+  Future<String?> saveTranslationConfiguration(
+    TranslationSettings value, {
+    String? apiKey,
+  }) async {
+    final settings = _normalizeTranslationSettings(value);
+    final validation = settings.validationError();
+    if (validation != null) return validation;
+    final candidate = apiKey?.trim() ?? '';
+    final sameEndpoint =
+        settings.baseUrl ==
+        _normalizeTranslationSettings(_settings.translationSettings).baseUrl;
+    if (settings.requiresApiKey &&
+        candidate.isEmpty &&
+        (!_translationKeyConfigured || !sameEndpoint)) {
+      return 'translation_missing_credentials';
+    }
+    if (!settings.requiresApiKey) {
+      if (_translationKeyConfigured) {
+        await _translationCredentials?.deleteApiKey();
+        _translationKeyConfigured = false;
+      }
+    } else if (candidate.isNotEmpty) {
+      final credentials = _translationCredentials;
+      if (credentials == null) return 'translation_unavailable';
+      await credentials.writeApiKey(candidate);
+      _translationKeyConfigured = true;
+    }
+    _settings = _settings.copyWith(translationSettings: settings);
+    await _settingsRepository.save(_settings);
+    await _updateQueuedTranslationOptions();
+    notifyListeners();
+    return null;
+  }
+
+  Future<void> removeTranslationApiKey() async {
+    await _translationCredentials?.deleteApiKey();
+    _translationKeyConfigured = false;
+    if (_settings.translationSettings.autoTranslate) {
+      _settings = _settings.copyWith(
+        translationSettings: _settings.translationSettings.copyWith(
+          autoTranslate: false,
+        ),
+      );
+      await _settingsRepository.save(_settings);
+      await _updateQueuedTranslationOptions();
+    }
+    notifyListeners();
+  }
+
+  Future<({List<String> models, String? errorCode})>
+  testTranslationConfiguration(
+    TranslationSettings value, {
+    String? candidateApiKey,
+  }) async {
+    final service = _translationService;
+    if (service == null) {
+      return (models: const <String>[], errorCode: 'translation_unavailable');
+    }
+    final settings = _normalizeTranslationSettings(value);
+    final candidate = candidateApiKey?.trim() ?? '';
+    final sameEndpoint =
+        settings.baseUrl ==
+        _normalizeTranslationSettings(_settings.translationSettings).baseUrl;
+    if (settings.requiresApiKey &&
+        candidate.isEmpty &&
+        (!_translationKeyConfigured || !sameEndpoint)) {
+      return (
+        models: const <String>[],
+        errorCode: 'translation_missing_credentials',
+      );
+    }
+    try {
+      final models = await service.listModels(
+        settings,
+        candidateApiKey: candidateApiKey,
+      );
+      return (models: models, errorCode: null);
+    } on TranslationException catch (error) {
+      return (models: const <String>[], errorCode: error.code);
+    } on TimeoutException {
+      return (models: const <String>[], errorCode: 'translation_timeout');
+    } on SocketException {
+      return (models: const <String>[], errorCode: 'translation_network_error');
+    } on Object {
+      return (
+        models: const <String>[],
+        errorCode: 'translation_request_failed',
+      );
+    }
+  }
+
+  Future<String?> updateTranslationDefaults(TranslationSettings value) async {
+    final settings = _normalizeTranslationSettings(value);
+    if (settings.autoTranslate &&
+        !settings.isConfigured(hasApiKey: _translationKeyConfigured)) {
+      return settings.validationError() ?? 'translation_missing_credentials';
+    }
+    _settings = _settings.copyWith(translationSettings: settings);
+    await _settingsRepository.save(_settings);
+    await _updateQueuedTranslationOptions();
+    notifyListeners();
+    return null;
+  }
+
+  Future<void> translateJob(
+    String id, {
+    required String targetLanguage,
+    bool replaceExisting = false,
+  }) async {
+    final job = _jobs[id];
+    final document = job?.document;
+    if (job == null ||
+        document == null ||
+        job.translationState.status.isActive) {
+      return;
+    }
+    final settings = _normalizeTranslationSettings(
+      _settings.translationSettings.copyWith(targetLanguage: targetLanguage),
+    );
+    final configurationError = settings.validationError();
+    if (configurationError != null ||
+        (settings.requiresApiKey && !_translationKeyConfigured)) {
+      await _setTranslationFailure(
+        job,
+        configurationError ?? 'translation_missing_credentials',
+      );
+      return;
+    }
+    final hasExisting = document.segments.any(
+      (segment) => segment.hasTranslation,
+    );
+    final targetChanged =
+        hasExisting &&
+        job.translationState.targetLanguage.isNotEmpty &&
+        job.translationState.targetLanguage != targetLanguage;
+    if (targetChanged && !replaceExisting) {
+      await _setTranslationFailure(
+        job,
+        'translation_target_change_confirmation_required',
+      );
+      return;
+    }
+    if (_settings.translationSettings.targetLanguage != targetLanguage) {
+      _settings = _settings.copyWith(
+        translationSettings: settings.copyWith(targetLanguage: targetLanguage),
+      );
+      await _settingsRepository.save(_settings);
+      await _updateQueuedTranslationOptions();
+    }
+    var updatedDocument = document;
+    if (replaceExisting) {
+      updatedDocument = document.copyWith(
+        segments: [
+          for (final segment in document.segments)
+            segment.copyWith(clearTranslatedText: true),
+        ],
+      );
+    }
+    final updated = await _transition(
+      job,
+      document: updatedDocument,
+      translationOptions: TranslationOptions(
+        enabled: false,
+        targetLanguage: targetLanguage,
+        baseUrl: settings.baseUrl,
+        model: settings.model,
+      ),
+    );
+    await _runTranslation(
+      updated,
+      settings: settings,
+      targetLanguage: targetLanguage,
+    );
+  }
+
+  Future<void> retryTranslation(String id) async {
+    final job = _jobs[id];
+    if (job == null || !job.translationState.status.canRetry) return;
+    final target = job.translationState.targetLanguage.isNotEmpty
+        ? job.translationState.targetLanguage
+        : _settings.translationSettings.targetLanguage;
+    await translateJob(id, targetLanguage: target);
+  }
+
+  Future<void> retranslateSegment(String jobId, String segmentId) async {
+    final job = _jobs[jobId];
+    final document = job?.document;
+    if (job == null || document == null) return;
+    final target = job.translationState.targetLanguage.isNotEmpty
+        ? job.translationState.targetLanguage
+        : _settings.translationSettings.targetLanguage;
+    final settings = _normalizeTranslationSettings(
+      _settings.translationSettings.copyWith(targetLanguage: target),
+    );
+    await _runTranslation(
+      job,
+      settings: settings,
+      targetLanguage: target,
+      segmentIds: {segmentId},
+    );
+  }
+
+  Future<void> updateTranslatedSegment(
+    String jobId,
+    String segmentId,
+    String text,
+  ) async {
+    final job = _jobs[jobId];
+    final document = job?.document;
+    if (job == null || document == null) return;
+    final value = text.trim();
+    final segments = [
+      for (final segment in document.segments)
+        if (segment.id == segmentId)
+          value.isEmpty
+              ? segment.copyWith(clearTranslatedText: true)
+              : segment.copyWith(translatedText: value)
+        else
+          segment,
+    ];
+    final progress = _translationProgress(segments);
+    await _transition(
+      job,
+      document: document.copyWith(segments: segments),
+      translationState: job.translationState.copyWith(
+        status: progress.completed == progress.total
+            ? TranslationStatus.completed
+            : TranslationStatus.partial,
+        completedSegments: progress.completed,
+        totalSegments: progress.total,
+        clearError: true,
+      ),
+    );
+  }
+
+  void cancelTranslation(String id) {
+    if (_jobs[id]?.translationState.status.isActive ?? false) {
+      _translationCancelledIds.add(id);
+    }
+  }
+
+  Future<void> _runTranslation(
+    TranscriptionJob job, {
+    required TranslationSettings settings,
+    required String targetLanguage,
+    Set<String>? segmentIds,
+  }) async {
+    final service = _translationService;
+    var current = _jobs[job.id] ?? job;
+    final document = current.document;
+    if (document == null) return;
+    if (service == null) {
+      await _setTranslationFailure(current, 'translation_unavailable');
+      return;
+    }
+    final translatableSegments = document.segments
+        .where(_isTranslatableSegment)
+        .toList(growable: false);
+    final candidates = translatableSegments
+        .where(
+          (segment) => segmentIds == null
+              ? !segment.hasTranslation
+              : segmentIds.contains(segment.id),
+        )
+        .toList(growable: false);
+    if (candidates.isEmpty) {
+      final progress = _translationProgress(translatableSegments);
+      await _transition(
+        current,
+        translationState: current.translationState.copyWith(
+          status: progress.completed == progress.total
+              ? TranslationStatus.completed
+              : TranslationStatus.partial,
+          targetLanguage: targetLanguage,
+          model: settings.model,
+          completedSegments: progress.completed,
+          totalSegments: progress.total,
+          clearError: true,
+        ),
+      );
+      return;
+    }
+
+    _translationCancelledIds.remove(job.id);
+    current = await _transition(
+      current,
+      translationState: TranslationState(
+        status: TranslationStatus.translating,
+        targetLanguage: targetLanguage,
+        model: settings.model,
+        completedSegments: _translationProgress(translatableSegments).completed,
+        totalSegments: translatableSegments.length,
+      ),
+    );
+
+    try {
+      await service.translate(
+        settings: settings,
+        targetLanguage: targetLanguage,
+        segments: candidates,
+        shouldCancel: () => _translationCancelledIds.contains(job.id),
+        onBatch: (translations, _, _) async {
+          current = _jobs[job.id] ?? current;
+          final latest = current.document;
+          if (latest == null) return;
+          final segments = [
+            for (final segment in latest.segments)
+              if (translations[segment.id] case final translated?)
+                segment.copyWith(translatedText: translated)
+              else
+                segment,
+          ];
+          final progress = _translationProgress(segments);
+          current = await _transition(
+            current,
+            document: latest.copyWith(segments: segments),
+            translationState: current.translationState.copyWith(
+              status: TranslationStatus.translating,
+              completedSegments: progress.completed,
+              totalSegments: progress.total,
+              clearError: true,
+            ),
+          );
+        },
+      );
+      current = _jobs[job.id] ?? current;
+      final segments = current.document?.segments ?? const [];
+      final progress = _translationProgress(segments);
+      await _transition(
+        current,
+        translationState: current.translationState.copyWith(
+          status: progress.completed == progress.total
+              ? TranslationStatus.completed
+              : TranslationStatus.partial,
+          completedSegments: progress.completed,
+          totalSegments: progress.total,
+          errorCode: progress.completed == progress.total
+              ? null
+              : 'translation_incomplete_response',
+          clearError: progress.completed == progress.total,
+        ),
+      );
+    } on OperationCancelledException {
+      current = _jobs[job.id] ?? current;
+      final segments = current.document?.segments ?? const [];
+      final progress = _translationProgress(segments);
+      await _transition(
+        current,
+        translationState: current.translationState.copyWith(
+          status: progress.completed > 0
+              ? TranslationStatus.partial
+              : TranslationStatus.cancelled,
+          completedSegments: progress.completed,
+          totalSegments: progress.total,
+          errorCode: 'translation_cancelled',
+          errorMessage: 'Translation was cancelled.',
+        ),
+      );
+    } on TranslationException catch (error) {
+      await _setTranslationFailure(
+        _jobs[job.id] ?? current,
+        error.code,
+        error.message,
+      );
+    } on TimeoutException {
+      await _setTranslationFailure(
+        _jobs[job.id] ?? current,
+        'translation_timeout',
+      );
+    } on SocketException {
+      await _setTranslationFailure(
+        _jobs[job.id] ?? current,
+        'translation_network_error',
+      );
+    } on Object catch (error) {
+      await _setTranslationFailure(
+        _jobs[job.id] ?? current,
+        'translation_request_failed',
+        _safeError(error),
+      );
+    } finally {
+      _translationCancelledIds.remove(job.id);
+    }
+  }
+
+  Future<void> _setTranslationFailure(
+    TranscriptionJob job,
+    String code, [
+    String? message,
+  ]) async {
+    final segments = job.document?.segments ?? const [];
+    final progress = _translationProgress(segments);
+    await _transition(
+      job,
+      translationState: TranslationState(
+        status: progress.completed > 0 && progress.completed < progress.total
+            ? TranslationStatus.partial
+            : TranslationStatus.failed,
+        targetLanguage: job.translationState.targetLanguage,
+        model: job.translationState.model,
+        completedSegments: progress.completed,
+        totalSegments: progress.total,
+        errorCode: code,
+        errorMessage: message == null ? null : _safeError(message),
+      ),
+    );
+  }
+
+  Future<void> _updateQueuedTranslationOptions() async {
+    final options = TranslationOptions.fromSettings(
+      _settings.translationSettings,
+    );
+    for (final job in workspaceJobs.where((job) => job.document == null)) {
+      await _transition(job, translationOptions: options);
+    }
+  }
+
+  bool _isTranslatableSegment(TranscriptSegment segment) =>
+      segment.text.trim().isNotEmpty;
+
+  ({int completed, int total}) _translationProgress(
+    Iterable<TranscriptSegment> segments,
+  ) {
+    var completed = 0;
+    var total = 0;
+    for (final segment in segments) {
+      if (!_isTranslatableSegment(segment)) continue;
+      total++;
+      if (segment.hasTranslation) completed++;
+    }
+    return (completed: completed, total: total);
+  }
+
+  TranslationSettings _normalizeTranslationSettings(TranslationSettings value) {
+    final baseUrl = value.baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+    return value.copyWith(baseUrl: baseUrl, model: value.model.trim());
+  }
+
+  String _initialTargetLanguage() {
+    final locale = Platform.localeName.replaceAll('_', '-').toLowerCase();
+    if (locale.startsWith('zh')) {
+      if (locale.contains('hant') ||
+          locale.contains('-tw') ||
+          locale.contains('-hk') ||
+          locale.contains('-mo')) {
+        return 'zh-Hant';
+      }
+      return 'zh-Hans';
+    }
+    final base = locale.split('-').first;
+    return supportedTranslationLanguageCodes.contains(base) ? base : 'en';
   }
 
   Future<void> refreshMediaDiagnostics() async {
@@ -806,6 +1430,9 @@ class AppController extends ChangeNotifier {
     int? queueIndex,
     JobProgress? progress,
     MediaMetadata? metadata,
+    TranscriptionOptions? options,
+    TranslationOptions? translationOptions,
+    TranslationState? translationState,
     TranscriptDocument? document,
     String? errorCode,
     String? errorMessage,
@@ -822,6 +1449,9 @@ class AppController extends ChangeNotifier {
       queueIndex: queueIndex,
       progress: progress,
       metadata: metadata,
+      options: options,
+      translationOptions: translationOptions,
+      translationState: translationState,
       document: document,
       errorCode: errorCode,
       errorMessage: errorMessage,

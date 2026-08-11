@@ -227,6 +227,35 @@ class ProcessMediaService implements MediaService {
   }
 
   @override
+  Future<void> deleteGeneratedMedia(String cacheKey) async {
+    final safeKey = cacheKey.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    await deleteTemporary(p.join(paths.temporary.path, '$safeKey.flac'));
+    await deleteTemporary(
+      p.join(paths.temporary.path, '$safeKey-waveform.png'),
+    );
+  }
+
+  @override
+  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {
+    if (!await paths.temporary.exists()) return;
+    final retained = retainedCacheKeys
+        .map((key) => key.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_'))
+        .toSet();
+    await for (final entity in paths.temporary.list(followLinks: false)) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      final cacheKey = name.endsWith('-waveform.png')
+          ? name.substring(0, name.length - '-waveform.png'.length)
+          : name.endsWith('.flac')
+          ? name.substring(0, name.length - '.flac'.length)
+          : null;
+      if (cacheKey != null && !retained.contains(cacheKey)) {
+        await deleteTemporary(entity.path);
+      }
+    }
+  }
+
+  @override
   Future<MediaDiagnostics> diagnostics() async {
     try {
       final tools = await _resolveTools(refresh: true);

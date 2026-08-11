@@ -21,6 +21,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> with WindowListener {
   bool _onboardingShown = false;
+  bool _sidebarVisible = true;
   bool _closeDialogOpen = false;
   bool? _preventClose;
   late final AppController _controller;
@@ -160,6 +161,16 @@ class _AppShellState extends State<AppShell> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
+    final sidebarToggle = IconButton(
+      key: const Key('toggle-app-sidebar'),
+      tooltip: context.strings.t(
+        _sidebarVisible ? 'hide_sidebar' : 'show_sidebar',
+      ),
+      onPressed: () => setState(() => _sidebarVisible = !_sidebarVisible),
+      icon: Icon(
+        _sidebarVisible ? Icons.menu_open_rounded : Icons.menu_rounded,
+      ),
+    );
     final destinations = [
       NavigationRailDestination(
         icon: const Icon(Icons.space_dashboard_outlined),
@@ -192,34 +203,62 @@ class _AppShellState extends State<AppShell> with WindowListener {
         child: Scaffold(
           body: Row(
             children: [
-              NavigationRail(
-                selectedIndex: controller.destinationIndex,
-                onDestinationSelected: controller.setDestination,
-                extended: MediaQuery.sizeOf(context).width >= 1180,
-                leading: Padding(
-                  padding: const EdgeInsets.only(top: 14, bottom: 22),
-                  child: Tooltip(
-                    message: 'MeowSTT',
-                    child: Image.asset(
-                      'assets/branding/meowstt-icon.png',
-                      width: 46,
-                      height: 46,
-                    ),
-                  ),
+              ClipRect(
+                child: AnimatedSize(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeInOut,
+                  alignment: Alignment.centerLeft,
+                  child: _sidebarVisible
+                      ? Row(
+                          key: const Key('app-sidebar'),
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            NavigationRail(
+                              minWidth: 64,
+                              minExtendedWidth: 184,
+                              selectedIndex: controller.destinationIndex,
+                              onDestinationSelected: controller.setDestination,
+                              extended:
+                                  MediaQuery.sizeOf(context).width >= 1180,
+                              leading: Padding(
+                                padding: const EdgeInsets.only(
+                                  top: 10,
+                                  bottom: 14,
+                                ),
+                                child: Tooltip(
+                                  message: 'MeowSTT',
+                                  child: Image.asset(
+                                    'assets/branding/meowstt-icon.png',
+                                    width: 38,
+                                    height: 38,
+                                  ),
+                                ),
+                              ),
+                              destinations: destinations,
+                            ),
+                            const VerticalDivider(width: 1),
+                          ],
+                        )
+                      : const SizedBox.shrink(key: Key('app-sidebar-hidden')),
                 ),
-                destinations: destinations,
               ),
-              const VerticalDivider(width: 1),
               Expanded(
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 220),
                   child: switch (controller.destinationIndex) {
-                    1 => const LibraryPage(key: ValueKey('library')),
-                    2 => const SettingsPage(key: ValueKey('settings')),
+                    1 => LibraryPage(
+                      key: const ValueKey('library'),
+                      sidebarToggle: sidebarToggle,
+                    ),
+                    2 => SettingsPage(
+                      key: const ValueKey('settings'),
+                      sidebarToggle: sidebarToggle,
+                    ),
                     _ => WorkspacePage(
                       key: const ValueKey('workspace'),
                       onAddFiles: _addFiles,
                       onAddFolder: _addFolder,
+                      sidebarToggle: sidebarToggle,
                     ),
                   },
                 ),
