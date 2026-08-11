@@ -2797,20 +2797,20 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
       child: AnimatedOpacity(
         opacity: visible ? 1 : 0,
         duration: const Duration(milliseconds: 120),
-        child: Row(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _SentenceRepeatButton(
-              segmentId: widget.segment.id,
-              isRepeating: widget.isRepeating,
-              onPressed: widget.onToggleRepeat,
-            ),
             IconButton(
               key: ValueKey('segment-edit-${widget.segment.id}'),
               tooltip: context.strings.t('edit'),
               onPressed: widget.onEdit,
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.edit_outlined, size: 18),
+            ),
+            _SentenceRepeatButton(
+              segmentId: widget.segment.id,
+              isRepeating: widget.isRepeating,
+              onPressed: widget.onToggleRepeat,
             ),
           ],
         ),

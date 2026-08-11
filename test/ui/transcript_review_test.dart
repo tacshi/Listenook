@@ -1119,6 +1119,15 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(tester.widget<AnimatedOpacity>(opacity).opacity, 1);
+      final edit = find.byKey(const ValueKey('segment-edit-repeatable'));
+      expect(
+        tester.getCenter(edit).dx,
+        closeTo(tester.getCenter(find.byKey(repeatKey)).dx, 1),
+      );
+      expect(
+        tester.getCenter(edit).dy,
+        lessThan(tester.getCenter(find.byKey(repeatKey)).dy),
+      );
 
       await tester.tap(find.byKey(repeatKey));
       await tester.pumpAndSettle();
