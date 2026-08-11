@@ -18,6 +18,17 @@ void main() {
     expect(migrated.toJson()['provider'], 'groq');
   });
 
+  test('fullscreen shortcut guide defaults on and persists when hidden', () {
+    expect(AppSettings.fromJson(const {}).showFullscreenShortcuts, isTrue);
+
+    final restored = AppSettings.fromJson(
+      const AppSettings(showFullscreenShortcuts: false).toJson(),
+    );
+
+    expect(restored.showFullscreenShortcuts, isFalse);
+    expect(restored.toJson()['show_fullscreen_shortcuts'], isFalse);
+  });
+
   test('older manifests migrate with safe defaults', () {
     final job = TranscriptionJob.fromJson({
       'id': 'job_1',

@@ -135,6 +135,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Appearance'), findsOneWidget);
     expect(find.text('Theme').hitTestable(), findsOneWidget);
+    final shortcutToggle = find.byKey(const Key('show-fullscreen-shortcuts'));
+    expect(tester.widget<SwitchListTile>(shortcutToggle).value, isTrue);
+    await tester.tap(shortcutToggle);
+    await tester.pumpAndSettle();
+    expect(controller.settings.showFullscreenShortcuts, isFalse);
+    expect(tester.widget<SwitchListTile>(shortcutToggle).value, isFalse);
 
     await tester.tap(find.text('About'));
     await tester.pumpAndSettle();

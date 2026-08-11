@@ -30,6 +30,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
   bool _onboardingShown = false;
   bool _sidebarVisible = true;
   bool _closeDialogOpen = false;
+  bool _windowFullscreen = false;
   bool? _preventClose;
   final _fullscreenController = ReviewFullscreenController();
   late final AppController _controller;
@@ -42,6 +43,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
     windowManager.addListener(this);
     _nativeNavigationChannel.setMethodCallHandler(_handleNativeNavigation);
     _syncCloseProtection();
+    unawaited(_syncWindowFullscreen());
     WidgetsBinding.instance.addPostFrameCallback((_) => _showOnboarding());
   }
 
@@ -67,6 +69,25 @@ class _AppShellState extends State<AppShell> with WindowListener {
     _preventClose = shouldPreventClose;
     unawaited(windowManager.setPreventClose(shouldPreventClose));
   }
+
+  Future<void> _syncWindowFullscreen() async {
+    try {
+      _setWindowFullscreen(await windowManager.isFullScreen());
+    } on Object {
+      // The window channel is unavailable in widget tests and early startup.
+    }
+  }
+
+  void _setWindowFullscreen(bool value) {
+    if (!mounted || _windowFullscreen == value) return;
+    setState(() => _windowFullscreen = value);
+  }
+
+  @override
+  void onWindowEnterFullScreen() => _setWindowFullscreen(true);
+
+  @override
+  void onWindowLeaveFullScreen() => _setWindowFullscreen(false);
 
   Future<void> _showOnboarding() async {
     if (!mounted || _onboardingShown) return;
@@ -222,6 +243,8 @@ class _AppShellState extends State<AppShell> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
+    final hideWindowToolbar =
+        _windowFullscreen && Theme.of(context).platform == TargetPlatform.macOS;
     final sidebarExtended = MediaQuery.sizeOf(context).width >= 1180;
     final destinations = [
       _destination(
@@ -272,10 +295,15 @@ class _AppShellState extends State<AppShell> with WindowListener {
         child: Scaffold(
           body: Column(
             children: [
-              AppWindowToolbar(
-                sidebarVisible: _sidebarVisible,
-                onToggleSidebar: _toggleSidebar,
-              ),
+              if (hideWindowToolbar)
+                const SizedBox.shrink(
+                  key: Key('app-window-toolbar-fullscreen-hidden'),
+                )
+              else
+                AppWindowToolbar(
+                  sidebarVisible: _sidebarVisible,
+                  onToggleSidebar: _toggleSidebar,
+                ),
               Expanded(
                 child: Row(
                   children: [

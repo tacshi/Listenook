@@ -301,6 +301,19 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ],
             ),
+            const Divider(height: 24),
+            SwitchListTile(
+              key: const Key('show-fullscreen-shortcuts'),
+              contentPadding: EdgeInsets.zero,
+              title: Text(context.strings.t('show_fullscreen_shortcuts')),
+              subtitle: Text(
+                context.strings.t('show_fullscreen_shortcuts_description'),
+              ),
+              value: settings.showFullscreenShortcuts,
+              onChanged: (value) => controller.updateSettings(
+                settings.copyWith(showFullscreenShortcuts: value),
+              ),
+            ),
           ],
         ),
       ),
