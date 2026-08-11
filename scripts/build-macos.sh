@@ -23,6 +23,19 @@ fi
 VERSION="$(awk '/^version:/{print $2}' "$ROOT/pubspec.yaml" | cut -d+ -f1)"
 ARCHES=("$ARCH")
 if [[ "$ARCH" == "all" ]]; then ARCHES=(arm64 x64); fi
+NOTARY_PROFILE="${MEOWSTT_NOTARY_PROFILE:-MeowSTT}"
+
+if [[ "$MODE" == "release" ]]; then
+  RELEASE_SIGN_IDENTITY="${MEOWSTT_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:--}}"
+  if [[ "$RELEASE_SIGN_IDENTITY" != "-" ]]; then
+    if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+      echo "No working notarytool keychain profile named '$NOTARY_PROFILE'." >&2
+      echo "Create it with 'xcrun notarytool store-credentials $NOTARY_PROFILE ...'" >&2
+      exit 1
+    fi
+    echo "Using notarytool keychain profile: $NOTARY_PROFILE"
+  fi
+fi
 
 for CURRENT_ARCH in "${ARCHES[@]}"; do
   EXPECTED_MACHO="$CURRENT_ARCH"
@@ -117,24 +130,43 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
     rm -rf "$DEBUG_APP"
     mv "$DEBUG_STAGE" "$DEBUG_APP"
   else
-    ZIP="$OUT/$BASE.app.zip"
-    rm -f "$ZIP"
-    ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
-
+    rm -f "$OUT/$BASE.app.zip"
     STAGE="$(mktemp -d)"
-    cp -R "$APP" "$STAGE/MeowSTT.app"
+    ditto "$APP" "$STAGE/MeowSTT.app"
     ln -s /Applications "$STAGE/Applications"
     DMG="$OUT/$BASE.dmg"
     rm -f "$DMG"
     hdiutil create -volname MeowSTT -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
     rm -rf "$STAGE"
-    if [[ -n "${MEOWSTT_NOTARY_PROFILE:-}" ]]; then
-      if [[ "$SIGN_IDENTITY" == "-" ]]; then
-        echo "Notarization requires DEVELOPER_ID_APPLICATION or MEOWSTT_MAC_SIGN_IDENTITY." >&2
+
+    if [[ "$SIGN_IDENTITY" != "-" ]]; then
+      DMG_SIGN_ARGS=(--force --sign "$SIGN_IDENTITY" --timestamp)
+      codesign "${DMG_SIGN_ARGS[@]}" "$DMG"
+      codesign --verify --strict --verbose=2 "$DMG"
+
+      NOTARY_OUTPUT="$(xcrun notarytool submit "$DMG" \
+        --keychain-profile "$NOTARY_PROFILE" \
+        --wait \
+        --output-format json)"
+      echo "$NOTARY_OUTPUT"
+      if ! grep -q '"status"[[:space:]]*:[[:space:]]*"Accepted"' <<<"$NOTARY_OUTPUT"; then
+        SUBMISSION_ID="$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+          <<<"$NOTARY_OUTPUT" | head -n 1)"
+        if [[ -n "$SUBMISSION_ID" ]]; then
+          xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+        fi
+        echo "Apple did not accept the notarization submission for $DMG." >&2
         exit 1
       fi
-      xcrun notarytool submit "$DMG" --keychain-profile "$MEOWSTT_NOTARY_PROFILE" --wait
+
+      xcrun stapler staple "$APP"
       xcrun stapler staple "$DMG"
+      xcrun stapler validate "$APP"
+      xcrun stapler validate "$DMG"
+      spctl --assess --type execute --verbose=4 "$APP"
+      spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+    else
+      echo "Warning: ad hoc-signed release artifacts will not pass Gatekeeper." >&2
     fi
   fi
 

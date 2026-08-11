@@ -85,12 +85,15 @@ scripts/build-release.sh --arch all
 ```
 
 Set `DEVELOPER_ID_APPLICATION` (or `MEOWSTT_MAC_SIGN_IDENTITY`) to the full
-Developer ID Application identity and `MEOWSTT_NOTARY_PROFILE` to a
-`notarytool` keychain profile for production. The app stores the Soniox API key
-in the encrypted macOS login Keychain without opting into the entitlement-only
-Data Protection Keychain, so direct distributions do not require a provisioning
-profile or the restricted Keychain Sharing entitlement. macOS builds run a real
-Keychain round-trip integration test before packaging.
+Developer ID Application identity for production. The release script uses the
+`notarytool` keychain profile named `MeowSTT` by default; override it with
+`MEOWSTT_NOTARY_PROFILE`. Signed releases fail before building if that profile
+cannot be used, then notarize and staple both the app and DMG before packaging
+the final DMG. The app stores the Soniox API key in the encrypted macOS login
+Keychain without opting into the entitlement-only Data Protection Keychain, so
+direct distributions do not require a provisioning profile or the restricted
+Keychain Sharing entitlement. macOS builds run a real Keychain round-trip
+integration test before packaging.
 
 Windows (Windows 10 22H2+, matching native host):
 
@@ -116,19 +119,19 @@ macOS builds also emit a matching `.sha256` manifest. For example:
 
 ```text
 dist/MeowSTT-1.0.0-macos-arm64-release.dmg
-dist/MeowSTT-1.0.0-macos-arm64-release.app.zip
 dist/MeowSTT-1.0.0-macos-arm64-release.sha256
 ```
 
-macOS release output contains an `.app.zip` and DMG. Windows debug output
-remains an uncompressed portable directory under `dist/`; Windows release
-output contains a portable ZIP and an Inno Setup `-setup.exe` installer.
+macOS release output contains only a DMG and its checksum manifest. Windows
+debug output remains an uncompressed portable directory under `dist/`; Windows
+release output contains a portable ZIP and an Inno Setup `-setup.exe` installer.
 
 macOS debug output remains an uncompressed `.app` bundle under `dist/`.
 
-The macOS build scripts are non-interactive: they do not access Keychain or
-launch the built app. Run the credential and launch checks explicitly when
-needed:
+The macOS build scripts are non-interactive and do not launch the built app.
+Signed release builds access the Developer ID certificate and `notarytool`
+profile in Keychain. Run the app credential round-trip and launch checks
+explicitly when needed:
 
 ```bash
 flutter test integration_test/secure_credential_store_test.dart -d macos
