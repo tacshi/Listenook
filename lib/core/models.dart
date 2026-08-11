@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 2;
+const int manifestVersion = 3;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 enum JobStatus {
@@ -53,6 +53,8 @@ enum ExportFormat { txt, markdown, srt, webVtt }
 enum ExportContentMode { original, translated, bilingual }
 
 enum TranslationViewMode { original, translated, bilingual }
+
+enum TranslationOrigin { soniox, llm }
 
 enum TranslationProviderTemplate {
   custom,
@@ -193,6 +195,8 @@ class TranscriptToken {
     this.speaker,
     this.language,
     this.confidence,
+    this.translationStatus,
+    this.sourceLanguage,
   });
 
   final String text;
@@ -201,6 +205,8 @@ class TranscriptToken {
   final String? speaker;
   final String? language;
   final double? confidence;
+  final String? translationStatus;
+  final String? sourceLanguage;
 
   Map<String, dynamic> toJson() => {
     'text': text,
@@ -209,6 +215,8 @@ class TranscriptToken {
     if (speaker case final value?) 'speaker': value,
     if (language case final value?) 'language': value,
     if (confidence case final value?) 'confidence': value,
+    if (translationStatus case final value?) 'translation_status': value,
+    if (sourceLanguage case final value?) 'source_language': value,
   };
 
   factory TranscriptToken.fromJson(Map<String, dynamic> json) =>
@@ -219,6 +227,8 @@ class TranscriptToken {
         speaker: json['speaker']?.toString(),
         language: json['language'] as String?,
         confidence: (json['confidence'] as num?)?.toDouble(),
+        translationStatus: json['translation_status'] as String?,
+        sourceLanguage: json['source_language'] as String?,
       );
 }
 
@@ -343,26 +353,66 @@ class TranscriptDocument {
       );
 }
 
+class SonioxTranslationOptions {
+  const SonioxTranslationOptions({
+    this.enabled = false,
+    this.targetLanguage = '',
+  });
+
+  final bool enabled;
+  final String targetLanguage;
+
+  String? validationError() {
+    if (!enabled) return null;
+    if (!supportedSonioxTranslationLanguageCodes.contains(targetLanguage)) {
+      return 'soniox_translation_invalid_language';
+    }
+    return null;
+  }
+
+  SonioxTranslationOptions copyWith({bool? enabled, String? targetLanguage}) =>
+      SonioxTranslationOptions(
+        enabled: enabled ?? this.enabled,
+        targetLanguage: targetLanguage ?? this.targetLanguage,
+      );
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'target_language': targetLanguage,
+  };
+
+  factory SonioxTranslationOptions.fromJson(Map<String, dynamic>? json) =>
+      SonioxTranslationOptions(
+        enabled: json?['enabled'] as bool? ?? false,
+        targetLanguage: json?['target_language'] as String? ?? '',
+      );
+}
+
 class TranscriptionOptions {
   const TranscriptionOptions({
     this.languageHints = const [],
     this.contextTerms = const [],
+    this.sonioxTranslation = const SonioxTranslationOptions(),
   });
 
   final List<String> languageHints;
   final List<String> contextTerms;
+  final SonioxTranslationOptions sonioxTranslation;
 
   TranscriptionOptions copyWith({
     List<String>? languageHints,
     List<String>? contextTerms,
+    SonioxTranslationOptions? sonioxTranslation,
   }) => TranscriptionOptions(
     languageHints: languageHints ?? this.languageHints,
     contextTerms: contextTerms ?? this.contextTerms,
+    sonioxTranslation: sonioxTranslation ?? this.sonioxTranslation,
   );
 
   Map<String, dynamic> toJson() => {
     'language_hints': languageHints,
     'context_terms': contextTerms,
+    'soniox_translation': sonioxTranslation.toJson(),
     'enable_speaker_diarization': true,
     'enable_language_identification': true,
   };
@@ -371,6 +421,9 @@ class TranscriptionOptions {
       TranscriptionOptions(
         languageHints: _strings(json?['language_hints']),
         contextTerms: _strings(json?['context_terms']),
+        sonioxTranslation: SonioxTranslationOptions.fromJson(
+          (json?['soniox_translation'] as Map?)?.cast<String, dynamic>(),
+        ),
       );
 }
 
@@ -513,6 +566,7 @@ class TranslationState {
     this.status = TranslationStatus.idle,
     this.targetLanguage = '',
     this.model = '',
+    this.origin,
     this.completedSegments = 0,
     this.totalSegments = 0,
     this.errorCode,
@@ -522,6 +576,7 @@ class TranslationState {
   final TranslationStatus status;
   final String targetLanguage;
   final String model;
+  final TranslationOrigin? origin;
   final int completedSegments;
   final int totalSegments;
   final String? errorCode;
@@ -534,15 +589,18 @@ class TranslationState {
     TranslationStatus? status,
     String? targetLanguage,
     String? model,
+    TranslationOrigin? origin,
     int? completedSegments,
     int? totalSegments,
     String? errorCode,
     String? errorMessage,
     bool clearError = false,
+    bool clearOrigin = false,
   }) => TranslationState(
     status: status ?? this.status,
     targetLanguage: targetLanguage ?? this.targetLanguage,
     model: model ?? this.model,
+    origin: clearOrigin ? null : origin ?? this.origin,
     completedSegments: completedSegments ?? this.completedSegments,
     totalSegments: totalSegments ?? this.totalSegments,
     errorCode: clearError ? null : errorCode ?? this.errorCode,
@@ -553,6 +611,7 @@ class TranslationState {
     'status': status.name,
     'target_language': targetLanguage,
     'model': model,
+    if (origin case final value?) 'origin': value.name,
     'completed_segments': completedSegments,
     'total_segments': totalSegments,
     if (errorCode case final value?) 'error_code': value,
@@ -566,6 +625,7 @@ class TranslationState {
             TranslationStatus.idle,
         targetLanguage: json?['target_language'] as String? ?? '',
         model: json?['model'] as String? ?? '',
+        origin: _enumByName(TranslationOrigin.values, json?['origin']),
         completedSegments: (json?['completed_segments'] as num?)?.toInt() ?? 0,
         totalSegments: (json?['total_segments'] as num?)?.toInt() ?? 0,
         errorCode: json?['error_code'] as String?,
@@ -602,6 +662,69 @@ const supportedTranslationLanguageCodes = <String>[
   'he',
   'id',
   'ms',
+];
+
+const supportedSonioxTranslationLanguageCodes = <String>[
+  'af',
+  'sq',
+  'ar',
+  'az',
+  'eu',
+  'be',
+  'bn',
+  'bs',
+  'bg',
+  'ca',
+  'zh',
+  'hr',
+  'cs',
+  'da',
+  'nl',
+  'en',
+  'et',
+  'fi',
+  'fr',
+  'gl',
+  'de',
+  'el',
+  'gu',
+  'he',
+  'hi',
+  'hu',
+  'id',
+  'it',
+  'ja',
+  'kn',
+  'kk',
+  'ko',
+  'lv',
+  'lt',
+  'mk',
+  'ms',
+  'ml',
+  'mr',
+  'no',
+  'fa',
+  'pl',
+  'pt',
+  'pa',
+  'ro',
+  'ru',
+  'sr',
+  'sk',
+  'sl',
+  'es',
+  'sw',
+  'sv',
+  'tl',
+  'ta',
+  'te',
+  'th',
+  'tr',
+  'uk',
+  'ur',
+  'vi',
+  'cy',
 ];
 
 class ExportOptions {
@@ -664,6 +787,7 @@ class AppSettings {
     this.onboardingComplete = false,
     this.ffmpegOverride,
     this.translationSettings = const TranslationSettings(),
+    this.sonioxTranslation = const SonioxTranslationOptions(),
   });
 
   final AppThemeMode themeMode;
@@ -675,6 +799,7 @@ class AppSettings {
   final bool onboardingComplete;
   final String? ffmpegOverride;
   final TranslationSettings translationSettings;
+  final SonioxTranslationOptions sonioxTranslation;
 
   AppSettings copyWith({
     AppThemeMode? themeMode,
@@ -687,6 +812,7 @@ class AppSettings {
     String? ffmpegOverride,
     bool clearFfmpegOverride = false,
     TranslationSettings? translationSettings,
+    SonioxTranslationOptions? sonioxTranslation,
   }) => AppSettings(
     themeMode: themeMode ?? this.themeMode,
     localeMode: localeMode ?? this.localeMode,
@@ -699,6 +825,7 @@ class AppSettings {
         ? null
         : ffmpegOverride ?? this.ffmpegOverride,
     translationSettings: translationSettings ?? this.translationSettings,
+    sonioxTranslation: sonioxTranslation ?? this.sonioxTranslation,
   );
 
   Map<String, dynamic> toJson() => {
@@ -712,6 +839,7 @@ class AppSettings {
     'onboarding_complete': onboardingComplete,
     if (ffmpegOverride case final value?) 'ffmpeg_override': value,
     'translation_settings': translationSettings.toJson(),
+    'soniox_translation': sonioxTranslation.toJson(),
   };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -731,6 +859,9 @@ class AppSettings {
     ffmpegOverride: json['ffmpeg_override'] as String?,
     translationSettings: TranslationSettings.fromJson(
       (json['translation_settings'] as Map?)?.cast<String, dynamic>(),
+    ),
+    sonioxTranslation: SonioxTranslationOptions.fromJson(
+      (json['soniox_translation'] as Map?)?.cast<String, dynamic>(),
     ),
   );
 }

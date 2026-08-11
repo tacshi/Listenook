@@ -15,11 +15,17 @@ import '../core/models.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
+import 'review_fullscreen_controller.dart';
 import 'workspace_page.dart';
 
 class TranscriptReview extends StatefulWidget {
-  const TranscriptReview({super.key, required this.jobId});
+  const TranscriptReview({
+    super.key,
+    required this.jobId,
+    this.fullscreenController,
+  });
   final String jobId;
+  final ReviewFullscreenController? fullscreenController;
 
   @override
   State<TranscriptReview> createState() => _TranscriptReviewState();
@@ -44,6 +50,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
   StreamSubscription<double>? _rateSubscription;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
   final _videoKey = GlobalKey<VideoState>();
+  late final ReviewFullscreenController _localFullscreenController;
+  NavigatorState? _rootNavigator;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   double _videoAspectRatio = 16 / 9;
@@ -66,20 +74,28 @@ class _TranscriptReviewState extends State<TranscriptReview>
   String? _waveformPath;
   bool _waveformLoading = false;
   double _videoPaneFraction = .55;
+  int _sourceRequest = 0;
+
+  ReviewFullscreenController get _fullscreenController =>
+      widget.fullscreenController ?? _localFullscreenController;
 
   @override
   void initState() {
     super.initState();
+    _localFullscreenController = ReviewFullscreenController();
     windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _rootNavigator = Navigator.of(context, rootNavigator: true);
+  }
+
+  @override
   void onWindowLeaveFullScreen() {
-    final videoState = _videoKey.currentState;
-    if (videoState != null && videoState.isFullscreen()) {
-      unawaited(videoState.exitFullscreen());
-    }
+    unawaited(_fullscreenController.exit());
   }
 
   void _ensurePlayer() {
@@ -118,6 +134,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   void didUpdateWidget(covariant TranscriptReview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.jobId != widget.jobId) {
+      _sourceRequest++;
       _search.clear();
       _position = Duration.zero;
       _duration = Duration.zero;
@@ -220,14 +237,20 @@ class _TranscriptReviewState extends State<TranscriptReview>
         .where((item) => item.id == widget.jobId)
         .firstOrNull;
     if (job == null || job.sourcePath == _openedPath) return;
+    final request = ++_sourceRequest;
     _openedPath = job.sourcePath;
     if (await File(job.sourcePath).exists()) {
+      if (!mounted || request != _sourceRequest || widget.jobId != job.id) {
+        return;
+      }
       _ensurePlayer();
       if (!(job.metadata?.hasVideo ?? false)) {
         unawaited(_loadWaveform(job));
       }
       await _player!.open(Media(job.sourcePath), play: false);
-      if (mounted) setState(() {});
+      if (mounted && request == _sourceRequest && widget.jobId == job.id) {
+        setState(() {});
+      }
     }
   }
 
@@ -428,11 +451,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
       onPlayPause: _player!.playOrPause,
       onSeek: _seek,
       onFullscreen: _toggleFullscreen,
+      onExitFullscreen: _fullscreenController.exit,
       onSeekBackward: () => _seekRelative(-const Duration(seconds: 5)),
       onSeekForward: () => _seekRelative(const Duration(seconds: 5)),
       onPlaybackRateChanged: _setPlaybackRate,
       onDecreaseSpeed: () => _changePlaybackRate(-.25),
       onIncreaseSpeed: () => _changePlaybackRate(.25),
+      onEnterNativeFullscreen: _enterNativeFullscreen,
+      onExitNativeFullscreen: _exitNativeFullscreen,
     );
     if (!fillHeight && (job.metadata?.hasVideo ?? false)) {
       return SizedBox(
@@ -582,7 +608,22 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   Future<void> _toggleFullscreen() async {
     final videoState = _videoKey.currentState;
-    if (videoState != null) await videoState.toggleFullscreen();
+    if (videoState != null && !_fullscreenController.isActive) {
+      await videoState.enterFullscreen();
+    }
+  }
+
+  Future<void> _enterNativeFullscreen() async {
+    final navigator = _rootNavigator;
+    if (navigator != null && navigator.mounted) {
+      _fullscreenController.markEntered(navigator);
+    }
+    await defaultEnterNativeFullscreen();
+  }
+
+  Future<void> _exitNativeFullscreen() async {
+    _fullscreenController.markExited();
+    await defaultExitNativeFullscreen();
   }
 
   Future<void> _seek(Duration position) async {
@@ -894,7 +935,7 @@ class _ReviewHeader extends StatelessWidget {
           IconButton(
             key: const Key('translate-transcript'),
             tooltip: controller.translationConfigured
-                ? context.strings.t('translate')
+                ? context.strings.t('translate_with_llm')
                 : context.strings.t('auto_translate_requires_config'),
             onPressed:
                 controller.translationConfigured &&
@@ -1031,14 +1072,14 @@ class _TranscriptToolbar extends StatelessWidget {
                         ? () => controller.retryTranslation(job.id)
                         : null,
                     icon: const Icon(Icons.refresh_rounded),
-                    label: Text(context.strings.t('retry_missing')),
+                    label: Text(context.strings.t('retry_missing_with_llm')),
                   ),
                 if (!job.translationState.status.isActive)
                   TextButton(
                     onPressed: controller.translationConfigured
                         ? () => _confirmRetranslateAll(context, job)
                         : null,
-                    child: Text(context.strings.t('retranslate_all')),
+                    child: Text(context.strings.t('retranslate_all_with_llm')),
                   ),
               ],
             ),
@@ -1095,7 +1136,7 @@ Future<void> _showTranslationDialog(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
-        title: Text(context.strings.t('translation_dialog_title')),
+        title: Text(context.strings.t('translate_with_llm')),
         content: SizedBox(
           width: 380,
           child: Column(
@@ -1140,7 +1181,7 @@ Future<void> _showTranslationDialog(
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, target),
-            child: Text(context.strings.t('translate')),
+            child: Text(context.strings.t('translate_with_llm')),
           ),
         ],
       ),
@@ -1375,7 +1416,9 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
                     if (widget.onRetranslate != null)
                       PopupMenuItem(
                         value: 'retranslate',
-                        child: Text(context.strings.t('retranslate_segment')),
+                        child: Text(
+                          context.strings.t('retranslate_segment_with_llm'),
+                        ),
                       ),
                   ],
                 ),
@@ -1437,11 +1480,14 @@ class _MediaPane extends StatelessWidget {
     required this.onPlayPause,
     required this.onSeek,
     required this.onFullscreen,
+    required this.onExitFullscreen,
     required this.onSeekBackward,
     required this.onSeekForward,
     required this.onPlaybackRateChanged,
     required this.onDecreaseSpeed,
     required this.onIncreaseSpeed,
+    required this.onEnterNativeFullscreen,
+    required this.onExitNativeFullscreen,
   });
 
   final TranscriptionJob job;
@@ -1461,11 +1507,14 @@ class _MediaPane extends StatelessWidget {
   final Future<void> Function() onPlayPause;
   final Future<void> Function(Duration) onSeek;
   final Future<void> Function() onFullscreen;
+  final Future<void> Function() onExitFullscreen;
   final Future<void> Function() onSeekBackward;
   final Future<void> Function() onSeekForward;
   final Future<void> Function(double) onPlaybackRateChanged;
   final Future<void> Function() onDecreaseSpeed;
   final Future<void> Function() onIncreaseSpeed;
+  final Future<void> Function() onEnterNativeFullscreen;
+  final Future<void> Function() onExitNativeFullscreen;
 
   @override
   Widget build(BuildContext context) {
@@ -1537,7 +1586,7 @@ class _MediaPane extends StatelessWidget {
                         playing: playing,
                         position: position,
                         duration: mediaDuration,
-                        onExit: () => unawaited(state.exitFullscreen()),
+                        onExit: () => unawaited(onExitFullscreen()),
                         onPlayPause: () => unawaited(onPlayPause()),
                         onSeek: (value) => unawaited(onSeek(value)),
                         onSeekBackward: () => unawaited(onSeekBackward()),
@@ -1547,6 +1596,8 @@ class _MediaPane extends StatelessWidget {
                         child: const SizedBox.expand(),
                       )
                     : const SizedBox.shrink(),
+                onEnterFullscreen: onEnterNativeFullscreen,
+                onExitFullscreen: onExitNativeFullscreen,
               ),
             ),
             SizedBox(

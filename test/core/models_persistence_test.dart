@@ -42,9 +42,10 @@ void main() {
     expect(job.document!.segments.single.translatedText, isNull);
     expect(job.translationState.status, TranslationStatus.idle);
     expect(job.translationOptions.enabled, isFalse);
+    expect(job.options.sonioxTranslation.enabled, isFalse);
   });
 
-  test('version 2 manifests round-trip translation without credentials', () {
+  test('version 3 manifests round-trip translation without credentials', () {
     final now = DateTime.utc(2026, 8, 11);
     final job = TranscriptionJob(
       id: 'translated',
@@ -53,8 +54,23 @@ void main() {
       createdAt: now,
       updatedAt: now,
       status: JobStatus.completed,
+      options: const TranscriptionOptions(
+        sonioxTranslation: SonioxTranslationOptions(
+          enabled: true,
+          targetLanguage: 'zh',
+        ),
+      ),
       document: TranscriptDocument(
-        tokens: const [],
+        tokens: const [
+          TranscriptToken(
+            text: '你好',
+            startMs: 0,
+            endMs: 0,
+            language: 'zh',
+            sourceLanguage: 'en',
+            translationStatus: 'translation',
+          ),
+        ],
         segments: const [
           TranscriptSegment(
             id: 'one',
@@ -77,6 +93,7 @@ void main() {
         status: TranslationStatus.completed,
         targetLanguage: 'zh-Hans',
         model: 'example-model',
+        origin: TranslationOrigin.llm,
         completedSegments: 1,
         totalSegments: 1,
       ),
@@ -85,11 +102,27 @@ void main() {
     final json = job.toJson();
     final restored = TranscriptionJob.fromJson(json);
 
-    expect(json['manifest_version'], 2);
+    expect(json['manifest_version'], 3);
     expect(job.toJsonString(), isNot(contains('api_key')));
     expect(restored.document!.segments.single.translatedText, '你好');
     expect(restored.translationState.status, TranslationStatus.completed);
+    expect(restored.translationState.origin, TranslationOrigin.llm);
+    expect(restored.options.sonioxTranslation.enabled, isTrue);
+    expect(restored.options.sonioxTranslation.targetLanguage, 'zh');
+    expect(restored.document!.tokens.single.translationStatus, 'translation');
+    expect(restored.document!.tokens.single.sourceLanguage, 'en');
     expect(const AppSettings().toJson().toString(), isNot(contains('api_key')));
+
+    final appSettings = AppSettings.fromJson(
+      const AppSettings(
+        sonioxTranslation: SonioxTranslationOptions(
+          enabled: true,
+          targetLanguage: 'ja',
+        ),
+      ).toJson(),
+    );
+    expect(appSettings.sonioxTranslation.enabled, isTrue);
+    expect(appSettings.sonioxTranslation.targetLanguage, 'ja');
   });
 
   test('job persistence is atomic and round-trips edits', () async {

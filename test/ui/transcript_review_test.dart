@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +12,7 @@ import 'package:meow_stt/l10n/strings.dart';
 import 'package:meow_stt/state/app_controller.dart';
 import 'package:meow_stt/ui/app_shell.dart';
 import 'package:meow_stt/ui/library_page.dart';
+import 'package:meow_stt/ui/review_fullscreen_controller.dart';
 import 'package:meow_stt/ui/transcript_review.dart';
 import 'package:meow_stt/ui/workspace_page.dart';
 import 'package:provider/provider.dart';
@@ -1693,6 +1696,85 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('queue selection exits fullscreen before replacing the review', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final now = DateTime.now().toUtc();
+    final document = _simpleDocument();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        for (final id in ['first', 'second'])
+          TranscriptionJob(
+            id: id,
+            batchId: 'batch',
+            sourcePath: '/missing/$id.wav',
+            createdAt: now,
+            updatedAt: now,
+            status: JobStatus.completed,
+            document: document,
+          ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller
+      ..reopen('first')
+      ..reopen('second')
+      ..selectJob('first');
+    final fullscreen = ReviewFullscreenController();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: Scaffold(
+            body: WorkspacePage(
+              onAddFiles: _noop,
+              onAddFolder: _noop,
+              fullscreenController: fullscreen,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    fullscreen.markEntered(navigator);
+    unawaited(
+      navigator.push<void>(
+        MaterialPageRoute(
+          builder: (_) => const Scaffold(
+            body: Text('Fullscreen route', key: Key('test-fullscreen-route')),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final secondTile = find.ancestor(
+      of: find.text('second.wav', skipOffstage: false),
+      matching: find.byType(InkWell, skipOffstage: false),
+    );
+    tester.widget<InkWell>(secondTile.first).onTap!();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('test-fullscreen-route')), findsNothing);
+    expect(fullscreen.isActive, isFalse);
+    expect(controller.selectedJobId, 'second');
+    expect(find.byType(TranscriptReview), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('video review stacks cleanly at the minimum window size', (
     tester,
   ) async {
@@ -2239,6 +2321,67 @@ void main() {
     ]);
   });
 
+  testWidgets('workspace replaces LLM controls with Soniox translation', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(
+        const AppSettings(
+          sonioxTranslation: SonioxTranslationOptions(
+            enabled: true,
+            targetLanguage: 'zh',
+          ),
+          translationSettings: TranslationSettings(
+            baseUrl: 'https://example.test/v1',
+            model: 'configured-llm',
+          ),
+        ),
+      ),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'ready',
+          batchId: 'batch',
+          sourcePath: '/missing/ready.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+        ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.reopen('ready');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(
+            body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('soniox-translation-summary')), findsOneWidget);
+    expect(find.text('Soniox built-in translation'), findsOneWidget);
+    expect(find.text('Chinese'), findsOneWidget);
+    expect(find.text('LLM Translation'), findsNothing);
+    expect(find.byKey(const Key('translation-target-language')), findsNothing);
+    expect(find.byKey(const Key('auto-translate-switch')), findsNothing);
+  });
+
   testWidgets('workspace keeps two panes at Windows initial content width', (
     tester,
   ) async {
@@ -2764,11 +2907,15 @@ class _Credentials implements CredentialStore {
 }
 
 class _Settings implements SettingsRepository {
-  @override
-  Future<AppSettings> load() async => const AppSettings();
+  _Settings([this.value = const AppSettings()]);
+
+  AppSettings value;
 
   @override
-  Future<void> save(AppSettings settings) async {}
+  Future<AppSettings> load() async => value;
+
+  @override
+  Future<void> save(AppSettings settings) async => value = settings;
 }
 
 class _Jobs implements JobRepository {

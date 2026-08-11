@@ -344,6 +344,7 @@ void main() {
       expect(result.status, JobStatus.completed);
       expect(result.document, isNotNull);
       expect(result.translationState.status, TranslationStatus.failed);
+      expect(result.translationState.origin, TranslationOrigin.llm);
       expect(result.translationState.errorCode, 'translation_rate_limit');
     },
   );
@@ -446,6 +447,201 @@ void main() {
     expect(result.translationState.status, TranslationStatus.partial);
     expect(result.translationState.completedSegments, 1);
     expect(result.status, JobStatus.completed);
+  });
+
+  test(
+    'Soniox translation completes in the transcription pass without LLM work',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('meow-soniox-');
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/translated.wav');
+      await file.writeAsBytes([1, 2, 3]);
+      final soniox = _Soniox(
+        transcriptPayload: {
+          'tokens': [
+            {
+              'text': 'Hello.',
+              'start_ms': 0,
+              'end_ms': 800,
+              'speaker': '1',
+              'language': 'en',
+              'translation_status': 'original',
+            },
+            {
+              'text': 'Hola.',
+              'language': 'es',
+              'source_language': 'en',
+              'translation_status': 'translation',
+            },
+          ],
+        },
+      );
+      final llm = _SuccessfulTranslation();
+      final settings = _Settings(
+        const AppSettings(
+          sonioxTranslation: SonioxTranslationOptions(
+            enabled: true,
+            targetLanguage: 'es',
+          ),
+          translationSettings: TranslationSettings(
+            provider: TranslationProviderTemplate.openAi,
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'translation-model',
+            targetLanguage: 'es',
+            autoTranslate: true,
+          ),
+        ),
+      );
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: soniox,
+        settings: settings,
+        translationCredentials: _TranslationCredentials(),
+        translationService: llm,
+      );
+      await controller.initialize();
+      await controller.addSources([file.path]);
+      await _waitFor(() => controller.readyCount == 1);
+
+      await controller.startReady();
+
+      final result = controller.workspaceJobs.single;
+      expect(settings.value.translationSettings.autoTranslate, isFalse);
+      expect(soniox.createdOptions?.sonioxTranslation.enabled, isTrue);
+      expect(result.document!.segments.single.translatedText, 'Hola.');
+      expect(result.translationState.status, TranslationStatus.completed);
+      expect(result.translationState.origin, TranslationOrigin.soniox);
+      expect(result.translationState.targetLanguage, 'es');
+      expect(llm.calls, 0);
+    },
+  );
+
+  test('automatic Soniox and LLM translation settings are exclusive', () async {
+    final directory = await Directory.systemTemp.createTemp('meow-modes-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/queued.wav');
+    await file.writeAsBytes([1]);
+    final settings = _Settings(
+      const AppSettings(
+        sonioxTranslation: SonioxTranslationOptions(targetLanguage: 'es'),
+        translationSettings: TranslationSettings(
+          provider: TranslationProviderTemplate.openAi,
+          baseUrl: 'https://api.openai.com/v1',
+          model: 'translation-model',
+          targetLanguage: 'es',
+          autoTranslate: true,
+        ),
+      ),
+    );
+    final controller = _controller(
+      jobs: _Jobs(),
+      soniox: _Soniox(),
+      settings: settings,
+      translationCredentials: _TranslationCredentials(),
+      translationService: _SuccessfulTranslation(),
+    );
+    await controller.initialize();
+    await controller.addSources([file.path]);
+    await _waitFor(() => controller.readyCount == 1);
+    expect(controller.workspaceJobs.single.translationOptions.enabled, isTrue);
+
+    final sonioxError = await controller.updateSonioxTranslation(
+      const SonioxTranslationOptions(enabled: true, targetLanguage: 'es'),
+    );
+
+    expect(sonioxError, isNull);
+    expect(controller.settings.sonioxTranslation.enabled, isTrue);
+    expect(controller.settings.translationSettings.autoTranslate, isFalse);
+    expect(
+      controller.workspaceJobs.single.options.sonioxTranslation.enabled,
+      isTrue,
+    );
+    expect(controller.workspaceJobs.single.translationOptions.enabled, isFalse);
+
+    final llmError = await controller.updateTranslationDefaults(
+      controller.settings.translationSettings.copyWith(autoTranslate: true),
+    );
+
+    expect(llmError, isNull);
+    expect(controller.settings.sonioxTranslation.enabled, isFalse);
+    expect(controller.settings.translationSettings.autoTranslate, isTrue);
+    expect(
+      controller.workspaceJobs.single.options.sonioxTranslation.enabled,
+      isFalse,
+    );
+    expect(controller.workspaceJobs.single.translationOptions.enabled, isTrue);
+  });
+
+  test('automatic mode changes do not alter submitted remote jobs', () async {
+    final directory = await Directory.systemTemp.createTemp('meow-submitted-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/submitted.wav');
+    await file.writeAsBytes([1]);
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'submitted',
+        batchId: 'batch',
+        sourcePath: file.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.processing,
+        metadata: const MediaMetadata(
+          sizeBytes: 1,
+          durationMs: 1000,
+          hasAudio: true,
+          hasVideo: false,
+          formatName: 'wav',
+        ),
+        remoteFileId: 'file-submitted',
+        remoteTranscriptionId: 'tx-submitted',
+        cleanupState: CleanupState.pending,
+        options: const TranscriptionOptions(
+          sonioxTranslation: SonioxTranslationOptions(targetLanguage: 'es'),
+        ),
+        translationOptions: const TranslationOptions(
+          enabled: true,
+          targetLanguage: 'es',
+          baseUrl: 'https://api.openai.com/v1',
+          model: 'translation-model',
+        ),
+      ),
+    ]);
+    final pollingGate = Completer<void>();
+    final settings = _Settings(
+      const AppSettings(
+        sonioxTranslation: SonioxTranslationOptions(targetLanguage: 'es'),
+        translationSettings: TranslationSettings(
+          provider: TranslationProviderTemplate.openAi,
+          baseUrl: 'https://api.openai.com/v1',
+          model: 'translation-model',
+          targetLanguage: 'es',
+          autoTranslate: true,
+        ),
+      ),
+    );
+    final controller = _controller(
+      jobs: jobs,
+      soniox: _Soniox(pollingGate: pollingGate),
+      settings: settings,
+      translationCredentials: _TranslationCredentials(),
+      translationService: _SuccessfulTranslation(),
+    );
+    await controller.initialize();
+    await _waitFor(() => controller.processing);
+
+    await controller.updateSonioxTranslation(
+      const SonioxTranslationOptions(enabled: true, targetLanguage: 'es'),
+    );
+
+    final submitted = controller.workspaceJobs.single;
+    expect(submitted.options.sonioxTranslation.enabled, isFalse);
+    expect(submitted.translationOptions.enabled, isTrue);
+
+    pollingGate.complete();
+    await _waitFor(
+      () => controller.workspaceJobs.single.status == JobStatus.completed,
+    );
   });
 
   test(
@@ -720,6 +916,7 @@ class _FailingTranslation implements TranslationService {
 }
 
 class _SuccessfulTranslation implements TranslationService {
+  int calls = 0;
   final segmentIds = <String>[];
 
   @override
@@ -741,6 +938,7 @@ class _SuccessfulTranslation implements TranslationService {
     onBatch,
     CancelCheck? shouldCancel,
   }) async {
+    calls++;
     segmentIds.addAll(segments.map((segment) => segment.id));
     await onBatch(
       {
@@ -823,19 +1021,29 @@ class _FailingMedia extends _Media {
 }
 
 class _Soniox implements SonioxClient {
-  _Soniox({this.uploadDelay = Duration.zero});
+  _Soniox({
+    this.uploadDelay = Duration.zero,
+    this.transcriptPayload,
+    this.pollingGate,
+  });
   final Duration uploadDelay;
+  final Map<String, dynamic>? transcriptPayload;
+  final Completer<void>? pollingGate;
   int currentUploads = 0;
   int maximumUploads = 0;
   int uploadCalls = 0;
   final deletedFiles = <String>[];
   final deletedTranscriptions = <String>[];
+  TranscriptionOptions? createdOptions;
 
   @override
   Future<String> createTranscription(
     String fileId,
     TranscriptionOptions options,
-  ) async => 'tx-$fileId';
+  ) async {
+    createdOptions = options;
+    return 'tx-$fileId';
+  }
 
   @override
   Future<void> deleteFile(String id) async => deletedFiles.add(id);
@@ -845,15 +1053,19 @@ class _Soniox implements SonioxClient {
       deletedTranscriptions.add(id);
 
   @override
-  Future<Map<String, dynamic>> getTranscript(String id) async => {
-    'tokens': [
-      {'text': 'Done.', 'start_ms': 0, 'end_ms': 800, 'speaker': '1'},
-    ],
-  };
+  Future<Map<String, dynamic>> getTranscript(String id) async =>
+      transcriptPayload ??
+      {
+        'tokens': [
+          {'text': 'Done.', 'start_ms': 0, 'end_ms': 800, 'speaker': '1'},
+        ],
+      };
 
   @override
-  Future<SonioxTranscriptionState> getTranscription(String id) async =>
-      const SonioxTranscriptionState(status: 'completed');
+  Future<SonioxTranscriptionState> getTranscription(String id) async {
+    await pollingGate?.future;
+    return const SonioxTranscriptionState(status: 'completed');
+  }
 
   @override
   Future<String> uploadFile(

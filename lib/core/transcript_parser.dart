@@ -3,7 +3,10 @@ import 'models.dart';
 class TranscriptParser {
   const TranscriptParser();
 
-  TranscriptDocument parse(Map<String, dynamic> payload) {
+  TranscriptDocument parse(
+    Map<String, dynamic> payload, {
+    String? sonioxTranslationTargetLanguage,
+  }) {
     final rawTokens = payload['tokens'] is List
         ? payload['tokens'] as List
         : payload['transcript'] is Map &&
@@ -16,7 +19,16 @@ class TranscriptParser {
         .map((json) => TranscriptToken.fromJson(json.cast<String, dynamic>()))
         .where((token) => token.text.trim().isNotEmpty)
         .toList(growable: false);
-    final segments = _segments(tokens);
+    final hasSonioxTranslation =
+        sonioxTranslationTargetLanguage != null ||
+        tokens.any(
+          (token) =>
+              token.translationStatus == 'original' ||
+              token.translationStatus == 'translation',
+        );
+    final segments = hasSonioxTranslation
+        ? _translatedSegments(tokens, sonioxTranslationTargetLanguage)
+        : _segments(tokens);
     final speakerIds =
         tokens
             .map((token) => token.speaker)
@@ -30,12 +42,13 @@ class TranscriptParser {
         SpeakerProfile(id: speakerIds[index], name: 'Speaker ${index + 1}'),
     ];
 
-    return TranscriptDocument(
+    final document = TranscriptDocument(
       tokens: tokens,
       segments: segments,
       speakers: speakers,
       updatedAt: DateTime.now().toUtc(),
     );
+    return hasSonioxTranslation ? normalizeSegments(document) : document;
   }
 
   /// Repairs documents produced by older parser versions that split a single
@@ -132,6 +145,102 @@ class TranscriptParser {
     }
     flush();
     return result;
+  }
+
+  List<TranscriptSegment> _translatedSegments(
+    List<TranscriptToken> tokens,
+    String? targetLanguage,
+  ) {
+    final result = <TranscriptSegment>[];
+    var plain = <TranscriptToken>[];
+    var originals = <TranscriptToken>[];
+    var translations = <TranscriptToken>[];
+
+    void flushPlain() {
+      if (plain.isEmpty) return;
+      result.addAll(_segments(plain));
+      plain = <TranscriptToken>[];
+    }
+
+    void flushTranslated() {
+      if (originals.isNotEmpty) {
+        final timed = originals
+            .where((token) => token.startMs != 0 || token.endMs != 0)
+            .toList(growable: false);
+        final text = originals.map((token) => token.text).join().trim();
+        final language = originals
+            .map((token) => token.language)
+            .whereType<String>()
+            .firstOrNull;
+        final translated = translations
+            .map((token) => token.text)
+            .join()
+            .trim();
+        final alreadyInTarget =
+            translated.isEmpty &&
+            language != null &&
+            targetLanguage != null &&
+            language.toLowerCase() == targetLanguage.toLowerCase();
+        if (text.isNotEmpty) {
+          result.add(
+            TranscriptSegment(
+              id: '',
+              startMs: timed.isEmpty ? 0 : timed.first.startMs,
+              endMs: timed.isEmpty ? 0 : timed.last.endMs,
+              text: text,
+              speaker: originals
+                  .map((token) => token.speaker)
+                  .whereType<String>()
+                  .firstOrNull,
+              language: language,
+              translatedText: translated.isNotEmpty
+                  ? translated
+                  : alreadyInTarget
+                  ? text
+                  : null,
+            ),
+          );
+        }
+      }
+      originals = <TranscriptToken>[];
+      translations = <TranscriptToken>[];
+    }
+
+    for (final token in tokens) {
+      switch (token.translationStatus) {
+        case 'translation':
+          flushPlain();
+          translations.add(token);
+        case 'original':
+          flushPlain();
+          if (translations.isNotEmpty) flushTranslated();
+          originals.add(token);
+        default:
+          flushTranslated();
+          plain.add(token);
+      }
+    }
+    flushTranslated();
+    flushPlain();
+
+    return [
+      for (var index = 0; index < result.length; index++)
+        TranscriptSegment(
+          id: 'segment-${index + 1}',
+          startMs: result[index].startMs,
+          endMs: result[index].endMs,
+          text: result[index].text,
+          speaker: result[index].speaker,
+          language: result[index].language,
+          translatedText:
+              result[index].translatedText ??
+              (targetLanguage != null &&
+                      result[index].language?.toLowerCase() ==
+                          targetLanguage.toLowerCase()
+                  ? result[index].text
+                  : null),
+        ),
+    ];
   }
 
   bool _endsSentence(String text) =>

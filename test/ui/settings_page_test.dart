@@ -51,6 +51,29 @@ void main() {
     expect(find.byKey(const Key('session-language-hints-field')), findsNothing);
     expect(find.byKey(const Key('session-context-terms-field')), findsNothing);
 
+    final sonioxSwitch = find.byKey(const Key('soniox-translation-switch'));
+    final sonioxTarget = find.byKey(const Key('soniox-translation-target'));
+    final targetField = tester.widget<DropdownButtonFormField<String>>(
+      sonioxTarget,
+    );
+    expect(supportedSonioxTranslationLanguageCodes, hasLength(60));
+    expect(supportedSonioxTranslationLanguageCodes, contains('zh'));
+    expect(supportedSonioxTranslationLanguageCodes, isNot(contains('yue')));
+    expect(supportedSonioxTranslationLanguageCodes, isNot(contains('zh-Hans')));
+    expect(targetField.onChanged, isNull);
+
+    await tester.ensureVisible(sonioxSwitch);
+    await tester.tap(sonioxSwitch);
+    await tester.pumpAndSettle();
+    expect(controller.settings.sonioxTranslation.enabled, isTrue);
+    expect(
+      tester.widget<DropdownButtonFormField<String>>(sonioxTarget).onChanged,
+      isNotNull,
+    );
+    expect(find.text('LLM Translation'), findsNothing);
+    await tester.ensureVisible(find.byKey(const Key('soniox-key-field')));
+    await tester.pumpAndSettle();
+
     expect(
       tester
           .widget<FilledButton>(find.byKey(const Key('save-soniox-key')))
@@ -76,10 +99,14 @@ void main() {
           .onPressed,
       isNotNull,
     );
+    await tester.ensureVisible(find.byKey(const Key('test-soniox-key')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('test-soniox-key')));
     await tester.pumpAndSettle();
     expect(soniox.validatedKey, 'candidate-key');
 
+    await tester.ensureVisible(find.byKey(const Key('save-soniox-key')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('save-soniox-key')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));

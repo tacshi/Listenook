@@ -18,6 +18,7 @@ void main() {
   setUp(() async {
     requests.clear();
     authorizations.clear();
+    createBody = null;
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     directory = await Directory.systemTemp.createTemp('soniox-client-');
     client = SonioxApiClient(
@@ -98,7 +99,48 @@ void main() {
     expect(createBody!['enable_speaker_diarization'], isTrue);
     expect(createBody!['enable_language_identification'], isTrue);
     expect((createBody!['context'] as Map)['terms'], ['MeowSTT']);
+    expect(createBody!.containsKey('translation'), isFalse);
     expect(authorizations, everyElement('Bearer test-key'));
+  });
+
+  test('adds one-way translation to the transcription request', () async {
+    final id = await client.createTranscription(
+      'file-1',
+      const TranscriptionOptions(
+        sonioxTranslation: SonioxTranslationOptions(
+          enabled: true,
+          targetLanguage: 'es',
+        ),
+      ),
+    );
+
+    expect(id, 'tx-1');
+    expect(createBody!['translation'], {
+      'type': 'one_way',
+      'target_language': 'es',
+    });
+  });
+
+  test('rejects unsupported Soniox translation languages locally', () async {
+    await expectLater(
+      client.createTranscription(
+        'file-1',
+        const TranscriptionOptions(
+          sonioxTranslation: SonioxTranslationOptions(
+            enabled: true,
+            targetLanguage: 'yue',
+          ),
+        ),
+      ),
+      throwsA(
+        isA<SonioxException>().having(
+          (error) => error.code,
+          'code',
+          'soniox_translation_invalid_language',
+        ),
+      ),
+    );
+    expect(createBody, isNull);
   });
 
   test('validates the key currently being edited without saving it', () async {

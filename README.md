@@ -3,8 +3,9 @@
 MeowSTT is a batch-first Soniox transcription app for macOS and Windows. Drop
 audio, video, or folders; review the queue before spending API credit; then edit
 speaker-aware transcripts beside synchronized playback and export TXT,
-Markdown, SRT, or WebVTT. Transcripts can optionally be translated through one
-user-configured OpenAI-compatible text endpoint.
+Markdown, SRT, or WebVTT. Transcripts can optionally be translated during
+Soniox transcription or afterward through one user-configured OpenAI-compatible
+text endpoint.
 
 The package name is `meow_stt`. Its permanent desktop identity is
 `app.meowstt.desktop`.
@@ -21,6 +22,8 @@ The package name is `meow_stt`. Its permanent desktop identity is
 - Streaming Soniox multipart upload with `stt-async-v5`, automatic language
   identification, always-on diarization, language hints, context terms, stable
   error mapping, and transient polling backoff.
+- Optional one-way Soniox translation in the original async transcription job,
+  with provider-native language targets and no separate translation pass.
 - A local, searchable library; source relinking; editable segments and speaker
   names; video/audio playback; timestamp seeking; transcript search; clipboard
   copy; and batch re-export.
@@ -38,12 +41,13 @@ The package name is `meow_stt`. Its permanent desktop identity is
 ## Privacy model
 
 MeowSTT is BYOK and has no application backend. Starting a job uploads its
-media directly to Soniox. Translation is separate and optional: when requested,
-transcript text—not media—is sent to the single OpenAI-compatible endpoint saved
-in Settings. Manifests store paths, small metadata, raw transcript tokens,
-original and translated edits, translation progress, and only the remote IDs
-owned by that job—never media copies or API keys. Cleanup deletes only those
-owned Soniox file/transcription IDs.
+media directly to Soniox. Optional Soniox translation is performed within that
+same transcription request. Optional LLM translation is a separate operation;
+when requested, transcript text—not media—is sent to the single
+OpenAI-compatible endpoint saved in Settings. Manifests store paths, small
+metadata, raw transcript tokens, original and translated edits, translation
+progress, and only the remote IDs owned by that job—never media copies or API
+keys. Cleanup deletes only those owned Soniox file/transcription IDs.
 See [PRIVACY.md](PRIVACY.md).
 
 ## Development

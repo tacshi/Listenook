@@ -9,6 +9,7 @@ import 'package:window_manager/window_manager.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'library_page.dart';
+import 'review_fullscreen_controller.dart';
 import 'settings_page.dart';
 import 'workspace_page.dart';
 
@@ -24,6 +25,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
   bool _sidebarVisible = true;
   bool _closeDialogOpen = false;
   bool? _preventClose;
+  final _fullscreenController = ReviewFullscreenController();
   late final AppController _controller;
 
   @override
@@ -86,6 +88,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
   Future<void> onWindowClose() async {
     final controller = _controller;
     if (!controller.hasActiveWork) {
+      await _fullscreenController.exit();
       await windowManager.destroy();
       return;
     }
@@ -116,7 +119,13 @@ class _AppShellState extends State<AppShell> with WindowListener {
     _closeDialogOpen = false;
     if (choice == null || choice == 0) return;
     if (choice == 2) await controller.cancelRemoteJobsForQuit();
+    await _fullscreenController.exit();
     await windowManager.destroy();
+  }
+
+  Future<void> _setDestination(int index) async {
+    await _fullscreenController.exit();
+    if (mounted) _controller.setDestination(index);
   }
 
   Future<void> _addFiles() async {
@@ -222,8 +231,8 @@ class _AppShellState extends State<AppShell> with WindowListener {
                                     minWidth: 64,
                                     minExtendedWidth: 184,
                                     selectedIndex: controller.destinationIndex,
-                                    onDestinationSelected:
-                                        controller.setDestination,
+                                    onDestinationSelected: (index) =>
+                                        unawaited(_setDestination(index)),
                                     extended:
                                         MediaQuery.sizeOf(context).width >=
                                         1180,
@@ -261,6 +270,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
                             key: const ValueKey('workspace'),
                             onAddFiles: _addFiles,
                             onAddFolder: _addFolder,
+                            fullscreenController: _fullscreenController,
                           ),
                         },
                       ),
