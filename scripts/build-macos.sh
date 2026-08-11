@@ -27,6 +27,17 @@ if [[ "$ARCH" == "all" ]]; then ARCHES=(arm64 x64); fi
 for CURRENT_ARCH in "${ARCHES[@]}"; do
   EXPECTED_MACHO="$CURRENT_ARCH"
   if [[ "$CURRENT_ARCH" == "x64" ]]; then EXPECTED_MACHO="x86_64"; fi
+  OUT="$ROOT/dist"
+  BASE="MeowSTT-$VERSION-macos-$CURRENT_ARCH-$MODE"
+  if [[ "$MODE" == "debug" ]]; then
+    DEBUG_APP="$OUT/$BASE.app"
+    DEBUG_EXECUTABLE="$DEBUG_APP/Contents/MacOS/MeowSTT"
+    if bash "$ROOT/scripts/is-macos-app-running.sh" "$DEBUG_EXECUTABLE"; then
+      echo "Refusing to replace the running debug app: $DEBUG_APP" >&2
+      echo "Quit MeowSTT, then run this build again." >&2
+      exit 1
+    fi
+  fi
   echo "Building MeowSTT $VERSION macOS $CURRENT_ARCH $MODE"
   cd "$ROOT"
   if [[ "$MODE" == "debug" ]]; then
@@ -76,6 +87,7 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   cp "$ROOT/assets/third_party/"* "$APP/Contents/Resources/third_party/"
   cp "$ROOT/packaging/ffmpeg/manifest.json" "$APP/Contents/Resources/third_party/ffmpeg-manifest.json"
   chmod +x "$HELPER_DEST/ffmpeg" "$HELPER_DEST/ffprobe"
+  bash "$ROOT/scripts/strip-macos-download-metadata.sh" "$APP"
   SIGN_IDENTITY="${MEOWSTT_MAC_DEBUG_SIGN_IDENTITY:--}"
   if [[ "$MODE" == "release" ]]; then
     SIGN_IDENTITY="${MEOWSTT_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:--}}"
@@ -108,14 +120,14 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   codesign "${SIGN_ARGS[@]}" "$APP"
   codesign --verify --deep --strict "$APP"
 
-  OUT="$ROOT/dist"
   mkdir -p "$OUT"
-  BASE="MeowSTT-$VERSION-macos-$CURRENT_ARCH-$MODE"
   if [[ "$MODE" == "debug" ]]; then
-    DEBUG_APP="$OUT/$BASE.app"
+    DEBUG_STAGE="$OUT/.$BASE.app.staging"
     rm -f "$OUT/$BASE.app.zip"
+    rm -rf "$DEBUG_STAGE"
+    ditto "$APP" "$DEBUG_STAGE"
     rm -rf "$DEBUG_APP"
-    ditto "$APP" "$DEBUG_APP"
+    mv "$DEBUG_STAGE" "$DEBUG_APP"
   else
     ZIP="$OUT/$BASE.app.zip"
     rm -f "$ZIP"
