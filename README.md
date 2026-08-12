@@ -95,6 +95,14 @@ direct distributions do not require a provisioning profile or the restricted
 Keychain Sharing entitlement. macOS builds run a real Keychain round-trip
 integration test before packaging.
 
+Debug packages prefer the same Developer ID Application identity as releases:
+`MEOWSTT_MAC_DEBUG_SIGN_IDENTITY`, then `MEOWSTT_MAC_SIGN_IDENTITY`, then
+`DEVELOPER_ID_APPLICATION`. Without an explicit value, the script matches an
+available Developer ID identity to the Team ID of an existing release app, or
+uses the only available Developer ID identity. It warns and falls back to
+ad-hoc signing when no usable release identity exists or debug signing fails.
+Set `MEOWSTT_MAC_DEBUG_SIGN_IDENTITY=-` to force that fallback.
+
 Windows (Windows 10 22H2+, matching native host):
 
 ```powershell
