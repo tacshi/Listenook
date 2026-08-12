@@ -21,7 +21,14 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-VERSION="$(awk '/^version:/{print $2}' "$ROOT/pubspec.yaml" | cut -d+ -f1)"
+VERSION="${BUILD_NAME:-$(awk '/^version:/{print $2}' "$ROOT/pubspec.yaml" | cut -d+ -f1)}"
+FLUTTER_VERSION_ARGS=()
+if [[ -n "${BUILD_NAME:-}" ]]; then
+  FLUTTER_VERSION_ARGS+=(--build-name "$BUILD_NAME")
+fi
+if [[ -n "${BUILD_NUMBER:-}" ]]; then
+  FLUTTER_VERSION_ARGS+=(--build-number "$BUILD_NUMBER")
+fi
 ARCHES=("$ARCH")
 if [[ "$ARCH" == "all" ]]; then ARCHES=(arm64 x64); fi
 NOTARY_PROFILE="${MEOWSTT_NOTARY_PROFILE:-MeowSTT}"
@@ -54,7 +61,7 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   echo "Building MeowSTT $VERSION macOS $CURRENT_ARCH $MODE"
   cd "$ROOT"
   if [[ "$MODE" == "debug" ]]; then
-    flutter build macos --debug --config-only
+    flutter build macos --debug --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
     xcodebuild \
       -workspace macos/Runner.xcworkspace \
       -scheme Runner \
@@ -69,7 +76,7 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   else
     EXCLUDED="x86_64"
     if [[ "$CURRENT_ARCH" == "x64" ]]; then EXCLUDED="arm64"; fi
-    FLUTTER_XCODE_EXCLUDED_ARCHS="$EXCLUDED" flutter build macos --release --config-only
+    FLUTTER_XCODE_EXCLUDED_ARCHS="$EXCLUDED" flutter build macos --release --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
     xcodebuild \
       -workspace macos/Runner.xcworkspace \
       -scheme Runner \
@@ -168,6 +175,10 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
     else
       echo "Warning: ad hoc-signed release artifacts will not pass Gatekeeper." >&2
     fi
+
+    APP_ZIP="$OUT/$BASE.zip"
+    rm -f "$APP_ZIP"
+    ditto -c -k --keepParent "$APP" "$APP_ZIP"
   fi
 
   CHECKSUMS="$OUT/$BASE.sha256"

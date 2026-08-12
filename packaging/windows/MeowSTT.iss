@@ -65,3 +65,10 @@ Name: "{autodesktop}\MeowSTT"; Filename: "{app}\MeowSTT.exe"; WorkingDir: "{app}
 
 [Run]
 Filename: "{app}\MeowSTT.exe"; Description: "Launch MeowSTT"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\MeowSTT.exe"; Flags: nowait postinstall runasoriginaluser; Check: ShouldRelaunch
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
