@@ -118,14 +118,8 @@ void main() {
       shouldFocusTranscriptAfterSeek(TranscriptSeekReason.standard),
       isTrue,
     );
-    expect(
-      shouldFocusTranscriptOnPlaybackResume(repeating: true),
-      isFalse,
-    );
-    expect(
-      shouldFocusTranscriptOnPlaybackResume(repeating: false),
-      isTrue,
-    );
+    expect(shouldFocusTranscriptOnPlaybackResume(repeating: true), isFalse);
+    expect(shouldFocusTranscriptOnPlaybackResume(repeating: false), isTrue);
   });
 
   group('fullscreen transcript subtitles', () {
@@ -685,8 +679,8 @@ void main() {
     );
     expect(find.byKey(const Key('more-toggle-speakers')), findsOneWidget);
     expect(find.byKey(const Key('more-toggle-timestamps')), findsOneWidget);
-    expect(find.byKey(const Key('focus-current-menu')), findsOneWidget);
-    expect(find.byKey(const Key('focus-current-sentence')), findsNothing);
+    expect(find.byKey(const Key('focus-current-menu')), findsNothing);
+    expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump(const Duration(milliseconds: 300));
 
@@ -1194,7 +1188,7 @@ void main() {
     tester.view.physicalSize = const Size(600, 700);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('translation-view-mode')), findsNothing);
-    expect(find.byKey(const Key('focus-current-sentence')), findsNothing);
+    expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
     await tester.tap(find.byKey(const Key('review-toolbar-more')));
     await tester.pump(const Duration(milliseconds: 300));
     expect(
@@ -1209,7 +1203,75 @@ void main() {
       find.byKey(const Key('translation-mode-bilingual-menu')),
       findsOneWidget,
     );
-    expect(find.byKey(const Key('focus-current-menu')), findsOneWidget);
+    expect(find.byKey(const Key('focus-current-menu')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('compact Chinese toolbar stays aligned and keeps focus visible', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(600, 700));
+    final controller = await _controllerForDocument(_simpleDocument());
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('zh', 'CN'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final tabs = find.byKey(const Key('review-content-tabs'));
+    final transcriptLabel = tester.widget<Text>(
+      find.descendant(of: tabs, matching: find.text('转写')),
+    );
+    final aiBriefLabel = tester.widget<Text>(
+      find.descendant(of: tabs, matching: find.text('AI 简报')),
+    );
+    expect(transcriptLabel.maxLines, 1);
+    expect(transcriptLabel.softWrap, isFalse);
+    expect(transcriptLabel.overflow, isNull);
+    expect(aiBriefLabel.maxLines, 1);
+    expect(aiBriefLabel.softWrap, isFalse);
+    expect(aiBriefLabel.overflow, isNull);
+    expect(
+      find.descendant(of: tabs, matching: find.byIcon(Icons.subject_rounded)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: tabs,
+        matching: find.byIcon(Icons.auto_awesome_rounded),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: tabs,
+        matching: find.byIcon(Icons.auto_awesome_outlined),
+      ),
+      findsNothing,
+    );
+    expect(
+      tester.getCenter(find.text('转写')).dy,
+      closeTo(tester.getCenter(find.text('AI 简报')).dy, 1),
+    );
+    expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('focus-current-menu')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -3178,8 +3240,274 @@ void main() {
     expect(find.byKey(const Key('video-review-stacked')), findsOneWidget);
     expect(find.byKey(const Key('video-review-split')), findsNothing);
     expect(find.byKey(const Key('video-transcript-divider')), findsNothing);
+    expect(find.byKey(const Key('video-audio-mode-toggle')), findsOneWidget);
     expect(find.byKey(const Key('transcript-scroll')), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('video audio toggle localizes its destination tooltip', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      metadata: _videoMetadata,
+      sourcePath: '/missing/test.mp4',
+    );
+    addTearDown(controller.dispose);
+    controller.reopen('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('zh', 'CN'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const Key('video-audio-mode-toggle')))
+          .tooltip,
+      '切换到音频模式',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('video waveform is loaded lazily and reused across switches', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final media = _CountingWaveformMedia();
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'first',
+            startMs: 0,
+            endMs: 1000,
+            text: 'First sentence.',
+          ),
+          TranscriptSegment(
+            id: 'second',
+            startMs: 1400,
+            endMs: 2400,
+            text: 'Second sentence.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      metadata: _videoMetadata,
+      sourcePath: '/missing/test.mp4',
+      mediaService: media,
+    );
+    addTearDown(controller.dispose);
+    controller
+      ..reopen('job')
+      ..rememberPlaybackPosition('job', const Duration(milliseconds: 1600));
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    const toggleKey = Key('video-audio-mode-toggle');
+    final panelRect = tester.getRect(
+      find.byKey(const Key('video-audio-mode-switcher')),
+    );
+    final toggleRect = tester.getRect(find.byKey(toggleKey));
+    final videoToggleCenter = toggleRect.center;
+    expect(media.waveformRequests, 0);
+    expect(panelRect.right - toggleRect.right, closeTo(12, .1));
+    expect(panelRect.bottom - toggleRect.bottom, closeTo(12, .1));
+    expect(find.byIcon(Icons.headphones_rounded), findsOneWidget);
+    expect(
+      tester.widget<IconButton>(find.byKey(toggleKey)).style?.backgroundColor,
+      isNull,
+    );
+    expect(
+      tester.widget<IconButton>(find.byKey(toggleKey)).tooltip,
+      'Switch to audio mode',
+    );
+    expect(
+      tester
+          .widget<TranscriptSegmentEditor>(find.byKey(const ValueKey('second')))
+          .isCurrent,
+      isTrue,
+    );
+    expect(
+      find.byKey(const ValueKey('video-audio-mode-video')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(toggleKey));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 160));
+    final transitioningToggleCenter = tester.getCenter(find.byKey(toggleKey));
+    await tester.pumpAndSettle();
+    expect(media.waveformRequests, 1);
+    expect(
+      find.byKey(const ValueKey('video-audio-mode-audio')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('audio-review-layout')), findsOneWidget);
+    expect(find.byKey(const Key('video-review-split')), findsNothing);
+    final audioLayoutRect = tester.getRect(
+      find.byKey(const Key('audio-review-layout')),
+    );
+    final audioToggleRect = tester.getRect(find.byKey(toggleKey));
+    final audioToggleCenter = audioToggleRect.center;
+    expect(
+      transitioningToggleCenter.dx,
+      inExclusiveRange(videoToggleCenter.dx, audioToggleCenter.dx),
+    );
+    expect(
+      transitioningToggleCenter.dy,
+      inExclusiveRange(audioToggleCenter.dy, videoToggleCenter.dy),
+    );
+    expect(audioLayoutRect.width, greaterThan(panelRect.width));
+    expect(audioToggleRect.top, greaterThanOrEqualTo(audioLayoutRect.top));
+    expect(audioToggleRect.bottom, lessThanOrEqualTo(audioLayoutRect.bottom));
+    expect(find.byKey(const Key('video-audio-mode-switcher')), findsNothing);
+    expect(find.byIcon(Icons.videocam_rounded), findsOneWidget);
+    expect(
+      tester.widget<IconButton>(find.byKey(toggleKey)).tooltip,
+      'Switch to video mode',
+    );
+    expect(
+      tester
+          .widget<TranscriptSegmentEditor>(find.byKey(const ValueKey('second')))
+          .isCurrent,
+      isTrue,
+    );
+
+    await tester.tap(find.byKey(toggleKey));
+    await tester.pump();
+    expect(find.byKey(const Key('video-review-split')), findsOneWidget);
+    await tester.tap(find.byKey(toggleKey));
+    await tester.pumpAndSettle();
+    expect(media.waveformRequests, 1);
+    expect(
+      tester
+          .widget<TranscriptSegmentEditor>(find.byKey(const ValueKey('second')))
+          .isCurrent,
+      isTrue,
+    );
+  });
+
+  testWidgets('video audio mode resets when the reviewed job changes', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final now = DateTime.now().toUtc();
+    TranscriptionJob job(String id) => TranscriptionJob(
+      id: id,
+      batchId: 'batch',
+      sourcePath: '/missing/$id.mp4',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      metadata: _videoMetadata,
+      document: _simpleDocument(),
+    );
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([job('first'), job('second')]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.reopen('first');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: Scaffold(
+            body: Consumer<AppController>(
+              builder: (context, value, _) =>
+                  TranscriptReview(jobId: value.selectedJobId!),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    const toggleKey = Key('video-audio-mode-toggle');
+    await tester.tap(find.byKey(toggleKey));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('video-audio-mode-audio')),
+      findsOneWidget,
+    );
+
+    controller.reopen('second');
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('video-audio-mode-video')),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.headphones_rounded), findsOneWidget);
+  });
+
+  testWidgets('audio-only reviews do not show the video audio toggle', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      metadata: const MediaMetadata(
+        sizeBytes: 1,
+        durationMs: 1000,
+        hasAudio: true,
+        hasVideo: false,
+        formatName: 'wav',
+      ),
+    );
+    addTearDown(controller.dispose);
+    controller.reopen('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('video-audio-mode-toggle')), findsNothing);
   });
 
   testWidgets('fullscreen shortcut hint mirrors every playback binding', (
@@ -3235,6 +3563,57 @@ void main() {
     expect(find.text('速度 −0.25×'), findsOneWidget);
     expect(find.text('速度 +0.25×'), findsOneWidget);
     expect(find.text('退出全屏'), findsOneWidget);
+  });
+
+  testWidgets('stacked video transport keeps mode and fullscreen aligned', (
+    tester,
+  ) async {
+    var modeSwitches = 0;
+    var fullscreenRequests = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('en'),
+        supportedLocales: AppStrings.supportedLocales,
+        localizationsDelegates: const [AppStrings.delegate],
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: 520,
+              child: VideoTransport(
+                playing: false,
+                position: const Duration(seconds: 12),
+                duration: const Duration(minutes: 3, seconds: 12),
+                playbackRate: 1,
+                onPlayPause: () async {},
+                onSeek: (_) async {},
+                onPlaybackRateChanged: (_) async {},
+                onSwitchToAudioMode: () => modeSwitches++,
+                onFullscreen: () async => fullscreenRequests++,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final transport = tester.getRect(find.byKey(const Key('video-transport')));
+    final mode = tester.getRect(
+      find.byKey(const Key('video-audio-mode-toggle')),
+    );
+    final fullscreen = tester.getRect(
+      find.byKey(const Key('video-fullscreen')),
+    );
+    expect(mode.right, lessThanOrEqualTo(fullscreen.left));
+    expect(mode.center.dy, closeTo(fullscreen.center.dy, 1));
+    expect(mode.top, greaterThanOrEqualTo(transport.top));
+    expect(fullscreen.right, lessThanOrEqualTo(transport.right));
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byKey(const Key('video-audio-mode-toggle')));
+    await tester.tap(find.byKey(const Key('video-fullscreen')));
+    expect(modeSwitches, 1);
+    expect(fullscreenRequests, 1);
   });
 
   testWidgets('video speed button shows and applies a playback rate', (
@@ -3330,6 +3709,14 @@ void main() {
     expect(find.byKey(const Key('fullscreen-video-surface')), findsOneWidget);
     expect(find.byKey(const Key('fullscreen-subtitle')), findsOneWidget);
     expect(find.text('Fullscreen transcript subtitle'), findsOneWidget);
+    final subtitleDecoration =
+        tester
+                .widget<DecoratedBox>(
+                  find.byKey(const Key('fullscreen-subtitle')),
+                )
+                .decoration
+            as BoxDecoration;
+    expect(subtitleDecoration.color, Colors.black.withValues(alpha: .40));
     await tester.sendKeyEvent(LogicalKeyboardKey.space);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
@@ -3863,6 +4250,7 @@ void main() {
   testWidgets('audio controls and waveform share one transport row', (
     tester,
   ) async {
+    var switchedToVideo = false;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -3877,6 +4265,7 @@ void main() {
                 waveformLoading: false,
                 onPlayPause: () async {},
                 onSeek: (_) async {},
+                onSwitchToVideoMode: () => switchedToVideo = true,
               ),
             ),
           ),
@@ -3888,11 +4277,13 @@ void main() {
     final current = find.byKey(const Key('audio-current-time'));
     final waveform = find.byKey(const Key('waveform-scrubber'));
     final duration = find.byKey(const Key('audio-duration'));
+    final switchMode = find.byKey(const Key('video-audio-mode-toggle'));
     final centerY = tester.getCenter(waveform).dy;
 
     expect(tester.getCenter(play).dy, closeTo(centerY, 1));
     expect(tester.getCenter(current).dy, closeTo(centerY, 1));
     expect(tester.getCenter(duration).dy, closeTo(centerY, 1));
+    expect(tester.getCenter(switchMode).dy, closeTo(centerY, 1));
     expect(tester.getCenter(play).dx, lessThan(tester.getCenter(current).dx));
     expect(
       tester.getCenter(current).dx,
@@ -3902,6 +4293,13 @@ void main() {
       tester.getCenter(waveform).dx,
       lessThan(tester.getCenter(duration).dx),
     );
+    expect(
+      tester.getCenter(duration).dx,
+      lessThan(tester.getCenter(switchMode).dx),
+    );
+    expect(find.byIcon(Icons.videocam_rounded), findsOneWidget);
+    await tester.tap(switchMode);
+    expect(switchedToVideo, isTrue);
   });
 
   testWidgets('audio transcript starts near the top of its scroll area', (
@@ -4310,8 +4708,9 @@ void main() {
         of: find.byKey(const Key('review-content-tabs')),
         matching: find.byType(CircularProgressIndicator),
       ),
-      findsOneWidget,
+      findsNothing,
     );
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
     final progress = tester.widget<LinearProgressIndicator>(
       find.byType(LinearProgressIndicator),
     );
@@ -4478,6 +4877,7 @@ Future<AppController> _controllerForDocument(
   AppSettings settings = const AppSettings(),
   TranslationService? translationService,
   TranslationCredentialStore? translationCredentials,
+  MediaService? mediaService,
   AiBriefService? aiBriefService,
   AiBrief? aiBrief,
   AiGenerationState aiGenerationState = const AiGenerationState(),
@@ -4501,7 +4901,7 @@ Future<AppController> _controllerForDocument(
         aiGenerationState: aiGenerationState,
       ),
     ]),
-    mediaService: _Media(),
+    mediaService: mediaService ?? _Media(),
     sonioxClient: _Soniox(),
     exporter: const DefaultTranscriptExporter(),
     translationCredentialStore: translationCredentials,
@@ -4796,6 +5196,16 @@ class _Media implements MediaService {
 
   @override
   Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
+}
+
+class _CountingWaveformMedia extends _Media {
+  int waveformRequests = 0;
+
+  @override
+  Future<String> renderWaveform(String sourcePath, String cacheKey) async {
+    waveformRequests++;
+    return '/tmp/$cacheKey-waveform.png';
+  }
 }
 
 class _Soniox implements SonioxClient {
