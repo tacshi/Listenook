@@ -80,7 +80,7 @@ void main() {
     expect(find.text('completed.wav'), findsNothing);
   });
 
-  testWidgets('a ready job can continue while its source still exists', (
+  testWidgets('Continue restores a ready job without starting transcription', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 800));
@@ -94,6 +94,7 @@ void main() {
     final source = File('${directory.path}/ready.wav');
     await tester.runAsync(() => source.writeAsBytes(const [0]));
     final now = DateTime.now().toUtc();
+    final soniox = _Soniox();
     final controller = AppController(
       credentialStore: _Credentials(),
       settingsRepository: _Settings(),
@@ -108,11 +109,12 @@ void main() {
         ),
       ]),
       mediaService: _Media(),
-      sonioxClient: _Soniox(),
+      sonioxClient: soniox,
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
+    controller.setDestination(1);
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -129,6 +131,16 @@ void main() {
     final continueButton = find.byKey(const Key('continue-ready-job-ready'));
     expect(continueButton, findsOneWidget);
     expect(tester.widget<OutlinedButton>(continueButton).onPressed, isNotNull);
+
+    await tester.tap(continueButton);
+    await tester.pumpAndSettle();
+
+    expect(controller.destinationIndex, 0);
+    expect(controller.workspaceJobs.single.id, 'ready');
+    expect(controller.selectedJobId, 'ready');
+    expect(controller.workspaceJobs.single.status, JobStatus.ready);
+    expect(controller.processing, isFalse);
+    expect(soniox.uploadCalls, 0);
   });
 
   testWidgets('Clear All confirms and removes inactive history', (
@@ -294,6 +306,8 @@ class _Media implements MediaService {
 }
 
 class _Soniox implements SonioxClient {
+  int uploadCalls = 0;
+
   @override
   Future<String> createTranscription(
     String fileId,
@@ -318,7 +332,10 @@ class _Soniox implements SonioxClient {
     String path, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
-  }) async => 'file';
+  }) async {
+    uploadCalls++;
+    return 'file';
+  }
 
   @override
   Future<void> validateKey({String? apiKey}) async {}

@@ -645,6 +645,7 @@ class _TranslationSettingsSectionState
     _providerItem(context, TranslationProviderTemplate.custom),
     _providerHeader(context, 'provider_cloud'),
     _providerItem(context, TranslationProviderTemplate.openAi),
+    _providerItem(context, TranslationProviderTemplate.openRouter),
     _providerItem(context, TranslationProviderTemplate.deepSeek),
     _providerItem(context, TranslationProviderTemplate.groq),
     _providerItem(context, TranslationProviderTemplate.nvidiaNim),

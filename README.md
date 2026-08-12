@@ -17,9 +17,9 @@ The package name is `meow_stt`. Its permanent desktop identity is
 - libmpv validation for readability, audio streams, supported media, and the
   Soniox 300-minute limit. Inputs are limited to MP3, WAV, M4A, OGG, MP4, MKV,
   and AVI.
-- A persisted semaphore-backed queue (1–4 workers, default 2) with explicit
-  start, determinate local progress, cancel/retry, interrupted-upload recovery,
-  remote-poll recovery, and scoped cleanup retries.
+- A persisted queue that automatically runs one worker per queued job, capped
+  at four, with explicit start, determinate local progress, cancel/retry,
+  interrupted-upload recovery, remote-poll recovery, and scoped cleanup retries.
 - Streaming Soniox multipart upload with `stt-async-v5`, automatic language
   identification, always-on diarization, language hints, context terms, stable
   error mapping, and transient polling backoff.

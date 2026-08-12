@@ -302,15 +302,16 @@ void main() {
       expect(find.text('Local'), findsOneWidget);
       expect(find.text('Popular'), findsNothing);
       expect(find.text('Other'), findsNothing);
+      expect(find.text('OpenRouter'), findsOneWidget);
       expect(find.text('LM Studio'), findsOneWidget);
       expect(find.text('LM Studio (Local)'), findsNothing);
       expect(find.text('Ollama OpenAI API'), findsOneWidget);
       expect(find.text('Ollama OpenAI API (Local)'), findsNothing);
-      await tester.tap(find.text('Groq').last);
+      await tester.tap(find.text('OpenRouter').last);
       await tester.pumpAndSettle();
       expect(
         tester.widget<TextField>(baseUrl).controller?.text,
-        'https://api.groq.com/openai/v1',
+        'https://openrouter.ai/api/v1',
       );
 
       await tester.enterText(baseUrl, 'https://example.test/v1/');

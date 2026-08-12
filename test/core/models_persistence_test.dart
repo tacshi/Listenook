@@ -16,6 +16,24 @@ void main() {
     });
     expect(migrated.provider, TranslationProviderTemplate.groq);
     expect(migrated.toJson()['provider'], 'groq');
+
+    final inferredOpenRouter = TranslationSettings.fromJson({
+      'base_url': 'https://openrouter.ai/api/v1/',
+      'model': 'openai/gpt-4o-mini',
+    });
+    expect(inferredOpenRouter.provider, TranslationProviderTemplate.openRouter);
+    expect(inferredOpenRouter.toJson()['provider'], 'openRouter');
+
+    const explicitOpenRouter = TranslationSettings(
+      provider: TranslationProviderTemplate.openRouter,
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'anthropic/claude-3.5-haiku',
+    );
+    final restoredOpenRouter = TranslationSettings.fromJson(
+      explicitOpenRouter.toJson(),
+    );
+    expect(restoredOpenRouter.provider, TranslationProviderTemplate.openRouter);
+    expect(restoredOpenRouter.toJson(), explicitOpenRouter.toJson());
   });
 
   test('fullscreen shortcut guide defaults on and persists when hidden', () {
@@ -27,6 +45,12 @@ void main() {
 
     expect(restored.showFullscreenShortcuts, isFalse);
     expect(restored.toJson()['show_fullscreen_shortcuts'], isFalse);
+  });
+
+  test('legacy concurrency setting is ignored and no longer persisted', () {
+    final restored = AppSettings.fromJson(const {'concurrency': 1});
+
+    expect(restored.toJson(), isNot(contains('concurrency')));
   });
 
   test('older manifests migrate with safe defaults', () {
