@@ -137,7 +137,7 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
     ln -s /Applications "$STAGE/Applications"
     DMG="$OUT/$BASE.dmg"
     rm -f "$DMG"
-    hdiutil create -volname MeowSTT -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+    bash "$ROOT/scripts/create-macos-dmg.sh" "$STAGE" "$DMG"
     rm -rf "$STAGE"
 
     if [[ "$SIGN_IDENTITY" != "-" ]]; then

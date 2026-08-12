@@ -2514,7 +2514,7 @@ void main() {
   });
 
   testWidgets(
-    'workspace header owns export all and queue owns status summary',
+    'workspace header omits export all and queue owns status summary',
     (tester) async {
       _setTestWindow(tester, const Size(1240, 820));
       final controller = await _controllerForDocument(_simpleDocument());
@@ -2543,8 +2543,8 @@ void main() {
       );
       expect(find.byKey(const Key('header-add-folder')), findsNothing);
       expect(find.byKey(const Key('header-add-files')), findsNothing);
-      expect(find.byKey(const Key('export-all')), findsOneWidget);
-      expect(find.text('Export all'), findsOneWidget);
+      expect(find.byKey(const Key('export-all')), findsNothing);
+      expect(find.text('Export all'), findsNothing);
       expect(
         find.byKey(const Key('file-queue-status-summary')),
         findsOneWidget,
@@ -2598,14 +2598,6 @@ void main() {
         find.text('Nothing uploads until you press Transcribe.'),
         findsNothing,
       );
-      expect(tester.takeException(), isNull);
-
-      await tester.tap(find.byKey(const Key('export-all')));
-      await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel').last);
-      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     },
   );
@@ -2954,7 +2946,7 @@ void main() {
 
     expect(find.byKey(const Key('file-queue-floating-button')), findsOneWidget);
     expect(find.byKey(const Key('file-queue-rail')), findsNothing);
-    expect(find.byKey(const Key('export-all')), findsOneWidget);
+    expect(find.byKey(const Key('export-all')), findsNothing);
     expect(find.text('Export all'), findsNothing);
     expect(find.byKey(const Key('video-review-stacked')), findsOneWidget);
     expect(find.byKey(const Key('video-review-split')), findsNothing);
@@ -3683,6 +3675,45 @@ void main() {
       tester.getCenter(waveform).dx,
       lessThan(tester.getCenter(duration).dx),
     );
+  });
+
+  testWidgets('audio transcript starts near the top of its scroll area', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1000, 700));
+    final controller = await _controllerForDocument(_simpleDocument());
+    addTearDown(controller.dispose);
+    controller.reopen('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final scrollTop = tester
+        .getTopLeft(find.byKey(const Key('transcript-scroll')))
+        .dy;
+    final firstSegmentTop = tester
+        .getTopLeft(find.byKey(const ValueKey('segment-card-segment')))
+        .dy;
+
+    expect(firstSegmentTop - scrollTop, lessThanOrEqualTo(32));
+
+    await tester.tap(find.byKey(const Key('focus-current-sentence')));
+    await tester.pumpAndSettle();
+    final focusedSegmentTop = tester
+        .getTopLeft(find.byKey(const ValueKey('segment-card-segment')))
+        .dy;
+    expect(focusedSegmentTop - scrollTop, lessThanOrEqualTo(32));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('opening another sentence cancels the previous draft', (

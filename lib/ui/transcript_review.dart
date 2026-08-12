@@ -587,7 +587,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
                 key: const Key('transcript-scroll'),
                 itemScrollController: _transcriptScroll,
                 initialScrollIndex: currentIndex ?? 0,
-                initialAlignment: .5,
+                initialAlignment: currentIndex == null || currentIndex == 0
+                    ? 0
+                    : .5,
                 scrollDirection: Axis.vertical,
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
                 itemCount: segments.length,
@@ -838,7 +840,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _lastScrolledSegmentId = segmentId;
     _programmaticScrolls++;
     try {
-      _transcriptScroll.jumpTo(index: index, alignment: .5);
+      _transcriptScroll.jumpTo(index: index, alignment: index == 0 ? 0 : .5);
       await WidgetsBinding.instance.endOfFrame;
     } finally {
       _programmaticScrolls--;
