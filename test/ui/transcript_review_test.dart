@@ -4595,6 +4595,101 @@ void main() {
     expect(decoration.color, isNull);
   });
 
+  testWidgets('focus keeps an already visible current sentence in place', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1240, 820));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: List.generate(
+        14,
+        (index) => TranscriptSegment(
+          id: 'segment-$index',
+          startMs: index * 1000,
+          endMs: (index + 1) * 1000,
+          text: 'Sentence $index is visible near the top.',
+        ),
+      ),
+      speakers: const [],
+      updatedAt: now,
+    );
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        for (final id in ['first-job', 'second-job'])
+          TranscriptionJob(
+            id: id,
+            batchId: 'batch',
+            sourcePath: '/missing/$id.mp4',
+            createdAt: now,
+            updatedAt: now,
+            status: JobStatus.completed,
+            metadata: _videoMetadata,
+            document: document,
+          ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    await controller.initialize();
+    addTearDown(controller.dispose);
+    controller.rememberPlaybackPosition(
+      'second-job',
+      const Duration(milliseconds: 6100),
+    );
+    final jobId = ValueNotifier('first-job');
+    addTearDown(jobId.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: Scaffold(
+            body: ValueListenableBuilder<String>(
+              valueListenable: jobId,
+              builder: (_, value, __) => TranscriptReview(jobId: value),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    jobId.value = 'second-job';
+    await tester.pumpAndSettle();
+
+    final firstCard = find.byKey(const ValueKey('segment-card-segment-0'));
+    final currentCard = find.byKey(const ValueKey('segment-card-segment-6'));
+    expect(firstCard, findsOneWidget);
+    expect(currentCard, findsOneWidget);
+    expect(
+      tester
+          .widgetList<TranscriptSegmentEditor>(
+            find.byType(TranscriptSegmentEditor),
+          )
+          .singleWhere((editor) => editor.segment.id == 'segment-6')
+          .isCurrent,
+      isTrue,
+    );
+    final firstCardTop = tester.getTopLeft(firstCard).dy;
+    final currentCardRect = tester.getRect(currentCard);
+    final transcriptRect = tester.getRect(
+      find.byKey(const Key('transcript-scroll')),
+    );
+    expect(transcriptRect.contains(currentCardRect.topLeft), isTrue);
+    expect(transcriptRect.contains(currentCardRect.bottomRight), isTrue);
+
+    await tester.tap(find.byKey(const Key('focus-current-sentence')));
+    await tester.pumpAndSettle();
+
+    expect(tester.getTopLeft(firstCard).dy, firstCardTop);
+  });
+
   testWidgets('focus jumps to a distant sentence within one frame', (
     tester,
   ) async {
