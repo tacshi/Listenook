@@ -64,11 +64,11 @@ void main() {
     },
   );
 
-  test('sentence repeat restarts outside its playable timing window', () {
+  test('sentence repeat tolerates seek undershoot near its beginning', () {
     const valid = TranscriptSegment(
       id: 'valid',
-      startMs: 100,
-      endMs: 900,
+      startMs: 1000,
+      endMs: 1900,
       text: 'Repeat me',
     );
     const invalid = TranscriptSegment(
@@ -78,12 +78,54 @@ void main() {
       text: 'No duration',
     );
 
-    expect(shouldRestartRepeatedSentence(valid, 99), isTrue);
-    expect(shouldRestartRepeatedSentence(valid, 100), isFalse);
-    expect(shouldRestartRepeatedSentence(valid, 899), isFalse);
-    expect(shouldRestartRepeatedSentence(valid, 900), isTrue);
-    expect(shouldRestartRepeatedSentence(valid, 1200), isTrue);
+    expect(shouldRestartRepeatedSentence(valid, 749), isTrue);
+    expect(shouldRestartRepeatedSentence(valid, 750), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 999), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 1000), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 1899), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 1900), isTrue);
+    expect(shouldRestartRepeatedSentence(valid, 2200), isTrue);
     expect(shouldRestartRepeatedSentence(invalid, 500), isFalse);
+  });
+
+  test('sentence repeat does not follow a transient next sentence', () {
+    expect(
+      shouldAutoFollowPlaybackSegment(
+        playing: true,
+        previousIndex: 2,
+        nextIndex: 3,
+        repeating: true,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldAutoFollowPlaybackSegment(
+        playing: true,
+        previousIndex: 2,
+        nextIndex: 3,
+        repeating: false,
+      ),
+      isTrue,
+    );
+  });
+
+  test('sentence repeat restart preserves the transcript viewport', () {
+    expect(
+      shouldFocusTranscriptAfterSeek(TranscriptSeekReason.repeatRestart),
+      isFalse,
+    );
+    expect(
+      shouldFocusTranscriptAfterSeek(TranscriptSeekReason.standard),
+      isTrue,
+    );
+    expect(
+      shouldFocusTranscriptOnPlaybackResume(repeating: true),
+      isFalse,
+    );
+    expect(
+      shouldFocusTranscriptOnPlaybackResume(repeating: false),
+      isTrue,
+    );
   });
 
   group('fullscreen transcript subtitles', () {

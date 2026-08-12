@@ -193,7 +193,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
         shouldRestartRepeatedSentence(repeatedSegment, value.inMilliseconds)) {
       _queueRepeatRestart();
     }
-    if (_playing && previousIndex != nextIndex) _queueFocusCurrent();
+    if (shouldAutoFollowPlaybackSegment(
+      playing: _playing,
+      previousIndex: previousIndex,
+      nextIndex: nextIndex,
+      repeating: repeatedSegment != null,
+    )) {
+      _queueFocusCurrent();
+    }
   }
 
   void _handlePlaying(bool value) {
@@ -212,7 +219,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
         )) {
       _queueRepeatRestart(resumeAfterSeek: true);
     }
-    if (resumed) _queueFocusCurrent(force: true);
+    if (resumed &&
+        shouldFocusTranscriptOnPlaybackResume(
+          repeating: repeatedSegment != null,
+        )) {
+      _queueFocusCurrent(force: true);
+    }
   }
 
   void _handleCompleted(bool value) {
@@ -783,7 +795,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
     await defaultExitNativeFullscreen();
   }
 
-  Future<void> _seek(Duration position) async {
+  Future<void> _seek(
+    Duration position, {
+    TranscriptSeekReason reason = TranscriptSeekReason.standard,
+  }) async {
     final seekDispatcher = _seekDispatcher;
     if (seekDispatcher == null) return;
     setState(() {
@@ -791,7 +806,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _followPlayback = true;
     });
     _appController.rememberPlaybackPosition(widget.jobId, position);
-    _queueFocusCurrent(force: true);
+    if (shouldFocusTranscriptAfterSeek(reason)) {
+      _queueFocusCurrent(force: true);
+    }
     await seekDispatcher.seek(position);
   }
 
@@ -830,7 +847,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final segmentId = segment.id;
     _repeatRestartPending = true;
     try {
-      await _seek(Duration(milliseconds: segment.startMs));
+      await _seek(
+        Duration(milliseconds: segment.startMs),
+        reason: TranscriptSeekReason.repeatRestart,
+      );
       if (!mounted || _repeatingSegmentId != segmentId) return;
       if (resumeAfterSeek && !player.state.playing) await player.play();
     } finally {
@@ -5088,9 +5108,27 @@ class LatestSeekDispatcher {
   }
 }
 
+const _repeatSeekUndershootToleranceMs = 250;
+
+bool shouldAutoFollowPlaybackSegment({
+  required bool playing,
+  required int? previousIndex,
+  required int? nextIndex,
+  required bool repeating,
+}) => playing && !repeating && previousIndex != nextIndex;
+
+enum TranscriptSeekReason { standard, repeatRestart }
+
+bool shouldFocusTranscriptAfterSeek(TranscriptSeekReason reason) =>
+    reason != TranscriptSeekReason.repeatRestart;
+
+bool shouldFocusTranscriptOnPlaybackResume({required bool repeating}) =>
+    !repeating;
+
 bool shouldRestartRepeatedSentence(TranscriptSegment segment, int positionMs) =>
     segment.endMs > segment.startMs &&
-    (positionMs < segment.startMs || positionMs >= segment.endMs);
+    (positionMs < segment.startMs - _repeatSeekUndershootToleranceMs ||
+        positionMs >= segment.endMs);
 
 int? currentTranscriptSegmentIndex(
   List<TranscriptSegment> segments,
