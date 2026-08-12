@@ -47,9 +47,8 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
     DEBUG_APP="$OUT/$BASE.app"
     DEBUG_EXECUTABLE="$DEBUG_APP/Contents/MacOS/MeowSTT"
     if bash "$ROOT/scripts/is-macos-app-running.sh" "$DEBUG_EXECUTABLE"; then
-      echo "Refusing to replace the running debug app: $DEBUG_APP" >&2
-      echo "Quit MeowSTT, then run this build again." >&2
-      exit 1
+      echo "Closing running debug app: $DEBUG_APP"
+      bash "$ROOT/scripts/stop-macos-app.sh" "$DEBUG_EXECUTABLE"
     fi
   fi
   echo "Building MeowSTT $VERSION macOS $CURRENT_ARCH $MODE"

@@ -32,10 +32,14 @@ class TranscriptReview extends StatefulWidget {
   State<TranscriptReview> createState() => _TranscriptReviewState();
 }
 
+enum _ReviewMediaMode { video, audio }
+
 class _TranscriptReviewState extends State<TranscriptReview>
     with WindowListener {
   static const _reviewDividerWidth = 9.0;
   static const _minimumReviewPaneWidth = 280.0;
+  static const _mediaModeTransitionDuration = Duration(milliseconds: 320);
+  static const _missingSourceAudioHeight = 96.0;
 
   Player? _player;
   LatestSeekDispatcher? _seekDispatcher;
@@ -78,6 +82,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   String _waveformSource = '';
   String? _waveformPath;
   bool _waveformLoading = false;
+  _ReviewMediaMode _mediaMode = _ReviewMediaMode.video;
   double _videoPaneFraction = .55;
   int _sourceRequest = 0;
 
@@ -166,6 +171,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _waveformSource = '';
       _waveformPath = null;
       _waveformLoading = false;
+      _mediaMode = _ReviewMediaMode.video;
       _openSource();
     }
   }
@@ -267,7 +273,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
         return;
       }
       _ensurePlayer();
-      if (!(job.metadata?.hasVideo ?? false)) {
+      if (!(job.metadata?.hasVideo ?? false) ||
+          _mediaMode == _ReviewMediaMode.audio) {
         unawaited(_loadWaveform(job));
       }
       final resumePosition = _appController.playbackPositionFor(job.id);
@@ -308,6 +315,19 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _waveformPath = path;
       _waveformLoading = false;
     });
+  }
+
+  void _toggleMediaMode(TranscriptionJob job) {
+    final nextMode = _mediaMode == _ReviewMediaMode.video
+        ? _ReviewMediaMode.audio
+        : _ReviewMediaMode.video;
+    setState(() => _mediaMode = nextMode);
+    if (nextMode == _ReviewMediaMode.audio) unawaited(_loadWaveform(job));
+  }
+
+  bool _supportsMediaModeSwitch(TranscriptionJob job) {
+    final metadata = job.metadata;
+    return metadata?.hasVideo == true && metadata?.hasAudio == true;
   }
 
   @override
@@ -430,7 +450,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final hasVideo = job.metadata?.hasVideo ?? false;
-                final sideBySide = hasVideo && constraints.maxWidth >= 840;
+                final canSwitchMediaMode = _supportsMediaModeSwitch(job);
+                final audioMode =
+                    canSwitchMediaMode && _mediaMode == _ReviewMediaMode.audio;
                 final transcript = _buildTranscriptPane(
                   controller: controller,
                   job: job,
@@ -439,48 +461,229 @@ class _TranscriptReviewState extends State<TranscriptReview>
                   segments: segments,
                   currentIndex: currentIndex,
                 );
-                if (sideBySide) {
-                  final availableWidth =
-                      constraints.maxWidth - _reviewDividerWidth;
-                  final maximumVideoWidth =
-                      availableWidth - _minimumReviewPaneWidth;
-                  final videoWidth = (availableWidth * _videoPaneFraction)
-                      .clamp(_minimumReviewPaneWidth, maximumVideoWidth)
-                      .toDouble();
-                  return Row(
-                    key: const Key('video-review-split'),
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                if (!hasVideo) {
+                  return Column(
+                    key: const Key('video-review-stacked'),
                     children: [
-                      SizedBox(
-                        key: const Key('video-review-media-pane'),
-                        width: videoWidth,
-                        child: _buildMediaArea(job, fillHeight: true),
+                      _buildMediaArea(
+                        job,
+                        presentation: _ReviewMediaMode.audio,
+                        fillHeight: false,
                       ),
-                      _ReviewSplitDivider(
-                        onDragUpdate: (delta) =>
-                            _resizeReviewPanes(delta, availableWidth),
-                      ),
-                      Expanded(
-                        key: const Key('video-review-transcript-pane'),
-                        child: transcript,
-                      ),
+                      const Divider(height: 1),
+                      Expanded(child: transcript),
                     ],
                   );
                 }
-                final stackedVideoHeight = hasVideo
-                    ? (constraints.maxHeight * .4).clamp(180.0, 300.0)
-                    : null;
-                return Column(
-                  key: const Key('video-review-stacked'),
-                  children: [
-                    _buildMediaArea(
-                      job,
-                      fillHeight: false,
-                      videoHeight: stackedVideoHeight,
-                    ),
-                    const Divider(height: 1),
-                    Expanded(child: transcript),
-                  ],
+
+                final sideBySide = constraints.maxWidth >= 840;
+                final availableWidth =
+                    constraints.maxWidth - _reviewDividerWidth;
+                final maximumVideoWidth =
+                    availableWidth - _minimumReviewPaneWidth;
+                final videoWidth = sideBySide
+                    ? (availableWidth * _videoPaneFraction)
+                          .clamp(_minimumReviewPaneWidth, maximumVideoWidth)
+                          .toDouble()
+                    : constraints.maxWidth;
+                final stackedVideoHeight = (constraints.maxHeight * .4)
+                    .clamp(180.0, 300.0)
+                    .toDouble();
+                final shortcutsHeight =
+                    controller.settings.showFullscreenShortcuts
+                    ? PlaybackShortcutsHint.preferredHeight
+                    : 0.0;
+                final stackedMediaHeight =
+                    stackedVideoHeight +
+                    VideoTransport.height +
+                    shortcutsHeight;
+                final videoMediaRect = sideBySide
+                    ? Rect.fromLTWH(0, 0, videoWidth, constraints.maxHeight)
+                    : Rect.fromLTWH(
+                        0,
+                        0,
+                        constraints.maxWidth,
+                        stackedMediaHeight,
+                      );
+                final videoTranscriptTop = sideBySide
+                    ? 0.0
+                    : stackedMediaHeight + 1;
+                final videoTranscriptRect = Rect.fromLTWH(
+                  sideBySide ? videoWidth + _reviewDividerWidth : 0,
+                  videoTranscriptTop,
+                  sideBySide
+                      ? constraints.maxWidth - videoWidth - _reviewDividerWidth
+                      : constraints.maxWidth,
+                  (constraints.maxHeight - videoTranscriptTop)
+                      .clamp(0.0, constraints.maxHeight)
+                      .toDouble(),
+                );
+                final audioMediaHeight = File(job.sourcePath).existsSync()
+                    ? AudioTransport.height
+                    : _missingSourceAudioHeight;
+                final audioMediaRect = Rect.fromLTWH(
+                  0,
+                  0,
+                  constraints.maxWidth,
+                  audioMediaHeight,
+                );
+                final audioTranscriptRect = Rect.fromLTWH(
+                  0,
+                  audioMediaHeight + 1,
+                  constraints.maxWidth,
+                  (constraints.maxHeight - audioMediaHeight - 1)
+                      .clamp(0.0, constraints.maxHeight)
+                      .toDouble(),
+                );
+                final videoButtonOffset = sideBySide
+                    ? Offset(
+                        videoWidth - _MediaModeButton.size - 12,
+                        constraints.maxHeight - _MediaModeButton.size - 12,
+                      )
+                    : Offset(
+                        constraints.maxWidth - _MediaModeButton.size - 10 - 48,
+                        stackedVideoHeight +
+                            (VideoTransport.height - _MediaModeButton.size) / 2,
+                      );
+                final audioButtonOffset = Offset(
+                  constraints.maxWidth - _MediaModeButton.size - 10,
+                  (audioMediaHeight - _MediaModeButton.size) / 2,
+                );
+                final media = _buildMediaArea(
+                  job,
+                  presentation: audioMode
+                      ? _ReviewMediaMode.audio
+                      : _ReviewMediaMode.video,
+                  fillHeight: !audioMode && sideBySide,
+                  videoHeight: stackedVideoHeight,
+                );
+                final layoutMarkerKey = audioMode
+                    ? const Key('audio-review-layout')
+                    : sideBySide
+                    ? const Key('video-review-split')
+                    : const Key('video-review-stacked');
+
+                return TweenAnimationBuilder<double>(
+                  tween: Tween(begin: 0.0, end: audioMode ? 1.0 : 0.0),
+                  duration: _mediaModeTransitionDuration,
+                  curve: Curves.easeInOutCubic,
+                  builder: (context, progress, _) {
+                    final mediaRect = Rect.lerp(
+                      videoMediaRect,
+                      audioMediaRect,
+                      progress,
+                    )!;
+                    final transcriptRect = Rect.lerp(
+                      videoTranscriptRect,
+                      audioTranscriptRect,
+                      progress,
+                    )!;
+                    final buttonOffset = Offset.lerp(
+                      videoButtonOffset,
+                      audioButtonOffset,
+                      progress,
+                    )!;
+                    return Stack(
+                      clipBehavior: Clip.hardEdge,
+                      children: [
+                        Positioned.fill(
+                          key: const ValueKey('review-layout-marker-slot'),
+                          child: IgnorePointer(
+                            child: SizedBox.expand(key: layoutMarkerKey),
+                          ),
+                        ),
+                        Positioned.fromRect(
+                          key: const ValueKey(
+                            'video-mode-switcher-marker-slot',
+                          ),
+                          rect: videoMediaRect,
+                          child: IgnorePointer(
+                            child: audioMode
+                                ? const SizedBox.shrink()
+                                : const SizedBox.expand(
+                                    key: Key('video-audio-mode-switcher'),
+                                  ),
+                          ),
+                        ),
+                        Positioned.fromRect(
+                          key: const ValueKey('animated-media-slot'),
+                          rect: mediaRect,
+                          child: SizedBox.expand(
+                            key: const Key('video-review-media-pane'),
+                            child: ClipRect(
+                              child: KeyedSubtree(
+                                key: ValueKey(
+                                  audioMode
+                                      ? 'video-audio-mode-audio'
+                                      : 'video-audio-mode-video',
+                                ),
+                                child: media,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned.fromRect(
+                          key: const ValueKey('animated-transcript-slot'),
+                          rect: transcriptRect,
+                          child: SizedBox.expand(
+                            key: const Key('video-review-transcript-pane'),
+                            child: transcript,
+                          ),
+                        ),
+                        Positioned(
+                          key: const ValueKey('vertical-divider-slot'),
+                          left: videoWidth * (1 - progress),
+                          top: 0,
+                          width: _reviewDividerWidth,
+                          height: constraints.maxHeight,
+                          child: sideBySide
+                              ? IgnorePointer(
+                                  ignoring: progress > 0,
+                                  child: Opacity(
+                                    opacity: 1 - progress,
+                                    child: _ReviewSplitDivider(
+                                      onDragUpdate: (delta) =>
+                                          _resizeReviewPanes(
+                                            delta,
+                                            availableWidth,
+                                          ),
+                                    ),
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                        Positioned(
+                          key: const ValueKey('horizontal-divider-slot'),
+                          left: 0,
+                          top: transcriptRect.top - 1,
+                          width: constraints.maxWidth,
+                          height: 1,
+                          child: IgnorePointer(
+                            child: Opacity(
+                              opacity: sideBySide ? progress : 1,
+                              child: Divider(
+                                height: 1,
+                                color: Theme.of(context).dividerColor,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          key: const ValueKey('media-mode-button-slot'),
+                          left: buttonOffset.dx,
+                          top: buttonOffset.dy,
+                          child: canSwitchMediaMode
+                              ? _MediaModeButton(
+                                  destination: audioMode
+                                      ? _ReviewMediaMode.video
+                                      : _ReviewMediaMode.audio,
+                                  onPressed: () => _toggleMediaMode(job),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                      ],
+                    );
+                  },
                 );
               },
             ),
@@ -501,10 +704,15 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   Widget _buildMediaArea(
     TranscriptionJob job, {
+    required _ReviewMediaMode presentation,
     required bool fillHeight,
     double? videoHeight,
   }) {
     final fullscreenController = _fullscreenController;
+    final hasVideo = job.metadata?.hasVideo ?? false;
+    final canSwitchMediaMode = _supportsMediaModeSwitch(job);
+    final audioMode =
+        canSwitchMediaMode && presentation == _ReviewMediaMode.audio;
     final showFullscreenShortcuts = context
         .read<AppController>()
         .settings
@@ -525,9 +733,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
           ),
         ],
       );
-      return fillHeight
+      final missingSource = fillHeight
           ? Align(alignment: Alignment.topCenter, child: banner)
           : banner;
+      return missingSource;
     }
     if (_player == null || _video == null) {
       return SizedBox(
@@ -540,36 +749,55 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ),
       );
     }
-    final pane = _MediaPane(
-      job: job,
-      document: job.document!,
-      viewMode: _viewMode,
-      video: _video!,
-      videoKey: _videoKey,
-      videoAspectRatio: _videoAspectRatio,
-      maxVideoHeight: videoHeight,
-      centerInAvailableHeight: fillHeight,
-      showFullscreenShortcuts: showFullscreenShortcuts,
-      isFullscreenActive: () => fullscreenController.isActive,
+    final mediaDuration = _duration.inMilliseconds > 0
+        ? _duration
+        : Duration(milliseconds: job.metadata?.durationMs ?? 0);
+    final audio = AudioTransport(
       playing: _playing,
-      playbackRate: _playbackRate,
       position: _position,
-      duration: _duration,
+      duration: mediaDuration,
       waveformPath: _waveformPath,
       waveformLoading: _waveformLoading,
       onPlayPause: _player!.playOrPause,
       onSeek: _seek,
-      onFullscreen: _toggleFullscreen,
-      onExitFullscreen: fullscreenController.exit,
-      onSeekBackward: () => _seekRelative(-const Duration(seconds: 5)),
-      onSeekForward: () => _seekRelative(const Duration(seconds: 5)),
-      onPlaybackRateChanged: _setPlaybackRate,
-      onDecreaseSpeed: () => _changePlaybackRate(-.25),
-      onIncreaseSpeed: () => _changePlaybackRate(.25),
-      onEnterNativeFullscreen: _enterNativeFullscreen,
-      onExitNativeFullscreen: _exitNativeFullscreen,
+      reserveModeButtonSpace: audioMode,
     );
-    if (!fillHeight && (job.metadata?.hasVideo ?? false)) {
+    if (audioMode) return audio;
+    late final Widget pane;
+    if (hasVideo) {
+      final video = _MediaPane(
+        job: job,
+        document: job.document!,
+        viewMode: _viewMode,
+        video: _video!,
+        videoKey: _videoKey,
+        videoAspectRatio: _videoAspectRatio,
+        maxVideoHeight: videoHeight,
+        centerInAvailableHeight: fillHeight,
+        showFullscreenShortcuts: showFullscreenShortcuts,
+        isFullscreenActive: () => fullscreenController.isActive,
+        playing: _playing,
+        playbackRate: _playbackRate,
+        position: _position,
+        duration: _duration,
+        onPlayPause: _player!.playOrPause,
+        onSeek: _seek,
+        onFullscreen: _toggleFullscreen,
+        onExitFullscreen: fullscreenController.exit,
+        onSeekBackward: () => _seekRelative(-const Duration(seconds: 5)),
+        onSeekForward: () => _seekRelative(const Duration(seconds: 5)),
+        onPlaybackRateChanged: _setPlaybackRate,
+        onDecreaseSpeed: () => _changePlaybackRate(-.25),
+        onIncreaseSpeed: () => _changePlaybackRate(.25),
+        onEnterNativeFullscreen: _enterNativeFullscreen,
+        onExitNativeFullscreen: _exitNativeFullscreen,
+        reserveModeButtonSpace: canSwitchMediaMode && !fillHeight,
+      );
+      pane = video;
+    } else {
+      pane = audio;
+    }
+    if (!fillHeight && hasVideo) {
       return SizedBox(
         height:
             (videoHeight ?? 180) +
@@ -1077,15 +1305,11 @@ class _ReviewContentTabs extends StatelessWidget {
   const _ReviewContentTabs({
     required this.width,
     required this.showAiBrief,
-    required this.hasBrief,
-    required this.generationActive,
     required this.onChanged,
   });
 
   final double width;
   final bool showAiBrief;
-  final bool hasBrief;
-  final bool generationActive;
   final ValueChanged<bool> onChanged;
 
   @override
@@ -1094,26 +1318,25 @@ class _ReviewContentTabs extends StatelessWidget {
     child: SegmentedButton<bool>(
       key: const Key('review-content-tabs'),
       showSelectedIcon: false,
+      style: const ButtonStyle(
+        padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 4)),
+      ),
       segments: [
         ButtonSegment(
           value: false,
-          icon: const Icon(Icons.subject_rounded, size: 18),
-          label: Text(context.strings.t('transcript')),
+          label: Text(
+            context.strings.t('transcript'),
+            maxLines: 1,
+            softWrap: false,
+          ),
         ),
         ButtonSegment(
           value: true,
-          icon: generationActive
-              ? const SizedBox.square(
-                  dimension: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : Icon(
-                  hasBrief
-                      ? Icons.auto_awesome_rounded
-                      : Icons.auto_awesome_outlined,
-                  size: 18,
-                ),
-          label: Text(context.strings.t('ai_brief')),
+          label: Text(
+            context.strings.t('ai_brief'),
+            maxLines: 1,
+            softWrap: false,
+          ),
         ),
       ],
       selected: {showAiBrief},
@@ -2142,7 +2365,6 @@ enum _TranscriptMoreAction {
   original,
   translated,
   bilingual,
-  focusCurrent,
   translate,
   copy,
   export,
@@ -2262,8 +2484,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   Widget _tabs(double width) => _ReviewContentTabs(
     width: width,
     showAiBrief: showAiBrief,
-    hasBrief: job.aiBrief != null,
-    generationActive: job.aiGenerationState.status.isActive,
     onChanged: onTabChanged,
   );
 
@@ -2409,7 +2629,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
             onChanged: onViewModeChanged,
           ),
         ],
-        if (medium) _focusButton(context),
+        _focusButton(context),
         if (job.translationState.status.isActive)
           _TranslationActionIconButton(job: job, controller: controller),
         _transcriptMoreMenu(
@@ -2417,7 +2637,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           controller,
           includeViewToggles: !full,
           includeViewMode: !medium,
-          includeFocus: !medium,
         ),
       ],
     );
@@ -2437,7 +2656,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     AppController controller, {
     required bool includeViewToggles,
     required bool includeViewMode,
-    required bool includeFocus,
   }) {
     final settings = controller.settings;
     final translationAction = _translationToolbarAction(
@@ -2483,17 +2701,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           value: _TranscriptMoreAction.bilingual,
           checked: viewMode == TranslationViewMode.bilingual,
           child: Text(context.strings.t('bilingual')),
-        ),
-      ],
-      if (includeFocus) ...[
-        if (includeViewToggles || (includeViewMode && _translationStarted))
-          const PopupMenuDivider(),
-        _menuItem(
-          key: const Key('focus-current-menu'),
-          value: _TranscriptMoreAction.focusCurrent,
-          icon: Icons.center_focus_strong_rounded,
-          label: context.strings.t('focus_current_sentence'),
-          enabled: onFocusCurrentSentence != null,
         ),
       ],
       if (job.translationState.status.isActive == false) ...[
@@ -2576,8 +2783,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         onViewModeChanged(TranslationViewMode.translated);
       case _TranscriptMoreAction.bilingual:
         onViewModeChanged(TranslationViewMode.bilingual);
-      case _TranscriptMoreAction.focusCurrent:
-        onFocusCurrentSentence?.call();
       case _TranscriptMoreAction.translate:
         if (_translationStarted) {
           _runTranslationToolbarAction(
@@ -3323,6 +3528,50 @@ ButtonStyle _compactSegmentActionStyle(
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
 );
 
+class _MediaModeButton extends StatelessWidget {
+  const _MediaModeButton({required this.destination, required this.onPressed});
+
+  final _ReviewMediaMode destination;
+  final VoidCallback onPressed;
+
+  static const size = 44.0;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    key: const Key('video-audio-mode-toggle'),
+    tooltip: context.strings.t(
+      destination == _ReviewMediaMode.video
+          ? 'switch_to_video_mode'
+          : 'switch_to_audio_mode',
+    ),
+    onPressed: onPressed,
+    style: const ButtonStyle(
+      minimumSize: WidgetStatePropertyAll(Size.square(size)),
+      maximumSize: WidgetStatePropertyAll(Size.square(size)),
+      padding: WidgetStatePropertyAll(EdgeInsets.all(10)),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ),
+    icon: AnimatedSwitcher(
+      duration: const Duration(milliseconds: 160),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: RotationTransition(
+          turns: Tween(begin: -.08, end: 0.0).animate(animation),
+          child: child,
+        ),
+      ),
+      child: Icon(
+        destination == _ReviewMediaMode.video
+            ? Icons.videocam_rounded
+            : Icons.headphones_rounded,
+        key: ValueKey(destination),
+      ),
+    ),
+  );
+}
+
 class _MediaPane extends StatelessWidget {
   const _MediaPane({
     required this.job,
@@ -3339,8 +3588,6 @@ class _MediaPane extends StatelessWidget {
     required this.playbackRate,
     required this.position,
     required this.duration,
-    required this.waveformPath,
-    required this.waveformLoading,
     required this.onPlayPause,
     required this.onSeek,
     required this.onFullscreen,
@@ -3352,6 +3599,7 @@ class _MediaPane extends StatelessWidget {
     required this.onIncreaseSpeed,
     required this.onEnterNativeFullscreen,
     required this.onExitNativeFullscreen,
+    required this.reserveModeButtonSpace,
   });
 
   final TranscriptionJob job;
@@ -3368,8 +3616,6 @@ class _MediaPane extends StatelessWidget {
   final double playbackRate;
   final Duration position;
   final Duration duration;
-  final String? waveformPath;
-  final bool waveformLoading;
   final Future<void> Function() onPlayPause;
   final Future<void> Function(Duration) onSeek;
   final Future<void> Function() onFullscreen;
@@ -3381,24 +3627,13 @@ class _MediaPane extends StatelessWidget {
   final Future<void> Function() onIncreaseSpeed;
   final Future<void> Function() onEnterNativeFullscreen;
   final Future<void> Function() onExitNativeFullscreen;
+  final bool reserveModeButtonSpace;
 
   @override
   Widget build(BuildContext context) {
-    final hasVideo = job.metadata?.hasVideo ?? false;
     final mediaDuration = duration.inMilliseconds > 0
         ? duration
         : Duration(milliseconds: job.metadata?.durationMs ?? 0);
-    if (!hasVideo) {
-      return AudioTransport(
-        playing: playing,
-        position: position,
-        duration: mediaDuration,
-        waveformPath: waveformPath,
-        waveformLoading: waveformLoading,
-        onPlayPause: onPlayPause,
-        onSeek: onSeek,
-      );
-    }
     final fullscreenSubtitle = fullscreenTranscriptSubtitle(
       document.segments,
       position.inMilliseconds,
@@ -3411,7 +3646,7 @@ class _MediaPane extends StatelessWidget {
     );
     return LayoutBuilder(
       builder: (context, constraints) {
-        const transportHeight = 56.0;
+        const transportHeight = VideoTransport.height;
         final shortcutsHeight = showFullscreenShortcuts
             ? PlaybackShortcutsHint.preferredHeight
             : 0.0;
@@ -3468,52 +3703,16 @@ class _MediaPane extends StatelessWidget {
                 onExitFullscreen: onExitNativeFullscreen,
               ),
             ),
-            SizedBox(
-              key: const Key('video-transport'),
-              height: transportHeight,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                child: Row(
-                  children: [
-                    IconButton.filledTonal(
-                      onPressed: onPlayPause,
-                      icon: Icon(
-                        playing
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(formatClock(position.inMilliseconds)),
-                    Expanded(
-                      child: Slider(
-                        value: position.inMilliseconds
-                            .clamp(0, mediaDuration.inMilliseconds)
-                            .toDouble(),
-                        max: mediaDuration.inMilliseconds
-                            .clamp(1, double.infinity)
-                            .toDouble(),
-                        onChanged: (value) =>
-                            onSeek(Duration(milliseconds: value.round())),
-                      ),
-                    ),
-                    Text(formatClock(mediaDuration.inMilliseconds)),
-                    PlaybackSpeedButton(
-                      rate: playbackRate,
-                      onChanged: onPlaybackRateChanged,
-                    ),
-                    IconButton(
-                      key: const Key('video-fullscreen'),
-                      tooltip: context.strings.t('fullscreen'),
-                      onPressed: () => unawaited(onFullscreen()),
-                      icon: const Icon(Icons.fullscreen_rounded),
-                    ),
-                  ],
-                ),
-              ),
+            VideoTransport(
+              playing: playing,
+              position: position,
+              duration: mediaDuration,
+              playbackRate: playbackRate,
+              onPlayPause: onPlayPause,
+              onSeek: onSeek,
+              onPlaybackRateChanged: onPlaybackRateChanged,
+              reserveModeButtonSpace: reserveModeButtonSpace,
+              onFullscreen: onFullscreen,
             ),
             if (showFullscreenShortcuts) const PlaybackShortcutsHint(),
           ],
@@ -3521,6 +3720,92 @@ class _MediaPane extends StatelessWidget {
       },
     );
   }
+}
+
+class VideoTransport extends StatelessWidget {
+  const VideoTransport({
+    super.key,
+    required this.playing,
+    required this.position,
+    required this.duration,
+    required this.playbackRate,
+    required this.onPlayPause,
+    required this.onSeek,
+    required this.onPlaybackRateChanged,
+    required this.onFullscreen,
+    this.onSwitchToAudioMode,
+    this.reserveModeButtonSpace = false,
+  });
+
+  static const height = 56.0;
+
+  final bool playing;
+  final Duration position;
+  final Duration duration;
+  final double playbackRate;
+  final Future<void> Function() onPlayPause;
+  final Future<void> Function(Duration) onSeek;
+  final Future<void> Function(double) onPlaybackRateChanged;
+  final VoidCallback? onSwitchToAudioMode;
+  final bool reserveModeButtonSpace;
+  final Future<void> Function() onFullscreen;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    key: const Key('video-transport'),
+    height: height,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      child: Row(
+        children: [
+          IconButton.filledTonal(
+            key: const Key('video-play-pause'),
+            onPressed: onPlayPause,
+            icon: Icon(
+              playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            formatClock(position.inMilliseconds),
+            key: const Key('video-current-time'),
+          ),
+          Expanded(
+            child: Slider(
+              key: const Key('video-seek'),
+              value: position.inMilliseconds
+                  .clamp(0, duration.inMilliseconds)
+                  .toDouble(),
+              max: duration.inMilliseconds.clamp(1, double.infinity).toDouble(),
+              onChanged: (value) =>
+                  onSeek(Duration(milliseconds: value.round())),
+            ),
+          ),
+          Text(
+            formatClock(duration.inMilliseconds),
+            key: const Key('video-duration'),
+          ),
+          PlaybackSpeedButton(
+            rate: playbackRate,
+            onChanged: onPlaybackRateChanged,
+          ),
+          if (onSwitchToAudioMode != null)
+            _MediaModeButton(
+              destination: _ReviewMediaMode.audio,
+              onPressed: onSwitchToAudioMode!,
+            )
+          else if (reserveModeButtonSpace)
+            const SizedBox.square(dimension: _MediaModeButton.size),
+          IconButton(
+            key: const Key('video-fullscreen'),
+            tooltip: context.strings.t('fullscreen'),
+            onPressed: () => unawaited(onFullscreen()),
+            icon: const Icon(Icons.fullscreen_rounded),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class PlaybackSpeedButton extends StatelessWidget {
@@ -3889,7 +4174,7 @@ class _VideoFullscreenKeyboardRegionState
                                       key: const Key('fullscreen-subtitle'),
                                       decoration: BoxDecoration(
                                         color: Colors.black.withValues(
-                                          alpha: .72,
+                                          alpha: .40,
                                         ),
                                         borderRadius: BorderRadius.circular(8),
                                       ),
@@ -4098,7 +4383,11 @@ class AudioTransport extends StatelessWidget {
     required this.waveformLoading,
     required this.onPlayPause,
     required this.onSeek,
+    this.onSwitchToVideoMode,
+    this.reserveModeButtonSpace = false,
   });
+
+  static const height = 64.0;
 
   final bool playing;
   final Duration position;
@@ -4107,10 +4396,13 @@ class AudioTransport extends StatelessWidget {
   final bool waveformLoading;
   final Future<void> Function() onPlayPause;
   final Future<void> Function(Duration) onSeek;
+  final VoidCallback? onSwitchToVideoMode;
+  final bool reserveModeButtonSpace;
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    height: 64,
+    key: const Key('audio-transport'),
+    height: height,
     width: double.infinity,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -4146,6 +4438,13 @@ class AudioTransport extends StatelessWidget {
             formatClock(duration.inMilliseconds),
             key: const Key('audio-duration'),
           ),
+          if (onSwitchToVideoMode != null)
+            _MediaModeButton(
+              destination: _ReviewMediaMode.video,
+              onPressed: onSwitchToVideoMode!,
+            )
+          else if (reserveModeButtonSpace)
+            const SizedBox.square(dimension: _MediaModeButton.size),
         ],
       ),
     ),
