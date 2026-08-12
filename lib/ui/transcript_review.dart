@@ -556,7 +556,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                       ? _ReviewMediaMode.audio
                       : _ReviewMediaMode.video,
                   fillHeight: !audioMode && sideBySide,
-                  videoHeight: stackedVideoHeight,
+                  videoHeight: sideBySide ? null : stackedVideoHeight,
                 );
                 final layoutMarkerKey = audioMode
                     ? const Key('audio-review-layout')
@@ -3682,10 +3682,12 @@ class _MediaPane extends StatelessWidget {
                 double.infinity,
               )
             : heightFromWidth;
-        final heightLimit = maxVideoHeight == null
-            ? availableHeight
-            : availableHeight.clamp(0.0, maxVideoHeight!);
-        final viewportHeight = heightFromWidth.clamp(0.0, heightLimit);
+        final viewportHeight = videoViewportHeight(
+          width: constraints.maxWidth,
+          aspectRatio: aspect,
+          availableHeight: availableHeight,
+          maximumHeight: maxVideoHeight,
+        );
         return Column(
           mainAxisSize: centerInAvailableHeight
               ? MainAxisSize.max
@@ -3742,6 +3744,19 @@ class _MediaPane extends StatelessWidget {
       },
     );
   }
+}
+
+double videoViewportHeight({
+  required double width,
+  required double aspectRatio,
+  required double availableHeight,
+  double? maximumHeight,
+}) {
+  final heightFromWidth = width / aspectRatio;
+  final heightLimit = maximumHeight == null
+      ? availableHeight
+      : availableHeight.clamp(0.0, maximumHeight);
+  return heightFromWidth.clamp(0.0, heightLimit).toDouble();
 }
 
 class VideoTransport extends StatelessWidget {

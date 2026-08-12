@@ -20,6 +20,26 @@ import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
+  test('wide video viewport derives its height from the available width', () {
+    expect(
+      videoViewportHeight(
+        width: 960,
+        aspectRatio: 16 / 9,
+        availableHeight: 700,
+      ),
+      540,
+    );
+    expect(
+      videoViewportHeight(
+        width: 960,
+        aspectRatio: 16 / 9,
+        availableHeight: 700,
+        maximumHeight: 300,
+      ),
+      300,
+    );
+  });
+
   test('current sentence remains active through the following silence', () {
     const segments = [
       TranscriptSegment(id: 'first', startMs: 100, endMs: 1000, text: 'First'),
