@@ -675,31 +675,10 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> continueReadyJob(String id) async {
+  void continueReadyJob(String id) {
     final job = _jobs[id];
     if (job == null || job.status != JobStatus.ready) return;
-    if (!await File(job.sourcePath).exists()) {
-      await _fail(
-        job,
-        'missing_source',
-        'The source file is missing. Relink it before continuing.',
-        status: JobStatus.missingSource,
-      );
-      return;
-    }
-    if (!_workspaceIds.contains(id)) _workspaceIds.add(id);
-    _selectedJobId = id;
-    _destinationIndex = 0;
-    notifyListeners();
-    if (!_keyConfigured || _processing) return;
-    _processing = true;
-    notifyListeners();
-    try {
-      await _runJob(id);
-    } finally {
-      _processing = false;
-      notifyListeners();
-    }
+    reopen(id);
   }
 
   Future<String?> relink(String id, String sourcePath) async {

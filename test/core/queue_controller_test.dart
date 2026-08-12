@@ -193,64 +193,78 @@ void main() {
     },
   );
 
-  test('a ready history job continues when its source still exists', () async {
-    final directory = await Directory.systemTemp.createTemp(
-      'meow-continue-ready-',
-    );
-    addTearDown(() => directory.delete(recursive: true));
-    final source = File('${directory.path}/ready.wav');
-    await source.writeAsBytes(const [1]);
-    final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
-      TranscriptionJob(
-        id: 'ready',
-        batchId: 'batch',
-        sourcePath: source.path,
-        createdAt: now,
-        updatedAt: now,
-        status: JobStatus.ready,
-      ),
-    ]);
-    final soniox = _Soniox();
-    final controller = _controller(jobs: jobs, soniox: soniox);
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    controller.setDestination(1);
+  test(
+    'continuing a ready history job only restores it to the workspace',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-continue-ready-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/ready.wav');
+      await source.writeAsBytes(const [1]);
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'ready',
+          batchId: 'batch',
+          sourcePath: source.path,
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+        ),
+      ]);
+      final soniox = _Soniox();
+      final controller = _controller(jobs: jobs, soniox: soniox);
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      controller.setDestination(1);
 
-    await controller.continueReadyJob('ready');
+      controller.continueReadyJob('ready');
 
-    expect(jobs.saved['ready']?.status, JobStatus.completed);
-    expect(controller.workspaceJobs.single.id, 'ready');
-    expect(controller.selectedJobId, 'ready');
-    expect(controller.destinationIndex, 0);
-    expect(soniox.uploadCalls, 1);
-  });
+      expect(jobs.saved['ready']?.status, JobStatus.ready);
+      expect(controller.workspaceJobs.single.id, 'ready');
+      expect(controller.selectedJobId, 'ready');
+      expect(controller.destinationIndex, 0);
+      expect(controller.processing, isFalse);
+      expect(soniox.uploadCalls, 0);
+    },
+  );
 
-  test('continuing a ready history job detects a missing source', () async {
-    final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
-      TranscriptionJob(
-        id: 'ready',
-        batchId: 'batch',
-        sourcePath: '${Directory.systemTemp.path}/missing-ready-source.wav',
-        createdAt: now,
-        updatedAt: now,
-        status: JobStatus.ready,
-      ),
-    ]);
-    final soniox = _Soniox();
-    final controller = _controller(jobs: jobs, soniox: soniox);
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    controller.setDestination(1);
+  test(
+    'continuing a ready history job defers missing-source validation',
+    () async {
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'ready',
+          batchId: 'batch',
+          sourcePath: '${Directory.systemTemp.path}/missing-ready-source.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+        ),
+      ]);
+      final soniox = _Soniox();
+      final controller = _controller(jobs: jobs, soniox: soniox);
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      controller.setDestination(1);
 
-    await controller.continueReadyJob('ready');
+      controller.continueReadyJob('ready');
 
-    expect(jobs.saved['ready']?.status, JobStatus.missingSource);
-    expect(controller.workspaceJobs, isEmpty);
-    expect(controller.destinationIndex, 1);
-    expect(soniox.uploadCalls, 0);
-  });
+      expect(jobs.saved['ready']?.status, JobStatus.ready);
+      expect(controller.workspaceJobs.single.id, 'ready');
+      expect(controller.selectedJobId, 'ready');
+      expect(controller.destinationIndex, 0);
+      expect(controller.processing, isFalse);
+      expect(soniox.uploadCalls, 0);
+
+      await controller.startReady();
+
+      expect(jobs.saved['ready']?.status, JobStatus.missingSource);
+      expect(soniox.uploadCalls, 0);
+    },
+  );
 
   test(
     'cancellation becomes terminal and cleans only the job-owned ids',
