@@ -118,8 +118,162 @@ void main() {
       shouldFocusTranscriptAfterSeek(TranscriptSeekReason.standard),
       isTrue,
     );
+    expect(
+      shouldFocusTranscriptAfterSeek(TranscriptSeekReason.videoProgressScrub),
+      isFalse,
+    );
     expect(shouldFocusTranscriptOnPlaybackResume(repeating: true), isFalse);
     expect(shouldFocusTranscriptOnPlaybackResume(repeating: false), isTrue);
+  });
+
+  testWidgets('dragging video progress does not focus the transcript', (
+    tester,
+  ) async {
+    final reasons = <TranscriptSeekReason>[];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VideoTransport(
+            playing: false,
+            position: const Duration(seconds: 5),
+            duration: const Duration(seconds: 30),
+            playbackRate: 1,
+            onPlayPause: () async {},
+            onSeek:
+                (
+                  _, {
+                  TranscriptSeekReason reason = TranscriptSeekReason.standard,
+                }) async => reasons.add(reason),
+            onPlaybackRateChanged: (_) async {},
+            onFullscreen: () async {},
+          ),
+        ),
+      ),
+    );
+    final seekBounds = tester.getRect(find.byKey(const Key('video-seek')));
+
+    await tester.dragFrom(
+      Offset(seekBounds.left + 8, seekBounds.center.dy),
+      Offset(seekBounds.width * .8, 0),
+    );
+
+    expect(reasons, isNotEmpty);
+    expect(
+      reasons.every((reason) => !shouldFocusTranscriptAfterSeek(reason)),
+      isTrue,
+    );
+  });
+
+  testWidgets('clicking a sentence does not focus the transcript list', (
+    tester,
+  ) async {
+    final reasons = <TranscriptSeekReason>[];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TranscriptSegmentEditor(
+            segment: const TranscriptSegment(
+              id: 'clicked',
+              startMs: 5000,
+              endMs: 6000,
+              text: 'Clicked sentence',
+            ),
+            tokens: const [],
+            positionMs: 0,
+            isCurrent: false,
+            query: '',
+            speakerName: '',
+            showSpeaker: false,
+            showTimestamp: false,
+            isEditing: false,
+            onSeek: ({required reason}) => reasons.add(reason),
+            onEdit: () {},
+            onCancel: () {},
+            onSave: (_) async {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('segment-text-clicked')));
+
+    expect(reasons, isNotEmpty);
+    expect(
+      reasons.every((reason) => !shouldFocusTranscriptAfterSeek(reason)),
+      isTrue,
+    );
+  });
+
+  testWidgets('returning from AI Brief preserves a stopped transcript view', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1000, 700));
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: List.generate(
+          30,
+          (index) => TranscriptSegment(
+            id: 'segment-$index',
+            startMs: index * 1000,
+            endMs: (index + 1) * 1000,
+            text: List.filled(
+              3,
+              'Transcript sentence $index with enough text for a full line.',
+            ).join('\n'),
+          ),
+        ),
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+    );
+    addTearDown(controller.dispose);
+    controller.rememberPlaybackPosition(
+      'job',
+      const Duration(milliseconds: 5000),
+    );
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(
+      find.byKey(const Key('transcript-scroll')),
+      const Offset(0, 1000),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('segment-card-segment-0')),
+      findsOneWidget,
+    );
+    final firstSegmentTop = tester.getTopLeft(
+      find.byKey(const ValueKey('segment-card-segment-0')),
+    );
+
+    await tester.tap(find.text('AI Brief').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transcript').first);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('segment-card-segment-0')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('segment-card-segment-0'))),
+      firstSegmentTop,
+    );
   });
 
   group('fullscreen transcript subtitles', () {
@@ -1561,7 +1715,7 @@ void main() {
                 showSpeaker: showSpeaker,
                 showTimestamp: showTimestamp,
                 isEditing: false,
-                onSeek: () {},
+                onSeek: _noopSegmentSeek,
                 onEdit: () {},
                 onCancel: () {},
                 onSave: (_) async {},
@@ -1695,7 +1849,7 @@ void main() {
       showSpeaker: true,
       showTimestamp: false,
       isEditing: false,
-      onSeek: () {},
+      onSeek: _noopSegmentSeek,
       onEdit: () {},
       onCancel: () {},
       onSave: (_) async {},
@@ -1913,7 +2067,7 @@ void main() {
               showSpeaker: false,
               showTimestamp: true,
               isEditing: false,
-              onSeek: () {},
+              onSeek: _noopSegmentSeek,
               onEdit: () {},
               onCancel: () {},
               onSave: (_) async {},
@@ -1955,7 +2109,7 @@ void main() {
                 showSpeaker: false,
                 showTimestamp: false,
                 isEditing: false,
-                onSeek: () {},
+                onSeek: _noopSegmentSeek,
                 onEdit: () {},
                 onCancel: () {},
                 onSave: (_) async {},
@@ -2000,7 +2154,7 @@ void main() {
             showSpeaker: false,
             showTimestamp: true,
             isEditing: false,
-            onSeek: () {},
+            onSeek: _noopSegmentSeek,
             onEdit: () {},
             onCancel: () {},
             onSave: (_) async {},
@@ -2036,7 +2190,7 @@ void main() {
               showSpeaker: false,
               showTimestamp: true,
               isEditing: false,
-              onSeek: () => seeks++,
+              onSeek: ({required reason}) => seeks++,
               onEdit: () {},
               onCancel: () {},
               onSave: (_) async {},
@@ -2202,7 +2356,7 @@ void main() {
             showSpeaker: false,
             showTimestamp: false,
             isEditing: false,
-            onSeek: _noop,
+            onSeek: _noopSegmentSeek,
             onEdit: _noop,
             onCancel: _noop,
             onSave: (_) async {},
@@ -3586,7 +3740,7 @@ void main() {
                 duration: const Duration(minutes: 3, seconds: 12),
                 playbackRate: 1,
                 onPlayPause: () async {},
-                onSeek: (_) async {},
+                onSeek: (_, {reason = TranscriptSeekReason.standard}) async {},
                 onPlaybackRateChanged: (_) async {},
                 onSwitchToAudioMode: () => modeSwitches++,
                 onFullscreen: () async => fullscreenRequests++,
@@ -4773,7 +4927,7 @@ class _EditorHarnessState extends State<_EditorHarness> {
     showSpeaker: false,
     showTimestamp: true,
     isEditing: _editing,
-    onSeek: widget.onSeek,
+    onSeek: ({required reason}) => widget.onSeek(),
     onEdit: () => setState(() => _editing = true),
     onCancel: () => setState(() => _editing = false),
     onSave: (text) async {
@@ -4815,7 +4969,7 @@ class _RepeatEditorHarnessState extends State<_RepeatEditorHarness> {
     isEditing: _editing,
     isRepeating: _repeating,
     onToggleRepeat: () => setState(() => _repeating = !_repeating),
-    onSeek: _noop,
+    onSeek: _noopSegmentSeek,
     onEdit: () => setState(() => _editing = true),
     onCancel: () => setState(() => _editing = false),
     onSave: (_) async => setState(() => _editing = false),
@@ -4860,7 +5014,7 @@ class _TwoEditorHarnessState extends State<_TwoEditorHarness> {
           showSpeaker: false,
           showTimestamp: true,
           isEditing: _editingId == segment.id,
-          onSeek: () {},
+          onSeek: _noopSegmentSeek,
           onEdit: () => setState(() => _editingId = segment.id),
           onCancel: () => setState(() => _editingId = null),
           onSave: (_) async => setState(() => _editingId = null),
@@ -4920,6 +5074,8 @@ Future<void> _selectTranslationView(WidgetTester tester, String label) async {
 }
 
 void _noop() {}
+
+void _noopSegmentSeek({required TranscriptSeekReason reason}) {}
 
 void _setTestWindow(WidgetTester tester, Size size) {
   tester.view.devicePixelRatio = 1;
