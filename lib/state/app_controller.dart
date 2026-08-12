@@ -101,6 +101,7 @@ class AppController extends ChangeNotifier {
 
   int get readyCount =>
       workspaceJobs.where((job) => job.status.canTranscribe).length;
+  int get processingCount => workspaceJobs.where((job) => job.isBusy).length;
   int get completedCount =>
       workspaceJobs.where((job) => job.status == JobStatus.completed).length;
   int get failedCount => workspaceJobs

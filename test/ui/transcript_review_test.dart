@@ -2464,11 +2464,19 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('queue-ready-status')), findsOneWidget);
+      expect(find.byKey(const Key('queue-processing-status')), findsOneWidget);
       expect(find.byKey(const Key('queue-completed-status')), findsOneWidget);
-      expect(find.byKey(const Key('queue-failed-status')), findsOneWidget);
+      expect(find.byKey(const Key('queue-failed-status')), findsNothing);
       expect(
         find.descendant(
           of: find.byKey(const Key('queue-ready-status')),
+          matching: find.text('0'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('queue-processing-status')),
           matching: find.text('0'),
         ),
         findsOneWidget,
@@ -2480,16 +2488,13 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('queue-failed-status')),
-          matching: find.text('0'),
-        ),
-        findsOneWidget,
-      );
       final statusSummary = find.byKey(const Key('file-queue-status-summary'));
       expect(
         find.descendant(of: statusSummary, matching: find.text('Ready')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: statusSummary, matching: find.text('Processing')),
         findsOneWidget,
       );
       expect(
@@ -2501,7 +2506,7 @@ void main() {
           of: statusSummary,
           matching: find.text('Needs attention'),
         ),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.text('Nothing uploads until you press Transcribe.'),
@@ -2568,6 +2573,14 @@ void main() {
 
     expect(find.text('出现问题，请重试。'), findsNothing);
     expect(find.text('转写失败。请检查源文件、API 密钥和网络连接。'), findsOneWidget);
+    expect(find.byKey(const Key('queue-failed-status')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('queue-failed-status')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('completed video collapses the queue and uses the wide split', (
@@ -2688,7 +2701,7 @@ void main() {
       find
           .descendant(
             of: visibleStatusSummary,
-            matching: find.text('Completed'),
+            matching: find.text('Processing'),
           )
           .hitTestable(),
       findsOneWidget,
@@ -2697,10 +2710,17 @@ void main() {
       find
           .descendant(
             of: visibleStatusSummary,
-            matching: find.text('Needs attention'),
+            matching: find.text('Completed'),
           )
           .hitTestable(),
       findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: visibleStatusSummary,
+        matching: find.text('Needs attention'),
+      ),
+      findsNothing,
     );
     final expandedReview = tester.getRect(find.byType(TranscriptReview));
     final queuePanel = tester.getRect(
@@ -3299,10 +3319,7 @@ void main() {
       find.text('Review everything before MeowSTT uploads anything.'),
       findsNothing,
     );
-    expect(
-      find.text('Batch drop · recursive folders · up to 5 hours each'),
-      findsOneWidget,
-    );
+    expect(find.text('Batch drop · up to 5 hours each'), findsOneWidget);
   });
 
   testWidgets('language and context options belong to the workspace session', (
@@ -3349,12 +3366,33 @@ void main() {
     expect(find.byKey(const Key('header-add-folder')), findsOneWidget);
     expect(find.byKey(const Key('header-add-files')), findsOneWidget);
     expect(find.byKey(const Key('header-transcribe')), findsOneWidget);
+    expect(find.widgetWithText(SwitchListTile, 'Speaker labels'), findsNothing);
+    expect(find.widgetWithText(SwitchListTile, 'Timestamps'), findsNothing);
 
-    await tester.enterText(
-      find.byKey(const Key('session-language-hints-field')),
-      'zh, en',
-    );
-    await tester.testTextInput.receiveAction(TextInputAction.done);
+    expect(find.byKey(const Key('session-language-hints-field')), findsNothing);
+    expect(find.text('Automatic'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('session-language-hints-picker')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Chinese  ·  zh'), findsOneWidget);
+    expect(find.text('English  ·  en'), findsOneWidget);
+
+    final chineseHint = find.byKey(const ValueKey('language-hint-zh'));
+    await tester.ensureVisible(chineseHint);
+    await tester.tap(chineseHint);
+    await tester.pump();
+    final englishHint = find.byKey(const ValueKey('language-hint-en'));
+    await tester.ensureVisible(englishHint);
+    await tester.tap(englishHint);
+    await tester.pump();
+
+    expect(controller.sessionOptions.languageHints, ['zh', 'en']);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('Chinese, English'), findsOneWidget);
+
     await tester.enterText(
       find.byKey(const Key('session-context-terms-field')),
       'MeowSTT, Soniox',
@@ -3362,7 +3400,6 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
 
-    expect(controller.sessionOptions.languageHints, ['zh', 'en']);
     expect(controller.sessionOptions.contextTerms, ['MeowSTT', 'Soniox']);
     expect(controller.workspaceJobs.single.options.languageHints, ['zh', 'en']);
     expect(controller.workspaceJobs.single.options.contextTerms, [

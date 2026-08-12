@@ -862,6 +862,7 @@ void main() {
         () => controller.workspaceJobs.last.status == JobStatus.uploading,
       );
 
+      expect(controller.processingCount, 1);
       expect(controller.inactiveHistoryCount, 1);
       await controller.clearInactiveHistory();
 
@@ -872,6 +873,7 @@ void main() {
       expect(controller.selectedJobId, activeId);
       expect(controller.workspaceJobs.single.status, JobStatus.uploading);
       await run;
+      expect(controller.processingCount, 0);
     },
   );
 }
