@@ -383,10 +383,35 @@ class _TranscriptReviewState extends State<TranscriptReview>
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
-          _ReviewHeader(
+          _UnifiedReviewToolbar(
             job: job,
             viewMode: _viewMode,
             showAiBrief: _showAiBrief,
+            search: _search,
+            searchVisible: _searchVisible,
+            onTabChanged: (value) {
+              if (value && _searchVisible) {
+                _search.clear();
+                _queueFocusCurrent(force: true);
+              }
+              setState(() {
+                _showAiBrief = value;
+                if (value) _searchVisible = false;
+              });
+            },
+            onViewModeChanged: (value) => setState(() => _viewMode = value),
+            onOpenSearch: () => setState(() => _searchVisible = true),
+            onCloseSearch: _closeTranscriptSearch,
+            onSearch: () {
+              setState(() {});
+              if (_search.text.trim().isEmpty) {
+                _queueFocusCurrent(force: true);
+              }
+            },
+            onFocusCurrentSentence: document.segments.isEmpty
+                ? null
+                : _focusCurrentSentence,
+            onGenerateAiBrief: () => _showAiBriefDialog(job),
           ),
           const Divider(height: 1),
           Expanded(
@@ -556,25 +581,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }) {
     final transcript = Column(
       children: [
-        _TranscriptToolbar(
-          job: job,
-          search: _search,
-          searchVisible: _searchVisible,
-          viewMode: _viewMode,
-          onViewModeChanged: (value) => setState(() => _viewMode = value),
-          onOpenSearch: () => setState(() => _searchVisible = true),
-          onCloseSearch: _closeTranscriptSearch,
-          onSearch: () {
-            setState(() {});
-            if (_search.text.trim().isEmpty) {
-              _queueFocusCurrent(force: true);
-            }
-          },
-          onFocusCurrentSentence: document.segments.isEmpty
-              ? null
-              : _focusCurrentSentence,
-        ),
-        const Divider(height: 1),
+        if (job.translationState.status != TranslationStatus.idle &&
+            job.translationState.status != TranslationStatus.completed)
+          _TranslationStatusStrip(job: job),
         if (controller.settings.showSpeakers && document.speakers.isNotEmpty)
           SpeakerStrip(job: job, document: document),
         Expanded(
@@ -685,30 +694,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ),
       ],
     );
-    return Column(
-      children: [
-        _ReviewContentTabs(
-          showAiBrief: _showAiBrief,
-          hasBrief: job.aiBrief != null,
-          generationActive: job.aiGenerationState.status.isActive,
-          onChanged: (value) => setState(() {
-            _showAiBrief = value;
-            if (value) _searchVisible = false;
-          }),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: _showAiBrief
-              ? _AiBriefPane(
-                  job: job,
-                  document: document,
-                  onGenerate: () => _showAiBriefDialog(job),
-                  onEvidence: _openAiEvidence,
-                )
-              : transcript,
-        ),
-      ],
-    );
+    return _showAiBrief
+        ? _AiBriefPane(
+            job: job,
+            document: document,
+            onGenerate: () => _showAiBriefDialog(job),
+            onEvidence: _openAiEvidence,
+          )
+        : transcript;
   }
 
   Future<void> _showAiBriefDialog(TranscriptionJob job) async {
@@ -1062,50 +1055,49 @@ class _ReviewSplitDivider extends StatelessWidget {
 
 class _ReviewContentTabs extends StatelessWidget {
   const _ReviewContentTabs({
+    required this.width,
     required this.showAiBrief,
     required this.hasBrief,
     required this.generationActive,
     required this.onChanged,
   });
 
+  final double width;
   final bool showAiBrief;
   final bool hasBrief;
   final bool generationActive;
   final ValueChanged<bool> onChanged;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-    child: SizedBox(
-      width: double.infinity,
-      child: SegmentedButton<bool>(
-        key: const Key('review-content-tabs'),
-        showSelectedIcon: false,
-        segments: [
-          ButtonSegment(
-            value: false,
-            icon: const Icon(Icons.subject_rounded, size: 18),
-            label: Text(context.strings.t('transcript')),
-          ),
-          ButtonSegment(
-            value: true,
-            icon: generationActive
-                ? const SizedBox.square(
-                    dimension: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(
-                    hasBrief
-                        ? Icons.auto_awesome_rounded
-                        : Icons.auto_awesome_outlined,
-                    size: 18,
-                  ),
-            label: Text(context.strings.t('ai_brief')),
-          ),
-        ],
-        selected: {showAiBrief},
-        onSelectionChanged: (values) => onChanged(values.first),
-      ),
+  Widget build(BuildContext context) => SizedBox(
+    width: width,
+    child: SegmentedButton<bool>(
+      key: const Key('review-content-tabs'),
+      showSelectedIcon: false,
+      segments: [
+        ButtonSegment(
+          value: false,
+          icon: const Icon(Icons.subject_rounded, size: 18),
+          label: Text(context.strings.t('transcript')),
+        ),
+        ButtonSegment(
+          value: true,
+          icon: generationActive
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(
+                  hasBrief
+                      ? Icons.auto_awesome_rounded
+                      : Icons.auto_awesome_outlined,
+                  size: 18,
+                ),
+          label: Text(context.strings.t('ai_brief')),
+        ),
+      ],
+      selected: {showAiBrief},
+      onSelectionChanged: (values) => onChanged(values.first),
     ),
   );
 }
@@ -1266,7 +1258,6 @@ class _AiBriefPane extends StatelessWidget {
     }
     return Column(
       children: [
-        _AiBriefToolbar(job: job, onGenerate: onGenerate),
         if (brief.isStaleFor(document))
           MaterialBanner(
             key: const Key('ai-brief-outdated'),
@@ -1445,52 +1436,6 @@ class _AiBriefPane extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _AiBriefToolbar extends StatelessWidget {
-  const _AiBriefToolbar({required this.job, required this.onGenerate});
-
-  final TranscriptionJob job;
-  final VoidCallback onGenerate;
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = context.read<AppController>();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-      child: Row(
-        children: [
-          Text(
-            context.strings.t('ai_brief'),
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const Spacer(),
-          IconButton(
-            tooltip: context.strings.t('copy_brief'),
-            onPressed: () => _copyBriefText(
-              context,
-              controller.renderAiBriefMarkdown(job.id),
-            ),
-            icon: const Icon(Icons.copy_all_outlined),
-          ),
-          IconButton(
-            tooltip: context.strings.t('export_brief'),
-            onPressed: () => _exportBrief(context, job.id),
-            icon: const Icon(Icons.ios_share_rounded),
-          ),
-          IconButton(
-            tooltip: context.strings.t('refresh_ai_brief'),
-            onPressed: job.aiGenerationState.status.isActive
-                ? null
-                : onGenerate,
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -2171,222 +2116,232 @@ AiBriefSection _sectionForInsight(AiInsightType type) => switch (type) {
   AiInsightType.openQuestion => AiBriefSection.openQuestions,
 };
 
-class _ReviewHeader extends StatelessWidget {
-  const _ReviewHeader({
+enum _TranscriptMoreAction {
+  toggleSpeakers,
+  toggleTimestamps,
+  original,
+  translated,
+  bilingual,
+  focusCurrent,
+  translate,
+  copy,
+  export,
+}
+
+enum _AiBriefMoreAction { copy, export }
+
+class _UnifiedReviewToolbar extends StatelessWidget {
+  const _UnifiedReviewToolbar({
     required this.job,
     required this.viewMode,
     required this.showAiBrief,
-  });
-
-  final TranscriptionJob job;
-  final TranslationViewMode viewMode;
-  final bool showAiBrief;
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = context.watch<AppController>();
-    final settings = controller.settings;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              job.fileName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-          ),
-          if (!showAiBrief) ...[
-            IconButton(
-              key: const Key('toggle-speaker-labels'),
-              tooltip: context.strings.t('speaker_labels'),
-              isSelected: settings.showSpeakers,
-              onPressed: () => unawaited(
-                controller.updateSettings(
-                  settings.copyWith(showSpeakers: !settings.showSpeakers),
-                ),
-              ),
-              icon: const Icon(Icons.person_outline_rounded),
-              selectedIcon: const Icon(Icons.person_rounded),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              key: const Key('toggle-timestamps'),
-              tooltip: context.strings.t('timestamps'),
-              isSelected: settings.showTimestamps,
-              onPressed: () => unawaited(
-                controller.updateSettings(
-                  settings.copyWith(showTimestamps: !settings.showTimestamps),
-                ),
-              ),
-              icon: const Icon(Icons.schedule_outlined),
-              selectedIcon: const Icon(Icons.schedule_rounded),
-            ),
-            IconButton(
-              key: const Key('translate-transcript'),
-              tooltip: controller.translationConfigured
-                  ? context.strings.t('translate_with_llm')
-                  : context.strings.t('auto_translate_requires_config'),
-              onPressed:
-                  controller.translationConfigured &&
-                      !job.translationState.status.isActive
-                  ? () => _showTranslationDialog(context, job)
-                  : null,
-              icon: const Icon(Icons.translate_rounded),
-            ),
-            IconButton(
-              tooltip: context.strings.t('copy'),
-              onPressed: () async {
-                final options = ExportOptions(
-                  showSpeakers: settings.showSpeakers,
-                  showTimestamps: settings.showTimestamps,
-                  localeCode: Localizations.localeOf(context).languageCode,
-                  contentMode: switch (viewMode) {
-                    TranslationViewMode.original => ExportContentMode.original,
-                    TranslationViewMode.translated =>
-                      ExportContentMode.translated,
-                    TranslationViewMode.bilingual =>
-                      ExportContentMode.bilingual,
-                  },
-                );
-                await Clipboard.setData(
-                  ClipboardData(text: controller.renderJob(job.id, options)),
-                );
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(context.strings.t('copied'))),
-                  );
-                }
-              },
-              icon: const Icon(Icons.copy_all_outlined),
-            ),
-            IconButton(
-              tooltip: context.strings.t('export'),
-              onPressed: () => showExportDialog(context, jobId: job.id),
-              icon: const Icon(Icons.ios_share_rounded),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _TranscriptToolbar extends StatelessWidget {
-  const _TranscriptToolbar({
-    required this.job,
     required this.search,
     required this.searchVisible,
-    required this.viewMode,
+    required this.onTabChanged,
     required this.onViewModeChanged,
     required this.onOpenSearch,
     required this.onCloseSearch,
     required this.onSearch,
     required this.onFocusCurrentSentence,
+    required this.onGenerateAiBrief,
   });
 
-  static const _expandedBreakpoint = 680.0;
+  static const _fullBreakpoint = 900.0;
+  static const _mediumBreakpoint = 700.0;
 
   final TranscriptionJob job;
+  final TranslationViewMode viewMode;
+  final bool showAiBrief;
   final TextEditingController search;
   final bool searchVisible;
-  final TranslationViewMode viewMode;
+  final ValueChanged<bool> onTabChanged;
   final ValueChanged<TranslationViewMode> onViewModeChanged;
   final VoidCallback onOpenSearch;
   final VoidCallback onCloseSearch;
   final VoidCallback onSearch;
   final VoidCallback? onFocusCurrentSentence;
+  final VoidCallback onGenerateAiBrief;
+
+  bool get _translationStarted =>
+      job.translationState.status != TranslationStatus.idle ||
+      (job.document?.segments.any((segment) => segment.hasTranslation) ??
+          false);
 
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
-    final translationStarted =
-        job.translationState.status != TranslationStatus.idle ||
-        (job.document?.segments.any((segment) => segment.hasTranslation) ??
-            false);
-    return LayoutBuilder(
-      builder: (context, constraints) => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-        child: searchVisible
-            ? _buildSearchRow(context)
-            : _buildToolbarRow(
-                context,
-                controller: controller,
-                translationStarted: translationStarted,
-                compact: constraints.maxWidth < _expandedBreakpoint,
-                canShowCompactProgress: constraints.maxWidth >= 360,
-              ),
+    return SizedBox(
+      key: const Key('review-header'),
+      height: 64,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            var full = constraints.maxWidth >= _fullBreakpoint;
+            var medium = constraints.maxWidth >= _mediumBreakpoint;
+            var tabWidth = full ? 256.0 : (medium ? 228.0 : 196.0);
+            var sideWidth = (constraints.maxWidth - tabWidth) / 2;
+
+            if (full && sideWidth < _transcriptActionsWidth(full: true)) {
+              full = false;
+              tabWidth = 228;
+              sideWidth = (constraints.maxWidth - tabWidth) / 2;
+            }
+            if (medium &&
+                !full &&
+                sideWidth < _transcriptActionsWidth(full: false)) {
+              medium = false;
+              tabWidth = 196;
+              sideWidth = (constraints.maxWidth - tabWidth) / 2;
+            }
+
+            return searchVisible && !showAiBrief
+                ? _buildSearchRow(context, tabWidth, sideWidth)
+                : Row(
+                    key: const Key('review-toolbar-row'),
+                    children: [
+                      SizedBox(width: sideWidth, child: _filename(context)),
+                      _tabs(tabWidth),
+                      SizedBox(
+                        width: sideWidth,
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: showAiBrief
+                              ? _buildAiBriefActions(
+                                  context,
+                                  controller,
+                                  full: full,
+                                )
+                              : _buildTranscriptActions(
+                                  context,
+                                  controller,
+                                  full: full,
+                                  medium: medium,
+                                ),
+                        ),
+                      ),
+                    ],
+                  );
+          },
+        ),
       ),
     );
   }
 
-  Widget _buildSearchRow(BuildContext context) => Row(
-    key: const Key('transcript-toolbar-search-row'),
+  double _transcriptActionsWidth({required bool full}) {
+    if (full) {
+      return 200 +
+          (_translationStarted ? 116 : 0) +
+          (job.translationState.status.isActive ? 40 : 0);
+    }
+    return 120 +
+        (_translationStarted ? 112 : 0) +
+        (job.translationState.status.isActive ? 40 : 0);
+  }
+
+  Widget _tabs(double width) => _ReviewContentTabs(
+    width: width,
+    showAiBrief: showAiBrief,
+    hasBrief: job.aiBrief != null,
+    generationActive: job.aiGenerationState.status.isActive,
+    onChanged: onTabChanged,
+  );
+
+  Widget _filename(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(right: 12),
+    child: Text(
+      job.fileName,
+      key: const Key('review-filename'),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(
+        context,
+      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+    ),
+  );
+
+  Widget _buildSearchRow(
+    BuildContext context,
+    double tabWidth,
+    double sideWidth,
+  ) => Row(
+    key: const Key('review-toolbar-search-row'),
     children: [
-      IconButton(
-        key: const Key('close-transcript-search'),
-        tooltip: context.strings.t('close_search'),
-        onPressed: onCloseSearch,
-        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-        padding: EdgeInsets.zero,
-        icon: const Icon(Icons.arrow_back_rounded),
-      ),
-      const SizedBox(width: 4),
-      Expanded(
-        child: CallbackShortcuts(
-          bindings: {
-            const SingleActivator(LogicalKeyboardKey.escape): onCloseSearch,
-          },
-          child: TextField(
-            key: const Key('transcript-search-field'),
-            autofocus: true,
-            controller: search,
-            onChanged: (_) => onSearch(),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: context.strings.t('search_transcript'),
-              prefixIcon: const Icon(Icons.search_rounded, size: 20),
-              prefixIconConstraints: const BoxConstraints(minWidth: 36),
-              suffixIconConstraints: const BoxConstraints(minWidth: 36),
-              suffixIcon: search.text.isEmpty
-                  ? null
-                  : IconButton(
-                      key: const Key('clear-transcript-search'),
-                      tooltip: context.strings.t('clear_search'),
-                      onPressed: () {
-                        search.clear();
-                        onSearch();
-                      },
-                      icon: const Icon(Icons.close_rounded, size: 18),
+      SizedBox(width: sideWidth, child: _filename(context)),
+      _tabs(tabWidth),
+      SizedBox(
+        width: sideWidth,
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: SizedBox(
+            width: sideWidth.clamp(0, 480).toDouble(),
+            child: Row(
+              children: [
+                IconButton(
+                  key: const Key('close-transcript-search'),
+                  tooltip: context.strings.t('close_search'),
+                  onPressed: onCloseSearch,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 40,
+                    height: 40,
+                  ),
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.arrow_back_rounded),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: CallbackShortcuts(
+                    bindings: {
+                      const SingleActivator(LogicalKeyboardKey.escape):
+                          onCloseSearch,
+                    },
+                    child: TextField(
+                      key: const Key('transcript-search-field'),
+                      autofocus: true,
+                      controller: search,
+                      onChanged: (_) => onSearch(),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: context.strings.t('search_transcript'),
+                        prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                        prefixIconConstraints: const BoxConstraints(
+                          minWidth: 36,
+                        ),
+                        suffixIconConstraints: const BoxConstraints(
+                          minWidth: 36,
+                        ),
+                        suffixIcon: search.text.isEmpty
+                            ? null
+                            : IconButton(
+                                key: const Key('clear-transcript-search'),
+                                tooltip: context.strings.t('clear_search'),
+                                onPressed: () {
+                                  search.clear();
+                                  onSearch();
+                                },
+                                icon: const Icon(Icons.close_rounded, size: 18),
+                              ),
+                      ),
                     ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
       ),
-      const SizedBox(width: 4),
-      _focusButton(context),
     ],
   );
 
-  Widget _buildToolbarRow(
-    BuildContext context, {
-    required AppController controller,
-    required bool translationStarted,
-    required bool compact,
-    required bool canShowCompactProgress,
+  Widget _buildTranscriptActions(
+    BuildContext context,
+    AppController controller, {
+    required bool full,
+    required bool medium,
   }) {
-    final translationActive = job.translationState.status.isActive;
-    final showStatus =
-        translationStarted &&
-        job.translationState.status != TranslationStatus.idle &&
-        job.translationState.status != TranslationStatus.completed &&
-        (!compact || (translationActive && canShowCompactProgress));
+    final settings = controller.settings;
     return Row(
-      key: const Key('transcript-toolbar-row'),
+      mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
           key: const Key('open-transcript-search'),
@@ -2396,27 +2351,54 @@ class _TranscriptToolbar extends StatelessWidget {
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.search_rounded),
         ),
-        if (translationStarted) ...[
+        if (full) ...[
+          IconButton(
+            key: const Key('toggle-speaker-labels'),
+            tooltip: context.strings.t('speaker_labels'),
+            isSelected: settings.showSpeakers,
+            onPressed: () => unawaited(
+              controller.updateSettings(
+                settings.copyWith(showSpeakers: !settings.showSpeakers),
+              ),
+            ),
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.person_outline_rounded),
+            selectedIcon: const Icon(Icons.person_rounded),
+          ),
+          IconButton(
+            key: const Key('toggle-timestamps'),
+            tooltip: context.strings.t('timestamps'),
+            isSelected: settings.showTimestamps,
+            onPressed: () => unawaited(
+              controller.updateSettings(
+                settings.copyWith(showTimestamps: !settings.showTimestamps),
+              ),
+            ),
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.schedule_outlined),
+            selectedIcon: const Icon(Icons.schedule_rounded),
+          ),
+        ],
+        if (_translationStarted && medium) ...[
           const SizedBox(width: 4),
           _TranslationViewDropdown(
             value: viewMode,
-            compact: compact,
+            compact: !full,
             onChanged: onViewModeChanged,
           ),
-          const SizedBox(width: 4),
-          _TranslationActionIconButton(job: job, controller: controller),
         ],
-        if (showStatus) ...[
-          const SizedBox(width: 8),
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: _TranslationStatusLabel(job: job, compact: compact),
-            ),
-          ),
-        ] else
-          const Spacer(),
-        _focusButton(context),
+        if (medium) _focusButton(context),
+        if (job.translationState.status.isActive)
+          _TranslationActionIconButton(job: job, controller: controller),
+        _transcriptMoreMenu(
+          context,
+          controller,
+          includeViewToggles: !full,
+          includeViewMode: !medium,
+          includeFocus: !medium,
+        ),
       ],
     );
   }
@@ -2429,6 +2411,279 @@ class _TranscriptToolbar extends StatelessWidget {
     padding: EdgeInsets.zero,
     icon: const Icon(Icons.center_focus_strong_rounded),
   );
+
+  Widget _transcriptMoreMenu(
+    BuildContext context,
+    AppController controller, {
+    required bool includeViewToggles,
+    required bool includeViewMode,
+    required bool includeFocus,
+  }) {
+    final settings = controller.settings;
+    final translationAction = _translationToolbarAction(
+      job.translationState.status,
+    );
+    final translateLabel = _translationStarted
+        ? _translationToolbarActionLabel(context, translationAction)
+        : context.strings.t('translate_with_llm');
+    final translateIcon = _translationStarted
+        ? _translationToolbarActionIcon(translationAction)
+        : Icons.translate_rounded;
+    final entries = <PopupMenuEntry<_TranscriptMoreAction>>[
+      if (includeViewToggles) ...[
+        CheckedPopupMenuItem(
+          key: const Key('more-toggle-speakers'),
+          value: _TranscriptMoreAction.toggleSpeakers,
+          checked: settings.showSpeakers,
+          child: Text(context.strings.t('speaker_labels')),
+        ),
+        CheckedPopupMenuItem(
+          key: const Key('more-toggle-timestamps'),
+          value: _TranscriptMoreAction.toggleTimestamps,
+          checked: settings.showTimestamps,
+          child: Text(context.strings.t('timestamps')),
+        ),
+      ],
+      if (includeViewMode && _translationStarted) ...[
+        if (includeViewToggles) const PopupMenuDivider(),
+        CheckedPopupMenuItem(
+          key: const Key('translation-mode-original-menu'),
+          value: _TranscriptMoreAction.original,
+          checked: viewMode == TranslationViewMode.original,
+          child: Text(context.strings.t('original')),
+        ),
+        CheckedPopupMenuItem(
+          key: const Key('translation-mode-translated-menu'),
+          value: _TranscriptMoreAction.translated,
+          checked: viewMode == TranslationViewMode.translated,
+          child: Text(context.strings.t('translated')),
+        ),
+        CheckedPopupMenuItem(
+          key: const Key('translation-mode-bilingual-menu'),
+          value: _TranscriptMoreAction.bilingual,
+          checked: viewMode == TranslationViewMode.bilingual,
+          child: Text(context.strings.t('bilingual')),
+        ),
+      ],
+      if (includeFocus) ...[
+        if (includeViewToggles || (includeViewMode && _translationStarted))
+          const PopupMenuDivider(),
+        _menuItem(
+          key: const Key('focus-current-menu'),
+          value: _TranscriptMoreAction.focusCurrent,
+          icon: Icons.center_focus_strong_rounded,
+          label: context.strings.t('focus_current_sentence'),
+          enabled: onFocusCurrentSentence != null,
+        ),
+      ],
+      if (job.translationState.status.isActive == false) ...[
+        const PopupMenuDivider(),
+        _menuItem(
+          key: const Key('translate-transcript'),
+          value: _TranscriptMoreAction.translate,
+          icon: translateIcon,
+          label: translateLabel,
+          enabled: controller.translationConfigured,
+        ),
+      ],
+      const PopupMenuDivider(),
+      _menuItem(
+        value: _TranscriptMoreAction.copy,
+        icon: Icons.copy_all_outlined,
+        label: context.strings.t('copy'),
+      ),
+      _menuItem(
+        value: _TranscriptMoreAction.export,
+        icon: Icons.ios_share_rounded,
+        label: context.strings.t('export'),
+      ),
+    ];
+    return SizedBox.square(
+      dimension: 40,
+      child: PopupMenuButton<_TranscriptMoreAction>(
+        key: const Key('review-toolbar-more'),
+        tooltip: context.strings.t('more_actions'),
+        padding: EdgeInsets.zero,
+        onSelected: (action) =>
+            _runTranscriptMoreAction(context, controller, settings, action),
+        itemBuilder: (_) => entries,
+        icon: const Icon(Icons.more_horiz_rounded),
+      ),
+    );
+  }
+
+  PopupMenuItem<_TranscriptMoreAction> _menuItem({
+    Key? key,
+    required _TranscriptMoreAction value,
+    required IconData icon,
+    required String label,
+    bool enabled = true,
+  }) => PopupMenuItem(
+    key: key,
+    value: value,
+    enabled: enabled,
+    child: Row(
+      children: [
+        Icon(icon, size: 20),
+        const SizedBox(width: 12),
+        Flexible(child: Text(label)),
+      ],
+    ),
+  );
+
+  void _runTranscriptMoreAction(
+    BuildContext context,
+    AppController controller,
+    AppSettings settings,
+    _TranscriptMoreAction action,
+  ) {
+    switch (action) {
+      case _TranscriptMoreAction.toggleSpeakers:
+        unawaited(
+          controller.updateSettings(
+            settings.copyWith(showSpeakers: !settings.showSpeakers),
+          ),
+        );
+      case _TranscriptMoreAction.toggleTimestamps:
+        unawaited(
+          controller.updateSettings(
+            settings.copyWith(showTimestamps: !settings.showTimestamps),
+          ),
+        );
+      case _TranscriptMoreAction.original:
+        onViewModeChanged(TranslationViewMode.original);
+      case _TranscriptMoreAction.translated:
+        onViewModeChanged(TranslationViewMode.translated);
+      case _TranscriptMoreAction.bilingual:
+        onViewModeChanged(TranslationViewMode.bilingual);
+      case _TranscriptMoreAction.focusCurrent:
+        onFocusCurrentSentence?.call();
+      case _TranscriptMoreAction.translate:
+        if (_translationStarted) {
+          _runTranslationToolbarAction(
+            context,
+            job,
+            controller,
+            _translationToolbarAction(job.translationState.status),
+          );
+        } else {
+          unawaited(_showTranslationDialog(context, job));
+        }
+      case _TranscriptMoreAction.copy:
+        unawaited(_copyTranscript(context, controller, settings));
+      case _TranscriptMoreAction.export:
+        unawaited(showExportDialog(context, jobId: job.id));
+    }
+  }
+
+  Future<void> _copyTranscript(
+    BuildContext context,
+    AppController controller,
+    AppSettings settings,
+  ) async {
+    final options = ExportOptions(
+      showSpeakers: settings.showSpeakers,
+      showTimestamps: settings.showTimestamps,
+      localeCode: Localizations.localeOf(context).languageCode,
+      contentMode: switch (viewMode) {
+        TranslationViewMode.original => ExportContentMode.original,
+        TranslationViewMode.translated => ExportContentMode.translated,
+        TranslationViewMode.bilingual => ExportContentMode.bilingual,
+      },
+    );
+    await Clipboard.setData(
+      ClipboardData(text: controller.renderJob(job.id, options)),
+    );
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.strings.t('copied'))));
+    }
+  }
+
+  Widget _buildAiBriefActions(
+    BuildContext context,
+    AppController controller, {
+    required bool full,
+  }) {
+    final active = job.aiGenerationState.status.isActive;
+    if (active) {
+      return IconButton(
+        key: const Key('cancel-ai-brief-toolbar'),
+        tooltip: context.strings.t('cancel'),
+        onPressed: () => controller.cancelAiBrief(job.id),
+        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.stop_circle_outlined),
+      );
+    }
+    if (job.aiBrief == null) return const SizedBox.shrink();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (full) ...[
+          IconButton(
+            key: const Key('copy-ai-brief-toolbar'),
+            tooltip: context.strings.t('copy_brief'),
+            onPressed: () => _copyBriefText(
+              context,
+              controller.renderAiBriefMarkdown(job.id),
+            ),
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.copy_all_outlined),
+          ),
+          IconButton(
+            key: const Key('export-ai-brief-toolbar'),
+            tooltip: context.strings.t('export_brief'),
+            onPressed: () => _exportBrief(context, job.id),
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.ios_share_rounded),
+          ),
+        ],
+        IconButton(
+          key: const Key('refresh-ai-brief-toolbar'),
+          tooltip: context.strings.t('refresh_ai_brief'),
+          onPressed: onGenerateAiBrief,
+          constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+          padding: EdgeInsets.zero,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+        if (!full)
+          SizedBox.square(
+            dimension: 40,
+            child: PopupMenuButton<_AiBriefMoreAction>(
+              key: const Key('ai-brief-toolbar-more'),
+              tooltip: context.strings.t('more_actions'),
+              padding: EdgeInsets.zero,
+              onSelected: (action) {
+                switch (action) {
+                  case _AiBriefMoreAction.copy:
+                    _copyBriefText(
+                      context,
+                      controller.renderAiBriefMarkdown(job.id),
+                    );
+                  case _AiBriefMoreAction.export:
+                    unawaited(_exportBrief(context, job.id));
+                }
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: _AiBriefMoreAction.copy,
+                  child: Text(context.strings.t('copy_brief')),
+                ),
+                PopupMenuItem(
+                  value: _AiBriefMoreAction.export,
+                  child: Text(context.strings.t('export_brief')),
+                ),
+              ],
+              icon: const Icon(Icons.more_horiz_rounded),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _TranslationViewDropdown extends StatelessWidget {
@@ -2558,6 +2813,40 @@ class _TranslationActionIconButton extends StatelessWidget {
       constraints: const BoxConstraints.tightFor(width: 40, height: 40),
       padding: EdgeInsets.zero,
       icon: Icon(_translationToolbarActionIcon(action)),
+    );
+  }
+}
+
+class _TranslationStatusStrip extends StatelessWidget {
+  const _TranslationStatusStrip({required this.job});
+
+  final TranscriptionJob job;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = job.translationState;
+    return DecoratedBox(
+      key: const Key('translation-status-strip'),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: Theme.of(context).dividerColor),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (state.status == TranslationStatus.translating)
+            LinearProgressIndicator(
+              value: state.totalSegments == 0
+                  ? null
+                  : state.progress.clamp(0, 1),
+            ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: _TranslationStatusLabel(job: job, compact: false),
+          ),
+        ],
+      ),
     );
   }
 }

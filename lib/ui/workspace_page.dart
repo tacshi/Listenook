@@ -149,6 +149,7 @@ class _Header extends StatelessWidget {
             label: Text(context.strings.t('transcribe')),
           ),
         ],
+        _ExportAllButton(controller: controller, compact: !showFullLabels),
       ],
     ];
     return LayoutBuilder(
@@ -1181,6 +1182,34 @@ Future<bool> chooseAndRelink(BuildContext context, String jobId) async {
     return false;
   }
   return true;
+}
+
+class _ExportAllButton extends StatelessWidget {
+  const _ExportAllButton({required this.controller, required this.compact});
+
+  final AppController controller;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final onPressed = controller.completedCount == 0
+        ? null
+        : () => showExportDialog(context);
+    if (compact) {
+      return IconButton.outlined(
+        key: const Key('export-all'),
+        tooltip: context.strings.t('export_all'),
+        onPressed: onPressed,
+        icon: const Icon(Icons.ios_share_rounded),
+      );
+    }
+    return OutlinedButton.icon(
+      key: const Key('export-all'),
+      onPressed: onPressed,
+      icon: const Icon(Icons.ios_share_rounded),
+      label: Text(context.strings.t('export_all')),
+    );
+  }
 }
 
 Future<void> showExportDialog(BuildContext context, {String? jobId}) async {

@@ -73,6 +73,61 @@ void main() {
     );
   });
 
+  test('parser moves a detached closing quote to the previous sentence', () {
+    final parsed = parser.parse({
+      'tokens': [
+        {
+          'text': '"You can give it a shot and we\'ll go from there.',
+          'start_ms': 0,
+          'end_ms': 1800,
+          'language': 'en',
+        },
+        {'text': '"', 'start_ms': 1810, 'end_ms': 1850, 'language': 'en'},
+        {
+          'text': ' I was so excited.',
+          'start_ms': 1900,
+          'end_ms': 2800,
+          'language': 'en',
+        },
+      ],
+    });
+
+    expect(parsed.segments, hasLength(2));
+    expect(parsed.segments.map((segment) => segment.text), [
+      '"You can give it a shot and we\'ll go from there."',
+      'I was so excited.',
+    ]);
+  });
+
+  test('normalizer repairs a detached closing quote in saved documents', () {
+    final repaired = parser.normalizeSegments(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'first',
+            startMs: 0,
+            endMs: 1800,
+            text: '"You can give it a shot and we\'ll go from there.',
+          ),
+          TranscriptSegment(
+            id: 'second',
+            startMs: 1810,
+            endMs: 2800,
+            text: '" I was so excited.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+      ),
+    );
+
+    expect(repaired.segments, hasLength(2));
+    expect(repaired.segments.first.text, endsWith('there."'));
+    expect(repaired.segments.last.text, 'I was so excited.');
+    expect(repaired.segments.last.id, 'second');
+  });
+
   test('parser omits whitespace-only tokens and empty segments', () {
     final parsed = parser.parse({
       'tokens': [

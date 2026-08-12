@@ -27,7 +27,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
     'app.meowstt.desktop/navigation',
   );
   static const _compactSidebarWidth = 64.0;
-  static const _extendedSidebarWidth = 152.0;
+  static const _extendedSidebarWidth = 184.0;
 
   bool _onboardingShown = false;
   bool _sidebarVisible = true;
@@ -221,6 +221,8 @@ class _AppShellState extends State<AppShell> with WindowListener {
         child: Text(
           label,
           key: ValueKey('$labelKey-navigation-label'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
             fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize,
           ),
