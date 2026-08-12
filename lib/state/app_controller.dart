@@ -58,7 +58,6 @@ class AppController extends ChangeNotifier {
   bool _translationKeyConfigured = false;
   int _destinationIndex = 0;
   String? _selectedJobId;
-  MediaDiagnostics? _mediaDiagnostics;
   AppSettings _settings = const AppSettings();
   TranscriptionOptions _sessionOptions = const TranscriptionOptions();
 
@@ -74,7 +73,6 @@ class AppController extends ChangeNotifier {
   );
   int get destinationIndex => _destinationIndex;
   String? get selectedJobId => _selectedJobId;
-  MediaDiagnostics? get mediaDiagnostics => _mediaDiagnostics;
 
   List<TranscriptionJob> get allJobs {
     final list = _jobs.values.toList()
@@ -227,7 +225,6 @@ class AppController extends ChangeNotifier {
     }
     _initializing = false;
     notifyListeners();
-    unawaited(refreshMediaDiagnostics());
     unawaited(_recover(interrupted));
     unawaited(_retryPendingCleanup(loaded));
   }
@@ -548,7 +545,10 @@ class AppController extends ChangeNotifier {
         if (state.isComplete) return;
         if (state.isFailed) {
           throw SonioxException(
-            code: state.errorType ?? 'transcription_failed',
+            code: canonicalSonioxErrorCode(
+              state.errorType,
+              fallback: 'transcription_failed',
+            ),
             message:
                 state.errorMessage ?? 'Soniox could not transcribe this file.',
             errorType: state.errorType,
@@ -663,6 +663,33 @@ class AppController extends ChangeNotifier {
       _processing = true;
       notifyListeners();
       await _runJob(updated.id);
+      _processing = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> continueReadyJob(String id) async {
+    final job = _jobs[id];
+    if (job == null || job.status != JobStatus.ready) return;
+    if (!await File(job.sourcePath).exists()) {
+      await _fail(
+        job,
+        'missing_source',
+        'The source file is missing. Relink it before continuing.',
+        status: JobStatus.missingSource,
+      );
+      return;
+    }
+    if (!_workspaceIds.contains(id)) _workspaceIds.add(id);
+    _selectedJobId = id;
+    _destinationIndex = 0;
+    notifyListeners();
+    if (!_keyConfigured || _processing) return;
+    _processing = true;
+    notifyListeners();
+    try {
+      await _runJob(id);
+    } finally {
       _processing = false;
       notifyListeners();
     }
@@ -1396,11 +1423,6 @@ class AppController extends ChangeNotifier {
         .split('-')
         .first;
     return supportedSonioxTranslationLanguageCodes.contains(base) ? base : 'en';
-  }
-
-  Future<void> refreshMediaDiagnostics() async {
-    _mediaDiagnostics = await _media.diagnostics();
-    notifyListeners();
   }
 
   Future<String> exportJob(

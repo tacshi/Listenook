@@ -1,13 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/models.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 
+typedef ExternalUrlLauncher = Future<bool> Function(Uri url);
+
+final _sonioxConsoleUrl = Uri.parse('https://console.soniox.com');
+
+Future<bool> _launchExternalUrl(Uri url) =>
+    launchUrl(url, mode: LaunchMode.externalApplication);
+
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({super.key, this.launchExternalUrl = _launchExternalUrl});
+
+  final ExternalUrlLauncher launchExternalUrl;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -15,7 +25,6 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final _key = TextEditingController();
-  bool _obscure = true;
   bool _savingKey = false;
   bool _testingKey = false;
 
@@ -101,6 +110,18 @@ class _SettingsPageState extends State<SettingsPage> {
     _Section(
       title: context.strings.t('soniox_key'),
       icon: Icons.key_rounded,
+      titleAction: TextButton.icon(
+        key: const Key('create-soniox-key-link'),
+        onPressed: _openSonioxConsole,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+        ),
+        icon: const Icon(Icons.open_in_new_rounded, size: 18),
+        label: Text(context.strings.t('create_soniox_key')),
+      ),
       trailing: controller.keyConfigured
           ? Tooltip(
               key: const Key('soniox-key-status'),
@@ -117,20 +138,12 @@ class _SettingsPageState extends State<SettingsPage> {
           TextField(
             key: const Key('soniox-key-field'),
             controller: _key,
-            obscureText: _obscure,
+            obscureText: true,
             enableSuggestions: false,
             autocorrect: false,
             onChanged: (_) => setState(() {}),
             decoration: InputDecoration(
               hintText: context.strings.t('key_hint'),
-              suffixIcon: IconButton(
-                onPressed: () => setState(() => _obscure = !_obscure),
-                icon: Icon(
-                  _obscure
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
-                ),
-              ),
             ),
           ),
           const SizedBox(height: 8),
@@ -323,53 +336,6 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget _systemTab(BuildContext context, AppController controller) =>
       _tabList([
         _Section(
-          title: context.strings.t('media_engine'),
-          icon: Icons.memory_rounded,
-          child: Row(
-            children: [
-              Icon(
-                controller.mediaDiagnostics?.available == true
-                    ? Icons.check_circle_rounded
-                    : Icons.warning_amber_rounded,
-                color: controller.mediaDiagnostics?.available == true
-                    ? Colors.green
-                    : Colors.orange,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      controller.mediaDiagnostics?.available == true
-                          ? context.strings.t('available')
-                          : context.strings.t('unavailable'),
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    Text(
-                      controller.mediaDiagnostics?.version ??
-                          (controller.mediaDiagnostics == null
-                              ? context.strings.t('checking')
-                              : context.strings.error(
-                                  controller.mediaDiagnostics?.errorCode,
-                                  englishFallback:
-                                      controller.mediaDiagnostics?.error,
-                                )),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-              TextButton(
-                onPressed: controller.refreshMediaDiagnostics,
-                child: Text(context.strings.t('refresh')),
-              ),
-            ],
-          ),
-        ),
-        _Section(
           title: context.strings.t('privacy'),
           icon: Icons.shield_outlined,
           child: Text(context.strings.t('privacy_body')),
@@ -394,6 +360,19 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) _showMessage(context.strings.t('key_save_failed'));
     } finally {
       if (mounted) setState(() => _savingKey = false);
+    }
+  }
+
+  Future<void> _openSonioxConsole() async {
+    try {
+      final opened = await widget.launchExternalUrl(_sonioxConsoleUrl);
+      if (!opened && mounted) {
+        _showMessage(context.strings.t('soniox_console_open_failed'));
+      }
+    } on Object {
+      if (mounted) {
+        _showMessage(context.strings.t('soniox_console_open_failed'));
+      }
     }
   }
 
@@ -442,7 +421,6 @@ class _TranslationSettingsSectionState
   late final TextEditingController _baseUrl;
   late final TextEditingController _model;
   final _apiKey = TextEditingController();
-  bool _obscure = true;
   bool _saving = false;
   bool _testing = false;
   bool? _connectionOk;
@@ -578,23 +556,14 @@ class _TranslationSettingsSectionState
             TextField(
               key: const Key('translation-key-field'),
               controller: _apiKey,
-              obscureText: _obscure,
+              obscureText: true,
               enableSuggestions: false,
               autocorrect: false,
               onChanged: (_) => _invalidateTest(clearModel: false),
               decoration: InputDecoration(
-                labelText: context.strings.t('api_key'),
                 hintText: _canUseStoredKey
-                    ? context.strings.t('translation_key_retained_hint')
+                    ? context.strings.t('key_hint')
                     : context.strings.t('translation_key_hint'),
-                suffixIcon: IconButton(
-                  onPressed: () => setState(() => _obscure = !_obscure),
-                  icon: Icon(
-                    _obscure
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
-                  ),
-                ),
               ),
             )
           else
@@ -674,20 +643,19 @@ class _TranslationSettingsSectionState
 
   List<DropdownMenuItem<String>> _providerMenuItems(BuildContext context) => [
     _providerItem(context, TranslationProviderTemplate.custom),
-    _providerHeader(context, 'provider_popular'),
+    _providerHeader(context, 'provider_cloud'),
     _providerItem(context, TranslationProviderTemplate.openAi),
     _providerItem(context, TranslationProviderTemplate.deepSeek),
     _providerItem(context, TranslationProviderTemplate.groq),
     _providerItem(context, TranslationProviderTemplate.nvidiaNim),
     _providerItem(context, TranslationProviderTemplate.togetherAi),
     _providerItem(context, TranslationProviderTemplate.mistralAi),
-    _providerHeader(context, 'provider_local'),
-    _providerItem(context, TranslationProviderTemplate.lmStudio),
-    _providerItem(context, TranslationProviderTemplate.ollama),
-    _providerHeader(context, 'provider_other'),
     _providerItem(context, TranslationProviderTemplate.fireworksAi),
     _providerItem(context, TranslationProviderTemplate.perplexity),
     _providerItem(context, TranslationProviderTemplate.volcengineArk),
+    _providerHeader(context, 'provider_local'),
+    _providerItem(context, TranslationProviderTemplate.lmStudio),
+    _providerItem(context, TranslationProviderTemplate.ollama),
   ];
 
   DropdownMenuItem<String> _providerItem(
@@ -875,11 +843,13 @@ class _Section extends StatelessWidget {
     required this.title,
     required this.icon,
     required this.child,
+    this.titleAction,
     this.trailing,
   });
   final String title;
   final IconData icon;
   final Widget child;
+  final Widget? titleAction;
   final Widget? trailing;
 
   @override
@@ -896,11 +866,22 @@ class _Section extends StatelessWidget {
                 Icon(icon, color: Theme.of(context).colorScheme.primary),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (titleAction != null) ...[
+                        const SizedBox(width: 8),
+                        titleAction!,
+                      ],
+                    ],
                   ),
                 ),
                 if (trailing != null) ...[const SizedBox(width: 12), trailing!],

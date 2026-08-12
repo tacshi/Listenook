@@ -9,18 +9,18 @@ import 'package:meow_stt/ui/settings_page.dart';
 import 'package:provider/provider.dart';
 
 void main() {
-  testWidgets('an unsaved Soniox key can be tested and then saved', (
-    tester,
-  ) async {
-    final credentials = _Credentials();
-    final soniox = _Soniox();
+  testWidgets('stored API keys have no reveal controls', (tester) async {
+    final credentials = _Credentials()..value = 'soniox-secret';
+    final translationCredentials = _TranslationCredentials()
+      ..value = 'translation-secret';
     final controller = AppController(
       credentialStore: credentials,
       settingsRepository: _Settings(),
       jobRepository: _Jobs(),
       mediaService: _Media(),
-      sonioxClient: soniox,
+      sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
+      translationCredentialStore: translationCredentials,
     );
     addTearDown(controller.dispose);
     await controller.initialize();
@@ -37,6 +37,62 @@ void main() {
       ),
     );
 
+    final sonioxKeyField = tester.widget<TextField>(
+      find.byKey(const Key('soniox-key-field')),
+    );
+    expect(sonioxKeyField.obscureText, isTrue);
+    expect(sonioxKeyField.controller?.text, isEmpty);
+    expect(sonioxKeyField.decoration?.hintText, '••••••••••••••••');
+    expect(sonioxKeyField.decoration?.hintText, isNot(contains('soniox_')));
+    expect(sonioxKeyField.decoration?.suffixIcon, isNull);
+
+    final translationKeyFinder = find.byKey(const Key('translation-key-field'));
+    await tester.ensureVisible(translationKeyFinder);
+    await tester.pumpAndSettle();
+    final translationKeyField = tester.widget<TextField>(translationKeyFinder);
+    expect(translationKeyField.obscureText, isTrue);
+    expect(translationKeyField.controller?.text, isEmpty);
+    expect(translationKeyField.decoration?.labelText, isNull);
+    expect(translationKeyField.decoration?.hintText, '••••••••••••••••');
+    expect(translationKeyField.decoration?.suffixIcon, isNull);
+  });
+
+  testWidgets('an unsaved Soniox key can be tested and then saved', (
+    tester,
+  ) async {
+    Uri? launchedUrl;
+    final credentials = _Credentials();
+    final soniox = _Soniox();
+    final controller = AppController(
+      credentialStore: credentials,
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(),
+      mediaService: _Media(),
+      sonioxClient: soniox,
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: Scaffold(
+            body: SettingsPage(
+              launchExternalUrl: (url) async {
+                launchedUrl = url;
+                return true;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
     final pageTitle = find.byKey(const Key('settings-page-title'));
     expect(
       tester.widget<Text>(pageTitle).style?.fontSize,
@@ -49,6 +105,26 @@ void main() {
     expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
     expect(find.text('Batch options'), findsNothing);
     expect(find.text('Concurrent jobs'), findsNothing);
+
+    final createKeyLink = find.byKey(const Key('create-soniox-key-link'));
+    expect(find.text('Create a Soniox API key'), findsOneWidget);
+    final sonioxTitle = find.text('Soniox API key');
+    expect(
+      (tester.getCenter(createKeyLink).dy - tester.getCenter(sonioxTitle).dy)
+          .abs(),
+      lessThanOrEqualTo(1),
+    );
+    expect(
+      tester.getCenter(createKeyLink).dx,
+      greaterThan(tester.getCenter(sonioxTitle).dx),
+    );
+    expect(
+      tester.getCenter(createKeyLink).dy,
+      lessThan(tester.getTopLeft(find.byKey(const Key('soniox-key-field'))).dy),
+    );
+    await tester.tap(createKeyLink);
+    await tester.pump();
+    expect(launchedUrl, Uri.parse('https://console.soniox.com'));
 
     expect(find.byKey(const Key('session-language-hints-field')), findsNothing);
     expect(find.byKey(const Key('session-context-terms-field')), findsNothing);
@@ -144,7 +220,9 @@ void main() {
 
     await tester.tap(find.text('About'));
     await tester.pumpAndSettle();
-    expect(find.text('Media engine diagnostics').hitTestable(), findsOneWidget);
+    expect(find.text('Media engine diagnostics'), findsNothing);
+    expect(find.text('Privacy').hitTestable(), findsOneWidget);
+    expect(find.text('Third-party notices').hitTestable(), findsOneWidget);
   });
 
   testWidgets(
@@ -191,6 +269,13 @@ void main() {
       );
       await tester.ensureVisible(baseUrl);
 
+      final emptyTranslationKey = tester.widget<TextField>(key);
+      expect(emptyTranslationKey.decoration?.labelText, isNull);
+      expect(
+        emptyTranslationKey.decoration?.hintText,
+        'Required for remote endpoints',
+      );
+
       expect(tester.widget<TextField>(baseUrl).controller?.text, isEmpty);
       expect(
         find.text('Choose a provider and test the connection'),
@@ -213,6 +298,14 @@ void main() {
       await tester.ensureVisible(provider);
       await tester.tap(provider);
       await tester.pumpAndSettle();
+      expect(find.text('Cloud'), findsOneWidget);
+      expect(find.text('Local'), findsOneWidget);
+      expect(find.text('Popular'), findsNothing);
+      expect(find.text('Other'), findsNothing);
+      expect(find.text('LM Studio'), findsOneWidget);
+      expect(find.text('LM Studio (Local)'), findsNothing);
+      expect(find.text('Ollama OpenAI API'), findsOneWidget);
+      expect(find.text('Ollama OpenAI API (Local)'), findsNothing);
       await tester.tap(find.text('Groq').last);
       await tester.pumpAndSettle();
       expect(

@@ -8,6 +8,33 @@ import 'package:path/path.dart' as p;
 import '../core/contracts.dart';
 import '../core/models.dart';
 
+String canonicalSonioxErrorCode(
+  String? errorType, {
+  String fallback = 'request_failed',
+}) {
+  final normalized = errorType?.trim().toLowerCase() ?? '';
+  if (normalized.isEmpty) return fallback;
+  if (normalized == 'organization_balance_exhausted' ||
+      normalized == 'insufficient_funds' ||
+      normalized == 'insufficient_balance' ||
+      normalized.contains('balance') ||
+      normalized.contains('credit')) {
+    return 'exhausted_balance';
+  }
+  if (normalized == 'organization_monthly_budget_exhausted' ||
+      normalized == 'project_monthly_budget_exhausted' ||
+      normalized.contains('budget')) {
+    return 'budget_exhausted';
+  }
+  if (normalized.contains('quota') || normalized.contains('rate')) {
+    return 'rate_limit';
+  }
+  if (normalized.contains('audio') || normalized.contains('media')) {
+    return 'invalid_media';
+  }
+  return normalized;
+}
+
 class SonioxApiClient implements SonioxClient {
   SonioxApiClient(this._credentials, {http.Client? httpClient, Uri? baseUri})
     : _http = httpClient ?? http.Client(),
@@ -212,11 +239,11 @@ class SonioxApiClient implements SonioxClient {
     }
     final code = switch (statusCode) {
       401 || 403 => 'bad_credentials',
-      402 => 'exhausted_balance',
+      402 => canonicalSonioxErrorCode(type, fallback: 'exhausted_balance'),
       413 => 'invalid_media',
       429 => 'rate_limit',
       >= 500 => 'server_failure',
-      _ => _mapType(type),
+      _ => canonicalSonioxErrorCode(type),
     };
     throw SonioxException(
       code: code,
@@ -225,20 +252,6 @@ class SonioxApiClient implements SonioxClient {
       errorType: type.isEmpty ? null : type,
       retryable: statusCode == 408 || statusCode == 429 || statusCode >= 500,
     );
-  }
-
-  String _mapType(String type) {
-    final normalized = type.toLowerCase();
-    if (normalized.contains('balance') || normalized.contains('credit')) {
-      return 'exhausted_balance';
-    }
-    if (normalized.contains('quota') || normalized.contains('rate')) {
-      return 'rate_limit';
-    }
-    if (normalized.contains('audio') || normalized.contains('media')) {
-      return 'invalid_media';
-    }
-    return normalized.isEmpty ? 'request_failed' : normalized;
   }
 }
 

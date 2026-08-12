@@ -164,6 +164,21 @@ void main() {
       ),
     );
   });
+
+  test('maps current Soniox balance and monthly budget error types', () {
+    expect(
+      canonicalSonioxErrorCode('organization_balance_exhausted'),
+      'exhausted_balance',
+    );
+    expect(
+      canonicalSonioxErrorCode('organization_monthly_budget_exhausted'),
+      'budget_exhausted',
+    );
+    expect(
+      canonicalSonioxErrorCode('project_monthly_budget_exhausted'),
+      'budget_exhausted',
+    );
+  });
 }
 
 class _Credential implements CredentialStore {

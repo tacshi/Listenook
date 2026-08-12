@@ -96,6 +96,33 @@ void main() {
     },
   );
 
+  test('async balance failures retain an actionable error category', () async {
+    final directory = await Directory.systemTemp.createTemp('meow-balance-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/balance.wav');
+    await file.writeAsBytes([1, 2, 3]);
+    final jobs = _Jobs();
+    final controller = _controller(
+      jobs: jobs,
+      soniox: _Soniox(
+        transcriptionState: const SonioxTranscriptionState(
+          status: 'failed',
+          errorType: 'organization_balance_exhausted',
+          errorMessage: 'The organization balance is exhausted.',
+        ),
+      ),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.addSources([file.path]);
+    await _waitFor(() => controller.readyCount == 1);
+
+    await controller.startReady();
+
+    expect(controller.workspaceJobs.single.status, JobStatus.failed);
+    expect(controller.workspaceJobs.single.errorCode, 'exhausted_balance');
+  });
+
   test(
     'restart resumes polling from an owned remote transcription id',
     () async {
@@ -139,6 +166,65 @@ void main() {
       expect(soniox.deletedTranscriptions, contains('owned-tx'));
     },
   );
+
+  test('a ready history job continues when its source still exists', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'meow-continue-ready-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/ready.wav');
+    await source.writeAsBytes(const [1]);
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'ready',
+        batchId: 'batch',
+        sourcePath: source.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.ready,
+      ),
+    ]);
+    final soniox = _Soniox();
+    final controller = _controller(jobs: jobs, soniox: soniox);
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.setDestination(1);
+
+    await controller.continueReadyJob('ready');
+
+    expect(jobs.saved['ready']?.status, JobStatus.completed);
+    expect(controller.workspaceJobs.single.id, 'ready');
+    expect(controller.selectedJobId, 'ready');
+    expect(controller.destinationIndex, 0);
+    expect(soniox.uploadCalls, 1);
+  });
+
+  test('continuing a ready history job detects a missing source', () async {
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'ready',
+        batchId: 'batch',
+        sourcePath: '${Directory.systemTemp.path}/missing-ready-source.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.ready,
+      ),
+    ]);
+    final soniox = _Soniox();
+    final controller = _controller(jobs: jobs, soniox: soniox);
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.setDestination(1);
+
+    await controller.continueReadyJob('ready');
+
+    expect(jobs.saved['ready']?.status, JobStatus.missingSource);
+    expect(controller.workspaceJobs, isEmpty);
+    expect(controller.destinationIndex, 1);
+    expect(soniox.uploadCalls, 0);
+  });
 
   test(
     'cancellation becomes terminal and cleans only the job-owned ids',
@@ -1051,10 +1137,12 @@ class _Soniox implements SonioxClient {
     this.uploadDelay = Duration.zero,
     this.transcriptPayload,
     this.pollingGate,
+    this.transcriptionState,
   });
   final Duration uploadDelay;
   final Map<String, dynamic>? transcriptPayload;
   final Completer<void>? pollingGate;
+  final SonioxTranscriptionState? transcriptionState;
   int currentUploads = 0;
   int maximumUploads = 0;
   int uploadCalls = 0;
@@ -1090,7 +1178,8 @@ class _Soniox implements SonioxClient {
   @override
   Future<SonioxTranscriptionState> getTranscription(String id) async {
     await pollingGate?.future;
-    return const SonioxTranscriptionState(status: 'completed');
+    return transcriptionState ??
+        const SonioxTranscriptionState(status: 'completed');
   }
 
   @override

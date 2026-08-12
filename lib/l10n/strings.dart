@@ -21,7 +21,11 @@ class AppStrings {
   String error(String? code, {String? englishFallback}) {
     final canonical = switch (code?.toLowerCase()) {
       'authentication_error' || 'unauthorized' => 'bad_credentials',
-      'insufficient_funds' || 'insufficient_balance' => 'exhausted_balance',
+      'insufficient_funds' ||
+      'insufficient_balance' ||
+      'organization_balance_exhausted' => 'exhausted_balance',
+      'organization_monthly_budget_exhausted' ||
+      'project_monthly_budget_exhausted' => 'budget_exhausted',
       'quota_exceeded' || 'rate_limit_exceeded' => 'rate_limit',
       'unsupported_audio_format' || 'invalid_audio' => 'invalid_media',
       final value? when value.isNotEmpty => value,
@@ -56,10 +60,8 @@ class AppStrings {
         TranslationProviderTemplate.nvidiaNim => 'NVIDIA NIM',
         TranslationProviderTemplate.togetherAi => 'Together AI',
         TranslationProviderTemplate.mistralAi => 'Mistral AI',
-        TranslationProviderTemplate.lmStudio =>
-          isZh ? 'LM Studio（本地）' : 'LM Studio (Local)',
-        TranslationProviderTemplate.ollama =>
-          isZh ? 'Ollama OpenAI API（本地）' : 'Ollama OpenAI API (Local)',
+        TranslationProviderTemplate.lmStudio => 'LM Studio',
+        TranslationProviderTemplate.ollama => 'Ollama OpenAI API',
         TranslationProviderTemplate.fireworksAi => 'Fireworks AI',
         TranslationProviderTemplate.perplexity => 'Perplexity',
         TranslationProviderTemplate.volcengineArk =>
@@ -168,9 +170,8 @@ class AppStrings {
     'llm_translation': 'LLM Translation',
     'provider_template': 'Provider template',
     'provider_custom': 'Custom',
-    'provider_popular': 'Popular',
+    'provider_cloud': 'Cloud',
     'provider_local': 'Local',
-    'provider_other': 'Other',
     'provider_help_lm_studio':
         'Start LM Studio with its local server enabled before testing.',
     'provider_help_ollama':
@@ -179,14 +180,12 @@ class AppStrings {
         'Use the endpoint ID from Volcengine Ark as the model name.',
     'base_url': 'Base URL',
     'model': 'Model',
-    'api_key': 'API key',
     'translation_model_hint': 'Required; model ID from your endpoint',
     'translation_test_to_select_model': 'Test the connection to select a model',
     'translation_select_model': 'Select a model',
     'translation_local_no_key':
         'No API key is required for this local provider.',
     'translation_key_hint': 'Required for remote endpoints',
-    'translation_key_retained_hint': 'Leave blank to keep the stored key',
     'translation_configured': 'Translation is configured',
     'translation_not_configured': 'Choose a provider and test the connection',
     'translation_connection_ok': 'Connection successful',
@@ -228,7 +227,9 @@ class AppStrings {
         'Some segments are not translated. Original text will be used for those segments.',
     'key_configured': 'Securely stored on this device',
     'key_missing': 'Add your Soniox key to transcribe',
-    'key_hint': 'soniox_••••••••••••••••',
+    'key_hint': '••••••••••••••••',
+    'create_soniox_key': 'Create a Soniox API key',
+    'soniox_console_open_failed': 'Could not open the Soniox Console.',
     'paste': 'Paste',
     'save': 'Save',
     'test': 'Test',
@@ -239,11 +240,6 @@ class AppStrings {
     'privacy': 'Privacy',
     'privacy_body':
         'Media is uploaded directly to Soniox. Optional translation sends transcript text to your configured LLM endpoint. MeowSTT stores local paths and transcripts, and deletes only the remote Soniox items it created.',
-    'media_engine': 'Media engine diagnostics',
-    'refresh': 'Refresh',
-    'available': 'Available',
-    'unavailable': 'Unavailable',
-    'checking': 'Checking…',
     'notices': 'Third-party notices',
     'notices_body':
         'Playback and extraction use bundled libmpv components. Windows distributions also include the compact FLAC encoder. Soniox is a third-party transcription provider. Provenance and license texts are included with each distribution.',
@@ -302,7 +298,10 @@ class AppStrings {
     'speaker_number': 'Speaker {number}',
     'error_missing_credentials': 'A Soniox API key is required.',
     'error_bad_credentials': 'The Soniox API key is invalid.',
-    'error_exhausted_balance': 'The Soniox account has insufficient balance.',
+    'error_exhausted_balance':
+        'The Soniox account has no available balance. Add funds in the Soniox Console, then try again.',
+    'error_budget_exhausted':
+        'The Soniox monthly budget has been reached. Increase the organization or project budget in the Soniox Console, then try again.',
     'error_rate_limit':
         'Soniox is busy or the account quota was reached. Try again later.',
     'error_invalid_media': 'Soniox could not process this media file.',
@@ -324,6 +323,8 @@ class AppStrings {
     'error_media_error': 'The media file could not be inspected.',
     'error_cancelled': 'Cancelled by the user.',
     'error_transcription_failed': 'Soniox could not transcribe this file.',
+    'error_transcription_unknown':
+        'Transcription failed. Check the source file, API key, and network connection.',
     'error_translation_invalid_url': 'Enter a valid translation base URL.',
     'error_translation_https_required':
         'Remote translation endpoints must use HTTPS.',
@@ -442,21 +443,18 @@ class AppStrings {
     'llm_translation': 'LLM 翻译',
     'provider_template': '提供商模板',
     'provider_custom': '自定义',
-    'provider_popular': '热门',
+    'provider_cloud': '云端',
     'provider_local': '本地',
-    'provider_other': '其他',
     'provider_help_lm_studio': '测试前请先在 LM Studio 中启用本地服务器。',
     'provider_help_ollama': '测试前请先在本地启动 Ollama。',
     'provider_help_volcengine': '请将火山方舟的接入点 ID 作为模型名称。',
     'base_url': '基础 URL',
     'model': '模型',
-    'api_key': 'API 密钥',
     'translation_model_hint': '必填；填写端点支持的模型 ID',
     'translation_test_to_select_model': '测试连接后选择模型',
     'translation_select_model': '选择模型',
     'translation_local_no_key': '此本地提供商无需 API 密钥。',
     'translation_key_hint': '远程端点需要 API 密钥',
-    'translation_key_retained_hint': '留空可保留已存储的密钥',
     'translation_configured': '翻译已配置',
     'translation_not_configured': '请选择提供商并测试连接',
     'translation_connection_ok': '连接成功',
@@ -494,7 +492,9 @@ class AppStrings {
     'partial_export_warning': '部分段落尚未翻译，这些段落将使用原文。',
     'key_configured': '已安全存储在此设备',
     'key_missing': '添加 Soniox 密钥后即可转写',
-    'key_hint': 'soniox_••••••••••••••••',
+    'key_hint': '••••••••••••••••',
+    'create_soniox_key': '创建 Soniox API 密钥',
+    'soniox_console_open_failed': '无法打开 Soniox 控制台。',
     'paste': '粘贴',
     'save': '保存',
     'test': '测试',
@@ -504,11 +504,6 @@ class AppStrings {
     'privacy': '隐私',
     'privacy_body':
         '媒体会直接上传到 Soniox。可选翻译会把转写文本发送到你配置的 LLM 端点。MeowSTT 保存本地路径和转写内容，并且只删除由本应用创建的 Soniox 远程项目。',
-    'media_engine': '媒体引擎诊断',
-    'refresh': '刷新',
-    'available': '可用',
-    'unavailable': '不可用',
-    'checking': '正在检查…',
     'notices': '第三方声明',
     'notices_body':
         '播放和音频提取使用随附的 libmpv 组件。Windows 发行包还包含精简的 FLAC 编码器。Soniox 是第三方转写服务提供商。每个发行包均包含来源信息和许可证文本。',
@@ -565,7 +560,8 @@ class AppStrings {
     'speaker_number': '说话人 {number}',
     'error_missing_credentials': '需要填写 Soniox API 密钥。',
     'error_bad_credentials': 'Soniox API 密钥无效。',
-    'error_exhausted_balance': 'Soniox 账户余额不足。',
+    'error_exhausted_balance': 'Soniox 账户余额不足。请先在 Soniox 控制台充值，然后重新转写。',
+    'error_budget_exhausted': 'Soniox 每月预算已用完。请在 Soniox 控制台提高组织或项目预算，然后重新转写。',
     'error_rate_limit': 'Soniox 当前繁忙或账户已达到配额，请稍后重试。',
     'error_invalid_media': 'Soniox 无法处理此媒体文件。',
     'error_server_failure': 'Soniox 暂时不可用，请稍后重试。',
@@ -583,6 +579,7 @@ class AppStrings {
     'error_media_error': '无法检查此媒体文件。',
     'error_cancelled': '已由用户取消。',
     'error_transcription_failed': 'Soniox 无法转写此文件。',
+    'error_transcription_unknown': '转写失败。请检查源文件、API 密钥和网络连接。',
     'error_translation_invalid_url': '请输入有效的翻译基础 URL。',
     'error_translation_https_required': '远程翻译端点必须使用 HTTPS。',
     'error_translation_model_required': '请先填写翻译模型。',

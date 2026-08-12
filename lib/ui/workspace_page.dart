@@ -992,6 +992,9 @@ class _JobTile extends StatelessWidget {
 
   String _jobSubtitle(BuildContext context, TranscriptionJob job) {
     if (job.errorCode != null || job.errorMessage != null) {
+      if (job.errorCode == null || job.errorCode == 'unexpected') {
+        return context.strings.t('error_transcription_unknown');
+      }
       return context.strings.error(
         job.errorCode,
         englishFallback: job.errorMessage,

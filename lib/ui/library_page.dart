@@ -65,7 +65,7 @@ class _LibraryPageState extends State<LibraryPage> {
                       child: Text(context.strings.t('completed')),
                     ),
                     DropdownMenuItem(
-                      value: 'failed',
+                      value: 'attention',
                       child: Text(context.strings.t('failed')),
                     ),
                   ],
@@ -190,9 +190,9 @@ class _LibraryPageState extends State<LibraryPage> {
     if (_status == 'completed' && job.status != JobStatus.completed) {
       return false;
     }
-    if (_status == 'failed' &&
-        job.status != JobStatus.failed &&
-        job.status != JobStatus.missingSource) {
+    if (_status == 'attention' &&
+        !job.status.canTranscribe &&
+        !job.status.canRetry) {
       return false;
     }
     if (_filter == 'recent' &&
@@ -252,6 +252,13 @@ class _HistoryCard extends StatelessWidget {
                 onPressed: () => chooseAndRelink(context, job.id),
                 icon: const Icon(Icons.link_rounded),
                 label: Text(context.strings.t('relink')),
+              ),
+            if (job.status == JobStatus.ready)
+              OutlinedButton.icon(
+                key: Key('continue-ready-job-${job.id}'),
+                onPressed: () => controller.continueReadyJob(job.id),
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: Text(context.strings.t('continue')),
               ),
             if (job.document != null) ...[
               TextButton.icon(

@@ -27,6 +27,14 @@ void main() {
     expect(strings.t('notices'), '第三方声明');
     expect(strings.t('notices_body'), contains('第三方转写服务提供商'));
     expect(strings.error('bad_credentials'), 'Soniox API 密钥无效。');
+    expect(
+      strings.error('organization_balance_exhausted'),
+      'Soniox 账户余额不足。请先在 Soniox 控制台充值，然后重新转写。',
+    );
+    expect(
+      strings.error('project_monthly_budget_exhausted'),
+      'Soniox 每月预算已用完。请在 Soniox 控制台提高组织或项目预算，然后重新转写。',
+    );
     expect(strings.speakerName('Speaker 2'), '说话人 2');
   });
 

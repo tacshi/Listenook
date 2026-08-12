@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
@@ -9,6 +11,126 @@ import 'package:meow_stt/ui/library_page.dart';
 import 'package:provider/provider.dart';
 
 void main() {
+  testWidgets('Needs attention includes every actionable inactive job', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    const actionableStatuses = [
+      JobStatus.ready,
+      JobStatus.paused,
+      JobStatus.failed,
+      JobStatus.cancelled,
+      JobStatus.missingSource,
+      JobStatus.empty,
+    ];
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        for (final status in actionableStatuses)
+          TranscriptionJob(
+            id: status.name,
+            batchId: 'batch',
+            sourcePath: '/missing/${status.name}.wav',
+            createdAt: now,
+            updatedAt: now,
+            status: status,
+          ),
+        TranscriptionJob(
+          id: 'completed',
+          batchId: 'batch',
+          sourcePath: '/missing/completed.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+        ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    final statusDropdown = find.byWidgetPredicate(
+      (widget) => widget is DropdownButton<String>,
+    );
+    await tester.tap(statusDropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Needs attention').last);
+    await tester.pumpAndSettle();
+
+    for (final status in actionableStatuses) {
+      expect(find.text('${status.name}.wav'), findsOneWidget);
+    }
+    expect(find.text('completed.wav'), findsNothing);
+  });
+
+  testWidgets('a ready job can continue while its source still exists', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final temporaryDirectory = await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-stt-ready-job-'),
+    );
+    expect(temporaryDirectory, isNotNull);
+    final directory = temporaryDirectory!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/ready.wav');
+    await tester.runAsync(() => source.writeAsBytes(const [0]));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'ready',
+          batchId: 'batch',
+          sourcePath: source.path,
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+        ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    final continueButton = find.byKey(const Key('continue-ready-job-ready'));
+    expect(continueButton, findsOneWidget);
+    expect(tester.widget<OutlinedButton>(continueButton).onPressed, isNotNull);
+  });
+
   testWidgets('Clear All confirms and removes inactive history', (
     tester,
   ) async {
