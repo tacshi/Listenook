@@ -2524,6 +2524,10 @@ void main() {
       final events = <String>[];
       messenger.setMockMethodCallHandler(windowChannel, (call) async {
         if (call.method == 'isFullScreen') return false;
+        if (call.method == 'setPreventClose') {
+          final arguments = call.arguments as Map<Object?, Object?>;
+          events.add('prevent:${arguments['isPreventClose']}');
+        }
         if (call.method == 'destroy') events.add('destroy');
         return null;
       });
@@ -2564,6 +2568,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(events, ['prevent:true']);
+      events.clear();
 
       final dynamic appShellState = tester.state(find.byType(AppShell));
       final close = appShellState.onWindowClose() as Future<void>;

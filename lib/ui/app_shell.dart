@@ -33,7 +33,6 @@ class _AppShellState extends State<AppShell> with WindowListener {
   bool _sidebarVisible = true;
   bool _closeDialogOpen = false;
   bool _windowFullscreen = false;
-  bool? _preventClose;
   late final ReviewFullscreenController _fullscreenController;
   late final AppController _controller;
 
@@ -43,17 +42,15 @@ class _AppShellState extends State<AppShell> with WindowListener {
     _fullscreenController =
         widget.reviewController ?? ReviewFullscreenController();
     _controller = context.read<AppController>();
-    _controller.addListener(_syncCloseProtection);
     windowManager.addListener(this);
     _nativeNavigationChannel.setMethodCallHandler(_handleNativeNavigation);
-    _syncCloseProtection();
+    unawaited(windowManager.setPreventClose(true));
     unawaited(_syncWindowFullscreen());
     WidgetsBinding.instance.addPostFrameCallback((_) => _showOnboarding());
   }
 
   @override
   void dispose() {
-    _controller.removeListener(_syncCloseProtection);
     windowManager.removeListener(this);
     _nativeNavigationChannel.setMethodCallHandler(null);
     super.dispose();
@@ -65,13 +62,6 @@ class _AppShellState extends State<AppShell> with WindowListener {
       return null;
     }
     throw MissingPluginException('Unknown native navigation: ${call.method}');
-  }
-
-  void _syncCloseProtection() {
-    final shouldPreventClose = _controller.hasActiveWork;
-    if (_preventClose == shouldPreventClose) return;
-    _preventClose = shouldPreventClose;
-    unawaited(windowManager.setPreventClose(shouldPreventClose));
   }
 
   Future<void> _syncWindowFullscreen() async {
