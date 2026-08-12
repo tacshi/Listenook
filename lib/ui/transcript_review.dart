@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
-import 'package:scroll_to_index/scroll_to_index.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/models.dart';
@@ -37,12 +37,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
   static const _minimumReviewPaneWidth = 280.0;
 
   Player? _player;
+  LatestSeekDispatcher? _seekDispatcher;
   VideoController? _video;
   final _search = TextEditingController();
-  final _transcriptScroll = AutoScrollController(
-    axis: Axis.vertical,
-    suggestedRowHeight: 84,
-  );
+  final _transcriptScroll = ItemScrollController();
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<bool>? _playingSubscription;
@@ -64,6 +62,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
   bool _repeatRestartQueued = false;
   bool _repeatRestartQueuedResume = false;
   bool _followPlayback = true;
+  bool _focusFrameQueued = false;
+  bool _forceFocusQueued = false;
   bool _searchVisible = false;
   TranslationViewMode _viewMode = TranslationViewMode.original;
   int _programmaticScrolls = 0;
@@ -108,6 +108,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (_player != null) return;
     final player = Player();
     _player = player;
+    _seekDispatcher = LatestSeekDispatcher(player.seek);
     _video = VideoController(player);
     _positionSubscription = player.stream.position.listen(_handlePosition);
     _durationSubscription = player.stream.duration.listen((value) {
@@ -167,7 +168,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   void _handlePosition(Duration value) {
-    if (!mounted) return;
+    if (!mounted || (_seekDispatcher?.isBusy ?? false)) return;
     final document = _document;
     final previousIndex = document == null
         ? null
@@ -300,7 +301,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _fullscreenController.unregisterMediaShutdown(this);
     windowManager.removeListener(this);
     _search.dispose();
-    _transcriptScroll.dispose();
     unawaited(_shutdownMedia());
     super.dispose();
   }
@@ -311,6 +311,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _sourceRequest++;
     final player = _player;
     _player = null;
+    final seekDispatcher = _seekDispatcher;
+    _seekDispatcher = null;
     _video = null;
 
     final subscriptions = <StreamSubscription<dynamic>?>[
@@ -331,7 +333,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
     for (final subscription in subscriptions) {
       await subscription?.cancel();
     }
-    await player?.dispose();
+    try {
+      await seekDispatcher?.idle;
+    } catch (_) {
+      // A failed in-flight seek must not prevent the native player teardown.
+    } finally {
+      await player?.dispose();
+    }
   }
 
   void _rememberPlaybackPosition(String jobId) {
@@ -574,94 +582,89 @@ class _TranscriptReviewState extends State<TranscriptReview>
               }
               return false;
             },
-            child: Scrollbar(
-              controller: _transcriptScroll,
-              child: SelectionArea(
-                child: ListView.separated(
-                  key: const Key('transcript-scroll'),
-                  controller: _transcriptScroll,
-                  primary: false,
-                  scrollDirection: Axis.vertical,
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                  itemCount: segments.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 4),
-                  itemBuilder: (context, index) {
-                    final segment = segments[index];
-                    return AutoScrollTag(
-                      key: ValueKey('segment-tag-${segment.id}'),
-                      controller: _transcriptScroll,
-                      index: index,
-                      child: Column(
-                        children: [
-                          if (_viewMode != TranslationViewMode.translated)
-                            TranscriptSegmentEditor(
-                              key: ValueKey(segment.id),
-                              segment: segment,
-                              tokens: _tokensBySegment[segment.id] ?? const [],
-                              positionMs: _position.inMilliseconds,
-                              isCurrent: query.isEmpty && index == currentIndex,
-                              query: query,
-                              speakerName: context.strings.speakerName(
-                                document.speakerName(segment.speaker),
-                              ),
-                              showSpeaker: controller.settings.showSpeakers,
-                              showTimestamp: controller.settings.showTimestamps,
-                              isEditing: _editingSegmentId == segment.id,
-                              isRepeating: _repeatingSegmentId == segment.id,
-                              onToggleRepeat: _canRepeat(segment)
-                                  ? () => _toggleSentenceRepeat(segment)
-                                  : null,
-                              onSeek: () => unawaited(
-                                _seek(Duration(milliseconds: segment.startMs)),
-                              ),
-                              onEdit: () => _startEditing(segment.id),
-                              onCancel: () => _cancelEditing(segment.id),
-                              onSave: (text) => _saveSegment(segment.id, text),
-                            ),
-                          if (_viewMode != TranslationViewMode.original)
-                            _TranslatedSegmentEditor(
-                              key: ValueKey('translated-${segment.id}'),
-                              segment: segment,
-                              isCurrent: query.isEmpty && index == currentIndex,
-                              query: query,
-                              showTimestamp: controller.settings.showTimestamps,
-                              isEditing:
-                                  _editingTranslationSegmentId == segment.id,
-                              showRepeatAction:
-                                  _viewMode == TranslationViewMode.translated,
-                              isRepeating:
-                                  _viewMode == TranslationViewMode.translated &&
-                                  _repeatingSegmentId == segment.id,
-                              onToggleRepeat:
-                                  _viewMode == TranslationViewMode.translated &&
-                                      _canRepeat(segment)
-                                  ? () => _toggleSentenceRepeat(segment)
-                                  : null,
-                              onSeek: () => unawaited(
-                                _seek(Duration(milliseconds: segment.startMs)),
-                              ),
-                              onEdit: () =>
-                                  _startTranslationEditing(segment.id),
-                              onCancel: () =>
-                                  _cancelTranslationEditing(segment.id),
-                              onSave: (text) =>
-                                  _saveTranslation(segment.id, text),
-                              onRetranslate:
-                                  job.translationState.status.isActive ||
-                                      !controller.translationConfigured
-                                  ? null
-                                  : () => context
-                                        .read<AppController>()
-                                        .retranslateSegment(
-                                          widget.jobId,
-                                          segment.id,
-                                        ),
-                            ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
+            child: SelectionArea(
+              child: ScrollablePositionedList.separated(
+                key: const Key('transcript-scroll'),
+                itemScrollController: _transcriptScroll,
+                initialScrollIndex: currentIndex ?? 0,
+                initialAlignment: .5,
+                scrollDirection: Axis.vertical,
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                itemCount: segments.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 4),
+                itemBuilder: (context, index) {
+                  final segment = segments[index];
+                  return Column(
+                    children: [
+                      if (_viewMode != TranslationViewMode.translated)
+                        TranscriptSegmentEditor(
+                          key: ValueKey(segment.id),
+                          segment: segment,
+                          tokens: _tokensBySegment[segment.id] ?? const [],
+                          positionMs: _position.inMilliseconds,
+                          isCurrent: query.isEmpty && index == currentIndex,
+                          query: query,
+                          speakerName: context.strings.speakerName(
+                            document.speakerName(segment.speaker),
+                          ),
+                          showSpeaker: controller.settings.showSpeakers,
+                          showTimestamp: controller.settings.showTimestamps,
+                          highlightTranslated:
+                              job.translationState.status.isActive &&
+                              segment.hasTranslation,
+                          isEditing: _editingSegmentId == segment.id,
+                          isRepeating: _repeatingSegmentId == segment.id,
+                          onToggleRepeat: _canRepeat(segment)
+                              ? () => _toggleSentenceRepeat(segment)
+                              : null,
+                          onSeek: () => unawaited(
+                            _seek(Duration(milliseconds: segment.startMs)),
+                          ),
+                          onEdit: () => _startEditing(segment.id),
+                          onCancel: () => _cancelEditing(segment.id),
+                          onSave: (text) => _saveSegment(segment.id, text),
+                        ),
+                      if (_viewMode != TranslationViewMode.original)
+                        _TranslatedSegmentEditor(
+                          key: ValueKey('translated-${segment.id}'),
+                          segment: segment,
+                          isCurrent: query.isEmpty && index == currentIndex,
+                          query: query,
+                          showTimestamp: controller.settings.showTimestamps,
+                          highlightTranslated:
+                              job.translationState.status.isActive &&
+                              segment.hasTranslation,
+                          isEditing: _editingTranslationSegmentId == segment.id,
+                          showRepeatAction:
+                              _viewMode == TranslationViewMode.translated,
+                          isRepeating:
+                              _viewMode == TranslationViewMode.translated &&
+                              _repeatingSegmentId == segment.id,
+                          onToggleRepeat:
+                              _viewMode == TranslationViewMode.translated &&
+                                  _canRepeat(segment)
+                              ? () => _toggleSentenceRepeat(segment)
+                              : null,
+                          onSeek: () => unawaited(
+                            _seek(Duration(milliseconds: segment.startMs)),
+                          ),
+                          onEdit: () => _startTranslationEditing(segment.id),
+                          onCancel: () => _cancelTranslationEditing(segment.id),
+                          onSave: (text) => _saveTranslation(segment.id, text),
+                          onRetranslate:
+                              job.translationState.status.isActive ||
+                                  !controller.translationConfigured
+                              ? null
+                              : () => context
+                                    .read<AppController>()
+                                    .retranslateSegment(
+                                      widget.jobId,
+                                      segment.id,
+                                    ),
+                        ),
+                    ],
+                  );
+                },
               ),
             ),
           ),
@@ -691,15 +694,15 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   Future<void> _seek(Duration position) async {
-    final player = _player;
-    if (player == null) return;
+    final seekDispatcher = _seekDispatcher;
+    if (seekDispatcher == null) return;
     setState(() {
       _position = position;
       _followPlayback = true;
     });
     _appController.rememberPlaybackPosition(widget.jobId, position);
     _queueFocusCurrent(force: true);
-    await player.seek(position);
+    await seekDispatcher.seek(position);
   }
 
   bool _canRepeat(TranscriptSegment segment) =>
@@ -805,15 +808,21 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   void _queueFocusCurrent({bool force = false}) {
+    _forceFocusQueued |= force;
+    if (_focusFrameQueued) return;
+    _focusFrameQueued = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_scrollToCurrent(force: force));
+      final forceQueued = _forceFocusQueued;
+      _focusFrameQueued = false;
+      _forceFocusQueued = false;
+      if (mounted) unawaited(_scrollToCurrent(force: forceQueued));
     });
   }
 
   Future<void> _scrollToCurrent({bool force = false}) async {
     if (!_followPlayback ||
         _search.text.trim().isNotEmpty ||
-        !_transcriptScroll.hasClients) {
+        !_transcriptScroll.isAttached) {
       return;
     }
     final document = _document;
@@ -829,11 +838,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _lastScrolledSegmentId = segmentId;
     _programmaticScrolls++;
     try {
-      await _transcriptScroll.scrollToIndex(
-        index,
-        preferPosition: AutoScrollPosition.middle,
-        duration: const Duration(milliseconds: 260),
-      );
+      _transcriptScroll.jumpTo(index: index, alignment: .5);
+      await WidgetsBinding.instance.endOfFrame;
     } finally {
       _programmaticScrolls--;
     }
@@ -1096,6 +1102,7 @@ class _TranscriptToolbar extends StatelessWidget {
                 controller: controller,
                 translationStarted: translationStarted,
                 compact: constraints.maxWidth < _expandedBreakpoint,
+                canShowCompactProgress: constraints.maxWidth >= 360,
               ),
       ),
     );
@@ -1154,12 +1161,14 @@ class _TranscriptToolbar extends StatelessWidget {
     required AppController controller,
     required bool translationStarted,
     required bool compact,
+    required bool canShowCompactProgress,
   }) {
+    final translationActive = job.translationState.status.isActive;
     final showStatus =
         translationStarted &&
-        !compact &&
         job.translationState.status != TranslationStatus.idle &&
-        job.translationState.status != TranslationStatus.completed;
+        job.translationState.status != TranslationStatus.completed &&
+        (!compact || (translationActive && canShowCompactProgress));
     return Row(
       key: const Key('transcript-toolbar-row'),
       children: [
@@ -1183,14 +1192,14 @@ class _TranscriptToolbar extends StatelessWidget {
         ],
         if (showStatus) ...[
           const SizedBox(width: 8),
-          Flexible(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 180),
-              child: _TranslationStatusLabel(job: job),
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _TranslationStatusLabel(job: job, compact: compact),
             ),
           ),
-        ],
-        const Spacer(),
+        ] else
+          const Spacer(),
         _focusButton(context),
       ],
     );
@@ -1338,14 +1347,15 @@ class _TranslationActionIconButton extends StatelessWidget {
 }
 
 class _TranslationStatusLabel extends StatelessWidget {
-  const _TranslationStatusLabel({required this.job});
+  const _TranslationStatusLabel({required this.job, required this.compact});
 
   final TranscriptionJob job;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final state = job.translationState;
-    final text = switch (state.status) {
+    final fullText = switch (state.status) {
       TranslationStatus.translating =>
         context.strings
             .t('translation_progress')
@@ -1361,7 +1371,10 @@ class _TranslationStatusLabel extends StatelessWidget {
       ),
       TranslationStatus.idle => '',
     };
-    if (text.isEmpty) return const SizedBox.shrink();
+    if (fullText.isEmpty) return const SizedBox.shrink();
+    final text = state.status == TranslationStatus.translating && compact
+        ? '${state.completedSegments}/${state.totalSegments}'
+        : fullText;
     final color = _translationStatusColor(context, state.status);
     final indicator = state.status == TranslationStatus.translating
         ? SizedBox.square(
@@ -1369,26 +1382,33 @@ class _TranslationStatusLabel extends StatelessWidget {
             child: CircularProgressIndicator(strokeWidth: 2, color: color),
           )
         : Icon(_translationStatusIcon(state.status), size: 17, color: color);
-    return Row(
-      key: const Key('translation-status'),
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        indicator,
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: color,
-              fontWeight: state.status == TranslationStatus.completed
-                  ? FontWeight.w600
+    return Semantics(
+      label: fullText,
+      excludeSemantics: true,
+      child: Row(
+        key: const Key('translation-status'),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          indicator,
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              text,
+              key: state.status == TranslationStatus.translating
+                  ? const Key('translation-progress-count')
                   : null,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: color,
+                fontWeight: state.status == TranslationStatus.completed
+                    ? FontWeight.w600
+                    : null,
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -1408,6 +1428,11 @@ Color _translationStatusColor(BuildContext context, TranslationStatus status) {
     TranslationStatus.idle => theme.colorScheme.onSurfaceVariant,
   };
 }
+
+Color _translatedSegmentHighlightColor(BuildContext context) =>
+    _translationStatusColor(context, TranslationStatus.completed).withValues(
+      alpha: Theme.of(context).brightness == Brightness.dark ? .18 : .10,
+    );
 
 IconData _translationStatusIcon(TranslationStatus status) => switch (status) {
   TranslationStatus.completed => Icons.check_circle_rounded,
@@ -1547,6 +1572,7 @@ class _TranslatedSegmentEditor extends StatefulWidget {
     required this.isCurrent,
     required this.query,
     required this.showTimestamp,
+    required this.highlightTranslated,
     required this.isEditing,
     required this.showRepeatAction,
     required this.isRepeating,
@@ -1562,6 +1588,7 @@ class _TranslatedSegmentEditor extends StatefulWidget {
   final bool isCurrent;
   final String query;
   final bool showTimestamp;
+  final bool highlightTranslated;
   final bool isEditing;
   final bool showRepeatAction;
   final bool isRepeating;
@@ -1620,6 +1647,8 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
         margin: const EdgeInsets.only(top: 4),
         color: widget.isCurrent
             ? colors.primaryContainer.withValues(alpha: .35)
+            : widget.highlightTranslated
+            ? _translatedSegmentHighlightColor(context)
             : colors.surfaceContainerLow,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
@@ -2951,6 +2980,7 @@ class TranscriptSegmentEditor extends StatefulWidget {
     required this.speakerName,
     required this.showSpeaker,
     required this.showTimestamp,
+    this.highlightTranslated = false,
     required this.isEditing,
     this.isRepeating = false,
     this.onToggleRepeat,
@@ -2968,6 +2998,7 @@ class TranscriptSegmentEditor extends StatefulWidget {
   final String speakerName;
   final bool showSpeaker;
   final bool showTimestamp;
+  final bool highlightTranslated;
   final bool isEditing;
   final bool isRepeating;
   final VoidCallback? onToggleRepeat;
@@ -3036,18 +3067,28 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final translatedColor = _translationStatusColor(
+      context,
+      TranslationStatus.completed,
+    );
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DecoratedBox(
         key: ValueKey('segment-card-${widget.segment.id}'),
         decoration: BoxDecoration(
-          color: widget.isEditing || _hovered
+          color: widget.isEditing
+              ? colors.surfaceContainerLow
+              : widget.highlightTranslated
+              ? _translatedSegmentHighlightColor(context)
+              : _hovered
               ? colors.surfaceContainerLow
               : null,
           borderRadius: BorderRadius.circular(12),
           border: widget.isEditing
               ? Border.all(color: colors.outlineVariant)
+              : widget.highlightTranslated
+              ? Border.all(color: translatedColor.withValues(alpha: .35))
               : null,
         ),
         child: Padding(
@@ -3501,6 +3542,45 @@ List<TextRange?> _alignTokenRanges(String text, List<TranscriptToken> tokens) {
     cursor = end;
   }
   return result;
+}
+
+class LatestSeekDispatcher {
+  LatestSeekDispatcher(this._performSeek);
+
+  final Future<void> Function(Duration position) _performSeek;
+  Duration? _pendingPosition;
+  Completer<void>? _drainCompleter;
+
+  Future<void> seek(Duration position) {
+    _pendingPosition = position;
+    final active = _drainCompleter;
+    if (active != null) return active.future;
+
+    final completer = Completer<void>();
+    _drainCompleter = completer;
+    unawaited(_drain(completer));
+    return completer.future;
+  }
+
+  Future<void> get idle => _drainCompleter?.future ?? Future<void>.value();
+
+  bool get isBusy => _drainCompleter != null;
+
+  Future<void> _drain(Completer<void> completer) async {
+    try {
+      while (_pendingPosition != null) {
+        final position = _pendingPosition!;
+        _pendingPosition = null;
+        await _performSeek(position);
+      }
+      completer.complete();
+    } catch (error, stackTrace) {
+      _pendingPosition = null;
+      completer.completeError(error, stackTrace);
+    } finally {
+      if (identical(_drainCompleter, completer)) _drainCompleter = null;
+    }
+  }
 }
 
 bool shouldRestartRepeatedSentence(TranscriptSegment segment, int positionMs) =>

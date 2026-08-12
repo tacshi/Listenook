@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -16,6 +17,7 @@ import 'package:meow_stt/ui/review_fullscreen_controller.dart';
 import 'package:meow_stt/ui/transcript_review.dart';
 import 'package:meow_stt/ui/workspace_page.dart';
 import 'package:provider/provider.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
   test('current sentence remains active through the following silence', () {
@@ -35,6 +37,32 @@ void main() {
     expect(currentTranscriptSegmentIndex(segments, 1500), 1);
     expect(currentTranscriptSegmentIndex(segments, 5000), 1);
   });
+
+  test(
+    'rapid seeks execute the first and latest native positions only',
+    () async {
+      final firstSeek = Completer<void>();
+      final nativePositions = <Duration>[];
+      final dispatcher = LatestSeekDispatcher((position) async {
+        nativePositions.add(position);
+        if (nativePositions.length == 1) await firstSeek.future;
+      });
+
+      final pending = <Future<void>>[
+        dispatcher.seek(const Duration(seconds: 1)),
+        dispatcher.seek(const Duration(seconds: 20)),
+        dispatcher.seek(const Duration(seconds: 45)),
+      ];
+
+      expect(nativePositions, [const Duration(seconds: 1)]);
+      firstSeek.complete();
+      await Future.wait(pending);
+      expect(nativePositions, [
+        const Duration(seconds: 1),
+        const Duration(seconds: 45),
+      ]);
+    },
+  );
 
   test('sentence repeat restarts outside its playable timing window', () {
     const valid = TranscriptSegment(
@@ -532,10 +560,26 @@ void main() {
   testWidgets('active translation exposes only the adjacent cancel icon', (
     tester,
   ) async {
-    _setTestWindow(tester, const Size(900, 620));
+    _setTestWindow(tester, const Size(600, 620));
     final translation = _BlockingTranslation();
     final controller = await _controllerForDocument(
-      _simpleDocument(),
+      TranscriptDocument(
+        tokens: const [],
+        segments: [
+          for (var index = 0; index < 2000; index += 1)
+            TranscriptSegment(
+              id: 'segment-$index',
+              startMs: index * 1000,
+              endMs: (index + 1) * 1000,
+              text: index == 1 ? 'Still pending.' : 'Sentence $index.',
+              translatedText: index != 1 && index <= 1380
+                  ? 'Translated $index.'
+                  : null,
+            ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
       settings: _configuredTranslationAppSettings,
       translationService: translation,
     );
@@ -559,7 +603,16 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Translating 0 of 1'), findsOneWidget);
+    final progressCount = find.byKey(const Key('translation-progress-count'));
+    expect(find.text('1380/2000'), findsOneWidget);
+    expect(
+      (tester.renderObject(progressCount) as RenderParagraph).didExceedMaxLines,
+      isFalse,
+    );
+    expect(
+      tester.getSemantics(find.byKey(const Key('translation-status'))).label,
+      contains('Translating 1380 of 2000'),
+    );
     expect(find.text('Cancel'), findsNothing);
     expect(find.text('Translate unfinished with LLM'), findsNothing);
     expect(find.text('Retranslate all with LLM'), findsNothing);
@@ -583,6 +636,37 @@ void main() {
       isNull,
     );
     expect(find.byIcon(Icons.stop_circle_outlined), findsOneWidget);
+
+    final translatedCard = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('segment-card-segment-0')),
+    );
+    final pendingCard = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('segment-card-segment-1')),
+    );
+    final translatedDecoration = translatedCard.decoration as BoxDecoration;
+    final pendingDecoration = pendingCard.decoration as BoxDecoration;
+    expect(translatedDecoration.color, isNotNull);
+    expect(translatedDecoration.border, isNotNull);
+    expect(pendingDecoration.color, isNull);
+    expect(pendingDecoration.border, isNull);
+
+    await tester.tap(find.byKey(const Key('translation-view-mode')));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Translated').last);
+    await tester.pump(const Duration(milliseconds: 300));
+    final translatedResultFinder = find.byKey(
+      const ValueKey('translated-segment-segment-0'),
+    );
+    final pendingResultFinder = find.byKey(
+      const ValueKey('translated-segment-segment-1'),
+    );
+    final translatedResultCard = tester.widget<Card>(translatedResultFinder);
+    final pendingResultCard = tester.widget<Card>(pendingResultFinder);
+    final neutralResultColor = Theme.of(
+      tester.element(pendingResultFinder),
+    ).colorScheme.surfaceContainerLow;
+    expect(translatedResultCard.color, isNot(neutralResultColor));
+    expect(pendingResultCard.color, neutralResultColor);
 
     translation.release.complete();
     await translationFuture;
@@ -1138,7 +1222,9 @@ void main() {
     );
     expect(
       tester
-          .widget<ListView>(find.byKey(const Key('transcript-scroll')))
+          .widget<ScrollablePositionedList>(
+            find.byKey(const Key('transcript-scroll')),
+          )
           .scrollDirection,
       Axis.vertical,
     );
@@ -3685,13 +3771,69 @@ void main() {
 
     expect(search, findsNothing);
     expect(find.byKey(const Key('open-transcript-search')), findsOneWidget);
-    expect(position.pixels, greaterThan(0));
     final currentCard = tester.widget<DecoratedBox>(
       find.byKey(const ValueKey('segment-card-segment-59')),
     );
     final decoration = currentCard.decoration as BoxDecoration;
     expect(decoration.border, isNull);
     expect(decoration.color, isNull);
+  });
+
+  testWidgets('focus jumps to a distant sentence within one frame', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 620));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    const targetIndex = 1999;
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: List.generate(
+          targetIndex + 1,
+          (index) => TranscriptSegment(
+            id: 'segment-$index',
+            startMs: index * 1000,
+            endMs: (index + 1) * 1000,
+            text: 'Sentence $index.',
+          ),
+        ),
+        speakers: const [],
+        updatedAt: now,
+      ),
+    );
+    addTearDown(controller.dispose);
+    controller.rememberPlaybackPosition(
+      'job',
+      const Duration(milliseconds: targetIndex * 1000),
+    );
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('focus-current-sentence')));
+    var frames = 0;
+    while (find
+            .byKey(const ValueKey('segment-card-segment-$targetIndex'))
+            .evaluate()
+            .isEmpty &&
+        frames < 120) {
+      await tester.pump(const Duration(milliseconds: 16));
+      frames++;
+    }
+    expect(
+      frames,
+      lessThanOrEqualTo(1),
+      reason: 'The distant sentence took ${frames * 16} ms to render.',
+    );
   });
 
   testWidgets('search highlights every case-insensitive match', (tester) async {
