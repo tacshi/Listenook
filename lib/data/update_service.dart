@@ -69,6 +69,7 @@ class UpdateService extends ChangeNotifier {
   int _totalBytes = 0;
   bool _initialized = false;
   bool _started = false;
+  bool _shutdown = false;
   Timer? _timer;
   Future<void>? _activeOperation;
   Duration? _scheduledDelay;
@@ -100,12 +101,15 @@ class UpdateService extends ChangeNotifier {
 
   Future<void> start() async {
     await initialize();
-    if (_started || !_automaticEnabled || _platformKey == null) return;
+    if (_shutdown || _started || !_automaticEnabled || _platformKey == null) {
+      return;
+    }
     _started = true;
     _schedule(initialDelay);
   }
 
   void _schedule(Duration delay) {
+    if (_shutdown) return;
     _timer?.cancel();
     _scheduledDelay = delay;
     _timer = Timer(delay, () => unawaited(_runScheduledCheck()));
@@ -124,6 +128,7 @@ class UpdateService extends ChangeNotifier {
   }
 
   Future<void> checkAndDownloadNow() {
+    if (_shutdown) return Future.value();
     final active = _activeOperation;
     if (active != null) return active;
     final operation = _checkAndDownload();
@@ -344,11 +349,22 @@ class UpdateService extends ChangeNotifier {
     }
   }
 
-  @override
-  void dispose() {
+  /// Stops release-only background work before the desktop engine is torn
+  /// down. This service is supplied through Provider.value, so the widget tree
+  /// does not dispose it automatically.
+  void shutdown() {
+    if (_shutdown) return;
+    _shutdown = true;
     _started = false;
     _timer?.cancel();
+    _timer = null;
+    _scheduledDelay = null;
     if (_ownsClient) _client.close();
+  }
+
+  @override
+  void dispose() {
+    shutdown();
     super.dispose();
   }
 }

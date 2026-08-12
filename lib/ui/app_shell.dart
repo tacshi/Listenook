@@ -33,6 +33,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
   bool _onboardingShown = false;
   bool _sidebarVisible = true;
   bool _closeDialogOpen = false;
+  bool _windowClosing = false;
   bool _windowFullscreen = false;
   late final ReviewFullscreenController _fullscreenController;
   late final AppController _controller;
@@ -159,9 +160,18 @@ class _AppShellState extends State<AppShell> with WindowListener {
   }
 
   Future<void> _destroyWindow() async {
-    await _fullscreenController.exit();
-    await _fullscreenController.shutdownMedia();
-    await windowManager.destroy();
+    if (_windowClosing) return;
+    _windowClosing = true;
+    _updates?.shutdown();
+    try {
+      await _fullscreenController.exit();
+      await _fullscreenController.shutdownMedia();
+      await windowManager.setPreventClose(false);
+      await windowManager.close();
+    } on Object {
+      _windowClosing = false;
+      rethrow;
+    }
   }
 
   Future<void> _restartForUpdate(UpdateService updates) async {

@@ -2732,7 +2732,7 @@ void main() {
   });
 
   testWidgets(
-    'window close waits for review media shutdown before destroying engine',
+    'window close waits for review media before allowing native close',
     (tester) async {
       const windowChannel = MethodChannel('window_manager');
       final messenger =
@@ -2744,7 +2744,7 @@ void main() {
           final arguments = call.arguments as Map<Object?, Object?>;
           events.add('prevent:${arguments['isPreventClose']}');
         }
-        if (call.method == 'destroy') events.add('destroy');
+        if (call.method == 'close') events.add('close');
         return null;
       });
       addTearDown(
@@ -2794,7 +2794,20 @@ void main() {
 
       mediaReleased.complete();
       await close;
-      expect(events, ['media-start', 'media-done', 'destroy']);
+      expect(events, [
+        'media-start',
+        'media-done',
+        'prevent:false',
+        'close',
+      ]);
+
+      await appShellState.onWindowClose();
+      expect(events, [
+        'media-start',
+        'media-done',
+        'prevent:false',
+        'close',
+      ]);
     },
   );
 

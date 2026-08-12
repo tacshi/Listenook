@@ -151,6 +151,27 @@ void main() {
     expect(partial.existsSync(), isFalse);
   });
 
+  test('shutdown cancels a scheduled automatic check', () async {
+    var requests = 0;
+    final service = _service(
+      temporary,
+      MockClient((_) async {
+        requests++;
+        return http.Response('{}', 500);
+      }),
+      automaticEnabled: true,
+      initialDelay: const Duration(milliseconds: 20),
+    );
+    addTearDown(service.dispose);
+
+    await service.start();
+    service.shutdown();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    expect(requests, 0);
+    expect(service.scheduledDelay, isNull);
+  });
+
   test('removes installed and superseded update packages', () async {
     final oldPackage = File('${temporary.path}/MeowSTT-old.zip');
     await oldPackage.writeAsBytes([1]);
