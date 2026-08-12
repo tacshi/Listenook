@@ -46,6 +46,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   VideoController? _video;
   final _search = TextEditingController();
   final _transcriptScroll = ItemScrollController();
+  final _transcriptPositions = ItemPositionsListener.create();
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<bool>? _playingSubscription;
@@ -843,6 +844,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                 child: ScrollablePositionedList.separated(
                   key: const Key('transcript-scroll'),
                   itemScrollController: _transcriptScroll,
+                  itemPositionsListener: _transcriptPositions,
                   initialScrollIndex: currentIndex ?? 0,
                   initialAlignment: currentIndex == null || currentIndex == 0
                       ? 0
@@ -1184,6 +1186,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final segmentId = document.segments[index].id;
     if (!force && segmentId == _lastScrolledSegmentId) return;
     _lastScrolledSegmentId = segmentId;
+    final currentPosition = _transcriptPositions.itemPositions.value
+        .where((position) => position.index == index)
+        .firstOrNull;
+    if (currentPosition != null &&
+        currentPosition.itemLeadingEdge >= 0 &&
+        currentPosition.itemTrailingEdge <= 1) {
+      return;
+    }
     _programmaticScrolls++;
     try {
       _transcriptScroll.jumpTo(index: index, alignment: index == 0 ? 0 : .5);
