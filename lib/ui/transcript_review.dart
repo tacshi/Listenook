@@ -876,8 +876,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
                             onToggleRepeat: _canRepeat(segment)
                                 ? () => _toggleSentenceRepeat(segment)
                                 : null,
-                            onSeek: () => unawaited(
-                              _seek(Duration(milliseconds: segment.startMs)),
+                            onSeek: ({required reason}) => unawaited(
+                              _seek(
+                                Duration(milliseconds: segment.startMs),
+                                reason: reason,
+                              ),
                             ),
                             onEdit: () => _startEditing(segment.id),
                             onCancel: () => _cancelEditing(segment.id),
@@ -905,8 +908,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
                                     _canRepeat(segment)
                                 ? () => _toggleSentenceRepeat(segment)
                                 : null,
-                            onSeek: () => unawaited(
-                              _seek(Duration(milliseconds: segment.startMs)),
+                            onSeek: ({required reason}) => unawaited(
+                              _seek(
+                                Duration(milliseconds: segment.startMs),
+                                reason: reason,
+                              ),
                             ),
                             onEdit: () => _startTranslationEditing(segment.id),
                             onCancel: () =>
@@ -934,14 +940,18 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ),
       ],
     );
-    return _showAiBrief
-        ? _AiBriefPane(
-            job: job,
-            document: document,
-            onGenerate: () => _showAiBriefDialog(job),
-            onEvidence: _openAiEvidence,
-          )
-        : transcript;
+    return IndexedStack(
+      index: _showAiBrief ? 1 : 0,
+      children: [
+        transcript,
+        _AiBriefPane(
+          job: job,
+          document: document,
+          onGenerate: () => _showAiBriefDialog(job),
+          onEvidence: _openAiEvidence,
+        ),
+      ],
+    );
   }
 
   Future<void> _showAiBriefDialog(TranscriptionJob job) async {
@@ -3323,7 +3333,7 @@ class _TranslatedSegmentEditor extends StatefulWidget {
   final bool showRepeatAction;
   final bool isRepeating;
   final VoidCallback? onToggleRepeat;
-  final VoidCallback onSeek;
+  final TranscriptSegmentSeekCallback onSeek;
   final VoidCallback onEdit;
   final VoidCallback onCancel;
   final Future<void> Function(String) onSave;
@@ -3364,6 +3374,8 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
     super.dispose();
   }
 
+  void _seek() => widget.onSeek(reason: TranscriptSeekReason.sentenceClick);
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
@@ -3387,7 +3399,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
             children: [
               if (widget.showTimestamp)
                 TextButton(
-                  onPressed: widget.onSeek,
+                  onPressed: _seek,
                   child: Text(formatClock(widget.segment.startMs)),
                 ),
               Expanded(
@@ -3400,7 +3412,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
                         maxLines: null,
                       )
                     : InkWell(
-                        onTap: widget.onSeek,
+                        onTap: _seek,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -3617,7 +3629,7 @@ class _MediaPane extends StatelessWidget {
   final Duration position;
   final Duration duration;
   final Future<void> Function() onPlayPause;
-  final Future<void> Function(Duration) onSeek;
+  final TranscriptSeekCallback onSeek;
   final Future<void> Function() onFullscreen;
   final Future<void> Function() onExitFullscreen;
   final Future<void> Function() onSeekBackward;
@@ -3744,7 +3756,7 @@ class VideoTransport extends StatelessWidget {
   final Duration duration;
   final double playbackRate;
   final Future<void> Function() onPlayPause;
-  final Future<void> Function(Duration) onSeek;
+  final TranscriptSeekCallback onSeek;
   final Future<void> Function(double) onPlaybackRateChanged;
   final VoidCallback? onSwitchToAudioMode;
   final bool reserveModeButtonSpace;
@@ -3777,8 +3789,10 @@ class VideoTransport extends StatelessWidget {
                   .clamp(0, duration.inMilliseconds)
                   .toDouble(),
               max: duration.inMilliseconds.clamp(1, double.infinity).toDouble(),
-              onChanged: (value) =>
-                  onSeek(Duration(milliseconds: value.round())),
+              onChanged: (value) => onSeek(
+                Duration(milliseconds: value.round()),
+                reason: TranscriptSeekReason.videoProgressScrub,
+              ),
             ),
           ),
           Text(
@@ -4826,7 +4840,7 @@ class TranscriptSegmentEditor extends StatefulWidget {
   final bool isEditing;
   final bool isRepeating;
   final VoidCallback? onToggleRepeat;
-  final VoidCallback onSeek;
+  final TranscriptSegmentSeekCallback onSeek;
   final VoidCallback onEdit;
   final VoidCallback onCancel;
   final Future<void> Function(String text) onSave;
@@ -4887,6 +4901,8 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
     await widget.onSave(_draft.text);
     if (mounted) setState(() => _saving = false);
   }
+
+  void _seek() => widget.onSeek(reason: TranscriptSeekReason.sentenceClick);
 
   @override
   Widget build(BuildContext context) {
@@ -4983,7 +4999,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
 
   Widget _buildTimestamp(BuildContext context) => TextButton(
     key: ValueKey('segment-timestamp-${widget.segment.id}'),
-    onPressed: widget.onSeek,
+    onPressed: _seek,
     style: TextButton.styleFrom(
       minimumSize: Size.zero,
       padding: EdgeInsets.zero,
@@ -5064,7 +5080,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
       else
         InkWell(
           key: ValueKey('segment-text-${widget.segment.id}'),
-          onTap: widget.onSeek,
+          onTap: _seek,
           hoverColor: Colors.transparent,
           child: Padding(
             padding: const EdgeInsets.all(4),
@@ -5416,10 +5432,21 @@ bool shouldAutoFollowPlaybackSegment({
   required bool repeating,
 }) => playing && !repeating && previousIndex != nextIndex;
 
-enum TranscriptSeekReason { standard, repeatRestart }
+enum TranscriptSeekReason {
+  standard,
+  videoProgressScrub,
+  sentenceClick,
+  repeatRestart,
+}
+
+typedef TranscriptSeekCallback =
+    Future<void> Function(Duration position, {TranscriptSeekReason reason});
+
+typedef TranscriptSegmentSeekCallback =
+    void Function({required TranscriptSeekReason reason});
 
 bool shouldFocusTranscriptAfterSeek(TranscriptSeekReason reason) =>
-    reason != TranscriptSeekReason.repeatRestart;
+    reason == TranscriptSeekReason.standard;
 
 bool shouldFocusTranscriptOnPlaybackResume({required bool repeating}) =>
     !repeating;
