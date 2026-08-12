@@ -1,10 +1,11 @@
 import 'package:flutter/widgets.dart';
 
-/// Coordinates the fullscreen video route with mutations that can rebuild or
-/// remove the inline review video.
+/// Coordinates fullscreen and media teardown with mutations that can rebuild,
+/// remove, or terminate the inline review video.
 class ReviewFullscreenController {
   NavigatorState? _navigator;
   Future<void>? _pendingExit;
+  final Map<Object, Future<void> Function()> _mediaShutdowns = {};
   bool _active = false;
 
   bool get isActive => _active;
@@ -17,6 +18,20 @@ class ReviewFullscreenController {
   void markExited() {
     _active = false;
     _navigator = null;
+  }
+
+  void registerMediaShutdown(Object owner, Future<void> Function() shutdown) {
+    _mediaShutdowns[owner] = shutdown;
+  }
+
+  void unregisterMediaShutdown(Object owner) {
+    _mediaShutdowns.remove(owner);
+  }
+
+  Future<void> shutdownMedia() async {
+    for (final shutdown in List.of(_mediaShutdowns.values)) {
+      await shutdown();
+    }
   }
 
   Future<void> exit() {

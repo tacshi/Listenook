@@ -14,7 +14,9 @@ import 'settings_page.dart';
 import 'workspace_page.dart';
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  const AppShell({super.key, this.reviewController});
+
+  final ReviewFullscreenController? reviewController;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -32,12 +34,14 @@ class _AppShellState extends State<AppShell> with WindowListener {
   bool _closeDialogOpen = false;
   bool _windowFullscreen = false;
   bool? _preventClose;
-  final _fullscreenController = ReviewFullscreenController();
+  late final ReviewFullscreenController _fullscreenController;
   late final AppController _controller;
 
   @override
   void initState() {
     super.initState();
+    _fullscreenController =
+        widget.reviewController ?? ReviewFullscreenController();
     _controller = context.read<AppController>();
     _controller.addListener(_syncCloseProtection);
     windowManager.addListener(this);
@@ -125,8 +129,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
   Future<void> onWindowClose() async {
     final controller = _controller;
     if (!controller.hasActiveWork) {
-      await _fullscreenController.exit();
-      await windowManager.destroy();
+      await _destroyWindow();
       return;
     }
     if (!mounted || _closeDialogOpen) return;
@@ -156,7 +159,12 @@ class _AppShellState extends State<AppShell> with WindowListener {
     _closeDialogOpen = false;
     if (choice == null || choice == 0) return;
     if (choice == 2) await controller.cancelRemoteJobsForQuit();
+    await _destroyWindow();
+  }
+
+  Future<void> _destroyWindow() async {
     await _fullscreenController.exit();
+    await _fullscreenController.shutdownMedia();
     await windowManager.destroy();
   }
 

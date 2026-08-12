@@ -49,6 +49,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   StreamSubscription<bool>? _completedSubscription;
   StreamSubscription<double>? _rateSubscription;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
+  Future<void>? _mediaShutdown;
   final _videoKey = GlobalKey<VideoState>();
   late final AppController _appController;
   late final ReviewFullscreenController _localFullscreenController;
@@ -87,6 +88,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _appController = context.read<AppController>();
     _position = _appController.playbackPositionFor(widget.jobId);
     _localFullscreenController = ReviewFullscreenController();
+    _fullscreenController.registerMediaShutdown(this, _shutdownMedia);
     windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
   }
@@ -295,17 +297,41 @@ class _TranscriptReviewState extends State<TranscriptReview>
   @override
   void dispose() {
     _rememberPlaybackPosition(widget.jobId);
+    _fullscreenController.unregisterMediaShutdown(this);
     windowManager.removeListener(this);
     _search.dispose();
     _transcriptScroll.dispose();
-    _positionSubscription?.cancel();
-    _durationSubscription?.cancel();
-    _playingSubscription?.cancel();
-    _completedSubscription?.cancel();
-    _rateSubscription?.cancel();
-    _videoParamsSubscription?.cancel();
-    _player?.dispose();
+    unawaited(_shutdownMedia());
     super.dispose();
+  }
+
+  Future<void> _shutdownMedia() => _mediaShutdown ??= _disposeMediaResources();
+
+  Future<void> _disposeMediaResources() async {
+    _sourceRequest++;
+    final player = _player;
+    _player = null;
+    _video = null;
+
+    final subscriptions = <StreamSubscription<dynamic>?>[
+      _positionSubscription,
+      _durationSubscription,
+      _playingSubscription,
+      _completedSubscription,
+      _rateSubscription,
+      _videoParamsSubscription,
+    ];
+    _positionSubscription = null;
+    _durationSubscription = null;
+    _playingSubscription = null;
+    _completedSubscription = null;
+    _rateSubscription = null;
+    _videoParamsSubscription = null;
+
+    for (final subscription in subscriptions) {
+      await subscription?.cancel();
+    }
+    await player?.dispose();
   }
 
   void _rememberPlaybackPosition(String jobId) {
@@ -558,7 +584,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                   scrollDirection: Axis.vertical,
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
                   itemCount: segments.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  separatorBuilder: (_, __) => const SizedBox(height: 4),
                   itemBuilder: (context, index) {
                     final segment = segments[index];
                     return AutoScrollTag(
@@ -1720,16 +1746,28 @@ class _SentenceRepeatButton extends StatelessWidget {
     ),
     onPressed: onPressed,
     isSelected: isRepeating,
-    style: isRepeating
-        ? IconButton.styleFrom(
-            foregroundColor: Theme.of(context).colorScheme.onPrimaryContainer,
-            backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-          )
-        : null,
-    visualDensity: VisualDensity.compact,
+    style: _compactSegmentActionStyle(context, selected: isRepeating),
     icon: const Icon(Icons.repeat_one_rounded, size: 18),
   );
 }
+
+ButtonStyle _compactSegmentActionStyle(
+  BuildContext context, {
+  bool selected = false,
+}) => IconButton.styleFrom(
+  foregroundColor: selected
+      ? Theme.of(context).colorScheme.onPrimaryContainer
+      : null,
+  backgroundColor: selected
+      ? Theme.of(context).colorScheme.primaryContainer
+      : null,
+  minimumSize: Size.zero,
+  fixedSize: const Size(32, 28),
+  maximumSize: const Size(32, 28),
+  padding: EdgeInsets.zero,
+  visualDensity: VisualDensity.compact,
+  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+);
 
 class _MediaPane extends StatelessWidget {
   const _MediaPane({
@@ -2720,6 +2758,33 @@ class _WaveformProgressClipper extends CustomClipper<Rect> {
       oldClipper.progress != progress;
 }
 
+const _speakerHues = <double>[270, 210, 155, 25, 335, 185];
+
+Color _speakerColor(BuildContext context, String speakerId) {
+  final numericId = int.tryParse(speakerId);
+  var seed = numericId == null ? 0 : numericId - 1;
+  if (numericId == null) {
+    for (final codeUnit in speakerId.codeUnits) {
+      seed = (seed * 31 + codeUnit) & 0x7fffffff;
+    }
+  }
+  final index =
+      ((seed % _speakerHues.length) + _speakerHues.length) %
+      _speakerHues.length;
+  final dark = Theme.of(context).brightness == Brightness.dark;
+  return HSLColor.fromAHSL(
+    1,
+    _speakerHues[index],
+    dark ? .66 : .68,
+    dark ? .72 : .4,
+  ).toColor();
+}
+
+Color _onSpeakerColor(Color color) =>
+    ThemeData.estimateBrightnessForColor(color) == Brightness.dark
+    ? Colors.white
+    : Colors.black;
+
 class SpeakerStrip extends StatefulWidget {
   const SpeakerStrip({super.key, required this.job, required this.document});
   final TranscriptionJob job;
@@ -2770,6 +2835,7 @@ class _SpeakerStripState extends State<SpeakerStrip> {
           separatorBuilder: (_, __) => const SizedBox(width: 8),
           itemBuilder: (context, index) {
             final speaker = widget.document.speakers[index];
+            final speakerColor = _speakerColor(context, speaker.id);
             return ActionChip(
               avatarBoxConstraints: const BoxConstraints.tightFor(
                 width: 18,
@@ -2780,19 +2846,25 @@ class _SpeakerStripState extends State<SpeakerStrip> {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Theme.of(context).colorScheme.primary,
+                  color: speakerColor,
                 ),
                 child: Text(
                   '${index + 1}',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: Theme.of(context).colorScheme.onPrimary,
+                    color: _onSpeakerColor(speakerColor),
                     fontWeight: FontWeight.w700,
                     height: 1,
                   ),
                 ),
               ),
-              label: Text(context.strings.speakerName(speaker.name)),
+              label: Text(
+                context.strings.speakerName(speaker.name),
+                style: TextStyle(
+                  color: speakerColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               onPressed: () => _rename(context, speaker),
             );
           },
@@ -2914,6 +2986,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
   late final FocusNode _fieldFocus;
   bool _hovered = false;
   bool _actionFocused = false;
+  bool _repeatFocused = false;
   bool _saving = false;
 
   @override
@@ -2969,47 +3042,125 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
       child: DecoratedBox(
         key: ValueKey('segment-card-${widget.segment.id}'),
         decoration: BoxDecoration(
-          color: widget.isEditing ? colors.surfaceContainerLow : null,
+          color: widget.isEditing || _hovered
+              ? colors.surfaceContainerLow
+              : null,
           borderRadius: BorderRadius.circular(12),
           border: widget.isEditing
               ? Border.all(color: colors.outlineVariant)
               : null,
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 6, 6, 6),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          padding: const EdgeInsets.fromLTRB(8, 4, 6, 4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              if (widget.showTimestamp)
-                Padding(
-                  padding: EdgeInsets.only(
-                    top: widget.showSpeaker && widget.speakerName.isNotEmpty
-                        ? 0
-                        : 4,
-                  ),
-                  child: TextButton(
-                    key: ValueKey('segment-timestamp-${widget.segment.id}'),
-                    onPressed: widget.onSeek,
-                    style: TextButton.styleFrom(
-                      minimumSize: Size.zero,
-                      padding: const EdgeInsets.symmetric(horizontal: 7),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      alignment: Alignment.topCenter,
+              if (widget.showTimestamp || _showsSpeaker)
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(width: _leadingWidth),
+                        Expanded(
+                          child: _showsSpeaker
+                              ? _buildSpeaker(context)
+                              : widget.showTimestamp
+                              ? Padding(
+                                  padding: const EdgeInsets.only(left: 4),
+                                  child: Align(
+                                    alignment: Alignment.topLeft,
+                                    child: _buildTimestamp(context),
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                        const SizedBox(width: 36),
+                      ],
                     ),
-                    child: Text(formatClock(widget.segment.startMs)),
-                  ),
-                )
-              else
-                IconButton(
-                  tooltip: formatClock(widget.segment.startMs),
-                  onPressed: widget.onSeek,
-                  icon: const Icon(Icons.play_circle_outline_rounded, size: 20),
+                    if (widget.showTimestamp && _showsSpeaker)
+                      Positioned(
+                        top: 0,
+                        left: _leadingWidth,
+                        child: FractionalTranslation(
+                          translation: const Offset(-1, 0),
+                          child: _buildTimestamp(context),
+                        ),
+                      ),
+                  ],
                 ),
-              Expanded(child: _buildContent(context)),
-              const SizedBox(width: 4),
-              _buildActions(context),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: _leadingWidth,
+                    child: Align(
+                      alignment: Alignment.topRight,
+                      child: _buildRepeatAction(context),
+                    ),
+                  ),
+                  Expanded(child: _buildContent(context)),
+                  const SizedBox(width: 4),
+                  _buildActions(context),
+                ],
+              ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  bool get _showsSpeaker => widget.showSpeaker && widget.speakerName.isNotEmpty;
+
+  double get _leadingWidth => 32;
+
+  Widget _buildTimestamp(BuildContext context) => TextButton(
+    key: ValueKey('segment-timestamp-${widget.segment.id}'),
+    onPressed: widget.onSeek,
+    style: TextButton.styleFrom(
+      minimumSize: Size.zero,
+      padding: EdgeInsets.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      alignment: Alignment.topRight,
+    ),
+    child: Text(
+      formatClock(widget.segment.startMs),
+      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+        color: Theme.of(context).colorScheme.primary,
+      ),
+    ),
+  );
+
+  Widget _buildSpeaker(BuildContext context) => Padding(
+    key: ValueKey('segment-speaker-${widget.segment.id}'),
+    padding: const EdgeInsets.only(left: 4, bottom: 4),
+    child: SearchHighlightedText(
+      text: widget.speakerName,
+      query: widget.query,
+      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+        color: _speakerColor(
+          context,
+          widget.segment.speaker ?? widget.speakerName,
+        ),
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
+
+  Widget _buildRepeatAction(BuildContext context) {
+    final visible = _hovered || _repeatFocused || widget.isRepeating;
+    return Focus(
+      onFocusChange: (value) => setState(() => _repeatFocused = value),
+      child: AnimatedOpacity(
+        key: ValueKey('segment-repeat-opacity-${widget.segment.id}'),
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 120),
+        child: _SentenceRepeatButton(
+          segmentId: widget.segment.id,
+          isRepeating: widget.isRepeating,
+          onPressed: widget.onToggleRepeat,
         ),
       ),
     );
@@ -3018,19 +3169,6 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
   Widget _buildContent(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      if (widget.showSpeaker && widget.speakerName.isNotEmpty)
-        Padding(
-          key: ValueKey('segment-speaker-${widget.segment.id}'),
-          padding: const EdgeInsets.only(left: 4, bottom: 4),
-          child: SearchHighlightedText(
-            text: widget.speakerName,
-            query: widget.query,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: Theme.of(context).colorScheme.primary,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
       if (widget.isEditing)
         SelectionContainer.disabled(
           child: CallbackShortcuts(
@@ -3062,6 +3200,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
         InkWell(
           key: ValueKey('segment-text-${widget.segment.id}'),
           onTap: widget.onSeek,
+          hoverColor: Colors.transparent,
           child: Padding(
             padding: const EdgeInsets.all(4),
             child: widget.query.isEmpty
@@ -3089,12 +3228,6 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (widget.isRepeating)
-            _SentenceRepeatButton(
-              segmentId: widget.segment.id,
-              isRepeating: true,
-              onPressed: widget.onToggleRepeat,
-            ),
           IconButton(
             key: ValueKey('segment-cancel-${widget.segment.id}'),
             tooltip: context.strings.t('cancel'),
@@ -3117,10 +3250,11 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
         ],
       );
     }
-    final visible = _hovered || _actionFocused || widget.isRepeating;
+    final visible = _hovered || _actionFocused;
     return Focus(
       onFocusChange: (value) => setState(() => _actionFocused = value),
       child: AnimatedOpacity(
+        key: ValueKey('segment-edit-opacity-${widget.segment.id}'),
         opacity: visible ? 1 : 0,
         duration: const Duration(milliseconds: 120),
         child: Column(
@@ -3130,13 +3264,8 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
               key: ValueKey('segment-edit-${widget.segment.id}'),
               tooltip: context.strings.t('edit'),
               onPressed: widget.onEdit,
-              visualDensity: VisualDensity.compact,
+              style: _compactSegmentActionStyle(context),
               icon: const Icon(Icons.edit_outlined, size: 18),
-            ),
-            _SentenceRepeatButton(
-              segmentId: widget.segment.id,
-              isRepeating: widget.isRepeating,
-              onPressed: widget.onToggleRepeat,
             ),
           ],
         ),

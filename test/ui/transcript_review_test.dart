@@ -924,10 +924,7 @@ void main() {
       tester.widget<IconButton>(find.byKey(timestampToggle)).isSelected,
       isFalse,
     );
-    expect(
-      tester.widget<IconButton>(find.byKey(speakerToggle)).style,
-      isNull,
-    );
+    expect(tester.widget<IconButton>(find.byKey(speakerToggle)).style, isNull);
     expect(
       tester.widget<IconButton>(find.byKey(timestampToggle)).style,
       isNull,
@@ -1184,7 +1181,7 @@ void main() {
     expect(position.pixels, greaterThan(0));
   });
 
-  testWidgets('timestamp aligns with the speaker or first text line', (
+  testWidgets('timestamp sits above repeat and repeat aligns with text', (
     tester,
   ) async {
     const segment = TranscriptSegment(
@@ -1195,29 +1192,34 @@ void main() {
       speaker: '1',
     );
 
-    Future<void> pump({required bool showSpeaker}) => tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TranscriptSegmentEditor(
-            segment: segment,
-            tokens: const [],
-            positionMs: 0,
-            isCurrent: false,
-            query: '',
-            speakerName: 'Speaker 1',
-            showSpeaker: showSpeaker,
-            showTimestamp: true,
-            isEditing: false,
-            onSeek: () {},
-            onEdit: () {},
-            onCancel: () {},
-            onSave: (_) async {},
+    Future<void> pump({required bool showSpeaker, bool showTimestamp = true}) =>
+        tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: TranscriptSegmentEditor(
+                segment: segment,
+                tokens: const [],
+                positionMs: 0,
+                isCurrent: false,
+                query: '',
+                speakerName: 'Speaker 1',
+                showSpeaker: showSpeaker,
+                showTimestamp: showTimestamp,
+                isEditing: false,
+                onSeek: () {},
+                onEdit: () {},
+                onCancel: () {},
+                onSave: (_) async {},
+              ),
+            ),
           ),
-        ),
-      ),
-    );
+        );
 
     await pump(showSpeaker: true);
+    var transcriptText = find.descendant(
+      of: find.byKey(const ValueKey('segment-text-aligned')),
+      matching: find.byType(RichText),
+    );
     expect(
       tester
           .getTopLeft(find.byKey(const ValueKey('segment-timestamp-aligned')))
@@ -1229,18 +1231,137 @@ void main() {
         1,
       ),
     );
+    final timestampLabel = find.descendant(
+      of: find.byKey(const ValueKey('segment-timestamp-aligned')),
+      matching: find.byType(Text),
+    );
+    final speakerLabel = find.descendant(
+      of: find.byKey(const ValueKey('segment-speaker-aligned')),
+      matching: find.byType(Text),
+    );
+    expect(
+      tester.widget<Text>(speakerLabel).style?.fontSize,
+      tester.widget<Text>(timestampLabel).style?.fontSize,
+    );
+    expect(
+      tester.getTopLeft(speakerLabel).dy,
+      closeTo(tester.getTopLeft(timestampLabel).dy, 1),
+    );
+    expect(
+      tester.getCenter(speakerLabel).dy,
+      closeTo(tester.getCenter(timestampLabel).dy, 1),
+    );
+    expect(
+      tester.getCenter(find.byKey(const ValueKey('segment-repeat-aligned'))).dy,
+      closeTo(tester.getCenter(transcriptText).dy, 2),
+    );
+    expect(
+      tester
+          .getTopRight(find.byKey(const ValueKey('segment-timestamp-aligned')))
+          .dx,
+      closeTo(
+        tester
+            .getTopRight(find.byKey(const ValueKey('segment-repeat-aligned')))
+            .dx,
+        1,
+      ),
+    );
 
     await pump(showSpeaker: false);
-    final transcriptText = find.descendant(
+    transcriptText = find.descendant(
       of: find.byKey(const ValueKey('segment-text-aligned')),
       matching: find.byType(RichText),
+    );
+    expect(
+      tester.getCenter(find.byKey(const ValueKey('segment-repeat-aligned'))).dy,
+      closeTo(tester.getCenter(transcriptText).dy, 2),
     );
     expect(
       tester
           .getTopLeft(find.byKey(const ValueKey('segment-timestamp-aligned')))
           .dy,
-      closeTo(tester.getTopLeft(transcriptText).dy, 4),
+      lessThan(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('segment-repeat-aligned')))
+            .dy,
+      ),
     );
+    expect(
+      tester
+          .getTopLeft(find.byKey(const ValueKey('segment-timestamp-aligned')))
+          .dx,
+      closeTo(tester.getTopLeft(transcriptText).dx, 1),
+    );
+    final timestampedSentenceLeft = tester.getTopLeft(transcriptText).dx;
+
+    await pump(showSpeaker: false, showTimestamp: false);
+    transcriptText = find.descendant(
+      of: find.byKey(const ValueKey('segment-text-aligned')),
+      matching: find.byType(RichText),
+    );
+    expect(
+      tester.getTopLeft(transcriptText).dx,
+      closeTo(timestampedSentenceLeft, 1),
+    );
+  });
+
+  testWidgets('speaker labels use stable distinct colors', (tester) async {
+    const segments = [
+      TranscriptSegment(
+        id: 'first',
+        startMs: 0,
+        endMs: 1000,
+        text: 'First speaker',
+        speaker: '1',
+      ),
+      TranscriptSegment(
+        id: 'second',
+        startMs: 1000,
+        endMs: 2000,
+        text: 'Second speaker',
+        speaker: '2',
+      ),
+      TranscriptSegment(
+        id: 'first-again',
+        startMs: 2000,
+        endMs: 3000,
+        text: 'First speaker again',
+        speaker: '1',
+      ),
+    ];
+
+    Widget editor(TranscriptSegment segment) => TranscriptSegmentEditor(
+      segment: segment,
+      tokens: const [],
+      positionMs: 0,
+      isCurrent: false,
+      query: '',
+      speakerName: 'Speaker ${segment.speaker}',
+      showSpeaker: true,
+      showTimestamp: false,
+      isEditing: false,
+      onSeek: () {},
+      onEdit: () {},
+      onCancel: () {},
+      onSave: (_) async {},
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: Column(children: segments.map(editor).toList())),
+      ),
+    );
+
+    Color? speakerColor(String segmentId) {
+      final label = find.descendant(
+        of: find.byKey(ValueKey('segment-speaker-$segmentId')),
+        matching: find.byType(Text),
+      );
+      return tester.widget<Text>(label).style?.color;
+    }
+
+    expect(speakerColor('first'), isNot(speakerColor('second')));
+    expect(speakerColor('first-again'), speakerColor('first'));
   });
 
   testWidgets(
@@ -1456,6 +1577,51 @@ void main() {
     }
   });
 
+  testWidgets('single-line transcript rows keep compact vertical spacing', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              TranscriptSegmentEditor(
+                segment: const TranscriptSegment(
+                  id: 'compact',
+                  startMs: 100,
+                  endMs: 1000,
+                  text: 'One compact transcript line.',
+                ),
+                tokens: const [],
+                positionMs: 0,
+                isCurrent: false,
+                query: '',
+                speakerName: '',
+                showSpeaker: false,
+                showTimestamp: false,
+                isEditing: false,
+                onSeek: () {},
+                onEdit: () {},
+                onCancel: () {},
+                onSave: (_) async {},
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      tester.getSize(find.byKey(const ValueKey('segment-card-compact'))).height,
+      lessThanOrEqualTo(44),
+    );
+    expect(find.byIcon(Icons.play_circle_outline_rounded), findsNothing);
+    expect(
+      find.byKey(const ValueKey('segment-repeat-compact')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('played-word selection clears when the next sentence starts', (
     tester,
   ) async {
@@ -1561,10 +1727,14 @@ void main() {
     );
 
     expect(find.byType(TextField), findsNothing);
-    expect(
-      tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
-      0,
+    final editOpacity = find.byKey(
+      const ValueKey('segment-edit-opacity-editable'),
     );
+    final repeatOpacity = find.byKey(
+      const ValueKey('segment-repeat-opacity-editable'),
+    );
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 0);
 
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
@@ -1573,10 +1743,8 @@ void main() {
       tester.getCenter(find.byKey(const ValueKey('segment-card-editable'))),
     );
     await tester.pumpAndSettle();
-    expect(
-      tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
-      1,
-    );
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 1);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 1);
 
     await tester.tap(find.byKey(const ValueKey('segment-edit-editable')));
     await tester.pump();
@@ -1602,61 +1770,63 @@ void main() {
     expect(seeks, 0);
   });
 
-  testWidgets(
-    'sentence repeat appears on hover and stays visible while active',
-    (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(home: Scaffold(body: _RepeatEditorHarness())),
-      );
+  testWidgets('sentence repeat and edit appear on hover', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: _RepeatEditorHarness())),
+    );
 
-      final opacity = find.byType(AnimatedOpacity);
-      const repeatKey = ValueKey('segment-repeat-repeatable');
-      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0);
-      expect(
-        tester.widget<IconButton>(find.byKey(repeatKey)).isSelected,
-        isFalse,
-      );
+    const cardKey = ValueKey('segment-card-repeatable');
+    const repeatKey = ValueKey('segment-repeat-repeatable');
+    final card = find.byKey(cardKey);
+    final repeat = find.byKey(repeatKey);
+    final edit = find.byKey(const ValueKey('segment-edit-repeatable'));
+    final sentenceInk = tester.widget<InkWell>(
+      find.byKey(const ValueKey('segment-text-repeatable')),
+    );
+    final editOpacity = find.byKey(
+      const ValueKey('segment-edit-opacity-repeatable'),
+    );
+    final repeatOpacity = find.byKey(
+      const ValueKey('segment-repeat-opacity-repeatable'),
+    );
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 0);
+    expect(find.byIcon(Icons.play_circle_outline_rounded), findsNothing);
+    expect(tester.widget<IconButton>(repeat).isSelected, isFalse);
+    expect(tester.getCenter(repeat).dx, lessThan(tester.getCenter(edit).dx));
+    expect(
+      (tester.widget<DecoratedBox>(card).decoration as BoxDecoration).color,
+      isNull,
+    );
+    expect(sentenceInk.hoverColor, Colors.transparent);
 
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      addTearDown(mouse.removePointer);
-      await mouse.addPointer(location: Offset.zero);
-      await mouse.moveTo(
-        tester.getCenter(find.byKey(const ValueKey('segment-card-repeatable'))),
-      );
-      await tester.pumpAndSettle();
-      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 1);
-      final edit = find.byKey(const ValueKey('segment-edit-repeatable'));
-      expect(
-        tester.getCenter(edit).dx,
-        closeTo(tester.getCenter(find.byKey(repeatKey)).dx, 1),
-      );
-      expect(
-        tester.getCenter(edit).dy,
-        lessThan(tester.getCenter(find.byKey(repeatKey)).dy),
-      );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(card));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 1);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 1);
+    expect(
+      (tester.widget<DecoratedBox>(card).decoration as BoxDecoration).color,
+      Theme.of(tester.element(card)).colorScheme.surfaceContainerLow,
+    );
 
-      await tester.tap(find.byKey(repeatKey));
-      await tester.pumpAndSettle();
-      expect(
-        tester.widget<IconButton>(find.byKey(repeatKey)).isSelected,
-        isTrue,
-      );
+    await tester.tap(repeat);
+    await tester.pumpAndSettle();
+    expect(tester.widget<IconButton>(repeat).isSelected, isTrue);
 
-      FocusManager.instance.primaryFocus?.unfocus();
-      await mouse.moveTo(const Offset(-10, -10));
-      await tester.pumpAndSettle();
-      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 1);
+    FocusManager.instance.primaryFocus?.unfocus();
+    await mouse.moveTo(const Offset(-10, -10));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 1);
 
-      await tester.tap(find.byKey(repeatKey));
-      FocusManager.instance.primaryFocus?.unfocus();
-      await tester.pumpAndSettle();
-      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0);
-      expect(
-        tester.widget<IconButton>(find.byKey(repeatKey)).isSelected,
-        isFalse,
-      );
-    },
-  );
+    await tester.tap(repeat);
+    await tester.pumpAndSettle();
+    expect(tester.widget<IconButton>(repeat).isSelected, isFalse);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 0);
+  });
 
   testWidgets('unavailable sentence repeat is disabled', (tester) async {
     await tester.pumpWidget(
@@ -2046,6 +2216,67 @@ void main() {
     expect(windowToolbar, findsOneWidget);
   });
 
+  testWidgets(
+    'window close waits for review media shutdown before destroying engine',
+    (tester) async {
+      const windowChannel = MethodChannel('window_manager');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final events = <String>[];
+      messenger.setMockMethodCallHandler(windowChannel, (call) async {
+        if (call.method == 'isFullScreen') return false;
+        if (call.method == 'destroy') events.add('destroy');
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(windowChannel, null),
+      );
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: _Settings(),
+        jobRepository: _Jobs([]),
+        mediaService: _Media(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.updateSettings(
+        controller.settings.copyWith(onboardingComplete: true),
+      );
+      final reviewController = ReviewFullscreenController();
+      final mediaReleased = Completer<void>();
+      final mediaOwner = Object();
+      reviewController.registerMediaShutdown(mediaOwner, () async {
+        events.add('media-start');
+        await mediaReleased.future;
+        events.add('media-done');
+      });
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: MaterialApp(
+            locale: const Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: const [AppStrings.delegate],
+            home: AppShell(reviewController: reviewController),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final dynamic appShellState = tester.state(find.byType(AppShell));
+      final close = appShellState.onWindowClose() as Future<void>;
+      await tester.pump();
+      expect(events, ['media-start']);
+
+      mediaReleased.complete();
+      await close;
+      expect(events, ['media-start', 'media-done', 'destroy']);
+    },
+  );
+
   testWidgets('playback position is restored after switching app tabs', (
     tester,
   ) async {
@@ -2287,6 +2518,57 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('unexpected transcription failures show actionable guidance', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'failed-job',
+          batchId: 'batch',
+          sourcePath: '/missing/podcast-01.m4a',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.failed,
+          errorCode: 'unexpected',
+        ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.reopen('failed-job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('zh', 'CN'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: Scaffold(
+            body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('出现问题，请重试。'), findsNothing);
+    expect(find.text('转写失败。请检查源文件、API 密钥和网络连接。'), findsOneWidget);
+  });
 
   testWidgets('completed video collapses the queue and uses the wide split', (
     tester,
