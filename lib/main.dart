@@ -10,6 +10,7 @@ import 'data/openai_translation_service.dart';
 import 'data/process_media_service.dart';
 import 'data/soniox_api_client.dart';
 import 'data/transcript_exporter.dart';
+import 'data/update_service.dart';
 import 'state/app_controller.dart';
 
 Future<void> main() async {
@@ -49,5 +50,7 @@ Future<void> main() async {
     aiBriefService: DefaultAiBriefService(llmClient),
   );
   await controller.initialize();
-  runApp(MeowSttApp(controller: controller));
+  final updates = UpdateService();
+  await updates.initialize();
+  runApp(MeowSttApp(controller: controller, updates: updates));
 }

@@ -135,10 +135,12 @@ macOS builds also emit a matching `.sha256` manifest. For example:
 
 ```text
 dist/MeowSTT-1.0.0-macos-arm64-release.dmg
+dist/MeowSTT-1.0.0-macos-arm64-release.zip
 dist/MeowSTT-1.0.0-macos-arm64-release.sha256
 ```
 
-macOS release output contains only a DMG and its checksum manifest. Windows
+macOS release output contains a DMG for manual installation, a notarized app
+ZIP for automatic updates, and a checksum manifest. Windows
 debug output remains an uncompressed portable directory under `dist/`; Windows
 release output contains a portable ZIP and an Inno Setup `-setup.exe` installer.
 
@@ -153,6 +155,10 @@ explicitly when needed:
 flutter test integration_test/secure_credential_store_test.dart -d macos
 scripts/verify-macos-app.sh build/macos/Build/Products/Debug/MeowSTT.app
 ```
+
+Production releases and the forced background updater use the separate public
+`tacshi/MeowSTT-Release` repository. See `Release_Steps.md` for the two-machine
+Windows/macOS publishing workflow and dry-run commands.
 
 ## Architecture
 

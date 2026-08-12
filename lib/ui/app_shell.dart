@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../l10n/strings.dart';
+import '../data/update_service.dart';
 import '../state/app_controller.dart';
 import 'library_page.dart';
 import 'review_fullscreen_controller.dart';
@@ -35,6 +36,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
   bool _windowFullscreen = false;
   late final ReviewFullscreenController _fullscreenController;
   late final AppController _controller;
+  UpdateService? _updates;
 
   @override
   void initState() {
@@ -42,11 +44,15 @@ class _AppShellState extends State<AppShell> with WindowListener {
     _fullscreenController =
         widget.reviewController ?? ReviewFullscreenController();
     _controller = context.read<AppController>();
+    _updates = Provider.of<UpdateService?>(context, listen: false);
     windowManager.addListener(this);
     _nativeNavigationChannel.setMethodCallHandler(_handleNativeNavigation);
     unawaited(windowManager.setPreventClose(true));
     unawaited(_syncWindowFullscreen());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showOnboarding());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showOnboarding();
+      unawaited(_updates?.start());
+    });
   }
 
   @override
@@ -158,6 +164,41 @@ class _AppShellState extends State<AppShell> with WindowListener {
     await windowManager.destroy();
   }
 
+  Future<void> _restartForUpdate(UpdateService updates) async {
+    if (_controller.hasActiveWork) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          icon: const Icon(Icons.restart_alt_rounded),
+          title: Text(context.strings.t('update_active_title')),
+          content: Text(context.strings.t('update_active_body')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(context.strings.t('cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(context.strings.t('restart_to_update')),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    try {
+      await updates.installReadyUpdate();
+      await _destroyWindow();
+    } on Object catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${context.strings.t('update_restart_failed')} $error'),
+        ),
+      );
+    }
+  }
+
   Future<void> _setDestination(int index) async {
     await _fullscreenController.exit();
     if (mounted) _controller.setDestination(index);
@@ -224,6 +265,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
+    final updates = context.watch<UpdateService?>();
     final hideWindowToolbar =
         _windowFullscreen && Theme.of(context).platform == TargetPlatform.macOS;
     final sidebarExtended = MediaQuery.sizeOf(context).width >= 1180;
@@ -284,6 +326,12 @@ class _AppShellState extends State<AppShell> with WindowListener {
                 AppWindowToolbar(
                   sidebarVisible: _sidebarVisible,
                   onToggleSidebar: _toggleSidebar,
+                ),
+              if (updates?.readyToRestart == true)
+                UpdateReadyBanner(
+                  version: updates!.release!.version.name,
+                  installing: updates.phase == UpdatePhase.installing,
+                  onRestart: () => unawaited(_restartForUpdate(updates)),
                 ),
               Expanded(
                 child: Row(
@@ -379,6 +427,64 @@ class _AppShellState extends State<AppShell> with WindowListener {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class UpdateReadyBanner extends StatelessWidget {
+  const UpdateReadyBanner({
+    super.key,
+    required this.version,
+    required this.installing,
+    required this.onRestart,
+  });
+
+  final String version;
+  final bool installing;
+  final VoidCallback onRestart;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      key: const Key('update-ready-banner'),
+      color: colors.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          children: [
+            Icon(
+              Icons.system_update_alt_rounded,
+              color: colors.onSecondaryContainer,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                context.strings
+                    .t('update_ready')
+                    .replaceFirst('{version}', version),
+                style: TextStyle(color: colors.onSecondaryContainer),
+              ),
+            ),
+            const SizedBox(width: 12),
+            FilledButton.tonalIcon(
+              key: const Key('restart-to-update'),
+              onPressed: installing ? null : onRestart,
+              icon: installing
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.restart_alt_rounded),
+              label: Text(
+                context.strings.t(
+                  installing ? 'restarting_to_update' : 'restart_to_update',
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -3,7 +3,9 @@ param(
   [ValidateSet("debug", "release")]
   [string]$Mode,
   [ValidateSet("x64", "arm64")]
-  [string]$Arch = "x64"
+  [string]$Arch = "x64",
+  [string]$BuildName,
+  [string]$BuildNumber
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,7 +17,7 @@ if ($HostArch -ne $ExpectedHost) {
 }
 
 $VersionLine = Select-String -Path (Join-Path $Root "pubspec.yaml") -Pattern '^version:\s*([^+\s]+)'
-$Version = $VersionLine.Matches[0].Groups[1].Value
+$Version = if ($BuildName) { $BuildName } else { $VersionLine.Matches[0].Groups[1].Value }
 $Configuration = if ($Mode -eq "release") { "Release" } else { "Debug" }
 
 function Resolve-InnoCompiler {
@@ -85,7 +87,10 @@ function Invoke-CodeSign([string]$Path) {
 
 Push-Location $Root
 try {
-  & flutter build windows "--$Mode"
+  $FlutterArgs = @("build", "windows", "--$Mode")
+  if ($BuildName) { $FlutterArgs += @("--build-name", $BuildName) }
+  if ($BuildNumber) { $FlutterArgs += @("--build-number", $BuildNumber) }
+  & flutter @FlutterArgs
   if ($LASTEXITCODE -ne 0) { throw "Flutter Windows build failed." }
 
   $Build = Join-Path $Root "build\windows\$Arch\runner\$Configuration"
