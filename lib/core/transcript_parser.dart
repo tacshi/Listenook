@@ -48,7 +48,7 @@ class TranscriptParser {
       speakers: speakers,
       updatedAt: DateTime.now().toUtc(),
     );
-    return hasSonioxTranslation ? normalizeSegments(document) : document;
+    return normalizeSegments(document);
   }
 
   /// Repairs documents produced by older parser versions that split a single
@@ -63,13 +63,53 @@ class TranscriptParser {
     }
 
     final normalized = <TranscriptSegment>[];
-    for (final segment in sourceSegments) {
+    for (final sourceSegment in sourceSegments) {
+      var segment = sourceSegment;
       if (normalized.isEmpty) {
         normalized.add(segment);
         continue;
       }
 
-      final previous = normalized.last;
+      var previous = normalized.last;
+      final closingQuote = _takeDetachedClosingQuote(
+        previous.text,
+        segment.text,
+      );
+      if (closingQuote != null) {
+        final translatedQuote = _takeDetachedClosingQuote(
+          previous.translatedText ?? '',
+          segment.translatedText ?? '',
+        );
+        previous = TranscriptSegment(
+          id: previous.id,
+          startMs: previous.startMs,
+          endMs: segment.startMs > previous.endMs
+              ? segment.startMs
+              : previous.endMs,
+          text: '${previous.text.trimRight()}${closingQuote.quote}',
+          speaker: previous.speaker,
+          language: previous.language,
+          translatedText: translatedQuote == null
+              ? previous.translatedText
+              : '${previous.translatedText!.trimRight()}'
+                    '${translatedQuote.quote}',
+        );
+        normalized[normalized.length - 1] = previous;
+        segment = TranscriptSegment(
+          id: segment.id,
+          startMs: segment.startMs,
+          endMs: segment.endMs,
+          text: closingQuote.remainder,
+          speaker: segment.speaker,
+          language: segment.language,
+          translatedText: translatedQuote == null
+              ? segment.translatedText
+              : translatedQuote.remainder,
+        );
+        changed = true;
+        if (segment.text.trim().isEmpty) continue;
+      }
+
       final punctuationOnly = _isPunctuationOnly(segment.text);
       final speakersCompatible =
           previous.speaker == segment.speaker ||
@@ -248,6 +288,28 @@ class TranscriptParser {
 
   bool _isPunctuationOnly(String text) =>
       RegExp(r'''^\s*[,.;:!?，。；：！？、…—\-"'“”‘’()[\]{}]+\s*$''').hasMatch(text);
+
+  ({String quote, String remainder})? _takeDetachedClosingQuote(
+    String previous,
+    String current,
+  ) {
+    if (!_endsSentence(previous)) return null;
+    final match = RegExp(r'''^\s*(["”’])(?:\s+|$)''').firstMatch(current);
+    if (match == null) return null;
+    final quote = match.group(1)!;
+    final closesPrevious = switch (quote) {
+      '"' => _count(previous, '"').isOdd,
+      '”' => _count(previous, '“') > _count(previous, '”'),
+      '’' => _count(previous, '‘') > _count(previous, '’'),
+      _ => false,
+    };
+    if (!closesPrevious) return null;
+    return (quote: quote, remainder: current.substring(match.end).trimLeft());
+  }
+
+  int _count(String text, String character) =>
+      character.allMatches(text).length;
+
   String _joinSegmentText(String first, String second) {
     final left = first.trimRight();
     final right = second.trimLeft();

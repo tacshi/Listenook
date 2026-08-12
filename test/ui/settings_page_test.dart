@@ -153,7 +153,10 @@ void main() {
       tester.widget<DropdownButtonFormField<String>>(sonioxTarget).onChanged,
       isNotNull,
     );
-    expect(find.text('LLM Translation'), findsNothing);
+    await tester.ensureVisible(
+      find.byKey(const Key('translation-provider-template-field')),
+    );
+    expect(find.text('AI provider'), findsOneWidget);
     await tester.ensureVisible(find.byKey(const Key('soniox-key-field')));
     await tester.pumpAndSettle();
 
@@ -288,7 +291,7 @@ void main() {
       );
       expect(
         tester.getCenter(translationStatus).dx,
-        greaterThan(tester.getCenter(find.text('LLM Translation')).dx),
+        greaterThan(tester.getCenter(find.text('AI provider')).dx),
       );
       expect(
         find.text('Test the connection to select a model'),

@@ -247,11 +247,10 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     ),
-    if (!settings.sonioxTranslation.enabled)
-      _TranslationSettingsSection(
-        controller: controller,
-        settings: settings.translationSettings,
-      ),
+    _TranslationSettingsSection(
+      controller: controller,
+      settings: settings.translationSettings,
+    ),
   ]);
 
   Widget _appearanceTab(
@@ -494,7 +493,7 @@ class _TranslationSettingsSectionState
         : context.strings.t('translation_not_configured');
     return _Section(
       title: context.strings.t('llm_translation'),
-      icon: Icons.translate_rounded,
+      icon: Icons.smart_toy_outlined,
       trailing: Tooltip(
         key: const Key('translation-status'),
         message: statusLabel,

@@ -64,11 +64,11 @@ void main() {
     },
   );
 
-  test('sentence repeat restarts outside its playable timing window', () {
+  test('sentence repeat tolerates seek undershoot near its beginning', () {
     const valid = TranscriptSegment(
       id: 'valid',
-      startMs: 100,
-      endMs: 900,
+      startMs: 1000,
+      endMs: 1900,
       text: 'Repeat me',
     );
     const invalid = TranscriptSegment(
@@ -78,12 +78,54 @@ void main() {
       text: 'No duration',
     );
 
-    expect(shouldRestartRepeatedSentence(valid, 99), isTrue);
-    expect(shouldRestartRepeatedSentence(valid, 100), isFalse);
-    expect(shouldRestartRepeatedSentence(valid, 899), isFalse);
-    expect(shouldRestartRepeatedSentence(valid, 900), isTrue);
-    expect(shouldRestartRepeatedSentence(valid, 1200), isTrue);
+    expect(shouldRestartRepeatedSentence(valid, 749), isTrue);
+    expect(shouldRestartRepeatedSentence(valid, 750), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 999), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 1000), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 1899), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 1900), isTrue);
+    expect(shouldRestartRepeatedSentence(valid, 2200), isTrue);
     expect(shouldRestartRepeatedSentence(invalid, 500), isFalse);
+  });
+
+  test('sentence repeat does not follow a transient next sentence', () {
+    expect(
+      shouldAutoFollowPlaybackSegment(
+        playing: true,
+        previousIndex: 2,
+        nextIndex: 3,
+        repeating: true,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldAutoFollowPlaybackSegment(
+        playing: true,
+        previousIndex: 2,
+        nextIndex: 3,
+        repeating: false,
+      ),
+      isTrue,
+    );
+  });
+
+  test('sentence repeat restart preserves the transcript viewport', () {
+    expect(
+      shouldFocusTranscriptAfterSeek(TranscriptSeekReason.repeatRestart),
+      isFalse,
+    );
+    expect(
+      shouldFocusTranscriptAfterSeek(TranscriptSeekReason.standard),
+      isTrue,
+    );
+    expect(
+      shouldFocusTranscriptOnPlaybackResume(repeating: true),
+      isFalse,
+    );
+    expect(
+      shouldFocusTranscriptOnPlaybackResume(repeating: false),
+      isTrue,
+    );
   });
 
   group('fullscreen transcript subtitles', () {
@@ -329,22 +371,17 @@ void main() {
       viewDropdown.items!.map((item) => item.value),
       TranslationViewMode.values,
     );
+    expect(find.byKey(const Key('translation-toolbar-action')), findsNothing);
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pump(const Duration(milliseconds: 300));
     expect(
       tester
-          .widget<IconButton>(
-            find.byKey(const Key('translation-toolbar-action')),
-          )
-          .onPressed,
-      isNull,
+          .widget<PopupMenuItem>(find.byKey(const Key('translate-transcript')))
+          .enabled,
+      isFalse,
     );
-    expect(
-      tester
-          .widget<IconButton>(
-            find.byKey(const Key('translation-toolbar-action')),
-          )
-          .tooltip,
-      'Configure the translation endpoint and model in Settings first.',
-    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
     await _selectTranslationView(tester, 'Translated');
     await tester.tap(find.byKey(const Key('open-transcript-search')));
     await tester.pump();
@@ -359,7 +396,7 @@ void main() {
   });
 
   testWidgets(
-    'completed translation toolbar uses an adjacent localized action icon',
+    'completed translation command lives in the unified overflow menu',
     (tester) async {
       _setTestWindow(tester, const Size(900, 620));
       final controller = await _controllerForDocument(
@@ -407,7 +444,7 @@ void main() {
       await pump(const Locale('en'));
       await tester.pumpAndSettle();
 
-      final toolbar = find.byKey(const Key('transcript-toolbar-row'));
+      final toolbar = find.byKey(const Key('review-toolbar-row'));
       expect(toolbar, findsOneWidget);
       expect(
         find.descendant(
@@ -430,65 +467,40 @@ void main() {
         ),
         findsNothing,
       );
-      expect(
-        find.descendant(
-          of: toolbar,
-          matching: find.byKey(const Key('translation-toolbar-action')),
-        ),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('translation-toolbar-action')), findsNothing);
       expect(find.byType(SegmentedButton<TranslationViewMode>), findsNothing);
       expect(find.text('Retranslate all with LLM'), findsNothing);
       expect(find.text('Completed'), findsNothing);
-      expect(
-        tester
-            .widget<IconButton>(
-              find.byKey(const Key('translation-toolbar-action')),
-            )
-            .tooltip,
-        'Retranslate all with LLM',
-      );
-      expect(
-        tester
-            .widget<IconButton>(
-              find.byKey(const Key('translation-toolbar-action')),
-            )
-            .style,
-        isNull,
-      );
+      await tester.tap(find.byKey(const Key('review-toolbar-more')));
+      await tester.pumpAndSettle();
+      expect(find.text('Retranslate all with LLM'), findsOneWidget);
       expect(find.byIcon(Icons.restart_alt_rounded), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
       final dropdown = tester.getRect(
         find.byKey(const Key('translation-view-mode')),
-      );
-      final action = tester.getRect(
-        find.byKey(const Key('translation-toolbar-action')),
       );
       final toolbarRect = tester.getRect(toolbar);
       final focus = tester.getRect(
         find.byKey(const Key('focus-current-sentence')),
       );
-      expect(action.left - dropdown.right, lessThanOrEqualTo(16));
-      expect(action.left, greaterThan(dropdown.left));
-      expect(focus.right, closeTo(toolbarRect.right, 0.1));
+      final more = tester.getRect(find.byKey(const Key('review-toolbar-more')));
+      expect(focus.left - dropdown.right, lessThanOrEqualTo(16));
+      expect(more.right, closeTo(toolbarRect.right, 0.1));
       expect(tester.takeException(), isNull);
 
       await pump(const Locale('zh'));
       await tester.pumpAndSettle();
       expect(find.text('已完成'), findsNothing);
       expect(find.text('使用 LLM 全部重新翻译'), findsNothing);
-      expect(
-        tester
-            .widget<IconButton>(
-              find.byKey(const Key('translation-toolbar-action')),
-            )
-            .tooltip,
-        '使用 LLM 全部重新翻译',
-      );
+      await tester.tap(find.byKey(const Key('review-toolbar-more')));
+      await tester.pumpAndSettle();
+      expect(find.text('使用 LLM 全部重新翻译'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
 
-  testWidgets('retryable translation exposes only its adjacent action icon', (
+  testWidgets('retryable translation command remains available in overflow', (
     tester,
   ) async {
     // TranscriptReview's Card contributes 8px of horizontal margin, leaving
@@ -542,14 +554,12 @@ void main() {
     expect(find.text('Translate unfinished with LLM'), findsNothing);
     expect(find.text('Retranslate all with LLM'), findsNothing);
     expect(find.byKey(const Key('translation-more-actions')), findsNothing);
-    expect(
-      tester
-          .widget<IconButton>(
-            find.byKey(const Key('translation-toolbar-action')),
-          )
-          .tooltip,
-      'Translate unfinished with LLM',
-    );
+    expect(find.byKey(const Key('translation-toolbar-action')), findsNothing);
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('more-toggle-speakers')), findsOneWidget);
+    expect(find.byKey(const Key('more-toggle-timestamps')), findsOneWidget);
+    expect(find.text('Translate unfinished with LLM'), findsOneWidget);
     expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
     expect(
       tester.widget<Text>(find.text('Translation is incomplete')).style?.color,
@@ -560,7 +570,7 @@ void main() {
   testWidgets('active translation exposes only the adjacent cancel icon', (
     tester,
   ) async {
-    _setTestWindow(tester, const Size(600, 620));
+    _setTestWindow(tester, const Size(600, 900));
     final translation = _BlockingTranslation();
     final controller = await _controllerForDocument(
       TranscriptDocument(
@@ -604,7 +614,7 @@ void main() {
     await tester.pump();
 
     final progressCount = find.byKey(const Key('translation-progress-count'));
-    expect(find.text('1380/2000'), findsOneWidget);
+    expect(find.text('Translating 1380 of 2000'), findsOneWidget);
     expect(
       (tester.renderObject(progressCount) as RenderParagraph).didExceedMaxLines,
       isFalse,
@@ -617,6 +627,11 @@ void main() {
     expect(find.text('Translate unfinished with LLM'), findsNothing);
     expect(find.text('Retranslate all with LLM'), findsNothing);
     expect(find.byKey(const Key('translation-more-actions')), findsNothing);
+    expect(find.byKey(const Key('review-toolbar-more')), findsOneWidget);
+    expect(find.byKey(const Key('translation-status-strip')), findsOneWidget);
+    expect(find.byKey(const Key('translation-view-mode')), findsNothing);
+    expect(find.byKey(const Key('toggle-speaker-labels')), findsNothing);
+    expect(find.byKey(const Key('toggle-timestamps')), findsNothing);
     expect(
       tester
           .widget<IconButton>(
@@ -650,29 +665,36 @@ void main() {
     expect(pendingDecoration.color, isNull);
     expect(pendingDecoration.border, isNull);
 
-    await tester.tap(find.byKey(const Key('translation-view-mode')));
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('Translated').last);
+    final translatedMode = find.byKey(
+      const Key('translation-mode-translated-menu'),
+    );
+    expect(translatedMode, findsOneWidget);
+    expect(
+      tester
+          .widget<CheckedPopupMenuItem>(
+            find.byKey(const Key('translation-mode-original-menu')),
+          )
+          .checked,
+      isTrue,
+    );
+    expect(
+      tester.widget<CheckedPopupMenuItem>(translatedMode).checked,
+      isFalse,
+    );
+    expect(find.byKey(const Key('more-toggle-speakers')), findsOneWidget);
+    expect(find.byKey(const Key('more-toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('focus-current-menu')), findsOneWidget);
+    expect(find.byKey(const Key('focus-current-sentence')), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump(const Duration(milliseconds: 300));
-    final translatedResultFinder = find.byKey(
-      const ValueKey('translated-segment-segment-0'),
-    );
-    final pendingResultFinder = find.byKey(
-      const ValueKey('translated-segment-segment-1'),
-    );
-    final translatedResultCard = tester.widget<Card>(translatedResultFinder);
-    final pendingResultCard = tester.widget<Card>(pendingResultFinder);
-    final neutralResultColor = Theme.of(
-      tester.element(pendingResultFinder),
-    ).colorScheme.surfaceContainerLow;
-    expect(translatedResultCard.color, isNot(neutralResultColor));
-    expect(pendingResultCard.color, neutralResultColor);
 
     translation.release.complete();
     await translationFuture;
   });
 
-  testWidgets('280px completed toolbar keeps the action beside the dropdown', (
+  testWidgets('narrow transcript pane keeps commands in the unified toolbar', (
     tester,
   ) async {
     _setTestWindow(tester, const Size(1240, 820));
@@ -727,28 +749,32 @@ void main() {
           .width,
       closeTo(280, 1),
     );
+    final toolbar = find.byKey(const Key('review-toolbar-row'));
+    expect(find.byKey(const Key('review-header')), findsOneWidget);
+    expect(toolbar, findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('review-header')),
+        matching: find.byKey(const Key('review-content-tabs')),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('transcript-toolbar-row')), findsNothing);
     expect(find.byKey(const Key('translation-more-actions')), findsNothing);
-    expect(find.byKey(const Key('translation-toolbar-action')), findsOneWidget);
+    expect(find.byKey(const Key('translation-toolbar-action')), findsNothing);
     expect(find.byKey(const Key('translation-status')), findsNothing);
     expect(find.text('Completed'), findsNothing);
+    expect(find.byKey(const Key('translation-view-mode')), findsOneWidget);
     expect(
-      tester
-          .widget<IconButton>(
-            find.byKey(const Key('translation-toolbar-action')),
-          )
-          .tooltip,
-      'Retranslate all with LLM',
+      tester.getRect(find.byKey(const Key('review-toolbar-more'))).right,
+      closeTo(tester.getRect(toolbar).right, 0.1),
     );
-    expect(
-      tester.getRect(find.byKey(const Key('focus-current-sentence'))).right,
-      closeTo(
-        tester.getRect(find.byKey(const Key('transcript-toolbar-row'))).right,
-        0.1,
-      ),
-    );
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pumpAndSettle();
+    expect(find.text('Retranslate all with LLM'), findsOneWidget);
   });
 
-  testWidgets('search takes over one row and clears on Escape or Back', (
+  testWidgets('search expands in the right action lane and clears cleanly', (
     tester,
   ) async {
     final controller = await _controllerForDocument(
@@ -786,12 +812,49 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    final toolbarHeight = tester
+        .getSize(find.byKey(const Key('review-header')))
+        .height;
+    expect(toolbarHeight, 64);
     expect(find.byKey(const Key('transcript-search-field')), findsNothing);
+    final transcriptTabsCenter = tester
+        .getCenter(find.byKey(const Key('review-content-tabs')))
+        .dx;
+    expect(
+      transcriptTabsCenter,
+      closeTo(tester.getCenter(find.byKey(const Key('review-header'))).dx, 0.1),
+    );
     await tester.tap(find.byKey(const Key('open-transcript-search')));
     await tester.pump();
     final search = find.byKey(const Key('transcript-search-field'));
     expect(search, findsOneWidget);
+    final tabsRect = tester.getRect(
+      find.byKey(const Key('review-content-tabs')),
+    );
+    expect(find.byKey(const Key('review-filename')), findsOneWidget);
+    expect(tester.getRect(search).left, greaterThan(tabsRect.right));
+    expect(
+      tester.getCenter(find.byKey(const Key('close-transcript-search'))).dx,
+      greaterThan(tabsRect.right),
+    );
+    expect(
+      tester.getCenter(find.byKey(const Key('review-content-tabs'))).dx,
+      closeTo(transcriptTabsCenter, 0.1),
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('review-header'))).height,
+      toolbarHeight,
+    );
+    expect(find.byKey(const Key('review-toolbar-search-row')), findsOneWidget);
+    expect(find.byKey(const Key('review-toolbar-row')), findsNothing);
     expect(find.byKey(const Key('transcript-toolbar-row')), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('review-header')),
+        matching: find.byKey(const Key('review-content-tabs')),
+      ),
+      findsOneWidget,
+    );
 
     await tester.enterText(search, 'Second');
     await tester.pump();
@@ -808,6 +871,19 @@ void main() {
     expect(search, findsNothing);
     expect(find.byKey(const Key('open-transcript-search')), findsOneWidget);
     expect(find.byKey(const ValueKey('segment-card-first')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('open-transcript-search')));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('transcript-search-field')),
+      'Second',
+    );
+    await tester.tap(find.text('AI Brief').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('transcript-search-field')), findsNothing);
+    expect(find.byKey(const Key('ai-brief-empty-action')), findsOneWidget);
+    await tester.tap(find.text('Transcript').first);
+    await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('open-transcript-search')));
     await tester.pump();
@@ -965,6 +1041,7 @@ void main() {
   testWidgets('review header toggles speaker labels and timestamps', (
     tester,
   ) async {
+    _setTestWindow(tester, const Size(1000, 620));
     final controller = await _controllerForDocument(
       TranscriptDocument(
         tokens: const [],
@@ -1019,7 +1096,7 @@ void main() {
     expect(
       tester.getTopLeft(find.byKey(timestampToggle)).dx -
           tester.getTopRight(find.byKey(speakerToggle)).dx,
-      8,
+      0,
     );
 
     await tester.tap(find.byKey(speakerToggle));
@@ -1046,6 +1123,136 @@ void main() {
       tester.widget<IconButton>(find.byKey(timestampToggle)).isSelected,
       isTrue,
     );
+  });
+
+  testWidgets('unified transcript toolbar adapts at each breakpoint', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1000, 700));
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'segment',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Original sentence.',
+            translatedText: 'Translated sentence.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      translationState: const TranslationState(
+        status: TranslationStatus.completed,
+        targetLanguage: 'en',
+        completedSegments: 1,
+        totalSegments: 1,
+      ),
+      settings: _configuredTranslationAppSettings,
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('review-header')), findsOneWidget);
+    expect(find.byKey(const Key('toggle-speaker-labels')), findsOneWidget);
+    expect(find.byKey(const Key('toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('translation-view-mode')), findsOneWidget);
+    expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    tester.view.physicalSize = const Size(800, 700);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('toggle-speaker-labels')), findsNothing);
+    expect(find.byKey(const Key('toggle-timestamps')), findsNothing);
+    expect(find.byKey(const Key('translation-view-mode')), findsOneWidget);
+    expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('more-toggle-speakers')), findsOneWidget);
+    expect(find.byKey(const Key('more-toggle-timestamps')), findsOneWidget);
+    expect(
+      find.byKey(const Key('translation-mode-original-menu')),
+      findsNothing,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+
+    tester.view.physicalSize = const Size(600, 700);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('translation-view-mode')), findsNothing);
+    expect(find.byKey(const Key('focus-current-sentence')), findsNothing);
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.byKey(const Key('translation-mode-original-menu')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('translation-mode-translated-menu')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('translation-mode-bilingual-menu')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('focus-current-menu')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('long review filename ellipsizes without moving centered tabs', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(600, 700));
+    const fileName =
+        'a-very-long-recording-name-that-must-not-move-the-document-tabs.mp4';
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      sourcePath: '/missing/$fileName',
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final filenameFinder = find.byKey(const Key('review-filename'));
+    final filename = tester.widget<Text>(filenameFinder);
+    expect(filename.data, fileName);
+    expect(filename.maxLines, 1);
+    expect(filename.overflow, TextOverflow.ellipsis);
+    expect(
+      (tester.renderObject(filenameFinder) as RenderParagraph)
+          .didExceedMaxLines,
+      isTrue,
+    );
+    expect(
+      tester.getCenter(find.byKey(const Key('review-content-tabs'))).dx,
+      closeTo(tester.getCenter(find.byKey(const Key('review-header'))).dx, 0.1),
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('review omits transcript segments with empty source content', (
@@ -2132,7 +2339,13 @@ void main() {
     final navigationRail = tester.widget<NavigationRail>(
       find.byType(NavigationRail),
     );
-    expect(navigationRail.minExtendedWidth, 152);
+    expect(navigationRail.minExtendedWidth, 184);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('workspace-navigation-label')))
+          .maxLines,
+      1,
+    );
     final settingsLabel = tester.widget<Text>(
       find.descendant(of: settingsNavigation, matching: find.text('Settings')),
     );
@@ -2150,7 +2363,7 @@ void main() {
           ?.fontSize,
       settingsLabel.style?.fontSize,
     );
-    expect(tester.getSize(sidebar).width, lessThanOrEqualTo(186));
+    expect(tester.getSize(sidebar).width, lessThanOrEqualTo(218));
     expect(tester.getSize(settingsIndicator).width, 56);
     expect(
       tester.getSize(settingsIndicator).width,
@@ -2311,6 +2524,10 @@ void main() {
       final events = <String>[];
       messenger.setMockMethodCallHandler(windowChannel, (call) async {
         if (call.method == 'isFullScreen') return false;
+        if (call.method == 'setPreventClose') {
+          final arguments = call.arguments as Map<Object?, Object?>;
+          events.add('prevent:${arguments['isPreventClose']}');
+        }
         if (call.method == 'destroy') events.add('destroy');
         return null;
       });
@@ -2351,6 +2568,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(events, ['prevent:true']);
+      events.clear();
 
       final dynamic appShellState = tester.state(find.byType(AppShell));
       final close = appShellState.onWindowClose() as Future<void>;
@@ -2514,7 +2733,7 @@ void main() {
   });
 
   testWidgets(
-    'workspace header omits export all and queue owns status summary',
+    'workspace header owns export all and queue owns status summary',
     (tester) async {
       _setTestWindow(tester, const Size(1240, 820));
       final controller = await _controllerForDocument(_simpleDocument());
@@ -2543,8 +2762,8 @@ void main() {
       );
       expect(find.byKey(const Key('header-add-folder')), findsNothing);
       expect(find.byKey(const Key('header-add-files')), findsNothing);
-      expect(find.byKey(const Key('export-all')), findsNothing);
-      expect(find.text('Export all'), findsNothing);
+      expect(find.byKey(const Key('export-all')), findsOneWidget);
+      expect(find.text('Export all'), findsOneWidget);
       expect(
         find.byKey(const Key('file-queue-status-summary')),
         findsOneWidget,
@@ -2598,6 +2817,14 @@ void main() {
         find.text('Nothing uploads until you press Transcribe.'),
         findsNothing,
       );
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.byKey(const Key('export-all')));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel').last);
+      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     },
   );
@@ -2946,7 +3173,7 @@ void main() {
 
     expect(find.byKey(const Key('file-queue-floating-button')), findsOneWidget);
     expect(find.byKey(const Key('file-queue-rail')), findsNothing);
-    expect(find.byKey(const Key('export-all')), findsNothing);
+    expect(find.byKey(const Key('export-all')), findsOneWidget);
     expect(find.text('Export all'), findsNothing);
     expect(find.byKey(const Key('video-review-stacked')), findsOneWidget);
     expect(find.byKey(const Key('video-review-split')), findsNothing);
@@ -3544,7 +3771,7 @@ void main() {
     expect(find.byKey(const Key('soniox-translation-summary')), findsOneWidget);
     expect(find.text('Soniox built-in translation'), findsOneWidget);
     expect(find.text('Chinese'), findsOneWidget);
-    expect(find.text('LLM Translation'), findsNothing);
+    expect(find.text('AI provider'), findsNothing);
     expect(find.byKey(const Key('translation-target-language')), findsNothing);
     expect(find.byKey(const Key('auto-translate-switch')), findsNothing);
   });
@@ -3747,7 +3974,7 @@ void main() {
     expect(reopened.controller!.text, 'First original');
   });
 
-  testWidgets('focus clears search and centers a distant current sentence', (
+  testWidgets('search closes before focusing a distant current sentence', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(900, 620));
@@ -3788,8 +4015,9 @@ void main() {
     await tester.tap(find.byKey(const Key('open-transcript-search')));
     await tester.pump();
     final search = find.byKey(const Key('transcript-search-field'));
-    final focus = find.byKey(const Key('focus-current-sentence'));
-    expect(tester.getCenter(search).dx, lessThan(tester.getCenter(focus).dx));
+    expect(search, findsOneWidget);
+    expect(find.byKey(const Key('focus-current-sentence')), findsNothing);
+    expect(find.byKey(const Key('review-content-tabs')), findsOneWidget);
     await tester.enterText(search, 'Sentence 0');
     await tester.pump();
     final scrollable = find.descendant(
@@ -3799,11 +4027,14 @@ void main() {
     final position = tester.state<ScrollableState>(scrollable).position;
     expect(position.pixels, 0);
 
-    await tester.tap(focus);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-
     expect(search, findsNothing);
     expect(find.byKey(const Key('open-transcript-search')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('focus-current-sentence')));
+    await tester.pumpAndSettle();
+
     final currentCard = tester.widget<DecoratedBox>(
       find.byKey(const ValueKey('segment-card-segment-59')),
     );
@@ -3895,6 +4126,199 @@ void main() {
         .toList();
 
     expect(matches, ['Fly', 'FLY']);
+  });
+
+  testWidgets('AI Brief evidence returns to and focuses the transcript', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1000, 700));
+    final document = _simpleDocument();
+    final brief = AiBrief(
+      overview: 'Grounded overview',
+      overviewEvidenceSegmentIds: const ['segment'],
+      chapters: const [],
+      insights: const [],
+      outputLanguage: 'en',
+      model: 'brief-model',
+      selectedSections: const {AiBriefSection.overview},
+      generatedAt: document.updatedAt,
+      sourceTranscriptUpdatedAt: document.updatedAt,
+    );
+    final controller = await _controllerForDocument(document, aiBrief: brief);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final transcriptHeaderHeight = tester
+        .getSize(find.byKey(const Key('review-header')))
+        .height;
+    final transcriptTabsCenter = tester
+        .getCenter(find.byKey(const Key('review-content-tabs')))
+        .dx;
+    expect(transcriptHeaderHeight, 64);
+    expect(
+      transcriptTabsCenter,
+      closeTo(tester.getCenter(find.byKey(const Key('review-header'))).dx, 0.1),
+    );
+    expect(find.byKey(const Key('review-header')), findsOneWidget);
+    expect(find.byKey(const Key('transcript-toolbar-row')), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('review-header')),
+        matching: find.byKey(const Key('review-content-tabs')),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('AI Brief').first);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(find.byKey(const Key('review-header'))).height,
+      transcriptHeaderHeight,
+    );
+    expect(
+      tester.getCenter(find.byKey(const Key('review-content-tabs'))).dx,
+      closeTo(transcriptTabsCenter, 0.1),
+    );
+    expect(find.text('Grounded overview'), findsOneWidget);
+    expect(find.byKey(const Key('ai-evidence-segment')), findsOneWidget);
+    expect(find.byKey(const Key('translate-transcript')), findsNothing);
+    expect(find.byKey(const Key('copy-ai-brief-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('export-ai-brief-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('refresh-ai-brief-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('ai-brief-toolbar-more')), findsNothing);
+
+    tester.view.physicalSize = const Size(600, 700);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('copy-ai-brief-toolbar')), findsNothing);
+    expect(find.byKey(const Key('export-ai-brief-toolbar')), findsNothing);
+    expect(find.byKey(const Key('refresh-ai-brief-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('ai-brief-toolbar-more')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('ai-brief-toolbar-more')));
+    await tester.pumpAndSettle();
+    expect(find.text('Copy brief'), findsOneWidget);
+    expect(find.text('Export Markdown'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('ai-evidence-segment')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('transcript-scroll')), findsOneWidget);
+    expect(find.text('Hello'), findsOneWidget);
+  });
+
+  testWidgets('creating an AI Brief starts directly and renders output', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      settings: const AppSettings(
+        translationSettings: TranslationSettings(
+          baseUrl: 'https://llm.example/v1',
+          model: 'brief-model',
+        ),
+      ),
+      translationCredentials: _LlmCredentials(),
+      aiBriefService: _ImmediateAiBrief(),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('AI Brief').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('copy-ai-brief-toolbar')), findsNothing);
+    expect(find.byKey(const Key('export-ai-brief-toolbar')), findsNothing);
+    expect(find.byKey(const Key('refresh-ai-brief-toolbar')), findsNothing);
+    expect(find.byKey(const Key('ai-brief-toolbar-more')), findsNothing);
+    expect(find.byKey(const Key('cancel-ai-brief-toolbar')), findsNothing);
+    await tester.tap(find.byKey(const Key('ai-brief-empty-action')));
+    await tester.pumpAndSettle();
+    expect(find.text('Provider model: brief-model'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-create-ai-brief')));
+    await tester.pumpAndSettle();
+    expect(find.text('Evidence-backed overview'), findsOneWidget);
+    expect(find.byKey(const Key('ai-evidence-segment')), findsOneWidget);
+  });
+
+  testWidgets('AI Brief progress uses natural stage language', (tester) async {
+    final service = _PendingAiBrief();
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      settings: const AppSettings(
+        translationSettings: TranslationSettings(
+          baseUrl: 'https://llm.example/v1',
+          model: 'brief-model',
+        ),
+      ),
+      translationCredentials: _LlmCredentials(),
+      aiBriefService: service,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(() {
+      if (!service.release.isCompleted) service.release.complete();
+    });
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('AI Brief').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('ai-brief-empty-action')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Estimated AI requests'), findsNothing);
+    await tester.tap(find.byKey(const Key('confirm-create-ai-brief')));
+    await service.started.future;
+    await tester.pump();
+
+    expect(find.text('Analyzing the transcript…'), findsOneWidget);
+    expect(find.textContaining('0/1'), findsNothing);
+    expect(find.byKey(const Key('cancel-ai-brief-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('refresh-ai-brief-toolbar')), findsNothing);
+    expect(find.byKey(const Key('ai-brief-toolbar-more')), findsNothing);
+    expect(tester.getSize(find.byKey(const Key('review-header'))).height, 64);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('review-content-tabs')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+    final progress = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
+    );
+    expect(progress.value, isNull);
+
+    service.release.complete();
+    await tester.pumpAndSettle();
   });
 }
 
@@ -4053,6 +4477,10 @@ Future<AppController> _controllerForDocument(
   TranslationState translationState = const TranslationState(),
   AppSettings settings = const AppSettings(),
   TranslationService? translationService,
+  TranslationCredentialStore? translationCredentials,
+  AiBriefService? aiBriefService,
+  AiBrief? aiBrief,
+  AiGenerationState aiGenerationState = const AiGenerationState(),
 }) async {
   final now = DateTime.now().toUtc();
   final controller = AppController(
@@ -4069,12 +4497,16 @@ Future<AppController> _controllerForDocument(
         metadata: metadata,
         document: document,
         translationState: translationState,
+        aiBrief: aiBrief,
+        aiGenerationState: aiGenerationState,
       ),
     ]),
     mediaService: _Media(),
     sonioxClient: _Soniox(),
     exporter: const DefaultTranscriptExporter(),
+    translationCredentialStore: translationCredentials,
     translationService: translationService,
+    aiBriefService: aiBriefService,
   );
   await controller.initialize();
   return controller;
@@ -4216,6 +4648,84 @@ class _BlockingTranslation implements TranslationService {
   }) async {
     started.complete();
     await release.future;
+  }
+}
+
+class _LlmCredentials implements TranslationCredentialStore {
+  @override
+  Future<void> deleteApiKey() async {}
+
+  @override
+  Future<String?> readApiKey() async => 'configured';
+
+  @override
+  Future<void> writeApiKey(String key) async {}
+}
+
+class _ImmediateAiBrief implements AiBriefService {
+  @override
+  int estimateRequestCount(
+    TranscriptDocument document,
+    Set<AiBriefSection> sections,
+  ) => 2;
+
+  @override
+  Future<AiBrief> generate({
+    required LlmProviderSettings settings,
+    required TranscriptDocument document,
+    required Set<AiBriefSection> sections,
+    required String outputLanguage,
+    AiBriefProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    await onProgress?.call('analyzing', 1, 2);
+    await onProgress?.call('synthesizing', 2, 2);
+    return AiBrief(
+      overview: 'Evidence-backed overview',
+      overviewEvidenceSegmentIds: [document.segments.first.id],
+      chapters: const [],
+      insights: const [],
+      outputLanguage: outputLanguage,
+      model: settings.model,
+      selectedSections: sections,
+      generatedAt: DateTime.now().toUtc(),
+      sourceTranscriptUpdatedAt: document.updatedAt,
+    );
+  }
+}
+
+class _PendingAiBrief implements AiBriefService {
+  final started = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  int estimateRequestCount(
+    TranscriptDocument document,
+    Set<AiBriefSection> sections,
+  ) => 1;
+
+  @override
+  Future<AiBrief> generate({
+    required LlmProviderSettings settings,
+    required TranscriptDocument document,
+    required Set<AiBriefSection> sections,
+    required String outputLanguage,
+    AiBriefProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    started.complete();
+    await release.future;
+    return AiBrief(
+      overview: 'Finished overview',
+      overviewEvidenceSegmentIds: [document.segments.first.id],
+      chapters: const [],
+      insights: const [],
+      outputLanguage: outputLanguage,
+      model: settings.model,
+      selectedSections: sections,
+      generatedAt: DateTime.now().toUtc(),
+      sourceTranscriptUpdatedAt: document.updatedAt,
+    );
   }
 }
 
