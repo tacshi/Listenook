@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/macos-signing.sh"
 MODE="${1:?internal usage: build-macos.sh debug|release [--arch ...]}"
 shift
 ARCH="arm64"
@@ -99,27 +100,27 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   rm -f "$APP/Contents/Resources/third_party/flac-manifest.json"
   cp "$ROOT/assets/third_party/"* "$APP/Contents/Resources/third_party/"
   bash "$ROOT/scripts/strip-macos-download-metadata.sh" "$APP"
-  SIGN_IDENTITY="${MEOWSTT_MAC_DEBUG_SIGN_IDENTITY:--}"
-  if [[ "$MODE" == "release" ]]; then
+  if [[ "$MODE" == "debug" ]]; then
+    SIGN_IDENTITY="$(resolve_meowstt_debug_sign_identity "$ROOT")"
+    if [[ "$SIGN_IDENTITY" == "-" ]]; then
+      echo "Warning: no usable release signing identity was found; using ad-hoc signing." >&2
+    else
+      echo "Using release signing identity for debug: $SIGN_IDENTITY"
+    fi
+  else
     SIGN_IDENTITY="${MEOWSTT_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:--}}"
   fi
   ENTITLEMENTS="$ROOT/macos/Runner/DebugProfile.entitlements"
   if [[ "$MODE" == "release" ]]; then ENTITLEMENTS="$ROOT/macos/Runner/Release.entitlements"; fi
-  COMPONENT_SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
-  if [[ "$SIGN_IDENTITY" != "-" ]]; then
-    COMPONENT_SIGN_ARGS+=(--options runtime --timestamp)
+  if ! meowstt_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"; then
+    if [[ "$MODE" == "debug" && "$SIGN_IDENTITY" != "-" ]]; then
+      echo "Warning: release-identity signing failed; retrying the debug app ad-hoc." >&2
+      SIGN_IDENTITY="-"
+      meowstt_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"
+    else
+      exit 1
+    fi
   fi
-  while IFS= read -r -d '' COMPONENT; do
-    codesign "${COMPONENT_SIGN_ARGS[@]}" "$COMPONENT"
-  done < <(
-    find "$APP/Contents/Frameworks" "$APP/Contents/MacOS" -depth \
-      \( -type d -name '*.framework' -o -type d -name '*.appex' \
-      -o -type d -name '*.xpc' -o -type f -name '*.dylib' \) -print0
-  )
-  SIGN_ARGS=(--force --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS")
-  if [[ "$SIGN_IDENTITY" != "-" ]]; then SIGN_ARGS+=(--options runtime --timestamp); fi
-  codesign "${SIGN_ARGS[@]}" "$APP"
-  codesign --verify --deep --strict "$APP"
 
   mkdir -p "$OUT"
   if [[ "$MODE" == "debug" ]]; then

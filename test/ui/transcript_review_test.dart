@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -16,6 +17,7 @@ import 'package:meow_stt/ui/review_fullscreen_controller.dart';
 import 'package:meow_stt/ui/transcript_review.dart';
 import 'package:meow_stt/ui/workspace_page.dart';
 import 'package:provider/provider.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
   test('current sentence remains active through the following silence', () {
@@ -35,6 +37,32 @@ void main() {
     expect(currentTranscriptSegmentIndex(segments, 1500), 1);
     expect(currentTranscriptSegmentIndex(segments, 5000), 1);
   });
+
+  test(
+    'rapid seeks execute the first and latest native positions only',
+    () async {
+      final firstSeek = Completer<void>();
+      final nativePositions = <Duration>[];
+      final dispatcher = LatestSeekDispatcher((position) async {
+        nativePositions.add(position);
+        if (nativePositions.length == 1) await firstSeek.future;
+      });
+
+      final pending = <Future<void>>[
+        dispatcher.seek(const Duration(seconds: 1)),
+        dispatcher.seek(const Duration(seconds: 20)),
+        dispatcher.seek(const Duration(seconds: 45)),
+      ];
+
+      expect(nativePositions, [const Duration(seconds: 1)]);
+      firstSeek.complete();
+      await Future.wait(pending);
+      expect(nativePositions, [
+        const Duration(seconds: 1),
+        const Duration(seconds: 45),
+      ]);
+    },
+  );
 
   test('sentence repeat restarts outside its playable timing window', () {
     const valid = TranscriptSegment(
@@ -532,10 +560,26 @@ void main() {
   testWidgets('active translation exposes only the adjacent cancel icon', (
     tester,
   ) async {
-    _setTestWindow(tester, const Size(900, 620));
+    _setTestWindow(tester, const Size(600, 620));
     final translation = _BlockingTranslation();
     final controller = await _controllerForDocument(
-      _simpleDocument(),
+      TranscriptDocument(
+        tokens: const [],
+        segments: [
+          for (var index = 0; index < 2000; index += 1)
+            TranscriptSegment(
+              id: 'segment-$index',
+              startMs: index * 1000,
+              endMs: (index + 1) * 1000,
+              text: index == 1 ? 'Still pending.' : 'Sentence $index.',
+              translatedText: index != 1 && index <= 1380
+                  ? 'Translated $index.'
+                  : null,
+            ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
       settings: _configuredTranslationAppSettings,
       translationService: translation,
     );
@@ -559,7 +603,16 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Translating 0 of 1'), findsOneWidget);
+    final progressCount = find.byKey(const Key('translation-progress-count'));
+    expect(find.text('1380/2000'), findsOneWidget);
+    expect(
+      (tester.renderObject(progressCount) as RenderParagraph).didExceedMaxLines,
+      isFalse,
+    );
+    expect(
+      tester.getSemantics(find.byKey(const Key('translation-status'))).label,
+      contains('Translating 1380 of 2000'),
+    );
     expect(find.text('Cancel'), findsNothing);
     expect(find.text('Translate unfinished with LLM'), findsNothing);
     expect(find.text('Retranslate all with LLM'), findsNothing);
@@ -583,6 +636,37 @@ void main() {
       isNull,
     );
     expect(find.byIcon(Icons.stop_circle_outlined), findsOneWidget);
+
+    final translatedCard = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('segment-card-segment-0')),
+    );
+    final pendingCard = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('segment-card-segment-1')),
+    );
+    final translatedDecoration = translatedCard.decoration as BoxDecoration;
+    final pendingDecoration = pendingCard.decoration as BoxDecoration;
+    expect(translatedDecoration.color, isNotNull);
+    expect(translatedDecoration.border, isNotNull);
+    expect(pendingDecoration.color, isNull);
+    expect(pendingDecoration.border, isNull);
+
+    await tester.tap(find.byKey(const Key('translation-view-mode')));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Translated').last);
+    await tester.pump(const Duration(milliseconds: 300));
+    final translatedResultFinder = find.byKey(
+      const ValueKey('translated-segment-segment-0'),
+    );
+    final pendingResultFinder = find.byKey(
+      const ValueKey('translated-segment-segment-1'),
+    );
+    final translatedResultCard = tester.widget<Card>(translatedResultFinder);
+    final pendingResultCard = tester.widget<Card>(pendingResultFinder);
+    final neutralResultColor = Theme.of(
+      tester.element(pendingResultFinder),
+    ).colorScheme.surfaceContainerLow;
+    expect(translatedResultCard.color, isNot(neutralResultColor));
+    expect(pendingResultCard.color, neutralResultColor);
 
     translation.release.complete();
     await translationFuture;
@@ -924,10 +1008,7 @@ void main() {
       tester.widget<IconButton>(find.byKey(timestampToggle)).isSelected,
       isFalse,
     );
-    expect(
-      tester.widget<IconButton>(find.byKey(speakerToggle)).style,
-      isNull,
-    );
+    expect(tester.widget<IconButton>(find.byKey(speakerToggle)).style, isNull);
     expect(
       tester.widget<IconButton>(find.byKey(timestampToggle)).style,
       isNull,
@@ -1141,7 +1222,9 @@ void main() {
     );
     expect(
       tester
-          .widget<ListView>(find.byKey(const Key('transcript-scroll')))
+          .widget<ScrollablePositionedList>(
+            find.byKey(const Key('transcript-scroll')),
+          )
           .scrollDirection,
       Axis.vertical,
     );
@@ -1184,7 +1267,7 @@ void main() {
     expect(position.pixels, greaterThan(0));
   });
 
-  testWidgets('timestamp aligns with the speaker or first text line', (
+  testWidgets('timestamp sits above repeat and repeat aligns with text', (
     tester,
   ) async {
     const segment = TranscriptSegment(
@@ -1195,29 +1278,34 @@ void main() {
       speaker: '1',
     );
 
-    Future<void> pump({required bool showSpeaker}) => tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: TranscriptSegmentEditor(
-            segment: segment,
-            tokens: const [],
-            positionMs: 0,
-            isCurrent: false,
-            query: '',
-            speakerName: 'Speaker 1',
-            showSpeaker: showSpeaker,
-            showTimestamp: true,
-            isEditing: false,
-            onSeek: () {},
-            onEdit: () {},
-            onCancel: () {},
-            onSave: (_) async {},
+    Future<void> pump({required bool showSpeaker, bool showTimestamp = true}) =>
+        tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: TranscriptSegmentEditor(
+                segment: segment,
+                tokens: const [],
+                positionMs: 0,
+                isCurrent: false,
+                query: '',
+                speakerName: 'Speaker 1',
+                showSpeaker: showSpeaker,
+                showTimestamp: showTimestamp,
+                isEditing: false,
+                onSeek: () {},
+                onEdit: () {},
+                onCancel: () {},
+                onSave: (_) async {},
+              ),
+            ),
           ),
-        ),
-      ),
-    );
+        );
 
     await pump(showSpeaker: true);
+    var transcriptText = find.descendant(
+      of: find.byKey(const ValueKey('segment-text-aligned')),
+      matching: find.byType(RichText),
+    );
     expect(
       tester
           .getTopLeft(find.byKey(const ValueKey('segment-timestamp-aligned')))
@@ -1229,18 +1317,137 @@ void main() {
         1,
       ),
     );
+    final timestampLabel = find.descendant(
+      of: find.byKey(const ValueKey('segment-timestamp-aligned')),
+      matching: find.byType(Text),
+    );
+    final speakerLabel = find.descendant(
+      of: find.byKey(const ValueKey('segment-speaker-aligned')),
+      matching: find.byType(Text),
+    );
+    expect(
+      tester.widget<Text>(speakerLabel).style?.fontSize,
+      tester.widget<Text>(timestampLabel).style?.fontSize,
+    );
+    expect(
+      tester.getTopLeft(speakerLabel).dy,
+      closeTo(tester.getTopLeft(timestampLabel).dy, 1),
+    );
+    expect(
+      tester.getCenter(speakerLabel).dy,
+      closeTo(tester.getCenter(timestampLabel).dy, 1),
+    );
+    expect(
+      tester.getCenter(find.byKey(const ValueKey('segment-repeat-aligned'))).dy,
+      closeTo(tester.getCenter(transcriptText).dy, 2),
+    );
+    expect(
+      tester
+          .getTopRight(find.byKey(const ValueKey('segment-timestamp-aligned')))
+          .dx,
+      closeTo(
+        tester
+            .getTopRight(find.byKey(const ValueKey('segment-repeat-aligned')))
+            .dx,
+        1,
+      ),
+    );
 
     await pump(showSpeaker: false);
-    final transcriptText = find.descendant(
+    transcriptText = find.descendant(
       of: find.byKey(const ValueKey('segment-text-aligned')),
       matching: find.byType(RichText),
+    );
+    expect(
+      tester.getCenter(find.byKey(const ValueKey('segment-repeat-aligned'))).dy,
+      closeTo(tester.getCenter(transcriptText).dy, 2),
     );
     expect(
       tester
           .getTopLeft(find.byKey(const ValueKey('segment-timestamp-aligned')))
           .dy,
-      closeTo(tester.getTopLeft(transcriptText).dy, 4),
+      lessThan(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('segment-repeat-aligned')))
+            .dy,
+      ),
     );
+    expect(
+      tester
+          .getTopLeft(find.byKey(const ValueKey('segment-timestamp-aligned')))
+          .dx,
+      closeTo(tester.getTopLeft(transcriptText).dx, 1),
+    );
+    final timestampedSentenceLeft = tester.getTopLeft(transcriptText).dx;
+
+    await pump(showSpeaker: false, showTimestamp: false);
+    transcriptText = find.descendant(
+      of: find.byKey(const ValueKey('segment-text-aligned')),
+      matching: find.byType(RichText),
+    );
+    expect(
+      tester.getTopLeft(transcriptText).dx,
+      closeTo(timestampedSentenceLeft, 1),
+    );
+  });
+
+  testWidgets('speaker labels use stable distinct colors', (tester) async {
+    const segments = [
+      TranscriptSegment(
+        id: 'first',
+        startMs: 0,
+        endMs: 1000,
+        text: 'First speaker',
+        speaker: '1',
+      ),
+      TranscriptSegment(
+        id: 'second',
+        startMs: 1000,
+        endMs: 2000,
+        text: 'Second speaker',
+        speaker: '2',
+      ),
+      TranscriptSegment(
+        id: 'first-again',
+        startMs: 2000,
+        endMs: 3000,
+        text: 'First speaker again',
+        speaker: '1',
+      ),
+    ];
+
+    Widget editor(TranscriptSegment segment) => TranscriptSegmentEditor(
+      segment: segment,
+      tokens: const [],
+      positionMs: 0,
+      isCurrent: false,
+      query: '',
+      speakerName: 'Speaker ${segment.speaker}',
+      showSpeaker: true,
+      showTimestamp: false,
+      isEditing: false,
+      onSeek: () {},
+      onEdit: () {},
+      onCancel: () {},
+      onSave: (_) async {},
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: Column(children: segments.map(editor).toList())),
+      ),
+    );
+
+    Color? speakerColor(String segmentId) {
+      final label = find.descendant(
+        of: find.byKey(ValueKey('segment-speaker-$segmentId')),
+        matching: find.byType(Text),
+      );
+      return tester.widget<Text>(label).style?.color;
+    }
+
+    expect(speakerColor('first'), isNot(speakerColor('second')));
+    expect(speakerColor('first-again'), speakerColor('first'));
   });
 
   testWidgets(
@@ -1456,6 +1663,51 @@ void main() {
     }
   });
 
+  testWidgets('single-line transcript rows keep compact vertical spacing', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              TranscriptSegmentEditor(
+                segment: const TranscriptSegment(
+                  id: 'compact',
+                  startMs: 100,
+                  endMs: 1000,
+                  text: 'One compact transcript line.',
+                ),
+                tokens: const [],
+                positionMs: 0,
+                isCurrent: false,
+                query: '',
+                speakerName: '',
+                showSpeaker: false,
+                showTimestamp: false,
+                isEditing: false,
+                onSeek: () {},
+                onEdit: () {},
+                onCancel: () {},
+                onSave: (_) async {},
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      tester.getSize(find.byKey(const ValueKey('segment-card-compact'))).height,
+      lessThanOrEqualTo(44),
+    );
+    expect(find.byIcon(Icons.play_circle_outline_rounded), findsNothing);
+    expect(
+      find.byKey(const ValueKey('segment-repeat-compact')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('played-word selection clears when the next sentence starts', (
     tester,
   ) async {
@@ -1561,10 +1813,14 @@ void main() {
     );
 
     expect(find.byType(TextField), findsNothing);
-    expect(
-      tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
-      0,
+    final editOpacity = find.byKey(
+      const ValueKey('segment-edit-opacity-editable'),
     );
+    final repeatOpacity = find.byKey(
+      const ValueKey('segment-repeat-opacity-editable'),
+    );
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 0);
 
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
@@ -1573,10 +1829,8 @@ void main() {
       tester.getCenter(find.byKey(const ValueKey('segment-card-editable'))),
     );
     await tester.pumpAndSettle();
-    expect(
-      tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
-      1,
-    );
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 1);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 1);
 
     await tester.tap(find.byKey(const ValueKey('segment-edit-editable')));
     await tester.pump();
@@ -1602,61 +1856,63 @@ void main() {
     expect(seeks, 0);
   });
 
-  testWidgets(
-    'sentence repeat appears on hover and stays visible while active',
-    (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(home: Scaffold(body: _RepeatEditorHarness())),
-      );
+  testWidgets('sentence repeat and edit appear on hover', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: _RepeatEditorHarness())),
+    );
 
-      final opacity = find.byType(AnimatedOpacity);
-      const repeatKey = ValueKey('segment-repeat-repeatable');
-      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0);
-      expect(
-        tester.widget<IconButton>(find.byKey(repeatKey)).isSelected,
-        isFalse,
-      );
+    const cardKey = ValueKey('segment-card-repeatable');
+    const repeatKey = ValueKey('segment-repeat-repeatable');
+    final card = find.byKey(cardKey);
+    final repeat = find.byKey(repeatKey);
+    final edit = find.byKey(const ValueKey('segment-edit-repeatable'));
+    final sentenceInk = tester.widget<InkWell>(
+      find.byKey(const ValueKey('segment-text-repeatable')),
+    );
+    final editOpacity = find.byKey(
+      const ValueKey('segment-edit-opacity-repeatable'),
+    );
+    final repeatOpacity = find.byKey(
+      const ValueKey('segment-repeat-opacity-repeatable'),
+    );
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 0);
+    expect(find.byIcon(Icons.play_circle_outline_rounded), findsNothing);
+    expect(tester.widget<IconButton>(repeat).isSelected, isFalse);
+    expect(tester.getCenter(repeat).dx, lessThan(tester.getCenter(edit).dx));
+    expect(
+      (tester.widget<DecoratedBox>(card).decoration as BoxDecoration).color,
+      isNull,
+    );
+    expect(sentenceInk.hoverColor, Colors.transparent);
 
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      addTearDown(mouse.removePointer);
-      await mouse.addPointer(location: Offset.zero);
-      await mouse.moveTo(
-        tester.getCenter(find.byKey(const ValueKey('segment-card-repeatable'))),
-      );
-      await tester.pumpAndSettle();
-      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 1);
-      final edit = find.byKey(const ValueKey('segment-edit-repeatable'));
-      expect(
-        tester.getCenter(edit).dx,
-        closeTo(tester.getCenter(find.byKey(repeatKey)).dx, 1),
-      );
-      expect(
-        tester.getCenter(edit).dy,
-        lessThan(tester.getCenter(find.byKey(repeatKey)).dy),
-      );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(card));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 1);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 1);
+    expect(
+      (tester.widget<DecoratedBox>(card).decoration as BoxDecoration).color,
+      Theme.of(tester.element(card)).colorScheme.surfaceContainerLow,
+    );
 
-      await tester.tap(find.byKey(repeatKey));
-      await tester.pumpAndSettle();
-      expect(
-        tester.widget<IconButton>(find.byKey(repeatKey)).isSelected,
-        isTrue,
-      );
+    await tester.tap(repeat);
+    await tester.pumpAndSettle();
+    expect(tester.widget<IconButton>(repeat).isSelected, isTrue);
 
-      FocusManager.instance.primaryFocus?.unfocus();
-      await mouse.moveTo(const Offset(-10, -10));
-      await tester.pumpAndSettle();
-      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 1);
+    FocusManager.instance.primaryFocus?.unfocus();
+    await mouse.moveTo(const Offset(-10, -10));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 1);
 
-      await tester.tap(find.byKey(repeatKey));
-      FocusManager.instance.primaryFocus?.unfocus();
-      await tester.pumpAndSettle();
-      expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0);
-      expect(
-        tester.widget<IconButton>(find.byKey(repeatKey)).isSelected,
-        isFalse,
-      );
-    },
-  );
+    await tester.tap(repeat);
+    await tester.pumpAndSettle();
+    expect(tester.widget<IconButton>(repeat).isSelected, isFalse);
+    expect(tester.widget<AnimatedOpacity>(repeatOpacity).opacity, 0);
+  });
 
   testWidgets('unavailable sentence repeat is disabled', (tester) async {
     await tester.pumpWidget(
@@ -2046,6 +2302,67 @@ void main() {
     expect(windowToolbar, findsOneWidget);
   });
 
+  testWidgets(
+    'window close waits for review media shutdown before destroying engine',
+    (tester) async {
+      const windowChannel = MethodChannel('window_manager');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final events = <String>[];
+      messenger.setMockMethodCallHandler(windowChannel, (call) async {
+        if (call.method == 'isFullScreen') return false;
+        if (call.method == 'destroy') events.add('destroy');
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(windowChannel, null),
+      );
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: _Settings(),
+        jobRepository: _Jobs([]),
+        mediaService: _Media(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.updateSettings(
+        controller.settings.copyWith(onboardingComplete: true),
+      );
+      final reviewController = ReviewFullscreenController();
+      final mediaReleased = Completer<void>();
+      final mediaOwner = Object();
+      reviewController.registerMediaShutdown(mediaOwner, () async {
+        events.add('media-start');
+        await mediaReleased.future;
+        events.add('media-done');
+      });
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: MaterialApp(
+            locale: const Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: const [AppStrings.delegate],
+            home: AppShell(reviewController: reviewController),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final dynamic appShellState = tester.state(find.byType(AppShell));
+      final close = appShellState.onWindowClose() as Future<void>;
+      await tester.pump();
+      expect(events, ['media-start']);
+
+      mediaReleased.complete();
+      await close;
+      expect(events, ['media-start', 'media-done', 'destroy']);
+    },
+  );
+
   testWidgets('playback position is restored after switching app tabs', (
     tester,
   ) async {
@@ -2233,11 +2550,19 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('queue-ready-status')), findsOneWidget);
+      expect(find.byKey(const Key('queue-processing-status')), findsOneWidget);
       expect(find.byKey(const Key('queue-completed-status')), findsOneWidget);
-      expect(find.byKey(const Key('queue-failed-status')), findsOneWidget);
+      expect(find.byKey(const Key('queue-failed-status')), findsNothing);
       expect(
         find.descendant(
           of: find.byKey(const Key('queue-ready-status')),
+          matching: find.text('0'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('queue-processing-status')),
           matching: find.text('0'),
         ),
         findsOneWidget,
@@ -2249,16 +2574,13 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('queue-failed-status')),
-          matching: find.text('0'),
-        ),
-        findsOneWidget,
-      );
       final statusSummary = find.byKey(const Key('file-queue-status-summary'));
       expect(
         find.descendant(of: statusSummary, matching: find.text('Ready')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: statusSummary, matching: find.text('Processing')),
         findsOneWidget,
       );
       expect(
@@ -2270,7 +2592,7 @@ void main() {
           of: statusSummary,
           matching: find.text('Needs attention'),
         ),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.text('Nothing uploads until you press Transcribe.'),
@@ -2287,6 +2609,65 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('unexpected transcription failures show actionable guidance', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'failed-job',
+          batchId: 'batch',
+          sourcePath: '/missing/podcast-01.m4a',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.failed,
+          errorCode: 'unexpected',
+        ),
+      ]),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.reopen('failed-job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('zh', 'CN'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: Scaffold(
+            body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('出现问题，请重试。'), findsNothing);
+    expect(find.text('转写失败。请检查源文件、API 密钥和网络连接。'), findsOneWidget);
+    expect(find.byKey(const Key('queue-failed-status')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('queue-failed-status')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('completed video collapses the queue and uses the wide split', (
     tester,
@@ -2406,7 +2787,7 @@ void main() {
       find
           .descendant(
             of: visibleStatusSummary,
-            matching: find.text('Completed'),
+            matching: find.text('Processing'),
           )
           .hitTestable(),
       findsOneWidget,
@@ -2415,10 +2796,17 @@ void main() {
       find
           .descendant(
             of: visibleStatusSummary,
-            matching: find.text('Needs attention'),
+            matching: find.text('Completed'),
           )
           .hitTestable(),
       findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: visibleStatusSummary,
+        matching: find.text('Needs attention'),
+      ),
+      findsNothing,
     );
     final expandedReview = tester.getRect(find.byType(TranscriptReview));
     final queuePanel = tester.getRect(
@@ -3017,10 +3405,7 @@ void main() {
       find.text('Review everything before MeowSTT uploads anything.'),
       findsNothing,
     );
-    expect(
-      find.text('Batch drop · recursive folders · up to 5 hours each'),
-      findsOneWidget,
-    );
+    expect(find.text('Batch drop · up to 5 hours each'), findsOneWidget);
   });
 
   testWidgets('language and context options belong to the workspace session', (
@@ -3067,12 +3452,33 @@ void main() {
     expect(find.byKey(const Key('header-add-folder')), findsOneWidget);
     expect(find.byKey(const Key('header-add-files')), findsOneWidget);
     expect(find.byKey(const Key('header-transcribe')), findsOneWidget);
+    expect(find.widgetWithText(SwitchListTile, 'Speaker labels'), findsNothing);
+    expect(find.widgetWithText(SwitchListTile, 'Timestamps'), findsNothing);
 
-    await tester.enterText(
-      find.byKey(const Key('session-language-hints-field')),
-      'zh, en',
-    );
-    await tester.testTextInput.receiveAction(TextInputAction.done);
+    expect(find.byKey(const Key('session-language-hints-field')), findsNothing);
+    expect(find.text('Automatic'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('session-language-hints-picker')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Chinese  ·  zh'), findsOneWidget);
+    expect(find.text('English  ·  en'), findsOneWidget);
+
+    final chineseHint = find.byKey(const ValueKey('language-hint-zh'));
+    await tester.ensureVisible(chineseHint);
+    await tester.tap(chineseHint);
+    await tester.pump();
+    final englishHint = find.byKey(const ValueKey('language-hint-en'));
+    await tester.ensureVisible(englishHint);
+    await tester.tap(englishHint);
+    await tester.pump();
+
+    expect(controller.sessionOptions.languageHints, ['zh', 'en']);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('Chinese, English'), findsOneWidget);
+
     await tester.enterText(
       find.byKey(const Key('session-context-terms-field')),
       'MeowSTT, Soniox',
@@ -3080,7 +3486,6 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
 
-    expect(controller.sessionOptions.languageHints, ['zh', 'en']);
     expect(controller.sessionOptions.contextTerms, ['MeowSTT', 'Soniox']);
     expect(controller.workspaceJobs.single.options.languageHints, ['zh', 'en']);
     expect(controller.workspaceJobs.single.options.contextTerms, [
@@ -3366,13 +3771,69 @@ void main() {
 
     expect(search, findsNothing);
     expect(find.byKey(const Key('open-transcript-search')), findsOneWidget);
-    expect(position.pixels, greaterThan(0));
     final currentCard = tester.widget<DecoratedBox>(
       find.byKey(const ValueKey('segment-card-segment-59')),
     );
     final decoration = currentCard.decoration as BoxDecoration;
     expect(decoration.border, isNull);
     expect(decoration.color, isNull);
+  });
+
+  testWidgets('focus jumps to a distant sentence within one frame', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 620));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    const targetIndex = 1999;
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: List.generate(
+          targetIndex + 1,
+          (index) => TranscriptSegment(
+            id: 'segment-$index',
+            startMs: index * 1000,
+            endMs: (index + 1) * 1000,
+            text: 'Sentence $index.',
+          ),
+        ),
+        speakers: const [],
+        updatedAt: now,
+      ),
+    );
+    addTearDown(controller.dispose);
+    controller.rememberPlaybackPosition(
+      'job',
+      const Duration(milliseconds: targetIndex * 1000),
+    );
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('focus-current-sentence')));
+    var frames = 0;
+    while (find
+            .byKey(const ValueKey('segment-card-segment-$targetIndex'))
+            .evaluate()
+            .isEmpty &&
+        frames < 120) {
+      await tester.pump(const Duration(milliseconds: 16));
+      frames++;
+    }
+    expect(
+      frames,
+      lessThanOrEqualTo(1),
+      reason: 'The distant sentence took ${frames * 16} ms to render.',
+    );
   });
 
   testWidgets('search highlights every case-insensitive match', (tester) async {

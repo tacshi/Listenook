@@ -449,7 +449,6 @@ class _BatchOptionsPanel extends StatefulWidget {
 }
 
 class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
-  final _languages = TextEditingController();
   final _terms = TextEditingController();
   bool _seeded = false;
 
@@ -458,14 +457,12 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
     super.didChangeDependencies();
     if (_seeded) return;
     final options = context.read<AppController>().sessionOptions;
-    _languages.text = options.languageHints.join(', ');
     _terms.text = options.contextTerms.join(', ');
     _seeded = true;
   }
 
   @override
   void dispose() {
-    _languages.dispose();
     _terms.dispose();
     super.dispose();
   }
@@ -529,16 +526,11 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
             ),
           ),
           const SizedBox(height: 12),
-          TextField(
-            key: const Key('session-language-hints-field'),
-            controller: _languages,
-            decoration: InputDecoration(
-              labelText: context.strings.t('language_hints'),
-              hintText: context.strings.t('language_hints_hint'),
-              prefixIcon: const Icon(Icons.translate_rounded),
+          _LanguageHintsPicker(
+            selectedCodes: controller.sessionOptions.languageHints,
+            onChanged: (languageHints) => controller.updateSessionOptions(
+              controller.sessionOptions.copyWith(languageHints: languageHints),
             ),
-            onSubmitted: (_) => _saveSessionOptions(controller),
-            onTapOutside: (_) => _saveSessionOptions(controller),
           ),
           const SizedBox(height: 10),
           TextField(
@@ -623,27 +615,6 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
                   : null,
             ),
           ],
-          const Divider(height: 20),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(context.strings.t('speaker_labels')),
-            subtitle: Text(context.strings.t('diarization_reversible')),
-            value: settings.showSpeakers,
-            onChanged: (value) => controller.updateSettings(
-              settings.copyWith(showSpeakers: value),
-            ),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(context.strings.t('timestamps')),
-            subtitle: Text(context.strings.t('subtitle_timing_kept')),
-            value: settings.showTimestamps,
-            onChanged: (value) => controller.updateSettings(
-              settings.copyWith(showTimestamps: value),
-            ),
-          ),
         ],
       ),
     );
@@ -651,11 +622,7 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
 
   Future<void> _saveSessionOptions(AppController controller) =>
       controller.updateSessionOptions(
-        TranscriptionOptions(
-          languageHints: _split(_languages.text),
-          contextTerms: _split(_terms.text),
-          sonioxTranslation: controller.sessionOptions.sonioxTranslation,
-        ),
+        controller.sessionOptions.copyWith(contextTerms: _split(_terms.text)),
       );
 
   List<String> _split(String value) => value
@@ -664,6 +631,112 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
       .where((item) => item.isNotEmpty)
       .toSet()
       .toList();
+}
+
+class _LanguageHintsPicker extends StatefulWidget {
+  const _LanguageHintsPicker({
+    required this.selectedCodes,
+    required this.onChanged,
+  });
+
+  final List<String> selectedCodes;
+  final Future<void> Function(List<String> languageHints) onChanged;
+
+  @override
+  State<_LanguageHintsPicker> createState() => _LanguageHintsPickerState();
+}
+
+class _LanguageHintsPickerState extends State<_LanguageHintsPicker> {
+  late List<String> _selectedCodes;
+  bool _menuOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedCodes = [...widget.selectedCodes];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = _selectedCodes.toSet();
+    final summary = _selectedCodes.isEmpty
+        ? context.strings.t('automatic')
+        : _selectedCodes
+              .map(context.strings.translationLanguageName)
+              .join(', ');
+
+    return MenuAnchor(
+      key: const Key('session-language-hints-menu'),
+      style: const MenuStyle(
+        minimumSize: WidgetStatePropertyAll(Size(300, 0)),
+        maximumSize: WidgetStatePropertyAll(Size(360, 400)),
+      ),
+      onOpen: () => setState(() => _menuOpen = true),
+      onClose: () => setState(() => _menuOpen = false),
+      menuChildren: [
+        MenuItemButton(
+          key: const Key('language-hints-automatic'),
+          closeOnActivate: false,
+          leadingIcon: Icon(
+            _selectedCodes.isEmpty ? Icons.check_rounded : null,
+          ),
+          onPressed: _clear,
+          child: Text(context.strings.t('automatic')),
+        ),
+        const Divider(height: 1),
+        for (final code in supportedSonioxTranslationLanguageCodes)
+          MenuItemButton(
+            key: ValueKey('language-hint-$code'),
+            closeOnActivate: false,
+            leadingIcon: Checkbox(
+              value: selected.contains(code),
+              visualDensity: VisualDensity.compact,
+              onChanged: (_) => _toggle(code),
+            ),
+            onPressed: () => _toggle(code),
+            child: Text(
+              '${context.strings.translationLanguageName(code)}  ·  $code',
+            ),
+          ),
+      ],
+      builder: (context, menuController, child) => InkWell(
+        key: const Key('session-language-hints-picker'),
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => menuController.isOpen
+            ? menuController.close()
+            : menuController.open(),
+        child: InputDecorator(
+          decoration: InputDecoration(
+            labelText: context.strings.t('language_hints'),
+            prefixIcon: const Icon(Icons.translate_rounded),
+            suffixIcon: Icon(
+              _menuOpen
+                  ? Icons.arrow_drop_up_rounded
+                  : Icons.arrow_drop_down_rounded,
+            ),
+          ),
+          child: Text(summary, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggle(String code) async {
+    setState(() {
+      if (!_selectedCodes.remove(code)) {
+        _selectedCodes.add(code);
+      }
+    });
+    await _save();
+  }
+
+  Future<void> _clear() async {
+    if (_selectedCodes.isEmpty) return;
+    setState(_selectedCodes.clear);
+    await _save();
+  }
+
+  Future<void> _save() => widget.onChanged([..._selectedCodes]);
 }
 
 class _ReviewLine extends StatelessWidget {
@@ -782,16 +855,25 @@ class _QueueList extends StatelessWidget {
                         ),
                         const SizedBox(width: 16),
                         _QueueStat(
+                          key: const Key('queue-processing-status'),
+                          value: controller.processingCount,
+                          label: context.strings.t('processing'),
+                        ),
+                        const SizedBox(width: 16),
+                        _QueueStat(
                           key: const Key('queue-completed-status'),
                           value: controller.completedCount,
                           label: context.strings.t('completed'),
                         ),
-                        const SizedBox(width: 16),
-                        _QueueStat(
-                          key: const Key('queue-failed-status'),
-                          value: controller.failedCount,
-                          label: context.strings.t('failed'),
-                        ),
+                        if (controller.failedCount > 0) ...[
+                          const SizedBox(width: 16),
+                          _QueueStat(
+                            key: const Key('queue-failed-status'),
+                            value: controller.failedCount,
+                            label: context.strings.t('failed'),
+                            color: colors.error,
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -813,10 +895,16 @@ class _QueueList extends StatelessWidget {
 }
 
 class _QueueStat extends StatelessWidget {
-  const _QueueStat({super.key, required this.value, required this.label});
+  const _QueueStat({
+    super.key,
+    required this.value,
+    required this.label,
+    this.color,
+  });
 
   final int value;
   final String label;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -827,12 +915,16 @@ class _QueueStat extends StatelessWidget {
       children: [
         Text(
           '$value',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            color: color,
+            fontWeight: FontWeight.w700,
+          ),
         ),
         const SizedBox(width: 5),
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: color),
+        ),
       ],
     ),
   );
@@ -992,6 +1084,9 @@ class _JobTile extends StatelessWidget {
 
   String _jobSubtitle(BuildContext context, TranscriptionJob job) {
     if (job.errorCode != null || job.errorMessage != null) {
+      if (job.errorCode == null || job.errorCode == 'unexpected') {
+        return context.strings.t('error_transcription_unknown');
+      }
       return context.strings.error(
         job.errorCode,
         englishFallback: job.errorMessage,
