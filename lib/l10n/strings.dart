@@ -55,6 +55,7 @@ class AppStrings {
       switch (provider) {
         TranslationProviderTemplate.custom => t('provider_custom'),
         TranslationProviderTemplate.openAi => 'OpenAI',
+        TranslationProviderTemplate.openRouter => 'OpenRouter',
         TranslationProviderTemplate.deepSeek => 'DeepSeek',
         TranslationProviderTemplate.groq => 'Groq',
         TranslationProviderTemplate.nvidiaNim => 'NVIDIA NIM',
@@ -149,7 +150,6 @@ class AppStrings {
     'language_hints': 'Language hints',
     'context_terms': 'Names and context terms',
     'context_terms_hint': 'Product names, people, acronyms…',
-    'concurrency': 'Concurrent jobs',
     'appearance': 'Appearance',
     'theme': 'Theme',
     'locale': 'Language',
@@ -420,7 +420,6 @@ class AppStrings {
     'language_hints': '语言提示',
     'context_terms': '姓名与上下文词语',
     'context_terms_hint': '产品名称、人名、缩写…',
-    'concurrency': '并行任务数',
     'appearance': '外观',
     'theme': '主题',
     'locale': '语言',

@@ -14,6 +14,8 @@ import '../data/process_media_service.dart';
 import '../data/soniox_api_client.dart';
 
 class AppController extends ChangeNotifier {
+  static const _maxConcurrentJobs = 4;
+
   AppController({
     required CredentialStore credentialStore,
     required SettingsRepository settingsRepository,
@@ -377,19 +379,23 @@ class AppController extends ChangeNotifier {
     if (queue.isEmpty) return;
     _processing = true;
     notifyListeners();
+    await _runWorkerPool(queue);
+    _processing = false;
+    notifyListeners();
+  }
+
+  Future<void> _runWorkerPool(List<String> jobIds) async {
     var cursor = 0;
     Future<void> worker() async {
-      while (cursor < queue.length) {
-        final id = queue[cursor++];
+      while (cursor < jobIds.length) {
+        final id = jobIds[cursor++];
         await _runJob(id);
       }
     }
 
     await Future.wait(
-      List.generate(min(_settings.concurrency, queue.length), (_) => worker()),
+      List.generate(min(_maxConcurrentJobs, jobIds.length), (_) => worker()),
     );
-    _processing = false;
-    notifyListeners();
   }
 
   Future<void> _runJob(String id) async {
@@ -1495,19 +1501,7 @@ class AppController extends ChangeNotifier {
     if (resumable.isEmpty || !_keyConfigured) return;
     _processing = true;
     notifyListeners();
-    var cursor = 0;
-    Future<void> worker() async {
-      while (cursor < resumable.length) {
-        await _runJob(resumable[cursor++]);
-      }
-    }
-
-    await Future.wait(
-      List.generate(
-        min(_settings.concurrency, resumable.length),
-        (_) => worker(),
-      ),
-    );
+    await _runWorkerPool(resumable);
     _processing = false;
     notifyListeners();
   }

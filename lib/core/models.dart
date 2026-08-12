@@ -59,6 +59,7 @@ enum TranslationOrigin { soniox, llm }
 enum TranslationProviderTemplate {
   custom,
   openAi,
+  openRouter,
   deepSeek,
   groq,
   nvidiaNim,
@@ -75,6 +76,7 @@ extension TranslationProviderTemplateX on TranslationProviderTemplate {
   String get defaultBaseUrl => switch (this) {
     TranslationProviderTemplate.custom => '',
     TranslationProviderTemplate.openAi => 'https://api.openai.com/v1',
+    TranslationProviderTemplate.openRouter => 'https://openrouter.ai/api/v1',
     TranslationProviderTemplate.deepSeek => 'https://api.deepseek.com/v1',
     TranslationProviderTemplate.groq => 'https://api.groq.com/openai/v1',
     TranslationProviderTemplate.nvidiaNim =>
@@ -780,7 +782,6 @@ class AppSettings {
   const AppSettings({
     this.themeMode = AppThemeMode.system,
     this.localeMode = AppLocaleMode.system,
-    this.concurrency = 2,
     this.showSpeakers = true,
     this.showTimestamps = false,
     this.showFullscreenShortcuts = true,
@@ -792,7 +793,6 @@ class AppSettings {
 
   final AppThemeMode themeMode;
   final AppLocaleMode localeMode;
-  final int concurrency;
   final bool showSpeakers;
   final bool showTimestamps;
   final bool showFullscreenShortcuts;
@@ -804,7 +804,6 @@ class AppSettings {
   AppSettings copyWith({
     AppThemeMode? themeMode,
     AppLocaleMode? localeMode,
-    int? concurrency,
     bool? showSpeakers,
     bool? showTimestamps,
     bool? showFullscreenShortcuts,
@@ -815,7 +814,6 @@ class AppSettings {
   }) => AppSettings(
     themeMode: themeMode ?? this.themeMode,
     localeMode: localeMode ?? this.localeMode,
-    concurrency: (concurrency ?? this.concurrency).clamp(1, 4),
     showSpeakers: showSpeakers ?? this.showSpeakers,
     showTimestamps: showTimestamps ?? this.showTimestamps,
     showFullscreenShortcuts:
@@ -830,7 +828,6 @@ class AppSettings {
     'manifest_version': manifestVersion,
     'theme_mode': themeMode.name,
     'locale_mode': localeMode.name,
-    'concurrency': concurrency,
     'show_speakers': showSpeakers,
     'show_timestamps': showTimestamps,
     'show_fullscreen_shortcuts': showFullscreenShortcuts,
@@ -847,7 +844,6 @@ class AppSettings {
     localeMode:
         _enumByName(AppLocaleMode.values, json['locale_mode']) ??
         AppLocaleMode.system,
-    concurrency: ((json['concurrency'] as num?)?.toInt() ?? 2).clamp(1, 4),
     showSpeakers: json['show_speakers'] as bool? ?? true,
     showTimestamps: json['show_timestamps'] as bool? ?? false,
     showFullscreenShortcuts: json['show_fullscreen_shortcuts'] as bool? ?? true,

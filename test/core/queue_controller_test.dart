@@ -59,40 +59,66 @@ void main() {
     },
   );
 
+  test('worker pool runs four queued jobs and persists completion', () async {
+    final directory = await Directory.systemTemp.createTemp('meow-queue-');
+    addTearDown(() => directory.delete(recursive: true));
+    final files = <String>[];
+    for (var index = 0; index < 4; index++) {
+      final file = File('${directory.path}/$index.wav');
+      await file.writeAsBytes([1, 2, 3]);
+      files.add(file.path);
+    }
+    final jobs = _Jobs();
+    final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 40));
+    final controller = _controller(jobs: jobs, soniox: soniox);
+    await controller.initialize();
+    await controller.addSources(files);
+    await _waitFor(() => controller.readyCount == 4);
+    final movedId = controller.workspaceJobs.first.id;
+    controller.reorderWorkspace(0, 3);
+    await _waitFor(() => jobs.saved[movedId]?.queueIndex == 3);
+    expect(controller.workspaceJobs.last.id, movedId);
+
+    await controller.startReady();
+
+    expect(soniox.maximumUploads, 4);
+    expect(controller.completedCount, 4);
+    expect(
+      jobs.saved.values.every(
+        (job) => job.cleanupState == CleanupState.complete,
+      ),
+      isTrue,
+    );
+    expect(soniox.deletedFiles, hasLength(4));
+    expect(soniox.deletedTranscriptions, hasLength(4));
+  });
+
   test(
-    'worker pool respects configured concurrency and persists completion',
+    'worker pool matches smaller queues and caps larger queues at four',
     () async {
-      final directory = await Directory.systemTemp.createTemp('meow-queue-');
-      addTearDown(() => directory.delete(recursive: true));
-      final files = <String>[];
-      for (var index = 0; index < 4; index++) {
-        final file = File('${directory.path}/$index.wav');
-        await file.writeAsBytes([1, 2, 3]);
-        files.add(file.path);
+      for (final itemCount in [3, 6]) {
+        final directory = await Directory.systemTemp.createTemp(
+          'meow-auto-concurrency-',
+        );
+        addTearDown(() => directory.delete(recursive: true));
+        final files = <String>[];
+        for (var index = 0; index < itemCount; index++) {
+          final file = File('${directory.path}/$index.wav');
+          await file.writeAsBytes([1, 2, 3]);
+          files.add(file.path);
+        }
+        final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 40));
+        final controller = _controller(jobs: _Jobs(), soniox: soniox);
+        addTearDown(controller.dispose);
+        await controller.initialize();
+        await controller.addSources(files);
+        await _waitFor(() => controller.readyCount == itemCount);
+
+        await controller.startReady();
+
+        expect(soniox.maximumUploads, itemCount < 4 ? itemCount : 4);
+        expect(controller.completedCount, itemCount);
       }
-      final jobs = _Jobs();
-      final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 40));
-      final controller = _controller(jobs: jobs, soniox: soniox);
-      await controller.initialize();
-      await controller.addSources(files);
-      await _waitFor(() => controller.readyCount == 4);
-      final movedId = controller.workspaceJobs.first.id;
-      controller.reorderWorkspace(0, 3);
-      await _waitFor(() => jobs.saved[movedId]?.queueIndex == 3);
-      expect(controller.workspaceJobs.last.id, movedId);
-
-      await controller.startReady();
-
-      expect(soniox.maximumUploads, 2);
-      expect(controller.completedCount, 4);
-      expect(
-        jobs.saved.values.every(
-          (job) => job.cleanupState == CleanupState.complete,
-        ),
-        isTrue,
-      );
-      expect(soniox.deletedFiles, hasLength(4));
-      expect(soniox.deletedTranscriptions, hasLength(4));
     },
   );
 
@@ -957,7 +983,7 @@ class _AvailabilityCredentials
 }
 
 class _Settings implements SettingsRepository {
-  _Settings([this.value = const AppSettings(concurrency: 2)]);
+  _Settings([this.value = const AppSettings()]);
 
   AppSettings value;
 

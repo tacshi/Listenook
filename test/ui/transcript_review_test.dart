@@ -3454,6 +3454,8 @@ void main() {
     expect(find.byKey(const Key('header-transcribe')), findsOneWidget);
     expect(find.widgetWithText(SwitchListTile, 'Speaker labels'), findsNothing);
     expect(find.widgetWithText(SwitchListTile, 'Timestamps'), findsNothing);
+    expect(find.text('Concurrent jobs'), findsNothing);
+    expect(find.byType(SegmentedButton<int>), findsNothing);
 
     expect(find.byKey(const Key('session-language-hints-field')), findsNothing);
     expect(find.text('Automatic'), findsOneWidget);

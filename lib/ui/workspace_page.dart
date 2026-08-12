@@ -508,24 +508,6 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
                 : () => controller.setDestination(2),
           ),
           const Divider(height: 20),
-          Text(
-            context.strings.t('concurrency'),
-            style: Theme.of(context).textTheme.labelLarge,
-          ),
-          const SizedBox(height: 10),
-          SegmentedButton<int>(
-            segments: const [
-              ButtonSegment(value: 1, label: Text('1')),
-              ButtonSegment(value: 2, label: Text('2')),
-              ButtonSegment(value: 3, label: Text('3')),
-              ButtonSegment(value: 4, label: Text('4')),
-            ],
-            selected: {settings.concurrency},
-            onSelectionChanged: (value) => controller.updateSettings(
-              settings.copyWith(concurrency: value.first),
-            ),
-          ),
-          const SizedBox(height: 12),
           _LanguageHintsPicker(
             selectedCodes: controller.sessionOptions.languageHints,
             onChanged: (languageHints) => controller.updateSessionOptions(
