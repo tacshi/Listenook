@@ -7,17 +7,41 @@ class OperationCancelledException implements Exception {
   const OperationCancelledException();
 }
 
+class LlmException implements Exception {
+  const LlmException(this.code, {this.message, this.retryable = false});
+
+  final String code;
+  final String? message;
+  final bool retryable;
+
+  @override
+  String toString() => 'LlmException($code)';
+}
+
+class AiBriefException implements Exception {
+  const AiBriefException(this.code, {this.message});
+
+  final String code;
+  final String? message;
+
+  @override
+  String toString() => 'AiBriefException($code)';
+}
+
 abstract interface class CredentialStore {
   Future<String?> readApiKey();
   Future<void> writeApiKey(String key);
   Future<void> deleteApiKey();
 }
 
-abstract interface class TranslationCredentialStore {
+abstract interface class LlmCredentialStore {
   Future<String?> readApiKey();
   Future<void> writeApiKey(String key);
   Future<void> deleteApiKey();
 }
+
+abstract interface class TranslationCredentialStore
+    implements LlmCredentialStore {}
 
 /// Allows startup code to check credential availability without reading the
 /// secret itself. On macOS this avoids triggering Keychain authorization UI.
@@ -41,6 +65,39 @@ abstract interface class TranslationService {
       int totalSegments,
     )
     onBatch,
+    CancelCheck? shouldCancel,
+  });
+}
+
+abstract interface class LlmClient {
+  Future<List<String>> listModels(
+    LlmProviderSettings settings, {
+    String? candidateApiKey,
+  });
+
+  Future<String> complete({
+    required LlmProviderSettings settings,
+    required String systemPrompt,
+    required String userPrompt,
+    CancelCheck? shouldCancel,
+  });
+}
+
+typedef AiBriefProgressCallback =
+    Future<void> Function(String stage, int completedChunks, int totalChunks);
+
+abstract interface class AiBriefService {
+  int estimateRequestCount(
+    TranscriptDocument document,
+    Set<AiBriefSection> sections,
+  );
+
+  Future<AiBrief> generate({
+    required LlmProviderSettings settings,
+    required TranscriptDocument document,
+    required Set<AiBriefSection> sections,
+    required String outputLanguage,
+    AiBriefProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   });
 }

@@ -31,9 +31,14 @@ The package name is `meow_stt`. Its permanent desktop identity is
 - Manual or optional automatic LLM translation with editable bilingual review,
   partial-result recovery, retry-missing and per-segment retranslation, and
   Original/Translated/Bilingual copy and exports.
-- A single editable translation configuration with VoiceTale-style provider
-  templates. Custom starts blank; templates only prefill the Base URL, and
-  model selection is enabled after a successful connection test.
+- User-invoked AI Briefs with editable overviews, chapters, key ideas,
+  decisions, action items, and open questions. Generated items retain
+  timestamped transcript evidence that seeks the source media, and briefs can
+  be copied or exported as Markdown.
+- A single editable AI-provider configuration shared by LLM translation and
+  AI Briefs, with VoiceTale-style provider templates. Custom starts blank;
+  templates only prefill the Base URL, and model selection is enabled after a
+  successful connection test.
 - System/light/dark themes and English/Simplified Chinese localization.
 - Secure Soniox and translation credentials in Keychain/Credential Manager.
   `SONIOX_API_KEY` is used only as a development fallback for Soniox when secure
@@ -45,10 +50,13 @@ MeowSTT is BYOK and has no application backend. Starting a job uploads its
 media directly to Soniox. Optional Soniox translation is performed within that
 same transcription request. Optional LLM translation is a separate operation;
 when requested, transcript text—not media—is sent to the single
-OpenAI-compatible endpoint saved in Settings. Manifests store paths, small
-metadata, raw transcript tokens, original and translated edits, translation
-progress, and only the remote IDs owned by that job—never media copies or API
-keys. Cleanup deletes only those owned Soniox file/transcription IDs.
+OpenAI-compatible endpoint saved in Settings. AI Brief generation also sends
+transcript text, timestamps, and speaker names—not media—to that endpoint only
+after an explicit user action. Manifests store paths, small metadata, raw
+transcript tokens, original and translated edits, AI Brief drafts and evidence,
+generation progress, and only the remote IDs owned by that job—never media
+copies or API keys. Cleanup deletes only those owned Soniox
+file/transcription IDs.
 See [PRIVACY.md](PRIVACY.md).
 
 ## Development

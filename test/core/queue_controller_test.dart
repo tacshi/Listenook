@@ -916,6 +916,132 @@ void main() {
       expect(controller.processingCount, 0);
     },
   );
+
+  test(
+    'AI Brief refresh failure preserves the last successful brief',
+    () async {
+      final now = DateTime.utc(2026, 8, 12);
+      final job = TranscriptionJob(
+        id: 'brief-job',
+        batchId: 'batch',
+        sourcePath: '/brief.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        document: _document(now),
+      );
+      final briefService = _AiBrief();
+      final controller = _controller(
+        jobs: _Jobs([job]),
+        soniox: _Soniox(),
+        settings: _Settings(
+          const AppSettings(
+            translationSettings: TranslationSettings(
+              baseUrl: 'https://llm.example/v1',
+              model: 'brief-model',
+            ),
+          ),
+        ),
+        translationCredentials: _TranslationCredentials(),
+        aiBriefService: briefService,
+      );
+      await controller.initialize();
+
+      await controller.generateAiBrief(
+        job.id,
+        sections: const {AiBriefSection.overview},
+        outputLanguage: 'en',
+      );
+      expect(controller.allJobs.single.aiBrief?.overview, 'Grounded overview');
+
+      await controller.updateAiBriefOverview(job.id, 'User-edited overview');
+      briefService.error = const AiBriefException('ai_brief_rate_limit');
+      await controller.generateAiBrief(
+        job.id,
+        sections: const {AiBriefSection.overview},
+        outputLanguage: 'en',
+      );
+
+      final preserved = controller.allJobs.single;
+      expect(preserved.aiBrief?.overview, 'User-edited overview');
+      expect(preserved.aiBrief?.edited, isTrue);
+      expect(preserved.aiGenerationState.status, AiGenerationStatus.failed);
+      expect(preserved.aiGenerationState.errorCode, 'ai_brief_rate_limit');
+    },
+  );
+
+  test('transcript edits make an existing AI Brief stale', () async {
+    final now = DateTime.utc(2026, 8, 12);
+    final job = TranscriptionJob(
+      id: 'stale-brief',
+      batchId: 'batch',
+      sourcePath: '/brief.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      document: _document(now),
+      aiBrief: AiBrief(
+        overview: 'Original overview',
+        overviewEvidenceSegmentIds: const ['segment'],
+        chapters: const [],
+        insights: const [],
+        outputLanguage: 'en',
+        model: 'brief-model',
+        selectedSections: const {AiBriefSection.overview},
+        generatedAt: now,
+        sourceTranscriptUpdatedAt: now,
+      ),
+    );
+    final controller = _controller(jobs: _Jobs([job]), soniox: _Soniox());
+    await controller.initialize();
+
+    await controller.updateSegment(job.id, 'segment', 'Edited transcript');
+
+    final updated = controller.allJobs.single;
+    expect(updated.aiBrief, isNotNull);
+    expect(updated.aiBrief!.isStaleFor(updated.document!), isTrue);
+  });
+
+  test('interrupted AI Brief generation preserves prior output', () async {
+    final now = DateTime.utc(2026, 8, 12);
+    final job = TranscriptionJob(
+      id: 'interrupted-brief',
+      batchId: 'batch',
+      sourcePath: '/brief.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      document: _document(now),
+      aiBrief: AiBrief(
+        overview: 'Preserved',
+        overviewEvidenceSegmentIds: const ['segment'],
+        chapters: const [],
+        insights: const [],
+        outputLanguage: 'en',
+        model: 'brief-model',
+        selectedSections: const {AiBriefSection.overview},
+        generatedAt: now,
+        sourceTranscriptUpdatedAt: now,
+      ),
+      aiGenerationState: const AiGenerationState(
+        status: AiGenerationStatus.generating,
+        selectedSections: {AiBriefSection.overview},
+        outputLanguage: 'en',
+      ),
+    );
+    final jobs = _Jobs([job]);
+    final controller = _controller(jobs: jobs, soniox: _Soniox());
+
+    await controller.initialize();
+
+    final recovered = controller.allJobs.single;
+    expect(recovered.aiBrief?.overview, 'Preserved');
+    expect(recovered.aiGenerationState.status, AiGenerationStatus.interrupted);
+    expect(
+      jobs.saved[job.id]?.aiGenerationState.status,
+      AiGenerationStatus.interrupted,
+    );
+  });
 }
 
 TranscriptDocument _document(DateTime now) => TranscriptDocument(
@@ -940,6 +1066,7 @@ AppController _controller({
   SettingsRepository? settings,
   TranslationCredentialStore? translationCredentials,
   TranslationService? translationService,
+  AiBriefService? aiBriefService,
 }) => AppController(
   credentialStore: credentials ?? _Credentials(),
   settingsRepository: settings ?? _Settings(),
@@ -949,6 +1076,7 @@ AppController _controller({
   exporter: const DefaultTranscriptExporter(),
   translationCredentialStore: translationCredentials,
   translationService: translationService,
+  aiBriefService: aiBriefService,
 );
 
 Future<void> _waitFor(bool Function() condition) async {
@@ -1101,6 +1229,40 @@ class _SuccessfulTranslation implements TranslationService {
       },
       segments.length,
       segments.length,
+    );
+  }
+}
+
+class _AiBrief implements AiBriefService {
+  AiBriefException? error;
+
+  @override
+  int estimateRequestCount(
+    TranscriptDocument document,
+    Set<AiBriefSection> sections,
+  ) => 1;
+
+  @override
+  Future<AiBrief> generate({
+    required LlmProviderSettings settings,
+    required TranscriptDocument document,
+    required Set<AiBriefSection> sections,
+    required String outputLanguage,
+    AiBriefProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    if (error case final value?) throw value;
+    await onProgress?.call('analyzing', 1, 1);
+    return AiBrief(
+      overview: 'Grounded overview',
+      overviewEvidenceSegmentIds: [document.segments.single.id],
+      chapters: const [],
+      insights: const [],
+      outputLanguage: outputLanguage,
+      model: settings.model,
+      selectedSections: sections,
+      generatedAt: DateTime.now().toUtc(),
+      sourceTranscriptUpdatedAt: document.updatedAt,
     );
   }
 }

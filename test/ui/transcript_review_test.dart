@@ -3544,7 +3544,7 @@ void main() {
     expect(find.byKey(const Key('soniox-translation-summary')), findsOneWidget);
     expect(find.text('Soniox built-in translation'), findsOneWidget);
     expect(find.text('Chinese'), findsOneWidget);
-    expect(find.text('LLM Translation'), findsNothing);
+    expect(find.text('AI provider'), findsNothing);
     expect(find.byKey(const Key('translation-target-language')), findsNothing);
     expect(find.byKey(const Key('auto-translate-switch')), findsNothing);
   });
@@ -3896,6 +3896,137 @@ void main() {
 
     expect(matches, ['Fly', 'FLY']);
   });
+
+  testWidgets('AI Brief evidence returns to and focuses the transcript', (
+    tester,
+  ) async {
+    final document = _simpleDocument();
+    final brief = AiBrief(
+      overview: 'Grounded overview',
+      overviewEvidenceSegmentIds: const ['segment'],
+      chapters: const [],
+      insights: const [],
+      outputLanguage: 'en',
+      model: 'brief-model',
+      selectedSections: const {AiBriefSection.overview},
+      generatedAt: document.updatedAt,
+      sourceTranscriptUpdatedAt: document.updatedAt,
+    );
+    final controller = await _controllerForDocument(document, aiBrief: brief);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('AI Brief').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Grounded overview'), findsOneWidget);
+    expect(find.byKey(const Key('ai-evidence-segment')), findsOneWidget);
+    expect(find.byKey(const Key('translate-transcript')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('ai-evidence-segment')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('transcript-scroll')), findsOneWidget);
+    expect(find.text('Hello'), findsOneWidget);
+  });
+
+  testWidgets('creating an AI Brief starts directly and renders output', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      settings: const AppSettings(
+        translationSettings: TranslationSettings(
+          baseUrl: 'https://llm.example/v1',
+          model: 'brief-model',
+        ),
+      ),
+      translationCredentials: _LlmCredentials(),
+      aiBriefService: _ImmediateAiBrief(),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('AI Brief').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('ai-brief-empty-action')));
+    await tester.pumpAndSettle();
+    expect(find.text('Provider model: brief-model'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-create-ai-brief')));
+    await tester.pumpAndSettle();
+    expect(find.text('Evidence-backed overview'), findsOneWidget);
+    expect(find.byKey(const Key('ai-evidence-segment')), findsOneWidget);
+  });
+
+  testWidgets('AI Brief progress uses natural stage language', (tester) async {
+    final service = _PendingAiBrief();
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      settings: const AppSettings(
+        translationSettings: TranslationSettings(
+          baseUrl: 'https://llm.example/v1',
+          model: 'brief-model',
+        ),
+      ),
+      translationCredentials: _LlmCredentials(),
+      aiBriefService: service,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(() {
+      if (!service.release.isCompleted) service.release.complete();
+    });
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('AI Brief').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('ai-brief-empty-action')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Estimated AI requests'), findsNothing);
+    await tester.tap(find.byKey(const Key('confirm-create-ai-brief')));
+    await service.started.future;
+    await tester.pump();
+
+    expect(find.text('Analyzing the transcript…'), findsOneWidget);
+    expect(find.textContaining('0/1'), findsNothing);
+    final progress = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
+    );
+    expect(progress.value, isNull);
+
+    service.release.complete();
+    await tester.pumpAndSettle();
+  });
 }
 
 Iterable<TextSpan> _descendantSpans(TextSpan root) sync* {
@@ -4053,6 +4184,10 @@ Future<AppController> _controllerForDocument(
   TranslationState translationState = const TranslationState(),
   AppSettings settings = const AppSettings(),
   TranslationService? translationService,
+  TranslationCredentialStore? translationCredentials,
+  AiBriefService? aiBriefService,
+  AiBrief? aiBrief,
+  AiGenerationState aiGenerationState = const AiGenerationState(),
 }) async {
   final now = DateTime.now().toUtc();
   final controller = AppController(
@@ -4069,12 +4204,16 @@ Future<AppController> _controllerForDocument(
         metadata: metadata,
         document: document,
         translationState: translationState,
+        aiBrief: aiBrief,
+        aiGenerationState: aiGenerationState,
       ),
     ]),
     mediaService: _Media(),
     sonioxClient: _Soniox(),
     exporter: const DefaultTranscriptExporter(),
+    translationCredentialStore: translationCredentials,
     translationService: translationService,
+    aiBriefService: aiBriefService,
   );
   await controller.initialize();
   return controller;
@@ -4216,6 +4355,84 @@ class _BlockingTranslation implements TranslationService {
   }) async {
     started.complete();
     await release.future;
+  }
+}
+
+class _LlmCredentials implements TranslationCredentialStore {
+  @override
+  Future<void> deleteApiKey() async {}
+
+  @override
+  Future<String?> readApiKey() async => 'configured';
+
+  @override
+  Future<void> writeApiKey(String key) async {}
+}
+
+class _ImmediateAiBrief implements AiBriefService {
+  @override
+  int estimateRequestCount(
+    TranscriptDocument document,
+    Set<AiBriefSection> sections,
+  ) => 2;
+
+  @override
+  Future<AiBrief> generate({
+    required LlmProviderSettings settings,
+    required TranscriptDocument document,
+    required Set<AiBriefSection> sections,
+    required String outputLanguage,
+    AiBriefProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    await onProgress?.call('analyzing', 1, 2);
+    await onProgress?.call('synthesizing', 2, 2);
+    return AiBrief(
+      overview: 'Evidence-backed overview',
+      overviewEvidenceSegmentIds: [document.segments.first.id],
+      chapters: const [],
+      insights: const [],
+      outputLanguage: outputLanguage,
+      model: settings.model,
+      selectedSections: sections,
+      generatedAt: DateTime.now().toUtc(),
+      sourceTranscriptUpdatedAt: document.updatedAt,
+    );
+  }
+}
+
+class _PendingAiBrief implements AiBriefService {
+  final started = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  int estimateRequestCount(
+    TranscriptDocument document,
+    Set<AiBriefSection> sections,
+  ) => 1;
+
+  @override
+  Future<AiBrief> generate({
+    required LlmProviderSettings settings,
+    required TranscriptDocument document,
+    required Set<AiBriefSection> sections,
+    required String outputLanguage,
+    AiBriefProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    started.complete();
+    await release.future;
+    return AiBrief(
+      overview: 'Finished overview',
+      overviewEvidenceSegmentIds: [document.segments.first.id],
+      chapters: const [],
+      insights: const [],
+      outputLanguage: outputLanguage,
+      model: settings.model,
+      selectedSections: sections,
+      generatedAt: DateTime.now().toUtc(),
+      sourceTranscriptUpdatedAt: document.updatedAt,
+    );
   }
 }
 

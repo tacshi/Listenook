@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 3;
+const int manifestVersion = 4;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 enum JobStatus {
@@ -110,6 +110,49 @@ enum TranslationStatus {
   failed,
   cancelled,
   interrupted,
+}
+
+enum AiBriefSection {
+  overview,
+  chapters,
+  keyIdeas,
+  decisions,
+  actionItems,
+  openQuestions,
+}
+
+const defaultAiBriefSections = <AiBriefSection>{
+  AiBriefSection.overview,
+  AiBriefSection.chapters,
+  AiBriefSection.keyIdeas,
+  AiBriefSection.decisions,
+  AiBriefSection.actionItems,
+  AiBriefSection.openQuestions,
+};
+
+enum AiInsightType {
+  keyIdea,
+  notableMoment,
+  decision,
+  actionItem,
+  openQuestion,
+}
+
+enum AiGenerationStatus {
+  idle,
+  generating,
+  completed,
+  failed,
+  cancelled,
+  interrupted,
+}
+
+extension AiGenerationStatusX on AiGenerationStatus {
+  bool get isActive => this == AiGenerationStatus.generating;
+  bool get canRetry =>
+      this == AiGenerationStatus.failed ||
+      this == AiGenerationStatus.cancelled ||
+      this == AiGenerationStatus.interrupted;
 }
 
 extension TranslationStatusX on TranslationStatus {
@@ -512,6 +555,126 @@ class TranslationSettings {
       autoTranslate: json?['auto_translate'] as bool? ?? false,
     );
   }
+
+  factory TranslationSettings.fromParts(
+    LlmProviderSettings provider,
+    TranslationPreferences preferences,
+  ) => TranslationSettings(
+    provider: provider.provider,
+    baseUrl: provider.baseUrl,
+    model: provider.model,
+    targetLanguage: preferences.targetLanguage,
+    autoTranslate: preferences.autoTranslate,
+  );
+
+  LlmProviderSettings get providerSettings =>
+      LlmProviderSettings(provider: provider, baseUrl: baseUrl, model: model);
+
+  TranslationPreferences get preferences => TranslationPreferences(
+    targetLanguage: targetLanguage,
+    autoTranslate: autoTranslate,
+  );
+}
+
+class LlmProviderSettings {
+  const LlmProviderSettings({
+    this.provider = TranslationProviderTemplate.custom,
+    this.baseUrl = '',
+    this.model = '',
+  });
+
+  final TranslationProviderTemplate provider;
+  final String baseUrl;
+  final String model;
+
+  Uri? get uri => Uri.tryParse(baseUrl.trim());
+
+  bool get isLoopback {
+    final host = uri?.host.toLowerCase();
+    return host == 'localhost' || host == '127.0.0.1' || host == '::1';
+  }
+
+  bool get requiresApiKey => !isLoopback;
+
+  String? validationError({bool requireModel = true}) {
+    final value = uri;
+    if (value == null ||
+        value.host.isEmpty ||
+        value.userInfo.isNotEmpty ||
+        value.hasQuery ||
+        value.hasFragment) {
+      return 'translation_invalid_url';
+    }
+    if (value.scheme != 'http' && value.scheme != 'https') {
+      return 'translation_invalid_url';
+    }
+    if (!isLoopback && value.scheme != 'https') {
+      return 'translation_https_required';
+    }
+    if (requireModel && model.trim().isEmpty) {
+      return 'translation_model_required';
+    }
+    return null;
+  }
+
+  bool isConfigured({required bool hasApiKey}) =>
+      validationError() == null && (!requiresApiKey || hasApiKey);
+
+  LlmProviderSettings copyWith({
+    TranslationProviderTemplate? provider,
+    String? baseUrl,
+    String? model,
+  }) => LlmProviderSettings(
+    provider: provider ?? this.provider,
+    baseUrl: baseUrl ?? this.baseUrl,
+    model: model ?? this.model,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'provider': provider.name,
+    'base_url': baseUrl,
+    'model': model,
+  };
+
+  factory LlmProviderSettings.fromJson(Map<String, dynamic>? json) {
+    final baseUrl = json?['base_url'] as String? ?? '';
+    return LlmProviderSettings(
+      provider:
+          _enumByName(TranslationProviderTemplate.values, json?['provider']) ??
+          TranslationProviderTemplateX.inferFromBaseUrl(baseUrl),
+      baseUrl: baseUrl,
+      model: json?['model'] as String? ?? '',
+    );
+  }
+}
+
+class TranslationPreferences {
+  const TranslationPreferences({
+    this.targetLanguage = '',
+    this.autoTranslate = false,
+  });
+
+  final String targetLanguage;
+  final bool autoTranslate;
+
+  TranslationPreferences copyWith({
+    String? targetLanguage,
+    bool? autoTranslate,
+  }) => TranslationPreferences(
+    targetLanguage: targetLanguage ?? this.targetLanguage,
+    autoTranslate: autoTranslate ?? this.autoTranslate,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'target_language': targetLanguage,
+    'auto_translate': autoTranslate,
+  };
+
+  factory TranslationPreferences.fromJson(Map<String, dynamic>? json) =>
+      TranslationPreferences(
+        targetLanguage: json?['target_language'] as String? ?? '',
+        autoTranslate: json?['auto_translate'] as bool? ?? false,
+      );
 }
 
 class TranslationOptions {
@@ -630,6 +793,277 @@ class TranslationState {
         origin: _enumByName(TranslationOrigin.values, json?['origin']),
         completedSegments: (json?['completed_segments'] as num?)?.toInt() ?? 0,
         totalSegments: (json?['total_segments'] as num?)?.toInt() ?? 0,
+        errorCode: json?['error_code'] as String?,
+        errorMessage: json?['error_message'] as String?,
+      );
+}
+
+class AiChapter {
+  const AiChapter({
+    required this.id,
+    required this.title,
+    required this.summary,
+    required this.evidenceSegmentIds,
+    this.edited = false,
+  });
+
+  final String id;
+  final String title;
+  final String summary;
+  final List<String> evidenceSegmentIds;
+  final bool edited;
+
+  AiChapter copyWith({
+    String? title,
+    String? summary,
+    List<String>? evidenceSegmentIds,
+    bool? edited,
+  }) => AiChapter(
+    id: id,
+    title: title ?? this.title,
+    summary: summary ?? this.summary,
+    evidenceSegmentIds: evidenceSegmentIds ?? this.evidenceSegmentIds,
+    edited: edited ?? this.edited,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'summary': summary,
+    'evidence_segment_ids': evidenceSegmentIds,
+    'edited': edited,
+  };
+
+  factory AiChapter.fromJson(Map<String, dynamic> json) => AiChapter(
+    id: json['id'] as String? ?? '',
+    title: json['title'] as String? ?? '',
+    summary: json['summary'] as String? ?? '',
+    evidenceSegmentIds: _strings(json['evidence_segment_ids']),
+    edited: json['edited'] as bool? ?? false,
+  );
+}
+
+class AiInsight {
+  const AiInsight({
+    required this.id,
+    required this.type,
+    required this.text,
+    required this.evidenceSegmentIds,
+    this.owner,
+    this.deadline,
+    this.edited = false,
+  });
+
+  final String id;
+  final AiInsightType type;
+  final String text;
+  final String? owner;
+  final String? deadline;
+  final List<String> evidenceSegmentIds;
+  final bool edited;
+
+  AiInsight copyWith({
+    String? text,
+    String? owner,
+    String? deadline,
+    List<String>? evidenceSegmentIds,
+    bool? edited,
+    bool clearOwner = false,
+    bool clearDeadline = false,
+  }) => AiInsight(
+    id: id,
+    type: type,
+    text: text ?? this.text,
+    owner: clearOwner ? null : owner ?? this.owner,
+    deadline: clearDeadline ? null : deadline ?? this.deadline,
+    evidenceSegmentIds: evidenceSegmentIds ?? this.evidenceSegmentIds,
+    edited: edited ?? this.edited,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'type': type.name,
+    'text': text,
+    if (owner case final value?) 'owner': value,
+    if (deadline case final value?) 'deadline': value,
+    'evidence_segment_ids': evidenceSegmentIds,
+    'edited': edited,
+  };
+
+  factory AiInsight.fromJson(Map<String, dynamic> json) => AiInsight(
+    id: json['id'] as String? ?? '',
+    type:
+        _enumByName(AiInsightType.values, json['type']) ??
+        AiInsightType.keyIdea,
+    text: json['text'] as String? ?? '',
+    owner: json['owner'] as String?,
+    deadline: json['deadline'] as String?,
+    evidenceSegmentIds: _strings(json['evidence_segment_ids']),
+    edited: json['edited'] as bool? ?? false,
+  );
+}
+
+class AiBrief {
+  const AiBrief({
+    required this.overview,
+    this.overviewEvidenceSegmentIds = const [],
+    required this.chapters,
+    required this.insights,
+    required this.outputLanguage,
+    required this.model,
+    required this.selectedSections,
+    required this.generatedAt,
+    required this.sourceTranscriptUpdatedAt,
+    this.edited = false,
+  });
+
+  final String overview;
+  final List<String> overviewEvidenceSegmentIds;
+  final List<AiChapter> chapters;
+  final List<AiInsight> insights;
+  final String outputLanguage;
+  final String model;
+  final Set<AiBriefSection> selectedSections;
+  final DateTime generatedAt;
+  final DateTime sourceTranscriptUpdatedAt;
+  final bool edited;
+
+  bool isStaleFor(TranscriptDocument document) =>
+      document.updatedAt.isAfter(sourceTranscriptUpdatedAt);
+
+  AiBrief copyWith({
+    String? overview,
+    List<String>? overviewEvidenceSegmentIds,
+    List<AiChapter>? chapters,
+    List<AiInsight>? insights,
+    bool? edited,
+  }) => AiBrief(
+    overview: overview ?? this.overview,
+    overviewEvidenceSegmentIds:
+        overviewEvidenceSegmentIds ?? this.overviewEvidenceSegmentIds,
+    chapters: chapters ?? this.chapters,
+    insights: insights ?? this.insights,
+    outputLanguage: outputLanguage,
+    model: model,
+    selectedSections: selectedSections,
+    generatedAt: generatedAt,
+    sourceTranscriptUpdatedAt: sourceTranscriptUpdatedAt,
+    edited: edited ?? this.edited,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'overview': overview,
+    'overview_evidence_segment_ids': overviewEvidenceSegmentIds,
+    'chapters': chapters.map((item) => item.toJson()).toList(),
+    'insights': insights.map((item) => item.toJson()).toList(),
+    'output_language': outputLanguage,
+    'model': model,
+    'selected_sections': selectedSections.map((item) => item.name).toList(),
+    'generated_at': generatedAt.toIso8601String(),
+    'source_transcript_updated_at': sourceTranscriptUpdatedAt.toIso8601String(),
+    'edited': edited,
+  };
+
+  factory AiBrief.fromJson(Map<String, dynamic> json) => AiBrief(
+    overview: json['overview'] as String? ?? '',
+    overviewEvidenceSegmentIds: _strings(json['overview_evidence_segment_ids']),
+    chapters: _mapList(json['chapters'], AiChapter.fromJson),
+    insights: _mapList(json['insights'], AiInsight.fromJson),
+    outputLanguage: json['output_language'] as String? ?? 'en',
+    model: json['model'] as String? ?? '',
+    selectedSections: _enumSet(
+      AiBriefSection.values,
+      json['selected_sections'],
+      fallback: defaultAiBriefSections,
+    ),
+    generatedAt: _date(json['generated_at']) ?? DateTime.now().toUtc(),
+    sourceTranscriptUpdatedAt:
+        _date(json['source_transcript_updated_at']) ?? DateTime.now().toUtc(),
+    edited: json['edited'] as bool? ?? false,
+  );
+}
+
+class AiGenerationState {
+  const AiGenerationState({
+    this.status = AiGenerationStatus.idle,
+    this.stage = '',
+    this.completedChunks = 0,
+    this.totalChunks = 0,
+    this.outputLanguage = '',
+    this.model = '',
+    this.selectedSections = const {},
+    this.mergeSections = false,
+    this.errorCode,
+    this.errorMessage,
+  });
+
+  final AiGenerationStatus status;
+  final String stage;
+  final int completedChunks;
+  final int totalChunks;
+  final String outputLanguage;
+  final String model;
+  final Set<AiBriefSection> selectedSections;
+  final bool mergeSections;
+  final String? errorCode;
+  final String? errorMessage;
+
+  double get progress => totalChunks == 0 ? 0 : completedChunks / totalChunks;
+
+  AiGenerationState copyWith({
+    AiGenerationStatus? status,
+    String? stage,
+    int? completedChunks,
+    int? totalChunks,
+    String? outputLanguage,
+    String? model,
+    Set<AiBriefSection>? selectedSections,
+    bool? mergeSections,
+    String? errorCode,
+    String? errorMessage,
+    bool clearError = false,
+  }) => AiGenerationState(
+    status: status ?? this.status,
+    stage: stage ?? this.stage,
+    completedChunks: completedChunks ?? this.completedChunks,
+    totalChunks: totalChunks ?? this.totalChunks,
+    outputLanguage: outputLanguage ?? this.outputLanguage,
+    model: model ?? this.model,
+    selectedSections: selectedSections ?? this.selectedSections,
+    mergeSections: mergeSections ?? this.mergeSections,
+    errorCode: clearError ? null : errorCode ?? this.errorCode,
+    errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'status': status.name,
+    'stage': stage,
+    'completed_chunks': completedChunks,
+    'total_chunks': totalChunks,
+    'output_language': outputLanguage,
+    'model': model,
+    'selected_sections': selectedSections.map((item) => item.name).toList(),
+    'merge_sections': mergeSections,
+    if (errorCode case final value?) 'error_code': value,
+    if (errorMessage case final value?) 'error_message': value,
+  };
+
+  factory AiGenerationState.fromJson(Map<String, dynamic>? json) =>
+      AiGenerationState(
+        status:
+            _enumByName(AiGenerationStatus.values, json?['status']) ??
+            AiGenerationStatus.idle,
+        stage: json?['stage'] as String? ?? '',
+        completedChunks: (json?['completed_chunks'] as num?)?.toInt() ?? 0,
+        totalChunks: (json?['total_chunks'] as num?)?.toInt() ?? 0,
+        outputLanguage: json?['output_language'] as String? ?? '',
+        model: json?['model'] as String? ?? '',
+        selectedSections: _enumSet(
+          AiBriefSection.values,
+          json?['selected_sections'],
+          fallback: const {},
+        ),
+        mergeSections: json?['merge_sections'] as bool? ?? false,
         errorCode: json?['error_code'] as String?,
         errorMessage: json?['error_message'] as String?,
       );
@@ -787,9 +1221,14 @@ class AppSettings {
     this.showFullscreenShortcuts = true,
     this.exportOptions = const ExportOptions(),
     this.onboardingComplete = false,
-    this.translationSettings = const TranslationSettings(),
+    LlmProviderSettings llmProviderSettings = const LlmProviderSettings(),
+    TranslationPreferences translationPreferences =
+        const TranslationPreferences(),
+    TranslationSettings? translationSettings,
     this.sonioxTranslation = const SonioxTranslationOptions(),
-  });
+  }) : _llmProviderSettings = llmProviderSettings,
+       _translationPreferences = translationPreferences,
+       _legacyTranslationSettings = translationSettings;
 
   final AppThemeMode themeMode;
   final AppLocaleMode localeMode;
@@ -798,8 +1237,21 @@ class AppSettings {
   final bool showFullscreenShortcuts;
   final ExportOptions exportOptions;
   final bool onboardingComplete;
-  final TranslationSettings translationSettings;
+  final LlmProviderSettings _llmProviderSettings;
+  final TranslationPreferences _translationPreferences;
+  final TranslationSettings? _legacyTranslationSettings;
   final SonioxTranslationOptions sonioxTranslation;
+
+  LlmProviderSettings get llmProviderSettings =>
+      _legacyTranslationSettings?.providerSettings ?? _llmProviderSettings;
+
+  TranslationPreferences get translationPreferences =>
+      _legacyTranslationSettings?.preferences ?? _translationPreferences;
+
+  TranslationSettings get translationSettings => TranslationSettings.fromParts(
+    llmProviderSettings,
+    translationPreferences,
+  );
 
   AppSettings copyWith({
     AppThemeMode? themeMode,
@@ -809,6 +1261,8 @@ class AppSettings {
     bool? showFullscreenShortcuts,
     ExportOptions? exportOptions,
     bool? onboardingComplete,
+    LlmProviderSettings? llmProviderSettings,
+    TranslationPreferences? translationPreferences,
     TranslationSettings? translationSettings,
     SonioxTranslationOptions? sonioxTranslation,
   }) => AppSettings(
@@ -820,7 +1274,14 @@ class AppSettings {
         showFullscreenShortcuts ?? this.showFullscreenShortcuts,
     exportOptions: exportOptions ?? this.exportOptions,
     onboardingComplete: onboardingComplete ?? this.onboardingComplete,
-    translationSettings: translationSettings ?? this.translationSettings,
+    llmProviderSettings:
+        translationSettings?.providerSettings ??
+        llmProviderSettings ??
+        this.llmProviderSettings,
+    translationPreferences:
+        translationSettings?.preferences ??
+        translationPreferences ??
+        this.translationPreferences,
     sonioxTranslation: sonioxTranslation ?? this.sonioxTranslation,
   );
 
@@ -833,31 +1294,47 @@ class AppSettings {
     'show_fullscreen_shortcuts': showFullscreenShortcuts,
     'export_options': exportOptions.toJson(),
     'onboarding_complete': onboardingComplete,
-    'translation_settings': translationSettings.toJson(),
+    'llm_provider_settings': llmProviderSettings.toJson(),
+    'translation_preferences': translationPreferences.toJson(),
     'soniox_translation': sonioxTranslation.toJson(),
   };
 
-  factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
-    themeMode:
-        _enumByName(AppThemeMode.values, json['theme_mode']) ??
-        AppThemeMode.system,
-    localeMode:
-        _enumByName(AppLocaleMode.values, json['locale_mode']) ??
-        AppLocaleMode.system,
-    showSpeakers: json['show_speakers'] as bool? ?? true,
-    showTimestamps: json['show_timestamps'] as bool? ?? false,
-    showFullscreenShortcuts: json['show_fullscreen_shortcuts'] as bool? ?? true,
-    exportOptions: ExportOptions.fromJson(
-      (json['export_options'] as Map?)?.cast<String, dynamic>(),
-    ),
-    onboardingComplete: json['onboarding_complete'] as bool? ?? false,
-    translationSettings: TranslationSettings.fromJson(
+  factory AppSettings.fromJson(Map<String, dynamic> json) {
+    final legacy = TranslationSettings.fromJson(
       (json['translation_settings'] as Map?)?.cast<String, dynamic>(),
-    ),
-    sonioxTranslation: SonioxTranslationOptions.fromJson(
-      (json['soniox_translation'] as Map?)?.cast<String, dynamic>(),
-    ),
-  );
+    );
+    final hasSplitSettings = json['llm_provider_settings'] is Map;
+    return AppSettings(
+      themeMode:
+          _enumByName(AppThemeMode.values, json['theme_mode']) ??
+          AppThemeMode.system,
+      localeMode:
+          _enumByName(AppLocaleMode.values, json['locale_mode']) ??
+          AppLocaleMode.system,
+      showSpeakers: json['show_speakers'] as bool? ?? true,
+      showTimestamps: json['show_timestamps'] as bool? ?? false,
+      showFullscreenShortcuts:
+          json['show_fullscreen_shortcuts'] as bool? ?? true,
+      exportOptions: ExportOptions.fromJson(
+        (json['export_options'] as Map?)?.cast<String, dynamic>(),
+      ),
+      onboardingComplete: json['onboarding_complete'] as bool? ?? false,
+      llmProviderSettings: hasSplitSettings
+          ? LlmProviderSettings.fromJson(
+              (json['llm_provider_settings'] as Map).cast<String, dynamic>(),
+            )
+          : legacy.providerSettings,
+      translationPreferences: hasSplitSettings
+          ? TranslationPreferences.fromJson(
+              (json['translation_preferences'] as Map?)
+                  ?.cast<String, dynamic>(),
+            )
+          : legacy.preferences,
+      sonioxTranslation: SonioxTranslationOptions.fromJson(
+        (json['soniox_translation'] as Map?)?.cast<String, dynamic>(),
+      ),
+    );
+  }
 }
 
 class TranscriptionJob {
@@ -880,6 +1357,8 @@ class TranscriptionJob {
     this.cleanupState = CleanupState.none,
     this.translationOptions = const TranslationOptions(),
     this.translationState = const TranslationState(),
+    this.aiBrief,
+    this.aiGenerationState = const AiGenerationState(),
   });
 
   final String id;
@@ -900,8 +1379,13 @@ class TranscriptionJob {
   final CleanupState cleanupState;
   final TranslationOptions translationOptions;
   final TranslationState translationState;
+  final AiBrief? aiBrief;
+  final AiGenerationState aiGenerationState;
 
-  bool get isBusy => status.isActive || translationState.status.isActive;
+  bool get isBusy =>
+      status.isActive ||
+      translationState.status.isActive ||
+      aiGenerationState.status.isActive;
 
   String get fileName => sourcePath.replaceAll('\\', '/').split('/').last;
 
@@ -920,9 +1404,12 @@ class TranscriptionJob {
     CleanupState? cleanupState,
     TranslationOptions? translationOptions,
     TranslationState? translationState,
+    AiBrief? aiBrief,
+    AiGenerationState? aiGenerationState,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
+    bool clearAiBrief = false,
   }) => TranscriptionJob(
     id: id,
     batchId: batchId,
@@ -944,6 +1431,8 @@ class TranscriptionJob {
     cleanupState: cleanupState ?? this.cleanupState,
     translationOptions: translationOptions ?? this.translationOptions,
     translationState: translationState ?? this.translationState,
+    aiBrief: clearAiBrief ? null : aiBrief ?? this.aiBrief,
+    aiGenerationState: aiGenerationState ?? this.aiGenerationState,
   );
 
   Map<String, dynamic> toJson() => {
@@ -967,6 +1456,8 @@ class TranscriptionJob {
     'cleanup_state': cleanupState.name,
     'translation_options': translationOptions.toJson(),
     'translation_state': translationState.toJson(),
+    if (aiBrief case final value?) 'ai_brief': value.toJson(),
+    'ai_generation_state': aiGenerationState.toJson(),
   };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -1011,6 +1502,12 @@ class TranscriptionJob {
       translationState: TranslationState.fromJson(
         (json['translation_state'] as Map?)?.cast<String, dynamic>(),
       ),
+      aiBrief: json['ai_brief'] is Map
+          ? AiBrief.fromJson((json['ai_brief'] as Map).cast<String, dynamic>())
+          : null,
+      aiGenerationState: AiGenerationState.fromJson(
+        (json['ai_generation_state'] as Map?)?.cast<String, dynamic>(),
+      ),
     );
   }
 }
@@ -1043,6 +1540,20 @@ List<T> _mapList<T>(dynamic value, T Function(Map<String, dynamic>) parser) =>
 
 List<String> _strings(dynamic value) =>
     value is List ? value.whereType<String>().toList() : const [];
+
+Set<T> _enumSet<T extends Enum>(
+  List<T> values,
+  dynamic names, {
+  required Set<T> fallback,
+}) {
+  if (names is! List) return Set<T>.of(fallback);
+  final result = <T>{};
+  for (final name in names) {
+    final value = _enumByName(values, name);
+    if (value != null) result.add(value);
+  }
+  return result;
+}
 
 DateTime? _date(dynamic value) =>
     value is String ? DateTime.tryParse(value)?.toUtc() : null;

@@ -3,7 +3,9 @@ import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
+import 'data/ai_brief_service.dart';
 import 'data/local_repositories.dart';
+import 'data/openai_llm_client.dart';
 import 'data/openai_translation_service.dart';
 import 'data/process_media_service.dart';
 import 'data/soniox_api_client.dart';
@@ -32,7 +34,8 @@ Future<void> main() async {
   final paths = await AppPaths.create();
   final settingsRepository = JsonSettingsRepository(paths);
   final credentials = SecureCredentialStore();
-  final translationCredentials = SecureTranslationCredentialStore();
+  final llmCredentials = SecureLlmCredentialStore();
+  final llmClient = OpenAiCompatibleLlmClient(llmCredentials);
   final media = ProcessMediaService(paths);
   final controller = AppController(
     credentialStore: credentials,
@@ -41,10 +44,9 @@ Future<void> main() async {
     mediaService: media,
     sonioxClient: SonioxApiClient(credentials),
     exporter: const DefaultTranscriptExporter(),
-    translationCredentialStore: translationCredentials,
-    translationService: OpenAiCompatibleTranslationService(
-      translationCredentials,
-    ),
+    translationCredentialStore: llmCredentials,
+    translationService: OpenAiCompatibleTranslationService(llmCredentials),
+    aiBriefService: DefaultAiBriefService(llmClient),
   );
   await controller.initialize();
   runApp(MeowSttApp(controller: controller));

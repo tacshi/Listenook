@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
@@ -65,6 +66,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   bool _focusFrameQueued = false;
   bool _forceFocusQueued = false;
   bool _searchVisible = false;
+  bool _showAiBrief = false;
   TranslationViewMode _viewMode = TranslationViewMode.original;
   int _programmaticScrolls = 0;
   String? _lastScrolledSegmentId;
@@ -153,6 +155,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _repeatRestartQueuedResume = false;
       _followPlayback = true;
       _searchVisible = false;
+      _showAiBrief = false;
       _editingSegmentId = null;
       _editingTranslationSegmentId = null;
       _viewMode = TranslationViewMode.original;
@@ -380,7 +383,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
-          _ReviewHeader(job: job, viewMode: _viewMode),
+          _ReviewHeader(
+            job: job,
+            viewMode: _viewMode,
+            showAiBrief: _showAiBrief,
+          ),
           const Divider(height: 1),
           Expanded(
             child: LayoutBuilder(
@@ -546,134 +553,222 @@ class _TranscriptReviewState extends State<TranscriptReview>
     required String query,
     required List<TranscriptSegment> segments,
     required int? currentIndex,
-  }) => Column(
-    children: [
-      _TranscriptToolbar(
-        job: job,
-        search: _search,
-        searchVisible: _searchVisible,
-        viewMode: _viewMode,
-        onViewModeChanged: (value) => setState(() => _viewMode = value),
-        onOpenSearch: () => setState(() => _searchVisible = true),
-        onCloseSearch: _closeTranscriptSearch,
-        onSearch: () {
-          setState(() {});
-          if (_search.text.trim().isEmpty) {
-            _queueFocusCurrent(force: true);
-          }
-        },
-        onFocusCurrentSentence: document.segments.isEmpty
-            ? null
-            : _focusCurrentSentence,
-      ),
-      const Divider(height: 1),
-      if (controller.settings.showSpeakers && document.speakers.isNotEmpty)
-        SpeakerStrip(job: job, document: document),
-      Expanded(
-        child: Listener(
-          onPointerSignal: (event) {
-            if (event is PointerScrollEvent) _suspendFollow();
+  }) {
+    final transcript = Column(
+      children: [
+        _TranscriptToolbar(
+          job: job,
+          search: _search,
+          searchVisible: _searchVisible,
+          viewMode: _viewMode,
+          onViewModeChanged: (value) => setState(() => _viewMode = value),
+          onOpenSearch: () => setState(() => _searchVisible = true),
+          onCloseSearch: _closeTranscriptSearch,
+          onSearch: () {
+            setState(() {});
+            if (_search.text.trim().isEmpty) {
+              _queueFocusCurrent(force: true);
+            }
           },
-          child: NotificationListener<UserScrollNotification>(
-            onNotification: (notification) {
-              if (_programmaticScrolls == 0 &&
-                  notification.direction != ScrollDirection.idle) {
-                _suspendFollow();
-              }
-              return false;
+          onFocusCurrentSentence: document.segments.isEmpty
+              ? null
+              : _focusCurrentSentence,
+        ),
+        const Divider(height: 1),
+        if (controller.settings.showSpeakers && document.speakers.isNotEmpty)
+          SpeakerStrip(job: job, document: document),
+        Expanded(
+          child: Listener(
+            onPointerSignal: (event) {
+              if (event is PointerScrollEvent) _suspendFollow();
             },
-            child: SelectionArea(
-              child: ScrollablePositionedList.separated(
-                key: const Key('transcript-scroll'),
-                itemScrollController: _transcriptScroll,
-                initialScrollIndex: currentIndex ?? 0,
-                initialAlignment: currentIndex == null || currentIndex == 0
-                    ? 0
-                    : .5,
-                scrollDirection: Axis.vertical,
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                itemCount: segments.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 4),
-                itemBuilder: (context, index) {
-                  final segment = segments[index];
-                  return Column(
-                    children: [
-                      if (_viewMode != TranslationViewMode.translated)
-                        TranscriptSegmentEditor(
-                          key: ValueKey(segment.id),
-                          segment: segment,
-                          tokens: _tokensBySegment[segment.id] ?? const [],
-                          positionMs: _position.inMilliseconds,
-                          isCurrent: query.isEmpty && index == currentIndex,
-                          query: query,
-                          speakerName: context.strings.speakerName(
-                            document.speakerName(segment.speaker),
+            child: NotificationListener<UserScrollNotification>(
+              onNotification: (notification) {
+                if (_programmaticScrolls == 0 &&
+                    notification.direction != ScrollDirection.idle) {
+                  _suspendFollow();
+                }
+                return false;
+              },
+              child: SelectionArea(
+                child: ScrollablePositionedList.separated(
+                  key: const Key('transcript-scroll'),
+                  itemScrollController: _transcriptScroll,
+                  initialScrollIndex: currentIndex ?? 0,
+                  initialAlignment: currentIndex == null || currentIndex == 0
+                      ? 0
+                      : .5,
+                  scrollDirection: Axis.vertical,
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                  itemCount: segments.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 4),
+                  itemBuilder: (context, index) {
+                    final segment = segments[index];
+                    return Column(
+                      children: [
+                        if (_viewMode != TranslationViewMode.translated)
+                          TranscriptSegmentEditor(
+                            key: ValueKey(segment.id),
+                            segment: segment,
+                            tokens: _tokensBySegment[segment.id] ?? const [],
+                            positionMs: _position.inMilliseconds,
+                            isCurrent: query.isEmpty && index == currentIndex,
+                            query: query,
+                            speakerName: context.strings.speakerName(
+                              document.speakerName(segment.speaker),
+                            ),
+                            showSpeaker: controller.settings.showSpeakers,
+                            showTimestamp: controller.settings.showTimestamps,
+                            highlightTranslated:
+                                job.translationState.status.isActive &&
+                                segment.hasTranslation,
+                            isEditing: _editingSegmentId == segment.id,
+                            isRepeating: _repeatingSegmentId == segment.id,
+                            onToggleRepeat: _canRepeat(segment)
+                                ? () => _toggleSentenceRepeat(segment)
+                                : null,
+                            onSeek: () => unawaited(
+                              _seek(Duration(milliseconds: segment.startMs)),
+                            ),
+                            onEdit: () => _startEditing(segment.id),
+                            onCancel: () => _cancelEditing(segment.id),
+                            onSave: (text) => _saveSegment(segment.id, text),
                           ),
-                          showSpeaker: controller.settings.showSpeakers,
-                          showTimestamp: controller.settings.showTimestamps,
-                          highlightTranslated:
-                              job.translationState.status.isActive &&
-                              segment.hasTranslation,
-                          isEditing: _editingSegmentId == segment.id,
-                          isRepeating: _repeatingSegmentId == segment.id,
-                          onToggleRepeat: _canRepeat(segment)
-                              ? () => _toggleSentenceRepeat(segment)
-                              : null,
-                          onSeek: () => unawaited(
-                            _seek(Duration(milliseconds: segment.startMs)),
+                        if (_viewMode != TranslationViewMode.original)
+                          _TranslatedSegmentEditor(
+                            key: ValueKey('translated-${segment.id}'),
+                            segment: segment,
+                            isCurrent: query.isEmpty && index == currentIndex,
+                            query: query,
+                            showTimestamp: controller.settings.showTimestamps,
+                            highlightTranslated:
+                                job.translationState.status.isActive &&
+                                segment.hasTranslation,
+                            isEditing:
+                                _editingTranslationSegmentId == segment.id,
+                            showRepeatAction:
+                                _viewMode == TranslationViewMode.translated,
+                            isRepeating:
+                                _viewMode == TranslationViewMode.translated &&
+                                _repeatingSegmentId == segment.id,
+                            onToggleRepeat:
+                                _viewMode == TranslationViewMode.translated &&
+                                    _canRepeat(segment)
+                                ? () => _toggleSentenceRepeat(segment)
+                                : null,
+                            onSeek: () => unawaited(
+                              _seek(Duration(milliseconds: segment.startMs)),
+                            ),
+                            onEdit: () => _startTranslationEditing(segment.id),
+                            onCancel: () =>
+                                _cancelTranslationEditing(segment.id),
+                            onSave: (text) =>
+                                _saveTranslation(segment.id, text),
+                            onRetranslate:
+                                job.translationState.status.isActive ||
+                                    !controller.translationConfigured
+                                ? null
+                                : () => context
+                                      .read<AppController>()
+                                      .retranslateSegment(
+                                        widget.jobId,
+                                        segment.id,
+                                      ),
                           ),
-                          onEdit: () => _startEditing(segment.id),
-                          onCancel: () => _cancelEditing(segment.id),
-                          onSave: (text) => _saveSegment(segment.id, text),
-                        ),
-                      if (_viewMode != TranslationViewMode.original)
-                        _TranslatedSegmentEditor(
-                          key: ValueKey('translated-${segment.id}'),
-                          segment: segment,
-                          isCurrent: query.isEmpty && index == currentIndex,
-                          query: query,
-                          showTimestamp: controller.settings.showTimestamps,
-                          highlightTranslated:
-                              job.translationState.status.isActive &&
-                              segment.hasTranslation,
-                          isEditing: _editingTranslationSegmentId == segment.id,
-                          showRepeatAction:
-                              _viewMode == TranslationViewMode.translated,
-                          isRepeating:
-                              _viewMode == TranslationViewMode.translated &&
-                              _repeatingSegmentId == segment.id,
-                          onToggleRepeat:
-                              _viewMode == TranslationViewMode.translated &&
-                                  _canRepeat(segment)
-                              ? () => _toggleSentenceRepeat(segment)
-                              : null,
-                          onSeek: () => unawaited(
-                            _seek(Duration(milliseconds: segment.startMs)),
-                          ),
-                          onEdit: () => _startTranslationEditing(segment.id),
-                          onCancel: () => _cancelTranslationEditing(segment.id),
-                          onSave: (text) => _saveTranslation(segment.id, text),
-                          onRetranslate:
-                              job.translationState.status.isActive ||
-                                  !controller.translationConfigured
-                              ? null
-                              : () => context
-                                    .read<AppController>()
-                                    .retranslateSegment(
-                                      widget.jobId,
-                                      segment.id,
-                                    ),
-                        ),
-                    ],
-                  );
-                },
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           ),
         ),
+      ],
+    );
+    return Column(
+      children: [
+        _ReviewContentTabs(
+          showAiBrief: _showAiBrief,
+          hasBrief: job.aiBrief != null,
+          generationActive: job.aiGenerationState.status.isActive,
+          onChanged: (value) => setState(() {
+            _showAiBrief = value;
+            if (value) _searchVisible = false;
+          }),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _showAiBrief
+              ? _AiBriefPane(
+                  job: job,
+                  document: document,
+                  onGenerate: () => _showAiBriefDialog(job),
+                  onEvidence: _openAiEvidence,
+                )
+              : transcript,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showAiBriefDialog(TranscriptionJob job) async {
+    final controller = context.read<AppController>();
+    if (!controller.aiBriefConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.strings.t('ai_brief_configure'))),
+      );
+      return;
+    }
+    final result = await _showAiBriefGenerationDialog(context, job);
+    if (result == null || !mounted) return;
+    if (job.aiBrief?.edited ?? false) {
+      final replace = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(context.strings.t('ai_brief_edited_refresh_title')),
+          content: Text(context.strings.t('ai_brief_edited_refresh_body')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(context.strings.t('cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(context.strings.t('continue')),
+            ),
+          ],
+        ),
+      );
+      if (replace != true || !mounted) return;
+    }
+    setState(() {
+      _showAiBrief = true;
+      _searchVisible = false;
+    });
+    unawaited(
+      controller.generateAiBrief(
+        job.id,
+        sections: result.sections,
+        outputLanguage: result.outputLanguage,
       ),
-    ],
-  );
+    );
+  }
+
+  Future<void> _openAiEvidence(String segmentId) async {
+    final document = _document;
+    final segment = document?.segments
+        .where((item) => item.id == segmentId)
+        .firstOrNull;
+    if (segment == null) return;
+    setState(() {
+      _showAiBrief = false;
+      _searchVisible = false;
+      _search.clear();
+      _followPlayback = true;
+    });
+    await _seek(Duration(milliseconds: segment.startMs));
+    _queueFocusCurrent(force: true);
+  }
 
   Future<void> _toggleFullscreen() async {
     final videoState = _videoKey.currentState;
@@ -965,11 +1060,1127 @@ class _ReviewSplitDivider extends StatelessWidget {
   );
 }
 
+class _ReviewContentTabs extends StatelessWidget {
+  const _ReviewContentTabs({
+    required this.showAiBrief,
+    required this.hasBrief,
+    required this.generationActive,
+    required this.onChanged,
+  });
+
+  final bool showAiBrief;
+  final bool hasBrief;
+  final bool generationActive;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+    child: SizedBox(
+      width: double.infinity,
+      child: SegmentedButton<bool>(
+        key: const Key('review-content-tabs'),
+        showSelectedIcon: false,
+        segments: [
+          ButtonSegment(
+            value: false,
+            icon: const Icon(Icons.subject_rounded, size: 18),
+            label: Text(context.strings.t('transcript')),
+          ),
+          ButtonSegment(
+            value: true,
+            icon: generationActive
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    hasBrief
+                        ? Icons.auto_awesome_rounded
+                        : Icons.auto_awesome_outlined,
+                    size: 18,
+                  ),
+            label: Text(context.strings.t('ai_brief')),
+          ),
+        ],
+        selected: {showAiBrief},
+        onSelectionChanged: (values) => onChanged(values.first),
+      ),
+    ),
+  );
+}
+
+class _AiBriefDialogResult {
+  const _AiBriefDialogResult(this.sections, this.outputLanguage);
+
+  final Set<AiBriefSection> sections;
+  final String outputLanguage;
+}
+
+Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
+  BuildContext context,
+  TranscriptionJob job,
+) async {
+  final controller = context.read<AppController>();
+  var sections = Set<AiBriefSection>.of(
+    job.aiBrief?.selectedSections ?? defaultAiBriefSections,
+  );
+  var outputLanguage =
+      job.aiBrief?.outputLanguage ?? controller.defaultAiBriefLanguage;
+  if (!supportedTranslationLanguageCodes.contains(outputLanguage)) {
+    outputLanguage = 'en';
+  }
+  return showDialog<_AiBriefDialogResult>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) {
+        return AlertDialog(
+          title: Text(
+            context.strings.t(
+              job.aiBrief == null ? 'create_ai_brief' : 'refresh_ai_brief',
+            ),
+          ),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(context.strings.t('ai_brief_description')),
+                  const SizedBox(height: 16),
+                  Text(
+                    context.strings.t('ai_brief_sections'),
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final section in AiBriefSection.values)
+                        FilterChip(
+                          key: ValueKey('ai-brief-section-${section.name}'),
+                          selected: sections.contains(section),
+                          label: Text(
+                            context.strings.t(
+                              'ai_brief_section_${section.name}',
+                            ),
+                          ),
+                          onSelected: (selected) => setDialogState(() {
+                            if (selected) {
+                              sections.add(section);
+                            } else {
+                              sections.remove(section);
+                            }
+                          }),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    key: const Key('ai-brief-output-language'),
+                    initialValue: outputLanguage,
+                    decoration: InputDecoration(
+                      labelText: context.strings.t('ai_brief_output_language'),
+                      prefixIcon: const Icon(Icons.language_rounded),
+                    ),
+                    items: [
+                      for (final code in supportedTranslationLanguageCodes)
+                        DropdownMenuItem(
+                          value: code,
+                          child: Text(
+                            context.strings.translationLanguageName(code),
+                          ),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setDialogState(() => outputLanguage = value);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    context.strings
+                        .t('ai_brief_model')
+                        .replaceFirst(
+                          '{model}',
+                          controller.settings.llmProviderSettings.model,
+                        ),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(context.strings.t('cancel')),
+            ),
+            FilledButton.icon(
+              key: const Key('confirm-create-ai-brief'),
+              onPressed: sections.isEmpty
+                  ? null
+                  : () => Navigator.pop(
+                      context,
+                      _AiBriefDialogResult(
+                        Set<AiBriefSection>.of(sections),
+                        outputLanguage,
+                      ),
+                    ),
+              icon: const Icon(Icons.auto_awesome_rounded),
+              label: Text(context.strings.t('generate')),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+class _AiBriefPane extends StatelessWidget {
+  const _AiBriefPane({
+    required this.job,
+    required this.document,
+    required this.onGenerate,
+    required this.onEvidence,
+  });
+
+  final TranscriptionJob job;
+  final TranscriptDocument document;
+  final VoidCallback onGenerate;
+  final Future<void> Function(String segmentId) onEvidence;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.watch<AppController>();
+    final state = job.aiGenerationState;
+    final brief = job.aiBrief;
+    if (brief == null && state.status.isActive) {
+      return _AiBriefProgress(job: job);
+    }
+    if (brief == null) {
+      return _AiBriefEmpty(job: job, onGenerate: onGenerate);
+    }
+    return Column(
+      children: [
+        _AiBriefToolbar(job: job, onGenerate: onGenerate),
+        if (brief.isStaleFor(document))
+          MaterialBanner(
+            key: const Key('ai-brief-outdated'),
+            leading: const Icon(Icons.update_rounded),
+            content: Text(context.strings.t('ai_brief_outdated')),
+            actions: [
+              TextButton(
+                onPressed: state.status.isActive ? null : onGenerate,
+                child: Text(context.strings.t('refresh_ai_brief')),
+              ),
+            ],
+          ),
+        if (state.status.isActive) _AiBriefProgress(job: job, compact: true),
+        if (!state.status.isActive && state.errorCode != null)
+          MaterialBanner(
+            leading: Icon(
+              state.status == AiGenerationStatus.cancelled
+                  ? Icons.stop_circle_outlined
+                  : Icons.error_outline_rounded,
+            ),
+            content: Text(
+              context.strings.error(
+                state.errorCode,
+                englishFallback: state.errorMessage,
+              ),
+            ),
+            actions: [
+              TextButton.icon(
+                onPressed: () => controller.retryAiBrief(job.id),
+                icon: const Icon(Icons.refresh_rounded),
+                label: Text(context.strings.t('retry')),
+              ),
+            ],
+          ),
+        Expanded(
+          child: ListView(
+            key: const Key('ai-brief-scroll'),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.verified_outlined, size: 18),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      context.strings.t('ai_brief_draft'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+              if (brief.overview.trim().isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _AiBriefSectionCard(
+                  title: context.strings.t('overview'),
+                  icon: Icons.summarize_outlined,
+                  onCopy: () => _copyBriefText(context, brief.overview),
+                  onRegenerate: state.status.isActive
+                      ? null
+                      : () => _regenerateAiSection(
+                          context,
+                          job,
+                          AiBriefSection.overview,
+                        ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(brief.overview),
+                      const SizedBox(height: 8),
+                      _EvidenceChips(
+                        document: document,
+                        segmentIds: brief.overviewEvidenceSegmentIds,
+                        onEvidence: onEvidence,
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: () => _editOverview(context, job),
+                          icon: const Icon(Icons.edit_outlined, size: 18),
+                          label: Text(context.strings.t('edit')),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (brief.chapters.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _AiBriefSectionCard(
+                  title: context.strings.t('chapters'),
+                  icon: Icons.view_timeline_outlined,
+                  onCopy: () => _copyBriefText(
+                    context,
+                    brief.chapters
+                        .map(
+                          (item) =>
+                              '${_evidenceRange(document, item.evidenceSegmentIds)} '
+                              '${item.title}\n${item.summary}',
+                        )
+                        .join('\n\n'),
+                  ),
+                  onRegenerate: state.status.isActive
+                      ? null
+                      : () => _regenerateAiSection(
+                          context,
+                          job,
+                          AiBriefSection.chapters,
+                        ),
+                  child: Column(
+                    children: [
+                      for (final chapter in brief.chapters)
+                        _AiChapterTile(
+                          job: job,
+                          document: document,
+                          chapter: chapter,
+                          onEvidence: onEvidence,
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+              for (final type in AiInsightType.values)
+                if (brief.insights.any((item) => item.type == type)) ...[
+                  const SizedBox(height: 12),
+                  _AiBriefSectionCard(
+                    title: _insightTitle(context, type),
+                    icon: _insightIcon(type),
+                    onCopy: () => _copyBriefText(
+                      context,
+                      brief.insights
+                          .where((item) => item.type == type)
+                          .map((item) => '- ${item.text}')
+                          .join('\n'),
+                    ),
+                    onRegenerate: state.status.isActive
+                        ? null
+                        : () => _regenerateAiSection(
+                            context,
+                            job,
+                            _sectionForInsight(type),
+                          ),
+                    child: Column(
+                      children: [
+                        for (final insight in brief.insights.where(
+                          (item) => item.type == type,
+                        ))
+                          _AiInsightTile(
+                            job: job,
+                            document: document,
+                            insight: insight,
+                            onEvidence: onEvidence,
+                          ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: () => _addInsight(context, job, type),
+                            icon: const Icon(Icons.add_rounded),
+                            label: Text(context.strings.t('add_item')),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              if (brief.insights.isEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () =>
+                        _addInsight(context, job, AiInsightType.keyIdea),
+                    icon: const Icon(Icons.add_rounded),
+                    label: Text(context.strings.t('add_item')),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AiBriefToolbar extends StatelessWidget {
+  const _AiBriefToolbar({required this.job, required this.onGenerate});
+
+  final TranscriptionJob job;
+  final VoidCallback onGenerate;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.read<AppController>();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      child: Row(
+        children: [
+          Text(
+            context.strings.t('ai_brief'),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const Spacer(),
+          IconButton(
+            tooltip: context.strings.t('copy_brief'),
+            onPressed: () => _copyBriefText(
+              context,
+              controller.renderAiBriefMarkdown(job.id),
+            ),
+            icon: const Icon(Icons.copy_all_outlined),
+          ),
+          IconButton(
+            tooltip: context.strings.t('export_brief'),
+            onPressed: () => _exportBrief(context, job.id),
+            icon: const Icon(Icons.ios_share_rounded),
+          ),
+          IconButton(
+            tooltip: context.strings.t('refresh_ai_brief'),
+            onPressed: job.aiGenerationState.status.isActive
+                ? null
+                : onGenerate,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AiBriefEmpty extends StatelessWidget {
+  const _AiBriefEmpty({required this.job, required this.onGenerate});
+
+  final TranscriptionJob job;
+  final VoidCallback onGenerate;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.watch<AppController>();
+    final state = job.aiGenerationState;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.auto_awesome_outlined,
+                size: 56,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                context.strings.t('ai_brief_empty'),
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                context.strings.t('ai_brief_empty_body'),
+                textAlign: TextAlign.center,
+              ),
+              if (state.errorCode != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  context.strings.error(
+                    state.errorCode,
+                    englishFallback: state.errorMessage,
+                  ),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                key: const Key('ai-brief-empty-action'),
+                onPressed: controller.aiBriefConfigured ? onGenerate : null,
+                icon: const Icon(Icons.auto_awesome_rounded),
+                label: Text(
+                  context.strings.t(
+                    state.status.canRetry ? 'retry' : 'create_ai_brief',
+                  ),
+                ),
+              ),
+              if (!controller.aiBriefConfigured) ...[
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => controller.setDestination(2),
+                  child: Text(context.strings.t('ai_brief_configure')),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AiBriefProgress extends StatelessWidget {
+  const _AiBriefProgress({required this.job, this.compact = false});
+
+  final TranscriptionJob job;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = job.aiGenerationState;
+    final text = state.stage == 'synthesizing'
+        ? context.strings.t('ai_brief_progress_synthesizing')
+        : context.strings.t('ai_brief_progress_analyzing');
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const LinearProgressIndicator(),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: Text(text)),
+            TextButton.icon(
+              onPressed: () =>
+                  context.read<AppController>().cancelAiBrief(job.id),
+              icon: const Icon(Icons.stop_circle_outlined),
+              label: Text(context.strings.t('cancel')),
+            ),
+          ],
+        ),
+      ],
+    );
+    if (compact) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: content,
+      );
+    }
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: Padding(padding: const EdgeInsets.all(24), child: content),
+      ),
+    );
+  }
+}
+
+class _AiBriefSectionCard extends StatelessWidget {
+  const _AiBriefSectionCard({
+    required this.title,
+    required this.icon,
+    required this.onCopy,
+    required this.onRegenerate,
+    required this.child,
+  });
+
+  final String title;
+  final IconData icon;
+  final VoidCallback onCopy;
+  final VoidCallback? onRegenerate;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    margin: EdgeInsets.zero,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: context.strings.t('copy_section'),
+                onPressed: onCopy,
+                icon: const Icon(Icons.copy_outlined, size: 19),
+              ),
+              IconButton(
+                tooltip: context.strings.t('regenerate_section'),
+                onPressed: onRegenerate,
+                icon: const Icon(Icons.refresh_rounded, size: 20),
+              ),
+            ],
+          ),
+          const Divider(height: 8),
+          Padding(padding: const EdgeInsets.fromLTRB(4, 8, 6, 0), child: child),
+        ],
+      ),
+    ),
+  );
+}
+
+class _AiChapterTile extends StatelessWidget {
+  const _AiChapterTile({
+    required this.job,
+    required this.document,
+    required this.chapter,
+    required this.onEvidence,
+  });
+
+  final TranscriptionJob job;
+  final TranscriptDocument document;
+  final AiChapter chapter;
+  final Future<void> Function(String) onEvidence;
+
+  @override
+  Widget build(BuildContext context) => Card.outlined(
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              TextButton(
+                onPressed: chapter.evidenceSegmentIds.isEmpty
+                    ? null
+                    : () => onEvidence(chapter.evidenceSegmentIds.first),
+                child: Text(
+                  _evidenceRange(document, chapter.evidenceSegmentIds),
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  chapter.title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'edit') _editChapter(context, job, chapter);
+                  if (value == 'delete') {
+                    context.read<AppController>().deleteAiChapter(
+                      job.id,
+                      chapter.id,
+                    );
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Text(context.strings.t('edit')),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Text(context.strings.t('delete_item')),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (chapter.summary.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text(chapter.summary),
+            ),
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: _EvidenceChips(
+              document: document,
+              segmentIds: chapter.evidenceSegmentIds,
+              onEvidence: onEvidence,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _AiInsightTile extends StatelessWidget {
+  const _AiInsightTile({
+    required this.job,
+    required this.document,
+    required this.insight,
+    required this.onEvidence,
+  });
+
+  final TranscriptionJob job;
+  final TranscriptDocument document;
+  final AiInsight insight;
+  final Future<void> Function(String) onEvidence;
+
+  @override
+  Widget build(BuildContext context) => Card.outlined(
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: Text(insight.text)),
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'edit') _editInsight(context, job, insight);
+                  if (value == 'delete') {
+                    context.read<AppController>().deleteAiInsight(
+                      job.id,
+                      insight.id,
+                    );
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Text(context.strings.t('edit_item')),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Text(context.strings.t('delete_item')),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if ((insight.owner?.isNotEmpty ?? false) ||
+              (insight.deadline?.isNotEmpty ?? false))
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  if (insight.owner?.isNotEmpty ?? false)
+                    Chip(
+                      avatar: const Icon(Icons.person_outline, size: 16),
+                      label: Text(insight.owner!),
+                    ),
+                  if (insight.deadline?.isNotEmpty ?? false)
+                    Chip(
+                      avatar: const Icon(Icons.event_outlined, size: 16),
+                      label: Text(insight.deadline!),
+                    ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 6),
+          _EvidenceChips(
+            document: document,
+            segmentIds: insight.evidenceSegmentIds,
+            onEvidence: onEvidence,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _EvidenceChips extends StatelessWidget {
+  const _EvidenceChips({
+    required this.document,
+    required this.segmentIds,
+    required this.onEvidence,
+  });
+
+  final TranscriptDocument document;
+  final List<String> segmentIds;
+  final Future<void> Function(String) onEvidence;
+
+  @override
+  Widget build(BuildContext context) {
+    final byId = {for (final segment in document.segments) segment.id: segment};
+    final evidence = segmentIds
+        .map((id) => (id: id, segment: byId[id]))
+        .where((item) => item.segment != null)
+        .toList();
+    if (evidence.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(
+          '${context.strings.t('evidence')}:',
+          style: Theme.of(context).textTheme.labelSmall,
+        ),
+        for (final item in evidence)
+          ActionChip(
+            key: ValueKey('ai-evidence-${item.id}'),
+            avatar: const Icon(Icons.play_arrow_rounded, size: 16),
+            label: Text(formatClock(item.segment!.startMs)),
+            onPressed: () => onEvidence(item.id),
+          ),
+      ],
+    );
+  }
+}
+
+Future<void> _copyBriefText(BuildContext context, String text) async {
+  await Clipboard.setData(ClipboardData(text: text.trim()));
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text(context.strings.t('brief_copied'))));
+}
+
+Future<void> _exportBrief(BuildContext context, String jobId) async {
+  final directory = await getDirectoryPath(
+    confirmButtonText: context.strings.t('export_brief'),
+  );
+  if (directory == null || !context.mounted) return;
+  await context.read<AppController>().exportAiBrief(jobId, directory);
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text(context.strings.t('brief_exported'))));
+}
+
+Future<void> _regenerateAiSection(
+  BuildContext context,
+  TranscriptionJob job,
+  AiBriefSection section,
+) async {
+  final edited = switch (section) {
+    AiBriefSection.overview => job.aiBrief?.edited ?? false,
+    AiBriefSection.chapters =>
+      job.aiBrief?.chapters.any((item) => item.edited) ?? false,
+    _ =>
+      job.aiBrief?.insights.any(
+            (item) => item.edited && _sectionForInsight(item.type) == section,
+          ) ??
+          false,
+  };
+  if (edited) {
+    final replace = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.strings.t('ai_brief_edited_refresh_title')),
+        content: Text(context.strings.t('ai_brief_edited_refresh_body')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(context.strings.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(context.strings.t('continue')),
+          ),
+        ],
+      ),
+    );
+    if (replace != true || !context.mounted) return;
+  }
+  unawaited(
+    context.read<AppController>().regenerateAiBriefSections(job.id, {section}),
+  );
+}
+
+Future<void> _editOverview(BuildContext context, TranscriptionJob job) async {
+  final field = TextEditingController(text: job.aiBrief?.overview ?? '');
+  final value = await showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(context.strings.t('overview')),
+      content: SizedBox(
+        width: 480,
+        child: TextField(
+          controller: field,
+          autofocus: true,
+          minLines: 4,
+          maxLines: 12,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(context.strings.t('cancel')),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, field.text),
+          child: Text(context.strings.t('save')),
+        ),
+      ],
+    ),
+  );
+  field.dispose();
+  if (value != null && context.mounted) {
+    await context.read<AppController>().updateAiBriefOverview(job.id, value);
+  }
+}
+
+Future<void> _editChapter(
+  BuildContext context,
+  TranscriptionJob job,
+  AiChapter chapter,
+) async {
+  final title = TextEditingController(text: chapter.title);
+  final summary = TextEditingController(text: chapter.summary);
+  final save = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(context.strings.t('chapters')),
+      content: SizedBox(
+        width: 480,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: title, autofocus: true),
+            const SizedBox(height: 12),
+            TextField(controller: summary, minLines: 3, maxLines: 8),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: Text(context.strings.t('cancel')),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(context.strings.t('save')),
+        ),
+      ],
+    ),
+  );
+  if (save == true && context.mounted) {
+    await context.read<AppController>().updateAiChapter(
+      job.id,
+      chapter.id,
+      title: title.text,
+      summary: summary.text,
+    );
+  }
+  title.dispose();
+  summary.dispose();
+}
+
+Future<void> _editInsight(
+  BuildContext context,
+  TranscriptionJob job,
+  AiInsight insight,
+) async {
+  final text = TextEditingController(text: insight.text);
+  final owner = TextEditingController(text: insight.owner ?? '');
+  final deadline = TextEditingController(text: insight.deadline ?? '');
+  final save = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(context.strings.t('edit_item')),
+      content: SizedBox(
+        width: 480,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: text,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 8,
+            ),
+            if (insight.type == AiInsightType.actionItem) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: owner,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('owner'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: deadline,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('deadline'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: Text(context.strings.t('cancel')),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(context.strings.t('save')),
+        ),
+      ],
+    ),
+  );
+  if (save == true && context.mounted) {
+    await context.read<AppController>().updateAiInsight(
+      job.id,
+      insight.id,
+      text: text.text,
+      owner: owner.text,
+      deadline: deadline.text,
+    );
+  }
+  text.dispose();
+  owner.dispose();
+  deadline.dispose();
+}
+
+Future<void> _addInsight(
+  BuildContext context,
+  TranscriptionJob job,
+  AiInsightType initialType,
+) async {
+  final text = TextEditingController();
+  var type = initialType;
+  final save = await showDialog<bool>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: Text(context.strings.t('add_item')),
+        content: SizedBox(
+          width: 460,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<AiInsightType>(
+                initialValue: type,
+                items: [
+                  for (final value in AiInsightType.values)
+                    DropdownMenuItem(
+                      value: value,
+                      child: Text(_insightTitle(context, value)),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => type = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: text,
+                autofocus: true,
+                minLines: 3,
+                maxLines: 8,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(context.strings.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(context.strings.t('save')),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (save == true && context.mounted) {
+    await context.read<AppController>().addAiInsight(
+      job.id,
+      type: type,
+      text: text.text,
+    );
+  }
+  text.dispose();
+}
+
+String _evidenceRange(TranscriptDocument document, List<String> segmentIds) {
+  final byId = {for (final segment in document.segments) segment.id: segment};
+  final segments = segmentIds
+      .map((id) => byId[id])
+      .whereType<TranscriptSegment>()
+      .toList();
+  if (segments.isEmpty) return '';
+  final start = formatClock(segments.first.startMs);
+  final end = formatClock(segments.last.endMs);
+  return start == end ? start : '$start–$end';
+}
+
+String _insightTitle(BuildContext context, AiInsightType type) =>
+    switch (type) {
+      AiInsightType.keyIdea => context.strings.t('key_ideas'),
+      AiInsightType.notableMoment => context.strings.t('notable_moments'),
+      AiInsightType.decision => context.strings.t('decisions'),
+      AiInsightType.actionItem => context.strings.t('action_items'),
+      AiInsightType.openQuestion => context.strings.t('open_questions'),
+    };
+
+IconData _insightIcon(AiInsightType type) => switch (type) {
+  AiInsightType.keyIdea => Icons.lightbulb_outline_rounded,
+  AiInsightType.notableMoment => Icons.stars_outlined,
+  AiInsightType.decision => Icons.gavel_outlined,
+  AiInsightType.actionItem => Icons.task_alt_rounded,
+  AiInsightType.openQuestion => Icons.help_outline_rounded,
+};
+
+AiBriefSection _sectionForInsight(AiInsightType type) => switch (type) {
+  AiInsightType.keyIdea ||
+  AiInsightType.notableMoment => AiBriefSection.keyIdeas,
+  AiInsightType.decision => AiBriefSection.decisions,
+  AiInsightType.actionItem => AiBriefSection.actionItems,
+  AiInsightType.openQuestion => AiBriefSection.openQuestions,
+};
+
 class _ReviewHeader extends StatelessWidget {
-  const _ReviewHeader({required this.job, required this.viewMode});
+  const _ReviewHeader({
+    required this.job,
+    required this.viewMode,
+    required this.showAiBrief,
+  });
 
   final TranscriptionJob job;
   final TranslationViewMode viewMode;
+  final bool showAiBrief;
 
   @override
   Widget build(BuildContext context) {
@@ -989,73 +2200,76 @@ class _ReviewHeader extends StatelessWidget {
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
-          IconButton(
-            key: const Key('toggle-speaker-labels'),
-            tooltip: context.strings.t('speaker_labels'),
-            isSelected: settings.showSpeakers,
-            onPressed: () => unawaited(
-              controller.updateSettings(
-                settings.copyWith(showSpeakers: !settings.showSpeakers),
+          if (!showAiBrief) ...[
+            IconButton(
+              key: const Key('toggle-speaker-labels'),
+              tooltip: context.strings.t('speaker_labels'),
+              isSelected: settings.showSpeakers,
+              onPressed: () => unawaited(
+                controller.updateSettings(
+                  settings.copyWith(showSpeakers: !settings.showSpeakers),
+                ),
               ),
+              icon: const Icon(Icons.person_outline_rounded),
+              selectedIcon: const Icon(Icons.person_rounded),
             ),
-            icon: const Icon(Icons.person_outline_rounded),
-            selectedIcon: const Icon(Icons.person_rounded),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            key: const Key('toggle-timestamps'),
-            tooltip: context.strings.t('timestamps'),
-            isSelected: settings.showTimestamps,
-            onPressed: () => unawaited(
-              controller.updateSettings(
-                settings.copyWith(showTimestamps: !settings.showTimestamps),
+            const SizedBox(width: 8),
+            IconButton(
+              key: const Key('toggle-timestamps'),
+              tooltip: context.strings.t('timestamps'),
+              isSelected: settings.showTimestamps,
+              onPressed: () => unawaited(
+                controller.updateSettings(
+                  settings.copyWith(showTimestamps: !settings.showTimestamps),
+                ),
               ),
+              icon: const Icon(Icons.schedule_outlined),
+              selectedIcon: const Icon(Icons.schedule_rounded),
             ),
-            icon: const Icon(Icons.schedule_outlined),
-            selectedIcon: const Icon(Icons.schedule_rounded),
-          ),
-          IconButton(
-            key: const Key('translate-transcript'),
-            tooltip: controller.translationConfigured
-                ? context.strings.t('translate_with_llm')
-                : context.strings.t('auto_translate_requires_config'),
-            onPressed:
-                controller.translationConfigured &&
-                    !job.translationState.status.isActive
-                ? () => _showTranslationDialog(context, job)
-                : null,
-            icon: const Icon(Icons.translate_rounded),
-          ),
-          IconButton(
-            tooltip: context.strings.t('copy'),
-            onPressed: () async {
-              final options = ExportOptions(
-                showSpeakers: settings.showSpeakers,
-                showTimestamps: settings.showTimestamps,
-                localeCode: Localizations.localeOf(context).languageCode,
-                contentMode: switch (viewMode) {
-                  TranslationViewMode.original => ExportContentMode.original,
-                  TranslationViewMode.translated =>
-                    ExportContentMode.translated,
-                  TranslationViewMode.bilingual => ExportContentMode.bilingual,
-                },
-              );
-              await Clipboard.setData(
-                ClipboardData(text: controller.renderJob(job.id, options)),
-              );
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(context.strings.t('copied'))),
+            IconButton(
+              key: const Key('translate-transcript'),
+              tooltip: controller.translationConfigured
+                  ? context.strings.t('translate_with_llm')
+                  : context.strings.t('auto_translate_requires_config'),
+              onPressed:
+                  controller.translationConfigured &&
+                      !job.translationState.status.isActive
+                  ? () => _showTranslationDialog(context, job)
+                  : null,
+              icon: const Icon(Icons.translate_rounded),
+            ),
+            IconButton(
+              tooltip: context.strings.t('copy'),
+              onPressed: () async {
+                final options = ExportOptions(
+                  showSpeakers: settings.showSpeakers,
+                  showTimestamps: settings.showTimestamps,
+                  localeCode: Localizations.localeOf(context).languageCode,
+                  contentMode: switch (viewMode) {
+                    TranslationViewMode.original => ExportContentMode.original,
+                    TranslationViewMode.translated =>
+                      ExportContentMode.translated,
+                    TranslationViewMode.bilingual =>
+                      ExportContentMode.bilingual,
+                  },
                 );
-              }
-            },
-            icon: const Icon(Icons.copy_all_outlined),
-          ),
-          IconButton(
-            tooltip: context.strings.t('export'),
-            onPressed: () => showExportDialog(context, jobId: job.id),
-            icon: const Icon(Icons.ios_share_rounded),
-          ),
+                await Clipboard.setData(
+                  ClipboardData(text: controller.renderJob(job.id, options)),
+                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(context.strings.t('copied'))),
+                  );
+                }
+              },
+              icon: const Icon(Icons.copy_all_outlined),
+            ),
+            IconButton(
+              tooltip: context.strings.t('export'),
+              onPressed: () => showExportDialog(context, jobId: job.id),
+              icon: const Icon(Icons.ios_share_rounded),
+            ),
+          ],
         ],
       ),
     );

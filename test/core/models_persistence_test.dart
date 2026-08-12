@@ -36,6 +36,32 @@ void main() {
     expect(restoredOpenRouter.toJson(), explicitOpenRouter.toJson());
   });
 
+  test(
+    'legacy translation settings migrate into split provider preferences',
+    () {
+      final settings = AppSettings.fromJson({
+        'translation_settings': {
+          'provider': 'openRouter',
+          'base_url': 'https://openrouter.ai/api/v1',
+          'model': 'brief-model',
+          'target_language': 'zh-Hans',
+          'auto_translate': true,
+        },
+      });
+
+      expect(
+        settings.llmProviderSettings.provider,
+        TranslationProviderTemplate.openRouter,
+      );
+      expect(settings.llmProviderSettings.model, 'brief-model');
+      expect(settings.translationPreferences.targetLanguage, 'zh-Hans');
+      expect(settings.translationPreferences.autoTranslate, isTrue);
+      expect(settings.toJson(), contains('llm_provider_settings'));
+      expect(settings.toJson(), contains('translation_preferences'));
+      expect(settings.toJson(), isNot(contains('translation_settings')));
+    },
+  );
+
   test('fullscreen shortcut guide defaults on and persists when hidden', () {
     expect(AppSettings.fromJson(const {}).showFullscreenShortcuts, isTrue);
 
@@ -80,7 +106,7 @@ void main() {
     expect(job.options.sonioxTranslation.enabled, isFalse);
   });
 
-  test('version 3 manifests round-trip translation without credentials', () {
+  test('version 4 manifests round-trip translation without credentials', () {
     final now = DateTime.utc(2026, 8, 11);
     final job = TranscriptionJob(
       id: 'translated',
@@ -137,7 +163,7 @@ void main() {
     final json = job.toJson();
     final restored = TranscriptionJob.fromJson(json);
 
-    expect(json['manifest_version'], 3);
+    expect(json['manifest_version'], 4);
     expect(job.toJsonString(), isNot(contains('api_key')));
     expect(restored.document!.segments.single.translatedText, '你好');
     expect(restored.translationState.status, TranslationStatus.completed);
@@ -158,6 +184,74 @@ void main() {
     );
     expect(appSettings.sonioxTranslation.enabled, isTrue);
     expect(appSettings.sonioxTranslation.targetLanguage, 'ja');
+  });
+
+  test('version 4 manifests round-trip evidence-backed AI Briefs', () {
+    final now = DateTime.utc(2026, 8, 12);
+    final job = TranscriptionJob(
+      id: 'brief',
+      batchId: 'batch',
+      sourcePath: '/recording.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      document: TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 's1',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Supported statement.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: now,
+      ),
+      aiBrief: AiBrief(
+        overview: 'Overview',
+        overviewEvidenceSegmentIds: const ['s1'],
+        chapters: const [
+          AiChapter(
+            id: 'c1',
+            title: 'Opening',
+            summary: 'Summary',
+            evidenceSegmentIds: ['s1'],
+          ),
+        ],
+        insights: const [
+          AiInsight(
+            id: 'i1',
+            type: AiInsightType.actionItem,
+            text: 'Follow up.',
+            evidenceSegmentIds: ['s1'],
+          ),
+        ],
+        outputLanguage: 'en',
+        model: 'brief-model',
+        selectedSections: const {
+          AiBriefSection.overview,
+          AiBriefSection.actionItems,
+        },
+        generatedAt: now,
+        sourceTranscriptUpdatedAt: now,
+      ),
+      aiGenerationState: const AiGenerationState(
+        status: AiGenerationStatus.completed,
+        model: 'brief-model',
+        outputLanguage: 'en',
+        selectedSections: {AiBriefSection.overview},
+      ),
+    );
+
+    final json = job.toJson();
+    final restored = TranscriptionJob.fromJson(json);
+
+    expect(restored.aiBrief?.overviewEvidenceSegmentIds, ['s1']);
+    expect(restored.aiBrief?.chapters.single.title, 'Opening');
+    expect(restored.aiBrief?.insights.single.type, AiInsightType.actionItem);
+    expect(restored.aiGenerationState.status, AiGenerationStatus.completed);
+    expect(job.toJsonString(), isNot(contains('api_key')));
   });
 
   test('job persistence is atomic and round-trips edits', () async {

@@ -22,12 +22,20 @@ Completions API. The endpoint operator may apply its own retention and privacy
 policy. Changing or removing either translation configuration does not delete
 translations already stored locally.
 
+AI Brief generation is also optional and user-invoked. Before the first brief,
+MeowSTT explains that the selected transcript text, timestamps, and speaker
+names will be sent to the same configured OpenAI-compatible endpoint. Original
+audio and video are never sent to that endpoint. Generated overviews, chapters,
+insights, edits, and transcript evidence references are stored locally and can
+be removed with the history entry.
+
 Both API keys are stored by the operating system's secure credential service
 and are never written to settings or job manifests. Local Application Support
 data contains source paths, media metadata, queue/recovery state, raw transcript
 tokens, editable original and translated segments, speaker mappings,
-translation progress, and export defaults. Original media is not copied into
-the library. Temporary extracted FLAC audio is deleted after upload.
+translation progress, AI Brief drafts and generation state, and export defaults.
+Original media is not copied into the library. Temporary extracted FLAC audio
+is deleted after upload.
 
 Deleting a history entry removes its local manifest and edits only. It does not
 delete or modify the original media file.

@@ -12,6 +12,7 @@ import '../core/transcript_parser.dart';
 import '../data/openai_translation_service.dart';
 import '../data/process_media_service.dart';
 import '../data/soniox_api_client.dart';
+import '../data/transcript_exporter.dart';
 
 class AppController extends ChangeNotifier {
   static const _maxConcurrentJobs = 4;
@@ -25,6 +26,7 @@ class AppController extends ChangeNotifier {
     required TranscriptExporter exporter,
     TranslationCredentialStore? translationCredentialStore,
     TranslationService? translationService,
+    AiBriefService? aiBriefService,
     TranscriptParser parser = const TranscriptParser(),
     Uuid uuid = const Uuid(),
   }) : _credentials = credentialStore,
@@ -35,6 +37,7 @@ class AppController extends ChangeNotifier {
        _exporter = exporter,
        _translationCredentials = translationCredentialStore,
        _translationService = translationService,
+       _aiBriefService = aiBriefService,
        _parser = parser,
        _uuid = uuid;
 
@@ -46,6 +49,7 @@ class AppController extends ChangeNotifier {
   final TranscriptExporter _exporter;
   final TranslationCredentialStore? _translationCredentials;
   final TranslationService? _translationService;
+  final AiBriefService? _aiBriefService;
   final TranscriptParser _parser;
   final Uuid _uuid;
   final Map<String, TranscriptionJob> _jobs = {};
@@ -53,6 +57,7 @@ class AppController extends ChangeNotifier {
   final List<String> _workspaceIds = [];
   final Set<String> _cancelledIds = {};
   final Set<String> _translationCancelledIds = {};
+  final Set<String> _aiBriefCancelledIds = {};
   String _batchId = '';
   bool _processing = false;
   bool _initializing = true;
@@ -73,6 +78,14 @@ class AppController extends ChangeNotifier {
   bool get translationConfigured => _settings.translationSettings.isConfigured(
     hasApiKey: _translationKeyConfigured,
   );
+  bool get aiBriefConfigured => _settings.llmProviderSettings.isConfigured(
+    hasApiKey: _translationKeyConfigured,
+  );
+  String get defaultAiBriefLanguage => switch (_settings.localeMode) {
+    AppLocaleMode.simplifiedChinese => 'zh-Hans',
+    AppLocaleMode.english => 'en',
+    AppLocaleMode.system => _initialTargetLanguage(),
+  };
   int get destinationIndex => _destinationIndex;
   String? get selectedJobId => _selectedJobId;
 
@@ -198,6 +211,15 @@ class AppController extends ChangeNotifier {
             totalSegments: progress.total,
             errorCode: 'translation_interrupted',
             errorMessage: 'Translation was interrupted before it finished.',
+          ),
+        );
+      }
+      if (job.aiGenerationState.status == AiGenerationStatus.generating) {
+        job = job.copyWith(
+          aiGenerationState: job.aiGenerationState.copyWith(
+            status: AiGenerationStatus.interrupted,
+            errorCode: 'ai_brief_interrupted',
+            errorMessage: 'AI Brief generation was interrupted.',
           ),
         );
       }
@@ -1411,6 +1433,413 @@ class AppController extends ChangeNotifier {
     return supportedSonioxTranslationLanguageCodes.contains(base) ? base : 'en';
   }
 
+  Future<void> generateAiBrief(
+    String jobId, {
+    required Set<AiBriefSection> sections,
+    required String outputLanguage,
+    bool mergeSections = false,
+  }) async {
+    final service = _aiBriefService;
+    var current = _jobs[jobId];
+    final document = current?.document;
+    if (current == null || document == null) return;
+    if (service == null) {
+      await _setAiBriefFailure(current, 'ai_brief_unavailable');
+      return;
+    }
+    if (current.aiGenerationState.status.isActive) return;
+    final provider = _settings.llmProviderSettings;
+    final validation = provider.validationError();
+    if (validation != null || !aiBriefConfigured) {
+      await _setAiBriefFailure(
+        current,
+        validation ?? 'ai_brief_missing_credentials',
+      );
+      return;
+    }
+    final estimated = service.estimateRequestCount(document, sections);
+    _aiBriefCancelledIds.remove(jobId);
+    current = await _transition(
+      current,
+      aiGenerationState: AiGenerationState(
+        status: AiGenerationStatus.generating,
+        stage: 'analyzing',
+        totalChunks: estimated,
+        outputLanguage: outputLanguage,
+        model: provider.model,
+        selectedSections: Set<AiBriefSection>.of(sections),
+        mergeSections: mergeSections,
+      ),
+    );
+    try {
+      final generated = await service.generate(
+        settings: provider,
+        document: document,
+        sections: sections,
+        outputLanguage: outputLanguage,
+        shouldCancel: () => _aiBriefCancelledIds.contains(jobId),
+        onProgress: (stage, completed, total) async {
+          final latest = (_jobs[jobId] ?? current)!;
+          current = await _transition(
+            latest,
+            aiGenerationState: latest.aiGenerationState.copyWith(
+              status: AiGenerationStatus.generating,
+              stage: stage,
+              completedChunks: completed,
+              totalChunks: total,
+              clearError: true,
+            ),
+          );
+        },
+      );
+      final latest = (_jobs[jobId] ?? current)!;
+      current = latest;
+      final brief = mergeSections && latest.aiBrief != null
+          ? _mergeAiBrief(latest.aiBrief!, generated, sections)
+          : generated;
+      await _transition(
+        latest,
+        aiBrief: brief,
+        aiGenerationState: latest.aiGenerationState.copyWith(
+          status: AiGenerationStatus.completed,
+          stage: 'complete',
+          completedChunks: estimated,
+          totalChunks: estimated,
+          clearError: true,
+        ),
+      );
+    } on OperationCancelledException {
+      final latest = (_jobs[jobId] ?? current)!;
+      await _transition(
+        latest,
+        aiGenerationState: latest.aiGenerationState.copyWith(
+          status: AiGenerationStatus.cancelled,
+          errorCode: 'ai_brief_cancelled',
+          errorMessage: 'AI Brief generation was cancelled.',
+        ),
+      );
+    } on AiBriefException catch (error) {
+      await _setAiBriefFailure(
+        _jobs[jobId] ?? current!,
+        error.code,
+        error.message,
+      );
+    } on Object catch (error) {
+      await _setAiBriefFailure(
+        _jobs[jobId] ?? current!,
+        'ai_brief_request_failed',
+        _safeError(error),
+      );
+    } finally {
+      _aiBriefCancelledIds.remove(jobId);
+    }
+  }
+
+  Future<void> retryAiBrief(String jobId) async {
+    final job = _jobs[jobId];
+    if (job == null || !job.aiGenerationState.status.canRetry) return;
+    final sections = job.aiGenerationState.selectedSections.isNotEmpty
+        ? job.aiGenerationState.selectedSections
+        : job.aiBrief?.selectedSections ?? defaultAiBriefSections;
+    final language = job.aiGenerationState.outputLanguage.isNotEmpty
+        ? job.aiGenerationState.outputLanguage
+        : job.aiBrief?.outputLanguage ?? defaultAiBriefLanguage;
+    await generateAiBrief(
+      jobId,
+      sections: sections,
+      outputLanguage: language,
+      mergeSections: job.aiGenerationState.mergeSections,
+    );
+  }
+
+  Future<void> regenerateAiBriefSections(
+    String jobId,
+    Set<AiBriefSection> sections,
+  ) async {
+    final job = _jobs[jobId];
+    if (job?.aiBrief == null) return;
+    await generateAiBrief(
+      jobId,
+      sections: sections,
+      outputLanguage: job!.aiBrief!.outputLanguage,
+      mergeSections: true,
+    );
+  }
+
+  void cancelAiBrief(String jobId) {
+    if (_jobs[jobId]?.aiGenerationState.status.isActive ?? false) {
+      _aiBriefCancelledIds.add(jobId);
+    }
+  }
+
+  Future<void> updateAiBriefOverview(String jobId, String value) async {
+    final job = _jobs[jobId];
+    final brief = job?.aiBrief;
+    if (job == null || brief == null) return;
+    await _transition(
+      job,
+      aiBrief: brief.copyWith(overview: value.trim(), edited: true),
+    );
+  }
+
+  Future<void> updateAiChapter(
+    String jobId,
+    String chapterId, {
+    required String title,
+    required String summary,
+  }) async {
+    final job = _jobs[jobId];
+    final brief = job?.aiBrief;
+    if (job == null || brief == null) return;
+    final chapters = [
+      for (final chapter in brief.chapters)
+        if (chapter.id == chapterId)
+          chapter.copyWith(
+            title: title.trim(),
+            summary: summary.trim(),
+            edited: true,
+          )
+        else
+          chapter,
+    ];
+    await _transition(
+      job,
+      aiBrief: brief.copyWith(chapters: chapters, edited: true),
+    );
+  }
+
+  Future<void> deleteAiChapter(String jobId, String chapterId) async {
+    final job = _jobs[jobId];
+    final brief = job?.aiBrief;
+    if (job == null || brief == null) return;
+    await _transition(
+      job,
+      aiBrief: brief.copyWith(
+        chapters: brief.chapters.where((item) => item.id != chapterId).toList(),
+        edited: true,
+      ),
+    );
+  }
+
+  Future<void> updateAiInsight(
+    String jobId,
+    String insightId, {
+    required String text,
+    String? owner,
+    String? deadline,
+  }) async {
+    final job = _jobs[jobId];
+    final brief = job?.aiBrief;
+    if (job == null || brief == null) return;
+    final insights = [
+      for (final insight in brief.insights)
+        if (insight.id == insightId)
+          insight.copyWith(
+            text: text.trim(),
+            owner: owner?.trim(),
+            deadline: deadline?.trim(),
+            clearOwner: owner?.trim().isEmpty ?? true,
+            clearDeadline: deadline?.trim().isEmpty ?? true,
+            edited: true,
+          )
+        else
+          insight,
+    ];
+    await _transition(
+      job,
+      aiBrief: brief.copyWith(insights: insights, edited: true),
+    );
+  }
+
+  Future<void> addAiInsight(
+    String jobId, {
+    required AiInsightType type,
+    required String text,
+  }) async {
+    final job = _jobs[jobId];
+    final brief = job?.aiBrief;
+    final value = text.trim();
+    if (job == null || brief == null || value.isEmpty) return;
+    final insight = AiInsight(
+      id: 'manual-${DateTime.now().microsecondsSinceEpoch}',
+      type: type,
+      text: value,
+      evidenceSegmentIds: const [],
+      edited: true,
+    );
+    await _transition(
+      job,
+      aiBrief: brief.copyWith(
+        insights: [...brief.insights, insight],
+        edited: true,
+      ),
+    );
+  }
+
+  Future<void> deleteAiInsight(String jobId, String insightId) async {
+    final job = _jobs[jobId];
+    final brief = job?.aiBrief;
+    if (job == null || brief == null) return;
+    await _transition(
+      job,
+      aiBrief: brief.copyWith(
+        insights: brief.insights.where((item) => item.id != insightId).toList(),
+        edited: true,
+      ),
+    );
+  }
+
+  String renderAiBriefMarkdown(String jobId) {
+    final job = _jobs[jobId];
+    final brief = job?.aiBrief;
+    final document = job?.document;
+    if (job == null || brief == null || document == null) return '';
+    final buffer = StringBuffer()
+      ..writeln('# ${job.fileName} — AI Brief')
+      ..writeln();
+    if (brief.overview.trim().isNotEmpty) {
+      buffer
+        ..writeln('## Overview')
+        ..writeln()
+        ..writeln(brief.overview.trim())
+        ..writeln(_markdownEvidence(document, brief.overviewEvidenceSegmentIds))
+        ..writeln();
+    }
+    if (brief.chapters.isNotEmpty) {
+      buffer
+        ..writeln('## Chapters')
+        ..writeln();
+      for (final chapter in brief.chapters) {
+        buffer
+          ..writeln('### ${chapter.title}')
+          ..writeln()
+          ..writeln(chapter.summary)
+          ..writeln(_markdownEvidence(document, chapter.evidenceSegmentIds))
+          ..writeln();
+      }
+    }
+    for (final type in AiInsightType.values) {
+      final items = brief.insights.where((item) => item.type == type).toList();
+      if (items.isEmpty) continue;
+      buffer
+        ..writeln('## ${_aiInsightHeading(type)}')
+        ..writeln();
+      for (final item in items) {
+        final details = [
+          if (item.owner?.isNotEmpty ?? false) 'Owner: ${item.owner}',
+          if (item.deadline?.isNotEmpty ?? false) 'Due: ${item.deadline}',
+        ].join(' · ');
+        buffer
+          ..writeln('- ${item.text}${details.isEmpty ? '' : ' — $details'}')
+          ..writeln(
+            '  ${_markdownEvidence(document, item.evidenceSegmentIds)}',
+          );
+      }
+      buffer.writeln();
+    }
+    return buffer.toString().trimRight();
+  }
+
+  Future<String> exportAiBrief(String jobId, String directory) async {
+    final job = _jobs[jobId];
+    if (job?.aiBrief == null) throw StateError('Job has no AI Brief.');
+    final base = p
+        .basenameWithoutExtension(job!.fileName)
+        .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
+        .replaceAll(RegExp(r'[. ]+$'), '')
+        .trim();
+    var output = File(
+      p.join(directory, '${base.isEmpty ? 'brief' : base}-brief.md'),
+    );
+    var suffix = 2;
+    while (await output.exists()) {
+      output = File(
+        p.join(directory, '${base.isEmpty ? 'brief' : base}-brief-$suffix.md'),
+      );
+      suffix++;
+    }
+    await output.writeAsString(renderAiBriefMarkdown(jobId), flush: true);
+    return output.path;
+  }
+
+  AiBrief _mergeAiBrief(
+    AiBrief current,
+    AiBrief generated,
+    Set<AiBriefSection> sections,
+  ) {
+    bool replaces(AiInsightType type) => switch (type) {
+      AiInsightType.keyIdea ||
+      AiInsightType.notableMoment => sections.contains(AiBriefSection.keyIdeas),
+      AiInsightType.decision => sections.contains(AiBriefSection.decisions),
+      AiInsightType.actionItem => sections.contains(AiBriefSection.actionItems),
+      AiInsightType.openQuestion => sections.contains(
+        AiBriefSection.openQuestions,
+      ),
+    };
+    final retainedInsights = current.insights
+        .where((item) => !replaces(item.type))
+        .toList();
+    return AiBrief(
+      overview: sections.contains(AiBriefSection.overview)
+          ? generated.overview
+          : current.overview,
+      overviewEvidenceSegmentIds: sections.contains(AiBriefSection.overview)
+          ? generated.overviewEvidenceSegmentIds
+          : current.overviewEvidenceSegmentIds,
+      chapters: sections.contains(AiBriefSection.chapters)
+          ? generated.chapters
+          : current.chapters,
+      insights: [...retainedInsights, ...generated.insights],
+      outputLanguage: generated.outputLanguage,
+      model: generated.model,
+      selectedSections: {...current.selectedSections, ...sections},
+      generatedAt: generated.generatedAt,
+      sourceTranscriptUpdatedAt: generated.sourceTranscriptUpdatedAt,
+      edited:
+          retainedInsights.any((item) => item.edited) ||
+          (!sections.contains(AiBriefSection.overview) && current.edited) ||
+          (!sections.contains(AiBriefSection.chapters) &&
+              current.chapters.any((item) => item.edited)),
+    );
+  }
+
+  Future<void> _setAiBriefFailure(
+    TranscriptionJob job,
+    String code, [
+    String? message,
+  ]) => _transition(
+    job,
+    aiGenerationState: job.aiGenerationState.copyWith(
+      status: AiGenerationStatus.failed,
+      errorCode: code,
+      errorMessage: message,
+    ),
+  );
+
+  String _markdownEvidence(
+    TranscriptDocument document,
+    List<String> segmentIds,
+  ) {
+    final byId = {for (final segment in document.segments) segment.id: segment};
+    final times = segmentIds
+        .map((id) => byId[id])
+        .whereType<TranscriptSegment>()
+        .map((segment) => formatClock(segment.startMs))
+        .toSet()
+        .toList();
+    return times.isEmpty
+        ? ''
+        : 'Evidence: ${times.map((time) => '[$time]').join(' ')}';
+  }
+
+  String _aiInsightHeading(AiInsightType type) => switch (type) {
+    AiInsightType.keyIdea => 'Key ideas',
+    AiInsightType.notableMoment => 'Notable moments',
+    AiInsightType.decision => 'Decisions',
+    AiInsightType.actionItem => 'Action items',
+    AiInsightType.openQuestion => 'Open questions',
+  };
+
   Future<String> exportJob(
     String id,
     String directory,
@@ -1564,6 +1993,8 @@ class AppController extends ChangeNotifier {
     TranscriptionOptions? options,
     TranslationOptions? translationOptions,
     TranslationState? translationState,
+    AiBrief? aiBrief,
+    AiGenerationState? aiGenerationState,
     TranscriptDocument? document,
     String? errorCode,
     String? errorMessage,
@@ -1583,6 +2014,8 @@ class AppController extends ChangeNotifier {
       options: options,
       translationOptions: translationOptions,
       translationState: translationState,
+      aiBrief: aiBrief,
+      aiGenerationState: aiGenerationState,
       document: document,
       errorCode: errorCode,
       errorMessage: errorMessage,

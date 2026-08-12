@@ -100,9 +100,9 @@ class SecureCredentialStore
       _storage.delete(key: _storageKey, mOptions: _options);
 }
 
-class SecureTranslationCredentialStore
+class SecureLlmCredentialStore
     implements TranslationCredentialStore, CredentialAvailabilityStore {
-  SecureTranslationCredentialStore({FlutterSecureStorage? storage})
+  SecureLlmCredentialStore({FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
 
   static const _service = 'app.meowstt.desktop';
@@ -134,6 +134,11 @@ class SecureTranslationCredentialStore
   @override
   Future<void> deleteApiKey() =>
       _storage.delete(key: _storageKey, mOptions: _options);
+}
+
+@Deprecated('Use SecureLlmCredentialStore.')
+class SecureTranslationCredentialStore extends SecureLlmCredentialStore {
+  SecureTranslationCredentialStore({super.storage});
 }
 
 class JsonSettingsRepository implements SettingsRepository {
@@ -183,10 +188,9 @@ class LocalJobRepository implements JobRepository {
   }
 
   @override
-  Future<void> save(TranscriptionJob job) async {
+  Future<void> save(TranscriptionJob job) {
     final directory = Directory(p.join(paths.jobs.path, _safeId(job.id)));
-    await directory.create(recursive: true);
-    await _atomicFileWriter.write(
+    return _atomicFileWriter.write(
       File(p.join(directory.path, 'manifest.json')),
       job.toJsonString(),
     );
