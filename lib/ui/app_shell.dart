@@ -356,12 +356,13 @@ class _AppShellState extends State<AppShell> with WindowListener {
                 AppWindowToolbar(
                   sidebarVisible: _sidebarVisible,
                   onToggleSidebar: _toggleSidebar,
-                ),
-              if (updates?.readyToRestart == true)
-                UpdateReadyBanner(
-                  version: updates!.release!.version.name,
-                  installing: updates.phase == UpdatePhase.installing,
-                  onRestart: () => unawaited(_restartForUpdate(updates)),
+                  updateVersion: updates?.readyToRestart == true
+                      ? updates!.release!.version.name
+                      : null,
+                  updateInstalling: updates?.phase == UpdatePhase.installing,
+                  onRestartUpdate: updates?.readyToRestart == true
+                      ? () => unawaited(_restartForUpdate(updates!))
+                      : null,
                 ),
               Expanded(
                 child: Row(
@@ -481,64 +482,6 @@ class _AppShellState extends State<AppShell> with WindowListener {
   }
 }
 
-class UpdateReadyBanner extends StatelessWidget {
-  const UpdateReadyBanner({
-    super.key,
-    required this.version,
-    required this.installing,
-    required this.onRestart,
-  });
-
-  final String version;
-  final bool installing;
-  final VoidCallback onRestart;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Material(
-      key: const Key('update-ready-banner'),
-      color: colors.secondaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Row(
-          children: [
-            Icon(
-              Icons.system_update_alt_rounded,
-              color: colors.onSecondaryContainer,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                context.strings
-                    .t('update_ready')
-                    .replaceFirst('{version}', version),
-                style: TextStyle(color: colors.onSecondaryContainer),
-              ),
-            ),
-            const SizedBox(width: 12),
-            FilledButton.tonalIcon(
-              key: const Key('restart-to-update'),
-              onPressed: installing ? null : onRestart,
-              icon: installing
-                  ? const SizedBox.square(
-                      dimension: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.restart_alt_rounded),
-              label: Text(
-                context.strings.t(
-                  installing ? 'restarting_to_update' : 'restart_to_update',
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _NavigationRailAction extends StatefulWidget {
   const _NavigationRailAction({
     super.key,
@@ -646,6 +589,9 @@ class AppWindowToolbar extends StatefulWidget {
     super.key,
     required this.sidebarVisible,
     required this.onToggleSidebar,
+    this.updateVersion,
+    this.updateInstalling = false,
+    this.onRestartUpdate,
   });
 
   static const macOSHeight = 32.0;
@@ -654,6 +600,9 @@ class AppWindowToolbar extends StatefulWidget {
 
   final bool sidebarVisible;
   final VoidCallback onToggleSidebar;
+  final String? updateVersion;
+  final bool updateInstalling;
+  final VoidCallback? onRestartUpdate;
 
   @override
   State<AppWindowToolbar> createState() => _AppWindowToolbarState();
@@ -697,6 +646,10 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
     final sidebarTooltip = context.strings.t(
       widget.sidebarVisible ? 'hide_sidebar' : 'show_sidebar',
     );
+    final updateTooltip = widget.updateInstalling
+        ? context.strings.t('restarting_to_update')
+        : '${context.strings.t('update_ready').replaceFirst('{version}', widget.updateVersion ?? '')} '
+              '${context.strings.t('restart_to_update')}';
     return DecoratedBox(
       key: const Key('app-window-toolbar'),
       decoration: BoxDecoration(
@@ -743,6 +696,28 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
               ),
             ),
             const SizedBox(width: 4),
+            if (widget.updateVersion != null) ...[
+              IconButton.filledTonal(
+                key: const Key('restart-to-update'),
+                tooltip: updateTooltip,
+                onPressed: widget.updateInstalling
+                    ? null
+                    : widget.onRestartUpdate,
+                icon: widget.updateInstalling
+                    ? const SizedBox.square(
+                        dimension: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.system_update_alt_rounded),
+                iconSize: 18,
+                padding: const EdgeInsets.all(6),
+                constraints: const BoxConstraints.tightFor(
+                  width: 32,
+                  height: 32,
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
             const Expanded(child: DragToMoveArea(child: SizedBox.expand())),
             if (windows) ...[
               Tooltip(
