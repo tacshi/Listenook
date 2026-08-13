@@ -5,7 +5,8 @@ import '../core/models.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
-import 'workspace_page.dart';
+import 'job_actions.dart';
+import 'transcript_export_dialog.dart';
 
 class LibraryPage extends StatefulWidget {
   const LibraryPage({super.key});
@@ -31,20 +32,9 @@ class _LibraryPageState extends State<LibraryPage> {
           children: [
             Row(
               children: [
-                Text(
-                  context.strings.t('library'),
-                  key: const Key('library-page-title'),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
                 Expanded(
                   child: TextField(
+                    key: const Key('library-search'),
                     onChanged: (value) => setState(() => _query = value),
                     decoration: InputDecoration(
                       hintText: context.strings.t('search_library'),
@@ -256,18 +246,20 @@ class _HistoryCard extends StatelessWidget {
             if (job.status == JobStatus.ready)
               OutlinedButton.icon(
                 key: Key('continue-ready-job-${job.id}'),
-                onPressed: () => controller.continueReadyJob(job.id),
+                onPressed: () => controller.continueInInbox(job.id),
                 icon: const Icon(Icons.play_arrow_rounded),
                 label: Text(context.strings.t('continue')),
               ),
             if (job.document != null) ...[
               TextButton.icon(
-                onPressed: () => showExportDialog(context, jobId: job.id),
+                onPressed: () =>
+                    showTranscriptExportDialog(context, jobIds: [job.id]),
                 icon: const Icon(Icons.ios_share_rounded),
                 label: Text(context.strings.t('export')),
               ),
               FilledButton.tonalIcon(
-                onPressed: () => controller.reopen(job.id),
+                key: ValueKey('open-library-job-${job.id}'),
+                onPressed: () => controller.openInWorkspace(job.id),
                 icon: const Icon(Icons.open_in_new_rounded),
                 label: Text(context.strings.t('open')),
               ),

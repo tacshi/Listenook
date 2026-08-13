@@ -5,6 +5,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'data/ai_brief_service.dart';
 import 'data/local_repositories.dart';
+import 'data/local_media_source_resolver.dart';
 import 'data/openai_llm_client.dart';
 import 'data/openai_translation_service.dart';
 import 'data/process_media_service.dart';
@@ -43,6 +44,7 @@ Future<void> main() async {
     settingsRepository: settingsRepository,
     jobRepository: LocalJobRepository(paths),
     mediaService: media,
+    sourceResolver: const LocalMediaSourceResolver(),
     sonioxClient: SonioxApiClient(credentials),
     exporter: const DefaultTranscriptExporter(),
     translationCredentialStore: llmCredentials,

@@ -88,6 +88,7 @@ class AppStrings {
       _zh.keys.toSet()..removeAll(_en.keys);
 
   static const _en = <String, String>{
+    'inbox': 'Inbox',
     'workspace': 'Workspace',
     'library': 'Library',
     'settings': 'Settings',
@@ -96,11 +97,13 @@ class AppStrings {
     'settings_system_about': 'About',
     'add_files': 'Add files',
     'add_folder': 'Add folder',
+    'import_folder': 'Import folder',
+    'new_batch': 'New batch',
     'new_transcription': 'New transcription',
-    'new_session_title': 'Start a new transcription?',
+    'new_session_title': 'Start a new batch?',
     'new_session_body':
         '{count} untranscribed files will be removed. Completed transcripts stay in your library.',
-    'start_new': 'Start new',
+    'start_new': 'Start new batch',
     'transcribe': 'Transcribe',
     'drop_title': 'Drop audio, video, or folders',
     'supported': 'Batch drop · up to 5 hours each',
@@ -121,6 +124,12 @@ class AppStrings {
     'remove': 'Remove',
     'export': 'Export',
     'export_all': 'Export all',
+    'export_completed_count': 'Export completed ({count})',
+    'no_transcript_open': 'No transcript open',
+    'open_transcript_hint':
+        'Open a completed transcript from Inbox or Library to start reviewing it.',
+    'go_to_inbox': 'Go to Inbox',
+    'browse_library': 'Browse Library',
     'expand_file_queue': 'Expand file queue',
     'collapse_file_queue': 'Collapse file queue',
     'show_sidebar': 'Show sidebar',
@@ -445,6 +454,7 @@ class AppStrings {
   };
 
   static const _zh = <String, String>{
+    'inbox': '收件箱',
     'workspace': '工作区',
     'library': '资料库',
     'settings': '设置',
@@ -453,10 +463,12 @@ class AppStrings {
     'settings_system_about': '关于',
     'add_files': '添加文件',
     'add_folder': '添加文件夹',
+    'import_folder': '导入文件夹',
+    'new_batch': '新建批次',
     'new_transcription': '新建转写',
-    'new_session_title': '开始新的转写？',
+    'new_session_title': '开始新的批次？',
     'new_session_body': '{count} 个尚未转写的文件将被移除。已完成的转写仍会保留在资料库中。',
-    'start_new': '开始新转写',
+    'start_new': '开始新批次',
     'transcribe': '开始转写',
     'drop_title': '拖入音频、视频或文件夹',
     'supported': '批量拖放 · 单文件最长 5 小时',
@@ -476,6 +488,11 @@ class AppStrings {
     'remove': '移除',
     'export': '导出',
     'export_all': '全部导出',
+    'export_completed_count': '导出已完成项目（{count}）',
+    'no_transcript_open': '未打开转写',
+    'open_transcript_hint': '从收件箱或资料库打开已完成的转写，即可开始校对。',
+    'go_to_inbox': '前往收件箱',
+    'browse_library': '浏览资料库',
     'expand_file_queue': '展开文件队列',
     'collapse_file_queue': '收起文件队列',
     'show_sidebar': '显示侧边栏',

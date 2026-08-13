@@ -356,14 +356,19 @@ class _SettingsPageState extends State<SettingsPage> {
         icon: Icons.navigation_outlined,
         shortcuts: [
           _ShortcutDefinition(
+            id: 'inbox',
+            description: context.strings.t('inbox'),
+            keys: [commandKey, '1'],
+          ),
+          _ShortcutDefinition(
             id: 'workspace',
             description: context.strings.t('workspace'),
-            keys: [commandKey, '1'],
+            keys: [commandKey, '2'],
           ),
           _ShortcutDefinition(
             id: 'library',
             description: context.strings.t('library'),
-            keys: [commandKey, '2'],
+            keys: [commandKey, '3'],
           ),
           _ShortcutDefinition(
             id: 'settings',

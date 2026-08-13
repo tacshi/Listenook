@@ -130,6 +130,22 @@ abstract interface class MediaService {
   Future<MediaDiagnostics> diagnostics();
 }
 
+class ResolvedMediaSource {
+  const ResolvedMediaSource({required this.path, required this.identity});
+
+  final String path;
+  final String identity;
+}
+
+/// Resolves files and one-shot folder imports into canonical media candidates.
+///
+/// A future folder monitor can send changed paths through the same resolver and
+/// queue entry point without coupling filesystem traversal to application state.
+abstract interface class MediaSourceResolver {
+  Future<List<ResolvedMediaSource>> resolve(Iterable<String> inputs);
+  String identityFor(String path);
+}
+
 class MediaDiagnostics {
   const MediaDiagnostics({
     required this.available,

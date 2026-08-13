@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
 import 'package:meow_stt/l10n/strings.dart';
 import 'package:meow_stt/state/app_controller.dart';
@@ -19,6 +20,7 @@ void main() {
       settingsRepository: _Settings(),
       jobRepository: _Jobs(),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
       translationCredentialStore: translationCredentials,
@@ -73,6 +75,7 @@ void main() {
       settingsRepository: _Settings(),
       jobRepository: _Jobs(),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: soniox,
       exporter: const DefaultTranscriptExporter(),
     );
@@ -280,6 +283,7 @@ void main() {
       settingsRepository: _Settings(),
       jobRepository: _Jobs(),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -343,6 +347,7 @@ void main() {
         settingsRepository: settings,
         jobRepository: _Jobs(),
         mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
         sonioxClient: _Soniox(),
         exporter: const DefaultTranscriptExporter(),
         translationCredentialStore: translationCredentials,

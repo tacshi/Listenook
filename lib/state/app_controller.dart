@@ -14,6 +14,8 @@ import '../data/process_media_service.dart';
 import '../data/soniox_api_client.dart';
 import '../data/transcript_exporter.dart';
 
+enum AppDestination { inbox, workspace, library, settings }
+
 class AppController extends ChangeNotifier {
   static const _maxConcurrentJobs = 4;
 
@@ -22,6 +24,7 @@ class AppController extends ChangeNotifier {
     required SettingsRepository settingsRepository,
     required JobRepository jobRepository,
     required MediaService mediaService,
+    required MediaSourceResolver sourceResolver,
     required SonioxClient sonioxClient,
     required TranscriptExporter exporter,
     TranslationCredentialStore? translationCredentialStore,
@@ -35,6 +38,7 @@ class AppController extends ChangeNotifier {
        _media = mediaService,
        _soniox = sonioxClient,
        _exporter = exporter,
+       _sourceResolver = sourceResolver,
        _translationCredentials = translationCredentialStore,
        _translationService = translationService,
        _aiBriefService = aiBriefService,
@@ -47,6 +51,7 @@ class AppController extends ChangeNotifier {
   final MediaService _media;
   final SonioxClient _soniox;
   final TranscriptExporter _exporter;
+  final MediaSourceResolver _sourceResolver;
   final TranslationCredentialStore? _translationCredentials;
   final TranslationService? _translationService;
   final AiBriefService? _aiBriefService;
@@ -54,7 +59,7 @@ class AppController extends ChangeNotifier {
   final Uuid _uuid;
   final Map<String, TranscriptionJob> _jobs = {};
   final Map<String, Duration> _playbackPositions = {};
-  final List<String> _workspaceIds = [];
+  final List<String> _inboxIds = [];
   final Set<String> _cancelledIds = {};
   final Set<String> _translationCancelledIds = {};
   final Set<String> _aiBriefCancelledIds = {};
@@ -63,8 +68,8 @@ class AppController extends ChangeNotifier {
   bool _initializing = true;
   bool _keyConfigured = false;
   bool _translationKeyConfigured = false;
-  int _destinationIndex = 0;
-  String? _selectedJobId;
+  AppDestination _destination = AppDestination.inbox;
+  String? _activeWorkspaceJobId;
   AppSettings _settings = const AppSettings();
   TranscriptionOptions _sessionOptions = const TranscriptionOptions();
 
@@ -86,8 +91,8 @@ class AppController extends ChangeNotifier {
     AppLocaleMode.english => 'en',
     AppLocaleMode.system => _initialTargetLanguage(),
   };
-  int get destinationIndex => _destinationIndex;
-  String? get selectedJobId => _selectedJobId;
+  AppDestination get destination => _destination;
+  String? get activeWorkspaceJobId => _activeWorkspaceJobId;
 
   List<TranscriptionJob> get allJobs {
     final list = _jobs.values.toList()
@@ -95,13 +100,13 @@ class AppController extends ChangeNotifier {
     return list;
   }
 
-  List<TranscriptionJob> get workspaceJobs => _workspaceIds
+  List<TranscriptionJob> get inboxJobs => _inboxIds
       .map((id) => _jobs[id])
       .whereType<TranscriptionJob>()
       .toList(growable: false);
 
-  TranscriptionJob? get selectedJob =>
-      _selectedJobId == null ? null : _jobs[_selectedJobId];
+  TranscriptionJob? get activeWorkspaceJob =>
+      _activeWorkspaceJobId == null ? null : _jobs[_activeWorkspaceJobId];
 
   Duration playbackPositionFor(String jobId) =>
       _playbackPositions[jobId] ?? Duration.zero;
@@ -115,11 +120,11 @@ class AppController extends ChangeNotifier {
   }
 
   int get readyCount =>
-      workspaceJobs.where((job) => job.status.canTranscribe).length;
-  int get processingCount => workspaceJobs.where((job) => job.isBusy).length;
+      inboxJobs.where((job) => job.status.canTranscribe).length;
+  int get processingCount => inboxJobs.where((job) => job.isBusy).length;
   int get completedCount =>
-      workspaceJobs.where((job) => job.status == JobStatus.completed).length;
-  int get failedCount => workspaceJobs
+      inboxJobs.where((job) => job.status == JobStatus.completed).length;
+  int get failedCount => inboxJobs
       .where(
         (job) =>
             job.status == JobStatus.failed ||
@@ -128,12 +133,12 @@ class AppController extends ChangeNotifier {
       .length;
   int get inactiveHistoryCount =>
       _jobs.values.where((job) => !job.isBusy).length;
-  int get untranscribedWorkspaceCount =>
-      workspaceJobs.where((job) => job.document == null).length;
-  bool get canStartNewSession =>
-      workspaceJobs.isNotEmpty &&
+  int get untranscribedInboxCount =>
+      inboxJobs.where((job) => job.document == null).length;
+  bool get canStartNewInboxBatch =>
+      inboxJobs.isNotEmpty &&
       !_processing &&
-      !workspaceJobs.any((job) => job.isBusy);
+      !inboxJobs.any((job) => job.isBusy);
 
   Future<void> initialize() async {
     _settings = await _settingsRepository.load();
@@ -246,7 +251,7 @@ class AppController extends ChangeNotifier {
     if (interrupted.isNotEmpty) {
       _batchId = interrupted.first.batchId;
       _sessionOptions = interrupted.first.options;
-      _workspaceIds.addAll(interrupted.map((job) => job.id));
+      _inboxIds.addAll(interrupted.map((job) => job.id));
     }
     _initializing = false;
     notifyListeners();
@@ -263,98 +268,63 @@ class AppController extends ChangeNotifier {
     return (await read())?.isNotEmpty ?? false;
   }
 
-  void setDestination(int index) {
-    if (_destinationIndex == index) return;
-    _destinationIndex = index;
+  void setDestination(AppDestination destination) {
+    if (_destination == destination) return;
+    _destination = destination;
     notifyListeners();
   }
 
-  void selectJob(String? id) {
-    _selectedJobId = id;
-    notifyListeners();
-  }
-
-  void reorderWorkspace(int oldIndex, int newIndex) {
+  void reorderInbox(int oldIndex, int newIndex) {
     if (oldIndex == newIndex ||
         oldIndex < 0 ||
         newIndex < 0 ||
-        oldIndex >= _workspaceIds.length ||
-        newIndex >= _workspaceIds.length) {
+        oldIndex >= _inboxIds.length ||
+        newIndex >= _inboxIds.length) {
       return;
     }
-    final id = _workspaceIds.removeAt(oldIndex);
-    _workspaceIds.insert(newIndex, id);
+    final id = _inboxIds.removeAt(oldIndex);
+    _inboxIds.insert(newIndex, id);
     notifyListeners();
-    unawaited(_persistWorkspaceOrder());
+    unawaited(_persistInboxOrder());
   }
 
-  Future<void> _persistWorkspaceOrder() async {
-    for (var index = 0; index < _workspaceIds.length; index++) {
-      final job = _jobs[_workspaceIds[index]];
+  Future<void> _persistInboxOrder() async {
+    for (var index = 0; index < _inboxIds.length; index++) {
+      final job = _jobs[_inboxIds[index]];
       if (job != null && job.queueIndex != index) {
         await _transition(job, queueIndex: index);
       }
     }
   }
 
-  Future<void> addSources(Iterable<String> paths) async {
-    if (_workspaceIds.isEmpty && !_processing) _batchId = _uuid.v4();
+  Future<void> enqueueSources(Iterable<String> paths) async {
+    if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
     final existing = <String>{
-      for (final job in workspaceJobs) _canonical(job.sourcePath),
+      for (final job in inboxJobs) _sourceResolver.identityFor(job.sourcePath),
     };
-    final files = <String>[];
-    for (final path in paths) {
-      await _collectFiles(path, files);
-    }
-    for (final path in files) {
-      final canonical = _canonical(path);
-      if (!existing.add(canonical)) continue;
+    final sources = await _sourceResolver.resolve(paths);
+    for (final source in sources) {
+      if (!existing.add(source.identity)) continue;
       final now = DateTime.now().toUtc();
       final job = TranscriptionJob(
         id: _uuid.v4(),
         batchId: _batchId,
-        sourcePath: path,
+        sourcePath: source.path,
         createdAt: now,
         updatedAt: now,
         status: JobStatus.pending,
-        queueIndex: _workspaceIds.length,
+        queueIndex: _inboxIds.length,
         options: _sessionOptions,
         translationOptions: TranslationOptions.fromSettings(
           _settings.translationSettings,
         ),
       );
       _jobs[job.id] = job;
-      _workspaceIds.add(job.id);
-      _selectedJobId ??= job.id;
+      _inboxIds.add(job.id);
       await _jobsRepository.save(job);
       notifyListeners();
       unawaited(_prepare(job.id));
     }
-  }
-
-  Future<void> _collectFiles(String path, List<String> result) async {
-    final type = await FileSystemEntity.type(path, followLinks: false);
-    if (type == FileSystemEntityType.file) {
-      if (!_isHidden(path)) result.add(p.absolute(path));
-      return;
-    }
-    if (type != FileSystemEntityType.directory) return;
-    await for (final entity in Directory(
-      path,
-    ).list(recursive: true, followLinks: false)) {
-      if (entity is File && !_isHidden(entity.path)) {
-        result.add(p.absolute(entity.path));
-      }
-    }
-  }
-
-  bool _isHidden(String path) => p
-      .split(p.normalize(path))
-      .any((part) => part.startsWith('.') && part != '.' && part != '..');
-
-  String _canonical(String path) {
-    final normalized = p.canonicalize(p.absolute(path));
-    return Platform.isWindows ? normalized.toLowerCase() : normalized;
   }
 
   Future<void> _prepare(String id) async {
@@ -394,7 +364,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> startReady() async {
     if (_processing || !_keyConfigured) return;
-    final queue = workspaceJobs
+    final queue = inboxJobs
         .where((job) => job.status.canTranscribe)
         .map((job) => job.id)
         .toList();
@@ -627,10 +597,10 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> cancelAll() async {
-    for (final job in workspaceJobs.where((item) => item.status.isActive)) {
+    for (final job in inboxJobs.where((item) => item.status.isActive)) {
       _cancelledIds.add(job.id);
     }
-    for (final job in workspaceJobs.where(
+    for (final job in inboxJobs.where(
       (item) => item.translationState.status.isActive,
     )) {
       _translationCancelledIds.add(job.id);
@@ -638,7 +608,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> cancelRemoteJobsForQuit() async {
-    final active = workspaceJobs.where((job) => job.isBusy).toList();
+    final active = inboxJobs.where((job) => job.isBusy).toList();
     for (final job in active) {
       if (job.translationState.status.isActive) {
         _translationCancelledIds.add(job.id);
@@ -686,7 +656,7 @@ class AppController extends ChangeNotifier {
           ? CleanupState.none
           : job.cleanupState,
     );
-    if (!_workspaceIds.contains(id)) _workspaceIds.add(id);
+    if (!_inboxIds.contains(id)) _inboxIds.add(id);
     notifyListeners();
     if (_keyConfigured && !_processing) {
       _processing = true;
@@ -697,10 +667,12 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  void continueReadyJob(String id) {
+  void continueInInbox(String id) {
     final job = _jobs[id];
     if (job == null || job.status != JobStatus.ready) return;
-    reopen(id);
+    if (!_inboxIds.contains(id)) _inboxIds.add(id);
+    _destination = AppDestination.inbox;
+    notifyListeners();
   }
 
   Future<String?> relink(String id, String sourcePath) async {
@@ -728,24 +700,23 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> removeFromWorkspace(String id) async {
+  Future<void> removeFromInbox(String id) async {
     final job = _jobs[id];
     if (job == null || job.isBusy) return;
-    _workspaceIds.remove(id);
+    _inboxIds.remove(id);
     if (job.document == null) {
       _jobs.remove(id);
       _playbackPositions.remove(id);
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
-    if (_selectedJobId == id) _selectedJobId = _workspaceIds.firstOrNull;
     notifyListeners();
   }
 
-  Future<void> startNewSession() async {
-    if (!canStartNewSession) return;
+  Future<void> startNewInboxBatch() async {
+    if (!canStartNewInboxBatch) return;
     final discardedIds = [
-      for (final id in _workspaceIds)
+      for (final id in _inboxIds)
         if (_jobs[id]?.document == null) id,
     ];
     for (final id in discardedIds) {
@@ -754,8 +725,7 @@ class AppController extends ChangeNotifier {
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
-    _workspaceIds.clear();
-    _selectedJobId = null;
+    _inboxIds.clear();
     _batchId = _uuid.v4();
     _sessionOptions = TranscriptionOptions(
       sonioxTranslation: _settings.sonioxTranslation,
@@ -768,8 +738,8 @@ class AppController extends ChangeNotifier {
     if (job == null || job.isBusy) return;
     _jobs.remove(id);
     _playbackPositions.remove(id);
-    _workspaceIds.remove(id);
-    if (_selectedJobId == id) _selectedJobId = null;
+    _inboxIds.remove(id);
+    if (_activeWorkspaceJobId == id) _activeWorkspaceJobId = null;
     await _media.deleteGeneratedMedia(id);
     await _jobsRepository.delete(id);
     notifyListeners();
@@ -786,20 +756,21 @@ class AppController extends ChangeNotifier {
       await _jobsRepository.delete(id);
       _jobs.remove(id);
       _playbackPositions.remove(id);
-      _workspaceIds.remove(id);
+      _inboxIds.remove(id);
     }
     await _media.clearGeneratedMediaExcept(_jobs.keys.toSet());
-    if (_selectedJobId != null && !_jobs.containsKey(_selectedJobId)) {
-      _selectedJobId = _workspaceIds.firstOrNull;
+    if (_activeWorkspaceJobId != null &&
+        !_jobs.containsKey(_activeWorkspaceJobId)) {
+      _activeWorkspaceJobId = null;
     }
     notifyListeners();
   }
 
-  void reopen(String id) {
-    if (!_jobs.containsKey(id)) return;
-    if (!_workspaceIds.contains(id)) _workspaceIds.add(id);
-    _selectedJobId = id;
-    _destinationIndex = 0;
+  void openInWorkspace(String id) {
+    final job = _jobs[id];
+    if (job?.document == null) return;
+    _activeWorkspaceJobId = id;
+    _destination = AppDestination.workspace;
     notifyListeners();
   }
 
@@ -864,7 +835,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> updateSessionOptions(TranscriptionOptions value) async {
     _sessionOptions = value;
-    for (final job in workspaceJobs.where(
+    for (final job in inboxJobs.where(
       (job) =>
           job.status == JobStatus.pending ||
           job.status == JobStatus.probing ||
@@ -1349,7 +1320,7 @@ class AppController extends ChangeNotifier {
     final options = TranslationOptions.fromSettings(
       _settings.translationSettings,
     );
-    for (final job in workspaceJobs.where(
+    for (final job in inboxJobs.where(
       (job) => job.document == null && job.remoteTranscriptionId == null,
     )) {
       await _transition(job, translationOptions: options);
@@ -1357,7 +1328,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _updateQueuedSonioxTranslationOptions() async {
-    for (final job in workspaceJobs.where(
+    for (final job in inboxJobs.where(
       (job) => job.document == null && job.remoteTranscriptionId == null,
     )) {
       await _transition(
@@ -1861,25 +1832,32 @@ class AppController extends ChangeNotifier {
     );
   }
 
-  Future<List<String>> exportCompleted(
+  Future<List<String>> exportJobs(
+    Iterable<String> ids,
     String directory,
     ExportOptions options,
   ) async {
     final results = <String>[];
-    for (final job in workspaceJobs.where((item) => item.document != null)) {
+    for (final id in ids) {
+      final job = _jobs[id];
+      if (job == null || job.document == null) continue;
       results.add(await _exporter.exportToDirectory(job, directory, options));
     }
     return results;
   }
 
-  Future<String> exportCompletedZip(
+  Future<String> exportJobsZip(
+    Iterable<String> ids,
     String destination,
     ExportOptions options,
-  ) => _exporter.exportZip(
-    workspaceJobs.where((job) => job.document != null).toList(),
-    destination,
-    options,
-  );
+  ) {
+    final jobs = ids
+        .map((id) => _jobs[id])
+        .whereType<TranscriptionJob>()
+        .where((job) => job.document != null)
+        .toList(growable: false);
+    return _exporter.exportZip(jobs, destination, options);
+  }
 
   Future<String?> loadWaveform(String jobId) async {
     final job = _jobs[jobId];
@@ -2031,8 +2009,4 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     return updated;
   }
-}
-
-extension _FirstOrNull<T> on Iterable<T> {
-  T? get firstOrNull => isEmpty ? null : first;
 }

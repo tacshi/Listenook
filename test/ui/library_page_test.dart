@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
 import 'package:meow_stt/l10n/strings.dart';
 import 'package:meow_stt/state/app_controller.dart';
@@ -48,6 +49,7 @@ void main() {
         ),
       ]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -109,12 +111,13 @@ void main() {
         ),
       ]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: soniox,
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.setDestination(1);
+    controller.setDestination(AppDestination.library);
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -135,12 +138,72 @@ void main() {
     await tester.tap(continueButton);
     await tester.pumpAndSettle();
 
-    expect(controller.destinationIndex, 0);
-    expect(controller.workspaceJobs.single.id, 'ready');
-    expect(controller.selectedJobId, 'ready');
-    expect(controller.workspaceJobs.single.status, JobStatus.ready);
+    expect(controller.destination, AppDestination.inbox);
+    expect(controller.inboxJobs.single.id, 'ready');
+    expect(controller.activeWorkspaceJobId, isNull);
+    expect(controller.inboxJobs.single.status, JobStatus.ready);
     expect(controller.processing, isFalse);
     expect(soniox.uploadCalls, 0);
+  });
+
+  testWidgets('Open enters Workspace without adding history to Inbox', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'completed',
+          batchId: 'batch',
+          sourcePath: '/missing/completed.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: const [
+              TranscriptSegment(
+                id: 'segment',
+                startMs: 0,
+                endMs: 1000,
+                text: 'Transcript',
+              ),
+            ],
+            speakers: const [],
+            updatedAt: now,
+          ),
+        ),
+      ]),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('open-library-job-completed')));
+    await tester.pump();
+
+    expect(controller.destination, AppDestination.workspace);
+    expect(controller.activeWorkspaceJobId, 'completed');
+    expect(controller.inboxJobs, isEmpty);
   });
 
   testWidgets('Clear All confirms and removes inactive history', (
@@ -177,6 +240,7 @@ void main() {
       settingsRepository: _Settings(),
       jobRepository: jobs,
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -195,11 +259,8 @@ void main() {
       ),
     );
 
-    final pageTitle = find.byKey(const Key('library-page-title'));
-    expect(
-      tester.widget<Text>(pageTitle).style?.fontSize,
-      Theme.of(tester.element(pageTitle)).textTheme.titleLarge?.fontSize,
-    );
+    expect(find.byKey(const Key('library-page-title')), findsNothing);
+    expect(find.byKey(const Key('library-search')), findsOneWidget);
     expect(find.text('history.wav'), findsOneWidget);
     await tester.tap(find.byKey(const Key('clear-all-history')));
     await tester.pumpAndSettle();

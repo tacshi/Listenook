@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/openai_translation_service.dart';
 import 'package:meow_stt/data/process_media_service.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
@@ -23,8 +24,8 @@ void main() {
         'transcript',
         const Duration(minutes: 2, seconds: 7),
       );
-      controller.setDestination(1);
-      controller.setDestination(0);
+      controller.setDestination(AppDestination.library);
+      controller.setDestination(AppDestination.workspace);
 
       expect(
         controller.playbackPositionFor('transcript'),
@@ -72,17 +73,19 @@ void main() {
     final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 40));
     final controller = _controller(jobs: jobs, soniox: soniox);
     await controller.initialize();
-    await controller.addSources(files);
+    expect(controller.destination, AppDestination.inbox);
+    await controller.enqueueSources(files);
     await _waitFor(() => controller.readyCount == 4);
-    final movedId = controller.workspaceJobs.first.id;
-    controller.reorderWorkspace(0, 3);
+    final movedId = controller.inboxJobs.first.id;
+    controller.reorderInbox(0, 3);
     await _waitFor(() => jobs.saved[movedId]?.queueIndex == 3);
-    expect(controller.workspaceJobs.last.id, movedId);
+    expect(controller.inboxJobs.last.id, movedId);
 
     await controller.startReady();
 
     expect(soniox.maximumUploads, 4);
     expect(controller.completedCount, 4);
+    expect(controller.destination, AppDestination.inbox);
     expect(
       jobs.saved.values.every(
         (job) => job.cleanupState == CleanupState.complete,
@@ -111,7 +114,7 @@ void main() {
         final controller = _controller(jobs: _Jobs(), soniox: soniox);
         addTearDown(controller.dispose);
         await controller.initialize();
-        await controller.addSources(files);
+        await controller.enqueueSources(files);
         await _waitFor(() => controller.readyCount == itemCount);
 
         await controller.startReady();
@@ -140,13 +143,13 @@ void main() {
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    await controller.addSources([file.path]);
+    await controller.enqueueSources([file.path]);
     await _waitFor(() => controller.readyCount == 1);
 
     await controller.startReady();
 
-    expect(controller.workspaceJobs.single.status, JobStatus.failed);
-    expect(controller.workspaceJobs.single.errorCode, 'exhausted_balance');
+    expect(controller.inboxJobs.single.status, JobStatus.failed);
+    expect(controller.inboxJobs.single.errorCode, 'exhausted_balance');
   });
 
   test(
@@ -194,7 +197,7 @@ void main() {
   );
 
   test(
-    'continuing a ready history job only restores it to the workspace',
+    'continuing a ready history job only restores it to the inbox',
     () async {
       final directory = await Directory.systemTemp.createTemp(
         'meow-continue-ready-',
@@ -217,14 +220,14 @@ void main() {
       final controller = _controller(jobs: jobs, soniox: soniox);
       addTearDown(controller.dispose);
       await controller.initialize();
-      controller.setDestination(1);
+      controller.setDestination(AppDestination.library);
 
-      controller.continueReadyJob('ready');
+      controller.continueInInbox('ready');
 
       expect(jobs.saved['ready']?.status, JobStatus.ready);
-      expect(controller.workspaceJobs.single.id, 'ready');
-      expect(controller.selectedJobId, 'ready');
-      expect(controller.destinationIndex, 0);
+      expect(controller.inboxJobs.single.id, 'ready');
+      expect(controller.activeWorkspaceJobId, isNull);
+      expect(controller.destination, AppDestination.inbox);
       expect(controller.processing, isFalse);
       expect(soniox.uploadCalls, 0);
     },
@@ -248,14 +251,14 @@ void main() {
       final controller = _controller(jobs: jobs, soniox: soniox);
       addTearDown(controller.dispose);
       await controller.initialize();
-      controller.setDestination(1);
+      controller.setDestination(AppDestination.library);
 
-      controller.continueReadyJob('ready');
+      controller.continueInInbox('ready');
 
       expect(jobs.saved['ready']?.status, JobStatus.ready);
-      expect(controller.workspaceJobs.single.id, 'ready');
-      expect(controller.selectedJobId, 'ready');
-      expect(controller.destinationIndex, 0);
+      expect(controller.inboxJobs.single.id, 'ready');
+      expect(controller.activeWorkspaceJobId, isNull);
+      expect(controller.destination, AppDestination.inbox);
       expect(controller.processing, isFalse);
       expect(soniox.uploadCalls, 0);
 
@@ -277,16 +280,16 @@ void main() {
       final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 80));
       final controller = _controller(jobs: jobs, soniox: soniox);
       await controller.initialize();
-      await controller.addSources([file.path]);
+      await controller.enqueueSources([file.path]);
       await _waitFor(() => controller.readyCount == 1);
       final run = controller.startReady();
       await _waitFor(
-        () => controller.workspaceJobs.single.status == JobStatus.uploading,
+        () => controller.inboxJobs.single.status == JobStatus.uploading,
       );
-      await controller.cancelJob(controller.workspaceJobs.single.id);
+      await controller.cancelJob(controller.inboxJobs.single.id);
       await run;
 
-      expect(controller.workspaceJobs.single.status, JobStatus.cancelled);
+      expect(controller.inboxJobs.single.status, JobStatus.cancelled);
       expect(soniox.deletedFiles, hasLength(1));
       expect(soniox.deletedTranscriptions, isEmpty);
     },
@@ -312,32 +315,75 @@ void main() {
           contextTerms: ['MeowSTT'],
         ),
       );
-      await controller.addSources([completedFile.path]);
+      await controller.enqueueSources([completedFile.path]);
       await _waitFor(() => controller.readyCount == 1);
-      expect(controller.workspaceJobs.single.options.languageHints, ['zh']);
-      expect(controller.workspaceJobs.single.options.contextTerms, ['MeowSTT']);
+      expect(controller.inboxJobs.single.options.languageHints, ['zh']);
+      expect(controller.inboxJobs.single.options.contextTerms, ['MeowSTT']);
       await controller.startReady();
-      final completed = controller.workspaceJobs.single;
+      final completed = controller.inboxJobs.single;
+      controller.openInWorkspace(completed.id);
+      expect(controller.destination, AppDestination.workspace);
 
-      await controller.addSources([draftFile.path]);
+      await controller.enqueueSources([draftFile.path]);
       await _waitFor(() => controller.readyCount == 1);
-      expect(controller.untranscribedWorkspaceCount, 1);
+      expect(controller.untranscribedInboxCount, 1);
 
-      await controller.startNewSession();
+      await controller.startNewInboxBatch();
 
-      expect(controller.workspaceJobs, isEmpty);
+      expect(controller.inboxJobs, isEmpty);
+      expect(controller.activeWorkspaceJobId, completed.id);
+      expect(controller.destination, AppDestination.workspace);
       expect(controller.allJobs.map((job) => job.id), [completed.id]);
       expect(jobs.saved.keys, [completed.id]);
       expect(controller.sessionOptions.languageHints, isEmpty);
       expect(controller.sessionOptions.contextTerms, isEmpty);
 
-      await controller.addSources([nextFile.path]);
+      await controller.enqueueSources([nextFile.path]);
       await _waitFor(() => controller.readyCount == 1);
-      expect(controller.workspaceJobs.single.batchId, isNot(completed.batchId));
-      expect(controller.workspaceJobs.single.options.languageHints, isEmpty);
-      expect(controller.workspaceJobs.single.options.contextTerms, isEmpty);
+      expect(controller.inboxJobs.single.batchId, isNot(completed.batchId));
+      expect(controller.inboxJobs.single.options.languageHints, isEmpty);
+      expect(controller.inboxJobs.single.options.contextTerms, isEmpty);
     },
   );
+
+  test('batch export preserves the explicit completed job order', () async {
+    final now = DateTime.now().toUtc();
+    final exporter = _RecordingExporter();
+    final controller = _controller(
+      jobs: _Jobs([
+        for (final id in ['first', 'second'])
+          TranscriptionJob(
+            id: id,
+            batchId: 'batch',
+            sourcePath: '/missing/$id.wav',
+            createdAt: now,
+            updatedAt: now,
+            status: JobStatus.completed,
+            document: _document(now),
+          ),
+        TranscriptionJob(
+          id: 'draft',
+          batchId: 'batch',
+          sourcePath: '/missing/draft.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+        ),
+      ]),
+      soniox: _Soniox(),
+      exporter: exporter,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await controller.exportJobs(
+      const ['second', 'draft', 'first'],
+      '/exports',
+      const ExportOptions(),
+    );
+
+    expect(exporter.exportedJobIds, ['second', 'first']);
+  });
 
   test(
     'initialization repairs legacy mid-sentence and punctuation fragments',
@@ -412,19 +458,19 @@ void main() {
       ]);
       final controller = _controller(jobs: jobs, soniox: _Soniox());
       await controller.initialize();
-      controller.reopen('completed');
+      controller.openInWorkspace('completed');
 
       final error = await controller.relink('completed', '/replacement.wav');
 
       expect(error, isNull);
-      final linked = controller.selectedJob!;
+      final linked = controller.activeWorkspaceJob!;
       expect(linked.status, JobStatus.completed);
       expect(linked.sourcePath, '/replacement.wav');
       expect(linked.document, isNotNull);
       expect(linked.cleanupState, CleanupState.complete);
       expect(linked.metadata?.durationMs, 1000);
-      expect(controller.workspaceJobs.single.id, 'completed');
-      expect(controller.selectedJobId, 'completed');
+      expect(controller.inboxJobs, isEmpty);
+      expect(controller.activeWorkspaceJobId, 'completed');
     },
   );
 
@@ -652,12 +698,12 @@ void main() {
         translationService: llm,
       );
       await controller.initialize();
-      await controller.addSources([file.path]);
+      await controller.enqueueSources([file.path]);
       await _waitFor(() => controller.readyCount == 1);
 
       await controller.startReady();
 
-      final result = controller.workspaceJobs.single;
+      final result = controller.inboxJobs.single;
       expect(settings.value.translationSettings.autoTranslate, isFalse);
       expect(soniox.createdOptions?.sonioxTranslation.enabled, isTrue);
       expect(result.document!.segments.single.translatedText, 'Hola.');
@@ -693,9 +739,9 @@ void main() {
       translationService: _SuccessfulTranslation(),
     );
     await controller.initialize();
-    await controller.addSources([file.path]);
+    await controller.enqueueSources([file.path]);
     await _waitFor(() => controller.readyCount == 1);
-    expect(controller.workspaceJobs.single.translationOptions.enabled, isTrue);
+    expect(controller.inboxJobs.single.translationOptions.enabled, isTrue);
 
     final sonioxError = await controller.updateSonioxTranslation(
       const SonioxTranslationOptions(enabled: true, targetLanguage: 'es'),
@@ -705,10 +751,10 @@ void main() {
     expect(controller.settings.sonioxTranslation.enabled, isTrue);
     expect(controller.settings.translationSettings.autoTranslate, isFalse);
     expect(
-      controller.workspaceJobs.single.options.sonioxTranslation.enabled,
+      controller.inboxJobs.single.options.sonioxTranslation.enabled,
       isTrue,
     );
-    expect(controller.workspaceJobs.single.translationOptions.enabled, isFalse);
+    expect(controller.inboxJobs.single.translationOptions.enabled, isFalse);
 
     final llmError = await controller.updateTranslationDefaults(
       controller.settings.translationSettings.copyWith(autoTranslate: true),
@@ -718,10 +764,10 @@ void main() {
     expect(controller.settings.sonioxTranslation.enabled, isFalse);
     expect(controller.settings.translationSettings.autoTranslate, isTrue);
     expect(
-      controller.workspaceJobs.single.options.sonioxTranslation.enabled,
+      controller.inboxJobs.single.options.sonioxTranslation.enabled,
       isFalse,
     );
-    expect(controller.workspaceJobs.single.translationOptions.enabled, isTrue);
+    expect(controller.inboxJobs.single.translationOptions.enabled, isTrue);
   });
 
   test('automatic mode changes do not alter submitted remote jobs', () async {
@@ -786,13 +832,13 @@ void main() {
       const SonioxTranslationOptions(enabled: true, targetLanguage: 'es'),
     );
 
-    final submitted = controller.workspaceJobs.single;
+    final submitted = controller.inboxJobs.single;
     expect(submitted.options.sonioxTranslation.enabled, isFalse);
     expect(submitted.translationOptions.enabled, isTrue);
 
     pollingGate.complete();
     await _waitFor(
-      () => controller.workspaceJobs.single.status == JobStatus.completed,
+      () => controller.inboxJobs.single.status == JobStatus.completed,
     );
   });
 
@@ -893,13 +939,13 @@ void main() {
         media: media,
       );
       await controller.initialize();
-      controller.reopen('history');
-      await controller.addSources([activeFile.path]);
+      controller.openInWorkspace('history');
+      await controller.enqueueSources([activeFile.path]);
       await _waitFor(() => controller.readyCount == 1);
-      final activeId = controller.workspaceJobs.last.id;
+      final activeId = controller.inboxJobs.last.id;
       final run = controller.startReady();
       await _waitFor(
-        () => controller.workspaceJobs.last.status == JobStatus.uploading,
+        () => controller.inboxJobs.last.status == JobStatus.uploading,
       );
 
       expect(controller.processingCount, 1);
@@ -909,9 +955,9 @@ void main() {
       expect(jobs.saved.containsKey('history'), isFalse);
       expect(media.deletedGeneratedMedia, contains('history'));
       expect(media.retainedGeneratedMedia, {activeId});
-      expect(controller.workspaceJobs.single.id, activeId);
-      expect(controller.selectedJobId, activeId);
-      expect(controller.workspaceJobs.single.status, JobStatus.uploading);
+      expect(controller.inboxJobs.single.id, activeId);
+      expect(controller.activeWorkspaceJobId, isNull);
+      expect(controller.inboxJobs.single.status, JobStatus.uploading);
       await run;
       expect(controller.processingCount, 0);
     },
@@ -1067,17 +1113,48 @@ AppController _controller({
   TranslationCredentialStore? translationCredentials,
   TranslationService? translationService,
   AiBriefService? aiBriefService,
+  TranscriptExporter? exporter,
 }) => AppController(
   credentialStore: credentials ?? _Credentials(),
   settingsRepository: settings ?? _Settings(),
   jobRepository: jobs,
   mediaService: media ?? _Media(),
+  sourceResolver: const LocalMediaSourceResolver(),
   sonioxClient: soniox,
-  exporter: const DefaultTranscriptExporter(),
+  exporter: exporter ?? const DefaultTranscriptExporter(),
   translationCredentialStore: translationCredentials,
   translationService: translationService,
   aiBriefService: aiBriefService,
 );
+
+class _RecordingExporter implements TranscriptExporter {
+  final exportedJobIds = <String>[];
+
+  @override
+  Future<String> exportToDirectory(
+    TranscriptionJob job,
+    String directory,
+    ExportOptions options,
+  ) async {
+    exportedJobIds.add(job.id);
+    return '$directory/${job.id}';
+  }
+
+  @override
+  Future<String> exportZip(
+    List<TranscriptionJob> jobs,
+    String destination,
+    ExportOptions options,
+  ) async => destination;
+
+  @override
+  String render(
+    TranscriptDocument document,
+    ExportOptions options, {
+    required String title,
+    MediaMetadata? metadata,
+  }) => '';
+}
 
 Future<void> _waitFor(bool Function() condition) async {
   final deadline = DateTime.now().add(const Duration(seconds: 3));

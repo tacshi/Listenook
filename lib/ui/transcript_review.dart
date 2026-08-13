@@ -16,8 +16,9 @@ import '../core/models.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
+import 'job_actions.dart';
 import 'review_fullscreen_controller.dart';
-import 'workspace_page.dart';
+import 'transcript_export_dialog.dart';
 
 class TranscriptReview extends StatefulWidget {
   const TranscriptReview({
@@ -39,7 +40,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   static const _reviewDividerWidth = 9.0;
   static const _minimumReviewPaneWidth = 280.0;
   static const _mediaModeTransitionDuration = Duration(milliseconds: 320);
-  static const _missingSourceAudioHeight = 96.0;
+  static const _missingSourceAudioHeight = 112.0;
 
   Player? _player;
   LatestSeekDispatcher? _seekDispatcher;
@@ -85,7 +86,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   String? _waveformPath;
   bool _waveformLoading = false;
   _ReviewMediaMode _mediaMode = _ReviewMediaMode.video;
-  double _videoPaneFraction = .55;
+  double? _transcriptPaneWidth;
   int _sourceRequest = 0;
 
   ReviewFullscreenController get _fullscreenController =>
@@ -492,12 +493,20 @@ class _TranscriptReviewState extends State<TranscriptReview>
                 final sideBySide = constraints.maxWidth >= 840;
                 final availableWidth =
                     constraints.maxWidth - _reviewDividerWidth;
-                final maximumVideoWidth =
+                final maximumPaneWidth =
                     availableWidth - _minimumReviewPaneWidth;
-                final videoWidth = sideBySide
-                    ? (availableWidth * _videoPaneFraction)
-                          .clamp(_minimumReviewPaneWidth, maximumVideoWidth)
+                final preferredTranscriptWidth =
+                    _transcriptPaneWidth ?? availableWidth * .45;
+                final transcriptWidth = sideBySide
+                    ? preferredTranscriptWidth
+                          .clamp(_minimumReviewPaneWidth, maximumPaneWidth)
                           .toDouble()
+                    : constraints.maxWidth;
+                if (sideBySide && _transcriptPaneWidth == null) {
+                  _transcriptPaneWidth = transcriptWidth;
+                }
+                final videoWidth = sideBySide
+                    ? availableWidth - transcriptWidth
                     : constraints.maxWidth;
                 final stackedVideoHeight = (constraints.maxHeight * .4)
                     .clamp(180.0, 300.0)
@@ -518,9 +527,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                 final videoTranscriptRect = Rect.fromLTWH(
                   sideBySide ? videoWidth + _reviewDividerWidth : 0,
                   videoTranscriptTop,
-                  sideBySide
-                      ? constraints.maxWidth - videoWidth - _reviewDividerWidth
-                      : constraints.maxWidth,
+                  sideBySide ? transcriptWidth : constraints.maxWidth,
                   (constraints.maxHeight - videoTranscriptTop)
                       .clamp(0.0, constraints.maxHeight)
                       .toDouble(),
@@ -541,20 +548,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
                   (constraints.maxHeight - audioMediaHeight - 1)
                       .clamp(0.0, constraints.maxHeight)
                       .toDouble(),
-                );
-                final videoButtonOffset = sideBySide
-                    ? Offset(
-                        videoWidth - _MediaModeButton.size - 12,
-                        constraints.maxHeight - _MediaModeButton.size - 12,
-                      )
-                    : Offset(
-                        constraints.maxWidth - _MediaModeButton.size - 10 - 48,
-                        stackedVideoHeight +
-                            (VideoTransport.height - _MediaModeButton.size) / 2,
-                      );
-                final audioButtonOffset = Offset(
-                  constraints.maxWidth - _MediaModeButton.size - 10,
-                  (audioMediaHeight - _MediaModeButton.size) / 2,
                 );
                 final media = _buildMediaArea(
                   job,
@@ -583,11 +576,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
                     final transcriptRect = Rect.lerp(
                       videoTranscriptRect,
                       audioTranscriptRect,
-                      progress,
-                    )!;
-                    final buttonOffset = Offset.lerp(
-                      videoButtonOffset,
-                      audioButtonOffset,
                       progress,
                     )!;
                     return Stack(
@@ -675,19 +663,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
                             ),
                           ),
                         ),
-                        Positioned(
-                          key: const ValueKey('media-mode-button-slot'),
-                          left: buttonOffset.dx,
-                          top: buttonOffset.dy,
-                          child: canSwitchMediaMode
-                              ? _MediaModeButton(
-                                  destination: audioMode
-                                      ? _ReviewMediaMode.video
-                                      : _ReviewMediaMode.audio,
-                                  onPressed: () => _toggleMediaMode(job),
-                                )
-                              : const SizedBox.shrink(),
-                        ),
                       ],
                     );
                   },
@@ -701,12 +676,15 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   void _resizeReviewPanes(double delta, double availableWidth) {
-    final maximumVideoWidth = availableWidth - _minimumReviewPaneWidth;
-    final currentWidth = availableWidth * _videoPaneFraction;
-    final nextWidth = (currentWidth + delta)
-        .clamp(_minimumReviewPaneWidth, maximumVideoWidth)
+    final maximumPaneWidth = availableWidth - _minimumReviewPaneWidth;
+    final currentWidth = (_transcriptPaneWidth ?? availableWidth * .45).clamp(
+      _minimumReviewPaneWidth,
+      maximumPaneWidth,
+    );
+    final nextWidth = (currentWidth - delta)
+        .clamp(_minimumReviewPaneWidth, maximumPaneWidth)
         .toDouble();
-    setState(() => _videoPaneFraction = nextWidth / availableWidth);
+    setState(() => _transcriptPaneWidth = nextWidth);
   }
 
   Widget _buildMediaArea(
@@ -725,6 +703,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
         content: Text(context.strings.t('source_missing')),
         leading: const Icon(Icons.link_off_rounded),
         actions: [
+          if (canSwitchMediaMode)
+            _MediaModeButton(
+              destination: audioMode
+                  ? _ReviewMediaMode.video
+                  : _ReviewMediaMode.audio,
+              onPressed: () => _toggleMediaMode(job),
+            ),
           TextButton(
             onPressed: () async {
               final linked = await chooseAndRelink(context, job.id);
@@ -763,7 +748,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       waveformLoading: _waveformLoading,
       onPlayPause: _player!.playOrPause,
       onSeek: _seek,
-      reserveModeButtonSpace: audioMode,
+      onSwitchToVideoMode: audioMode ? () => _toggleMediaMode(job) : null,
     );
     if (audioMode) return audio;
     late final Widget pane;
@@ -795,7 +780,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
         onRepeatHoldEnd: _endSentenceRepeatHold,
         onEnterNativeFullscreen: _enterNativeFullscreen,
         onExitNativeFullscreen: _exitNativeFullscreen,
-        reserveModeButtonSpace: canSwitchMediaMode && !fillHeight,
+        onSwitchToAudioMode: canSwitchMediaMode
+            ? () => _toggleMediaMode(job)
+            : null,
       );
       pane = video;
     } else {
@@ -1078,7 +1065,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _endSentenceRepeatHold();
       return true;
     }
-    if (_appController.destinationIndex != 0 ||
+    if (_appController.destination != AppDestination.workspace ||
         ModalRoute.of(context)?.isCurrent == false) {
       return false;
     }
@@ -1852,7 +1839,8 @@ class _AiBriefEmpty extends StatelessWidget {
               if (!controller.aiBriefConfigured) ...[
                 const SizedBox(height: 8),
                 TextButton(
-                  onPressed: () => controller.setDestination(2),
+                  onPressed: () =>
+                      controller.setDestination(AppDestination.settings),
                   child: Text(context.strings.t('ai_brief_configure')),
                 ),
               ],
@@ -2908,7 +2896,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
       case _TranscriptMoreAction.copy:
         unawaited(_copyTranscript(context, controller, settings));
       case _TranscriptMoreAction.export:
-        unawaited(showExportDialog(context, jobId: job.id));
+        unawaited(showTranscriptExportDialog(context, jobIds: [job.id]));
     }
   }
 
@@ -3713,7 +3701,7 @@ class _MediaPane extends StatelessWidget {
     required this.onRepeatHoldEnd,
     required this.onEnterNativeFullscreen,
     required this.onExitNativeFullscreen,
-    required this.reserveModeButtonSpace,
+    required this.onSwitchToAudioMode,
   });
 
   final TranscriptionJob job;
@@ -3742,7 +3730,7 @@ class _MediaPane extends StatelessWidget {
   final VoidCallback onRepeatHoldEnd;
   final Future<void> Function() onEnterNativeFullscreen;
   final Future<void> Function() onExitNativeFullscreen;
-  final bool reserveModeButtonSpace;
+  final VoidCallback? onSwitchToAudioMode;
 
   @override
   Widget build(BuildContext context) {
@@ -3827,7 +3815,7 @@ class _MediaPane extends StatelessWidget {
               onPlayPause: onPlayPause,
               onSeek: onSeek,
               onPlaybackRateChanged: onPlaybackRateChanged,
-              reserveModeButtonSpace: reserveModeButtonSpace,
+              onSwitchToAudioMode: onSwitchToAudioMode,
               onFullscreen: onFullscreen,
             ),
           ],
@@ -3862,7 +3850,6 @@ class VideoTransport extends StatelessWidget {
     required this.onPlaybackRateChanged,
     required this.onFullscreen,
     this.onSwitchToAudioMode,
-    this.reserveModeButtonSpace = false,
   });
 
   static const height = 56.0;
@@ -3875,7 +3862,6 @@ class VideoTransport extends StatelessWidget {
   final TranscriptSeekCallback onSeek;
   final Future<void> Function(double) onPlaybackRateChanged;
   final VoidCallback? onSwitchToAudioMode;
-  final bool reserveModeButtonSpace;
   final Future<void> Function() onFullscreen;
 
   @override
@@ -3923,9 +3909,7 @@ class VideoTransport extends StatelessWidget {
             _MediaModeButton(
               destination: _ReviewMediaMode.audio,
               onPressed: onSwitchToAudioMode!,
-            )
-          else if (reserveModeButtonSpace)
-            const SizedBox.square(dimension: _MediaModeButton.size),
+            ),
           IconButton(
             key: const Key('video-fullscreen'),
             tooltip: context.strings.t('fullscreen'),
@@ -4411,7 +4395,6 @@ class AudioTransport extends StatelessWidget {
     required this.onPlayPause,
     required this.onSeek,
     this.onSwitchToVideoMode,
-    this.reserveModeButtonSpace = false,
   });
 
   static const height = 64.0;
@@ -4424,7 +4407,6 @@ class AudioTransport extends StatelessWidget {
   final Future<void> Function() onPlayPause;
   final Future<void> Function(Duration) onSeek;
   final VoidCallback? onSwitchToVideoMode;
-  final bool reserveModeButtonSpace;
 
   @override
   Widget build(BuildContext context) => SizedBox(
@@ -4469,9 +4451,7 @@ class AudioTransport extends StatelessWidget {
             _MediaModeButton(
               destination: _ReviewMediaMode.video,
               onPressed: onSwitchToVideoMode!,
-            )
-          else if (reserveModeButtonSpace)
-            const SizedBox.square(dimension: _MediaModeButton.size),
+            ),
         ],
       ),
     ),
