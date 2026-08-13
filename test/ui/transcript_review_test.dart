@@ -108,6 +108,19 @@ void main() {
     expect(shouldRestartRepeatedSentence(invalid, 500), isFalse);
   });
 
+  test('sentence repeat lets the current pass finish before restarting', () {
+    const segment = TranscriptSegment(
+      id: 'current',
+      startMs: 1000,
+      endMs: 1900,
+      text: 'Finish this pass',
+    );
+
+    expect(shouldRestartRepeatedSentence(segment, 1450), isFalse);
+    expect(shouldRestartRepeatedSentence(segment, 1899), isFalse);
+    expect(shouldRestartRepeatedSentence(segment, 1900), isTrue);
+  });
+
   test('sentence repeat does not follow a transient next sentence', () {
     expect(
       shouldAutoFollowPlaybackSegment(
@@ -3697,61 +3710,6 @@ void main() {
     expect(find.byKey(const Key('video-audio-mode-toggle')), findsNothing);
   });
 
-  testWidgets('fullscreen shortcut hint mirrors every playback binding', (
-    tester,
-  ) async {
-    Future<void> pump(Locale locale) => tester.pumpWidget(
-      MaterialApp(
-        locale: locale,
-        supportedLocales: AppStrings.supportedLocales,
-        localizationsDelegates: const [
-          AppStrings.delegate,
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        home: const Scaffold(
-          body: Align(
-            alignment: Alignment.topLeft,
-            child: SizedBox(width: 280, child: PlaybackShortcutsHint()),
-          ),
-        ),
-      ),
-    );
-
-    await pump(const Locale('en'));
-    expect(
-      tester.getSize(find.byKey(const Key('playback-shortcuts'))).height,
-      PlaybackShortcutsHint.preferredHeight,
-    );
-    expect(find.text('Fullscreen shortcuts'), findsOneWidget);
-    expect(find.text('Play / pause'), findsOneWidget);
-    expect(find.text('Back 5s'), findsOneWidget);
-    expect(find.text('Forward 5s'), findsOneWidget);
-    expect(find.text('Speed −0.25×'), findsOneWidget);
-    expect(find.text('Speed +0.25×'), findsOneWidget);
-    expect(find.text('Exit fullscreen'), findsOneWidget);
-    for (final id in [
-      'play-pause',
-      'seek-backward',
-      'seek-forward',
-      'decrease-speed',
-      'increase-speed',
-      'exit-fullscreen',
-    ]) {
-      expect(find.byKey(ValueKey('shortcut-key-$id')), findsOneWidget);
-    }
-
-    await pump(const Locale('zh'));
-    expect(find.text('全屏快捷键'), findsOneWidget);
-    expect(find.text('播放/暂停'), findsOneWidget);
-    expect(find.text('后退 5 秒'), findsOneWidget);
-    expect(find.text('前进 5 秒'), findsOneWidget);
-    expect(find.text('速度 −0.25×'), findsOneWidget);
-    expect(find.text('速度 +0.25×'), findsOneWidget);
-    expect(find.text('退出全屏'), findsOneWidget);
-  });
-
   testWidgets('stacked video transport keeps mode and fullscreen aligned', (
     tester,
   ) async {
@@ -3859,6 +3817,8 @@ void main() {
     var forwardCalls = 0;
     var slowerCalls = 0;
     var fasterCalls = 0;
+    var repeatStarts = 0;
+    var repeatEnds = 0;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -3882,6 +3842,8 @@ void main() {
                   onSeekForward: () => forwardCalls++,
                   onDecreaseSpeed: () => slowerCalls++,
                   onIncreaseSpeed: () => fasterCalls++,
+                  onRepeatHoldStart: () => repeatStarts++,
+                  onRepeatHoldEnd: () => repeatEnds++,
                   child: const ColoredBox(
                     key: Key('fullscreen-video-surface'),
                     color: Colors.black,
@@ -3916,9 +3878,20 @@ void main() {
     expect(slowerCalls, 1);
     expect(fasterCalls, 1);
 
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyR);
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyR);
+    expect(repeatStarts, 1);
+    expect(repeatEnds, 0);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.keyR);
+    expect(repeatEnds, 1);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyR);
+    expect(repeatStarts, 2);
+
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
 
+    expect(repeatEnds, 2);
     expect(find.byKey(const Key('fullscreen-video-surface')), findsNothing);
     expect(find.byKey(const Key('workspace-content')), findsOneWidget);
   });
@@ -3941,6 +3914,8 @@ void main() {
           onSeekForward: _noop,
           onDecreaseSpeed: _noop,
           onIncreaseSpeed: _noop,
+          onRepeatHoldStart: _noop,
+          onRepeatHoldEnd: _noop,
           child: const ColoredBox(color: Colors.black),
         ),
       ),
@@ -3987,6 +3962,8 @@ void main() {
                 onSeekForward: () {},
                 onDecreaseSpeed: () {},
                 onIncreaseSpeed: () {},
+                onRepeatHoldStart: _noop,
+                onRepeatHoldEnd: _noop,
                 child: const ColoredBox(
                   key: Key('fullscreen-auto-hide-surface'),
                   color: Colors.black,
@@ -4097,6 +4074,8 @@ void main() {
                 onSeekForward: () {},
                 onDecreaseSpeed: () {},
                 onIncreaseSpeed: () {},
+                onRepeatHoldStart: _noop,
+                onRepeatHoldEnd: _noop,
                 child: const ColoredBox(color: Colors.black),
               );
             },

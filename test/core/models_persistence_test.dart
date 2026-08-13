@@ -62,15 +62,12 @@ void main() {
     },
   );
 
-  test('fullscreen shortcut guide defaults on and persists when hidden', () {
-    expect(AppSettings.fromJson(const {}).showFullscreenShortcuts, isTrue);
+  test('legacy fullscreen shortcut preference is ignored', () {
+    final restored = AppSettings.fromJson(const {
+      'show_fullscreen_shortcuts': false,
+    });
 
-    final restored = AppSettings.fromJson(
-      const AppSettings(showFullscreenShortcuts: false).toJson(),
-    );
-
-    expect(restored.showFullscreenShortcuts, isFalse);
-    expect(restored.toJson()['show_fullscreen_shortcuts'], isFalse);
+    expect(restored.toJson(), isNot(contains('show_fullscreen_shortcuts')));
   });
 
   test('legacy concurrency setting is ignored and no longer persisted', () {

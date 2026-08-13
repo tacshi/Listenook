@@ -80,8 +80,8 @@ host). Packaging scripts do this automatically.
 Set `SONIOX_API_KEY` only to opt into live development calls. Normal tests use
 fake local services and never consume Soniox credit.
 
-Keyboard shortcuts: `Cmd/Ctrl+O` opens media and `Cmd/Ctrl+Enter` starts the
-reviewed queue. All primary actions remain reachable without a mouse.
+The complete keyboard shortcut reference is available in
+**Settings → Shortcuts**. All primary actions remain reachable without a mouse.
 
 ## Packaging
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
@@ -60,6 +61,10 @@ void main() {
   testWidgets('an unsaved Soniox key can be tested and then saved', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(1200, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     Uri? launchedUrl;
     final credentials = _Credentials();
     final soniox = _Soniox();
@@ -78,9 +83,15 @@ void main() {
       ChangeNotifierProvider.value(
         value: controller,
         child: MaterialApp(
+          theme: ThemeData(platform: TargetPlatform.macOS),
           locale: const Locale('en'),
           supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: const [AppStrings.delegate],
+          localizationsDelegates: const [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
           home: Scaffold(
             body: SettingsPage(
               launchExternalUrl: (url) async {
@@ -100,8 +111,10 @@ void main() {
     );
     expect(find.text('Transcription'), findsOneWidget);
     expect(find.text('Appearance'), findsWidgets);
+    expect(find.text('Shortcuts'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
     expect(find.byIcon(Icons.transcribe_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.keyboard_outlined), findsOneWidget);
     expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
     expect(find.text('Batch options'), findsNothing);
     expect(find.text('Concurrent jobs'), findsNothing);
@@ -214,18 +227,104 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Appearance'), findsOneWidget);
     expect(find.text('Theme').hitTestable(), findsOneWidget);
-    final shortcutToggle = find.byKey(const Key('show-fullscreen-shortcuts'));
-    expect(tester.widget<SwitchListTile>(shortcutToggle).value, isTrue);
-    await tester.tap(shortcutToggle);
+    expect(find.byKey(const Key('show-fullscreen-shortcuts')), findsNothing);
+
+    await tester.tap(find.text('Shortcuts'));
     await tester.pumpAndSettle();
-    expect(controller.settings.showFullscreenShortcuts, isFalse);
-    expect(tester.widget<SwitchListTile>(shortcutToggle).value, isFalse);
+    expect(find.text('Application').hitTestable(), findsOneWidget);
+    expect(find.text('Navigation').hitTestable(), findsOneWidget);
+    expect(find.text('Review playback').hitTestable(), findsOneWidget);
+    expect(find.text('Fullscreen playback').hitTestable(), findsOneWidget);
+    expect(find.text('Hold to repeat the current sentence'), findsOneWidget);
+    for (final id in [
+      'open-media',
+      'toggle-sidebar',
+      'start-ready',
+      'workspace',
+      'library',
+      'settings',
+      'hold-repeat',
+      'play-pause',
+      'seek-backward',
+      'seek-forward',
+      'decrease-speed',
+      'increase-speed',
+      'exit-fullscreen',
+    ]) {
+      expect(find.byKey(ValueKey('shortcut-row-$id')), findsOneWidget);
+    }
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('shortcut-row-open-media')),
+        matching: find.text('⌘'),
+      ),
+      findsOneWidget,
+    );
 
     await tester.tap(find.text('About'));
     await tester.pumpAndSettle();
     expect(find.text('Media engine diagnostics'), findsNothing);
     expect(find.text('Privacy').hitTestable(), findsOneWidget);
     expect(find.text('Third-party notices').hitTestable(), findsOneWidget);
+  });
+
+  testWidgets('shortcut tab localizes labels and uses Ctrl off macOS', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(),
+      mediaService: _Media(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          theme: ThemeData(platform: TargetPlatform.windows),
+          locale: const Locale('zh', 'CN'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const Scaffold(body: SettingsPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('快捷键'));
+    await tester.pumpAndSettle();
+    expect(find.text('应用').hitTestable(), findsOneWidget);
+    expect(find.text('导航').hitTestable(), findsOneWidget);
+    expect(find.text('校对播放').hitTestable(), findsOneWidget);
+    expect(find.text('全屏播放').hitTestable(), findsOneWidget);
+    expect(find.text('按住以重复当前句'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('shortcut-row-open-media')),
+        matching: find.text('Ctrl'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('shortcut-row-play-pause')),
+        matching: find.text('空格'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets(

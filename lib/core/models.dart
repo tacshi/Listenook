@@ -1218,7 +1218,6 @@ class AppSettings {
     this.localeMode = AppLocaleMode.system,
     this.showSpeakers = true,
     this.showTimestamps = false,
-    this.showFullscreenShortcuts = true,
     this.exportOptions = const ExportOptions(),
     this.onboardingComplete = false,
     LlmProviderSettings llmProviderSettings = const LlmProviderSettings(),
@@ -1234,7 +1233,6 @@ class AppSettings {
   final AppLocaleMode localeMode;
   final bool showSpeakers;
   final bool showTimestamps;
-  final bool showFullscreenShortcuts;
   final ExportOptions exportOptions;
   final bool onboardingComplete;
   final LlmProviderSettings _llmProviderSettings;
@@ -1258,7 +1256,6 @@ class AppSettings {
     AppLocaleMode? localeMode,
     bool? showSpeakers,
     bool? showTimestamps,
-    bool? showFullscreenShortcuts,
     ExportOptions? exportOptions,
     bool? onboardingComplete,
     LlmProviderSettings? llmProviderSettings,
@@ -1270,8 +1267,6 @@ class AppSettings {
     localeMode: localeMode ?? this.localeMode,
     showSpeakers: showSpeakers ?? this.showSpeakers,
     showTimestamps: showTimestamps ?? this.showTimestamps,
-    showFullscreenShortcuts:
-        showFullscreenShortcuts ?? this.showFullscreenShortcuts,
     exportOptions: exportOptions ?? this.exportOptions,
     onboardingComplete: onboardingComplete ?? this.onboardingComplete,
     llmProviderSettings:
@@ -1291,7 +1286,6 @@ class AppSettings {
     'locale_mode': localeMode.name,
     'show_speakers': showSpeakers,
     'show_timestamps': showTimestamps,
-    'show_fullscreen_shortcuts': showFullscreenShortcuts,
     'export_options': exportOptions.toJson(),
     'onboarding_complete': onboardingComplete,
     'llm_provider_settings': llmProviderSettings.toJson(),
@@ -1313,8 +1307,6 @@ class AppSettings {
           AppLocaleMode.system,
       showSpeakers: json['show_speakers'] as bool? ?? true,
       showTimestamps: json['show_timestamps'] as bool? ?? false,
-      showFullscreenShortcuts:
-          json['show_fullscreen_shortcuts'] as bool? ?? true,
       exportOptions: ExportOptions.fromJson(
         (json['export_options'] as Map?)?.cast<String, dynamic>(),
       ),

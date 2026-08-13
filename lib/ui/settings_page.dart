@@ -42,7 +42,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final settings = controller.settings;
     return SafeArea(
       child: DefaultTabController(
-        length: 3,
+        length: 4,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -75,6 +75,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     text: context.strings.t('appearance'),
                   ),
                   Tab(
+                    icon: const Icon(Icons.keyboard_outlined),
+                    text: context.strings.t('settings_shortcuts'),
+                  ),
+                  Tab(
                     icon: const Icon(Icons.info_outline_rounded),
                     text: context.strings.t('settings_system_about'),
                   ),
@@ -87,6 +91,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 children: [
                   _transcriptionTab(context, controller, settings),
                   _appearanceTab(context, controller, settings),
+                  _shortcutsTab(context),
                   _systemTab(context, controller),
                 ],
               ),
@@ -313,24 +318,109 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ],
             ),
-            const Divider(height: 24),
-            SwitchListTile(
-              key: const Key('show-fullscreen-shortcuts'),
-              contentPadding: EdgeInsets.zero,
-              title: Text(context.strings.t('show_fullscreen_shortcuts')),
-              subtitle: Text(
-                context.strings.t('show_fullscreen_shortcuts_description'),
-              ),
-              value: settings.showFullscreenShortcuts,
-              onChanged: (value) => controller.updateSettings(
-                settings.copyWith(showFullscreenShortcuts: value),
-              ),
-            ),
           ],
         ),
       ),
     ),
   ]);
+
+  Widget _shortcutsTab(BuildContext context) {
+    final commandKey = Theme.of(context).platform == TargetPlatform.macOS
+        ? '⌘'
+        : 'Ctrl';
+    final enterKey = context.strings.t('shortcut_key_enter');
+    return _tabList([
+      _ShortcutSection(
+        title: context.strings.t('shortcut_section_application'),
+        icon: Icons.apps_rounded,
+        shortcuts: [
+          _ShortcutDefinition(
+            id: 'open-media',
+            description: context.strings.t('shortcut_open_media'),
+            keys: [commandKey, 'O'],
+          ),
+          _ShortcutDefinition(
+            id: 'toggle-sidebar',
+            description: context.strings.t('shortcut_toggle_sidebar'),
+            keys: [commandKey, 'B'],
+          ),
+          _ShortcutDefinition(
+            id: 'start-ready',
+            description: context.strings.t('shortcut_start_ready'),
+            keys: [commandKey, enterKey],
+          ),
+        ],
+      ),
+      _ShortcutSection(
+        title: context.strings.t('shortcut_section_navigation'),
+        icon: Icons.navigation_outlined,
+        shortcuts: [
+          _ShortcutDefinition(
+            id: 'workspace',
+            description: context.strings.t('workspace'),
+            keys: [commandKey, '1'],
+          ),
+          _ShortcutDefinition(
+            id: 'library',
+            description: context.strings.t('library'),
+            keys: [commandKey, '2'],
+          ),
+          _ShortcutDefinition(
+            id: 'settings',
+            description: context.strings.t('settings'),
+            keys: [commandKey, ','],
+          ),
+        ],
+      ),
+      _ShortcutSection(
+        title: context.strings.t('shortcut_section_review_playback'),
+        icon: Icons.repeat_one_rounded,
+        shortcuts: [
+          _ShortcutDefinition(
+            id: 'hold-repeat',
+            description: context.strings.t('shortcut_hold_repeat'),
+            keys: const ['R'],
+          ),
+        ],
+      ),
+      _ShortcutSection(
+        title: context.strings.t('shortcut_section_fullscreen_playback'),
+        icon: Icons.fullscreen_rounded,
+        shortcuts: [
+          _ShortcutDefinition(
+            id: 'play-pause',
+            description: context.strings.t('shortcut_play_pause'),
+            keys: [context.strings.t('shortcut_key_space')],
+          ),
+          _ShortcutDefinition(
+            id: 'seek-backward',
+            description: context.strings.t('shortcut_seek_backward'),
+            keys: const ['←'],
+          ),
+          _ShortcutDefinition(
+            id: 'seek-forward',
+            description: context.strings.t('shortcut_seek_forward'),
+            keys: const ['→'],
+          ),
+          _ShortcutDefinition(
+            id: 'decrease-speed',
+            description: context.strings.t('shortcut_decrease_speed'),
+            keys: const ['X'],
+          ),
+          _ShortcutDefinition(
+            id: 'increase-speed',
+            description: context.strings.t('shortcut_increase_speed'),
+            keys: const ['C'],
+          ),
+          _ShortcutDefinition(
+            id: 'exit-fullscreen',
+            description: context.strings.t('exit_fullscreen'),
+            keys: [context.strings.t('shortcut_key_escape')],
+          ),
+        ],
+      ),
+    ]);
+  }
 
   Widget _systemTab(BuildContext context, AppController controller) =>
       _tabList([
@@ -835,6 +925,105 @@ class _TranslationSettingsSectionState
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _ShortcutDefinition {
+  const _ShortcutDefinition({
+    required this.id,
+    required this.description,
+    required this.keys,
+  });
+
+  final String id;
+  final String description;
+  final List<String> keys;
+}
+
+class _ShortcutSection extends StatelessWidget {
+  const _ShortcutSection({
+    required this.title,
+    required this.icon,
+    required this.shortcuts,
+  });
+
+  final String title;
+  final IconData icon;
+  final List<_ShortcutDefinition> shortcuts;
+
+  @override
+  Widget build(BuildContext context) => _Section(
+    title: title,
+    icon: icon,
+    child: Column(
+      children: [
+        for (var index = 0; index < shortcuts.length; index++) ...[
+          if (index > 0) const Divider(height: 17),
+          _ShortcutRow(shortcut: shortcuts[index]),
+        ],
+      ],
+    ),
+  );
+}
+
+class _ShortcutRow extends StatelessWidget {
+  const _ShortcutRow({required this.shortcut});
+
+  final _ShortcutDefinition shortcut;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final keyDescription = shortcut.keys.join('+');
+    return Semantics(
+      key: ValueKey('shortcut-row-${shortcut.id}'),
+      label: '${shortcut.description}: $keyDescription',
+      child: ExcludeSemantics(
+        child: Row(
+          children: [
+            Expanded(child: Text(shortcut.description)),
+            const SizedBox(width: 16),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var index = 0; index < shortcut.keys.length; index++) ...[
+                  if (index > 0)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 5),
+                      child: Text(
+                        '+',
+                        style: TextStyle(color: colors.onSurfaceVariant),
+                      ),
+                    ),
+                  Container(
+                    key: ValueKey('shortcut-key-${shortcut.id}-$index'),
+                    constraints: const BoxConstraints(minWidth: 30),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colors.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: colors.outlineVariant),
+                    ),
+                    child: Text(
+                      shortcut.keys[index],
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: colors.onSurfaceVariant,
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
