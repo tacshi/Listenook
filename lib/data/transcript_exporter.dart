@@ -33,12 +33,12 @@ class DefaultTranscriptExporter implements TranscriptExporter {
     final document = job.document;
     if (document == null) throw StateError('The job has no transcript.');
     final extension = _extension(options.format);
-    final base = _sanitize(p.basenameWithoutExtension(job.fileName));
+    final base = _exportBaseName(job);
     final output = await _availableFile(directory, base, extension);
     final contents = render(
       document,
       options,
-      title: job.fileName,
+      title: job.displayName,
       metadata: job.metadata,
     );
     await output.writeAsString(contents, encoding: utf8, flush: true);
@@ -55,7 +55,7 @@ class DefaultTranscriptExporter implements TranscriptExporter {
     final names = <String>{};
     for (final job in jobs.where((item) => item.document != null)) {
       final extension = _extension(options.format);
-      final base = _sanitize(p.basenameWithoutExtension(job.fileName));
+      final base = _exportBaseName(job);
       var name = '$base.$extension';
       var suffix = 2;
       while (!names.add(name.toLowerCase())) {
@@ -66,7 +66,7 @@ class DefaultTranscriptExporter implements TranscriptExporter {
         render(
           job.document!,
           options,
-          title: job.fileName,
+          title: job.displayName,
           metadata: job.metadata,
         ),
       );
@@ -78,6 +78,9 @@ class DefaultTranscriptExporter implements TranscriptExporter {
     await file.writeAsBytes(data, flush: true);
     return file.path;
   }
+
+  String _exportBaseName(TranscriptionJob job) =>
+      _sanitize(job.displayTitle ?? p.basenameWithoutExtension(job.fileName));
 
   String _plain(TranscriptDocument document, ExportOptions options) => document
       .segments

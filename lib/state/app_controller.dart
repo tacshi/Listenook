@@ -14,6 +14,8 @@ import '../data/process_media_service.dart';
 import '../data/soniox_api_client.dart';
 import '../data/transcript_exporter.dart';
 
+enum AppDestination { inbox, workspace, library, settings }
+
 class AppController extends ChangeNotifier {
   static const _maxConcurrentJobs = 4;
 
@@ -21,7 +23,9 @@ class AppController extends ChangeNotifier {
     required CredentialStore credentialStore,
     required SettingsRepository settingsRepository,
     required JobRepository jobRepository,
+    LibraryCatalogRepository? libraryCatalogRepository,
     required MediaService mediaService,
+    required MediaSourceResolver sourceResolver,
     required SonioxClient sonioxClient,
     required TranscriptExporter exporter,
     TranslationCredentialStore? translationCredentialStore,
@@ -32,9 +36,11 @@ class AppController extends ChangeNotifier {
   }) : _credentials = credentialStore,
        _settingsRepository = settingsRepository,
        _jobsRepository = jobRepository,
+       _libraryCatalogRepository = libraryCatalogRepository,
        _media = mediaService,
        _soniox = sonioxClient,
        _exporter = exporter,
+       _sourceResolver = sourceResolver,
        _translationCredentials = translationCredentialStore,
        _translationService = translationService,
        _aiBriefService = aiBriefService,
@@ -44,9 +50,11 @@ class AppController extends ChangeNotifier {
   final CredentialStore _credentials;
   final SettingsRepository _settingsRepository;
   final JobRepository _jobsRepository;
+  final LibraryCatalogRepository? _libraryCatalogRepository;
   final MediaService _media;
   final SonioxClient _soniox;
   final TranscriptExporter _exporter;
+  final MediaSourceResolver _sourceResolver;
   final TranslationCredentialStore? _translationCredentials;
   final TranslationService? _translationService;
   final AiBriefService? _aiBriefService;
@@ -54,7 +62,7 @@ class AppController extends ChangeNotifier {
   final Uuid _uuid;
   final Map<String, TranscriptionJob> _jobs = {};
   final Map<String, Duration> _playbackPositions = {};
-  final List<String> _workspaceIds = [];
+  final List<String> _inboxIds = [];
   final Set<String> _cancelledIds = {};
   final Set<String> _translationCancelledIds = {};
   final Set<String> _aiBriefCancelledIds = {};
@@ -63,12 +71,41 @@ class AppController extends ChangeNotifier {
   bool _initializing = true;
   bool _keyConfigured = false;
   bool _translationKeyConfigured = false;
-  int _destinationIndex = 0;
-  String? _selectedJobId;
+  AppDestination _destination = AppDestination.inbox;
+  String? _activeWorkspaceJobId;
   AppSettings _settings = const AppSettings();
+  LibraryCatalog _libraryCatalog = const LibraryCatalog();
   TranscriptionOptions _sessionOptions = const TranscriptionOptions();
 
   AppSettings get settings => _settings;
+  LibraryCatalog get libraryCatalog => _libraryCatalog;
+  List<LibraryGroup> get libraryGroups {
+    final groups = List<LibraryGroup>.of(_libraryCatalog.groups)
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return groups;
+  }
+
+  List<LibraryTag> get libraryTags {
+    final tags = List<LibraryTag>.of(_libraryCatalog.tags)
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return tags;
+  }
+
+  LibraryGroup? libraryGroupById(String? id) {
+    if (id == null) return null;
+    for (final group in _libraryCatalog.groups) {
+      if (group.id == id) return group;
+    }
+    return null;
+  }
+
+  LibraryTag? libraryTagById(String id) {
+    for (final tag in _libraryCatalog.tags) {
+      if (tag.id == id) return tag;
+    }
+    return null;
+  }
+
   TranscriptionOptions get sessionOptions => _sessionOptions;
   bool get initializing => _initializing;
   bool get processing => _processing;
@@ -86,8 +123,8 @@ class AppController extends ChangeNotifier {
     AppLocaleMode.english => 'en',
     AppLocaleMode.system => _initialTargetLanguage(),
   };
-  int get destinationIndex => _destinationIndex;
-  String? get selectedJobId => _selectedJobId;
+  AppDestination get destination => _destination;
+  String? get activeWorkspaceJobId => _activeWorkspaceJobId;
 
   List<TranscriptionJob> get allJobs {
     final list = _jobs.values.toList()
@@ -95,13 +132,13 @@ class AppController extends ChangeNotifier {
     return list;
   }
 
-  List<TranscriptionJob> get workspaceJobs => _workspaceIds
+  List<TranscriptionJob> get inboxJobs => _inboxIds
       .map((id) => _jobs[id])
       .whereType<TranscriptionJob>()
       .toList(growable: false);
 
-  TranscriptionJob? get selectedJob =>
-      _selectedJobId == null ? null : _jobs[_selectedJobId];
+  TranscriptionJob? get activeWorkspaceJob =>
+      _activeWorkspaceJobId == null ? null : _jobs[_activeWorkspaceJobId];
 
   Duration playbackPositionFor(String jobId) =>
       _playbackPositions[jobId] ?? Duration.zero;
@@ -115,11 +152,11 @@ class AppController extends ChangeNotifier {
   }
 
   int get readyCount =>
-      workspaceJobs.where((job) => job.status.canTranscribe).length;
-  int get processingCount => workspaceJobs.where((job) => job.isBusy).length;
+      inboxJobs.where((job) => job.status.canTranscribe).length;
+  int get processingCount => inboxJobs.where((job) => job.isBusy).length;
   int get completedCount =>
-      workspaceJobs.where((job) => job.status == JobStatus.completed).length;
-  int get failedCount => workspaceJobs
+      inboxJobs.where((job) => job.status == JobStatus.completed).length;
+  int get failedCount => inboxJobs
       .where(
         (job) =>
             job.status == JobStatus.failed ||
@@ -128,14 +165,16 @@ class AppController extends ChangeNotifier {
       .length;
   int get inactiveHistoryCount =>
       _jobs.values.where((job) => !job.isBusy).length;
-  int get untranscribedWorkspaceCount =>
-      workspaceJobs.where((job) => job.document == null).length;
-  bool get canStartNewSession =>
-      workspaceJobs.isNotEmpty &&
+  int get untranscribedInboxCount =>
+      inboxJobs.where((job) => job.document == null).length;
+  bool get canStartNewInboxBatch =>
+      inboxJobs.isNotEmpty &&
       !_processing &&
-      !workspaceJobs.any((job) => job.isBusy);
+      !inboxJobs.any((job) => job.isBusy);
 
   Future<void> initialize() async {
+    _libraryCatalog =
+        await _libraryCatalogRepository?.load() ?? const LibraryCatalog();
     _settings = await _settingsRepository.load();
     var settingsChanged = false;
     if (_settings.translationSettings.targetLanguage.isEmpty) {
@@ -246,7 +285,7 @@ class AppController extends ChangeNotifier {
     if (interrupted.isNotEmpty) {
       _batchId = interrupted.first.batchId;
       _sessionOptions = interrupted.first.options;
-      _workspaceIds.addAll(interrupted.map((job) => job.id));
+      _inboxIds.addAll(interrupted.map((job) => job.id));
     }
     _initializing = false;
     notifyListeners();
@@ -263,98 +302,216 @@ class AppController extends ChangeNotifier {
     return (await read())?.isNotEmpty ?? false;
   }
 
-  void setDestination(int index) {
-    if (_destinationIndex == index) return;
-    _destinationIndex = index;
+  void setDestination(AppDestination destination) {
+    if (_destination == destination) return;
+    _destination = destination;
     notifyListeners();
   }
 
-  void selectJob(String? id) {
-    _selectedJobId = id;
+  Future<void> renameLibraryItem(String id, String? title) async {
+    final job = _jobs[id];
+    if (job == null) return;
+    final normalized = title?.trim();
+    if (normalized != null && normalized.length > 200) {
+      throw ArgumentError.value(title, 'title', 'Title is too long.');
+    }
+    await _transition(
+      job,
+      displayTitle: normalized,
+      clearDisplayTitle: normalized == null || normalized.isEmpty,
+    );
+  }
+
+  Future<LibraryGroup> createLibraryGroup(String name) async {
+    final normalized = _validateOrganizerName(name);
+    if (_libraryCatalog.groups.any(
+      (group) => group.name.toLowerCase() == normalized.toLowerCase(),
+    )) {
+      throw ArgumentError.value(name, 'name', 'Group name already exists.');
+    }
+    final group = LibraryGroup(id: _uuid.v4(), name: normalized);
+    _libraryCatalog = _libraryCatalog.copyWith(
+      groups: [..._libraryCatalog.groups, group],
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+    return group;
+  }
+
+  Future<LibraryTag> createLibraryTag(String name) async {
+    final normalized = _validateOrganizerName(name);
+    if (_libraryCatalog.tags.any(
+      (tag) => tag.name.toLowerCase() == normalized.toLowerCase(),
+    )) {
+      throw ArgumentError.value(name, 'name', 'Tag name already exists.');
+    }
+    final tag = LibraryTag(id: _uuid.v4(), name: normalized);
+    _libraryCatalog = _libraryCatalog.copyWith(
+      tags: [..._libraryCatalog.tags, tag],
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+    return tag;
+  }
+
+  Future<void> renameLibraryGroup(String id, String name) async {
+    final normalized = _validateOrganizerName(name);
+    if (_libraryCatalog.groups.any(
+      (group) =>
+          group.id != id &&
+          group.name.toLowerCase() == normalized.toLowerCase(),
+    )) {
+      throw ArgumentError.value(name, 'name', 'Group name already exists.');
+    }
+    if (libraryGroupById(id) == null) return;
+    _libraryCatalog = _libraryCatalog.copyWith(
+      groups: [
+        for (final group in _libraryCatalog.groups)
+          if (group.id == id) group.copyWith(name: normalized) else group,
+      ],
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
     notifyListeners();
   }
 
-  void reorderWorkspace(int oldIndex, int newIndex) {
+  Future<void> deleteLibraryGroup(String id) async {
+    if (libraryGroupById(id) == null) return;
+    for (final job in _jobs.values.where((job) => job.groupId == id).toList()) {
+      await _transition(job, clearGroupId: true);
+    }
+    _libraryCatalog = _libraryCatalog.copyWith(
+      groups: _libraryCatalog.groups
+          .where((group) => group.id != id)
+          .toList(growable: false),
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+  }
+
+  Future<void> renameLibraryTag(String id, String name) async {
+    final normalized = _validateOrganizerName(name);
+    if (_libraryCatalog.tags.any(
+      (tag) =>
+          tag.id != id && tag.name.toLowerCase() == normalized.toLowerCase(),
+    )) {
+      throw ArgumentError.value(name, 'name', 'Tag name already exists.');
+    }
+    if (libraryTagById(id) == null) return;
+    _libraryCatalog = _libraryCatalog.copyWith(
+      tags: [
+        for (final tag in _libraryCatalog.tags)
+          if (tag.id == id) tag.copyWith(name: normalized) else tag,
+      ],
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+  }
+
+  Future<void> deleteLibraryTag(String id) async {
+    if (libraryTagById(id) == null) return;
+    for (final job
+        in _jobs.values.where((job) => job.tagIds.contains(id)).toList()) {
+      await _transition(job, tagIds: Set<String>.of(job.tagIds)..remove(id));
+    }
+    _libraryCatalog = _libraryCatalog.copyWith(
+      tags: _libraryCatalog.tags
+          .where((tag) => tag.id != id)
+          .toList(growable: false),
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+  }
+
+  Future<void> moveLibraryItems(Iterable<String> ids, String? groupId) async {
+    if (groupId != null && libraryGroupById(groupId) == null) {
+      throw ArgumentError.value(groupId, 'groupId', 'Unknown group.');
+    }
+    for (final id in ids.toSet()) {
+      final job = _jobs[id];
+      if (job == null || job.groupId == groupId) continue;
+      await _transition(job, groupId: groupId, clearGroupId: groupId == null);
+    }
+  }
+
+  Future<void> updateLibraryItemTags(
+    Iterable<String> ids, {
+    Set<String> addTagIds = const {},
+    Set<String> removeTagIds = const {},
+  }) async {
+    final knownTagIds = _libraryCatalog.tags.map((tag) => tag.id).toSet();
+    if (!knownTagIds.containsAll(addTagIds)) {
+      throw ArgumentError.value(addTagIds, 'addTagIds', 'Unknown tag.');
+    }
+    for (final id in ids.toSet()) {
+      final job = _jobs[id];
+      if (job == null) continue;
+      final updatedTagIds = Set<String>.of(job.tagIds)
+        ..addAll(addTagIds)
+        ..removeAll(removeTagIds);
+      if (setEquals(updatedTagIds, job.tagIds)) continue;
+      await _transition(job, tagIds: updatedTagIds);
+    }
+  }
+
+  String _validateOrganizerName(String name) {
+    final normalized = name.trim();
+    if (normalized.isEmpty || normalized.length > 60) {
+      throw ArgumentError.value(name, 'name', 'Invalid organizer name.');
+    }
+    return normalized;
+  }
+
+  void reorderInbox(int oldIndex, int newIndex) {
     if (oldIndex == newIndex ||
         oldIndex < 0 ||
         newIndex < 0 ||
-        oldIndex >= _workspaceIds.length ||
-        newIndex >= _workspaceIds.length) {
+        oldIndex >= _inboxIds.length ||
+        newIndex >= _inboxIds.length) {
       return;
     }
-    final id = _workspaceIds.removeAt(oldIndex);
-    _workspaceIds.insert(newIndex, id);
+    final id = _inboxIds.removeAt(oldIndex);
+    _inboxIds.insert(newIndex, id);
     notifyListeners();
-    unawaited(_persistWorkspaceOrder());
+    unawaited(_persistInboxOrder());
   }
 
-  Future<void> _persistWorkspaceOrder() async {
-    for (var index = 0; index < _workspaceIds.length; index++) {
-      final job = _jobs[_workspaceIds[index]];
+  Future<void> _persistInboxOrder() async {
+    for (var index = 0; index < _inboxIds.length; index++) {
+      final job = _jobs[_inboxIds[index]];
       if (job != null && job.queueIndex != index) {
         await _transition(job, queueIndex: index);
       }
     }
   }
 
-  Future<void> addSources(Iterable<String> paths) async {
-    if (_workspaceIds.isEmpty && !_processing) _batchId = _uuid.v4();
+  Future<void> enqueueSources(Iterable<String> paths) async {
+    if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
     final existing = <String>{
-      for (final job in workspaceJobs) _canonical(job.sourcePath),
+      for (final job in inboxJobs) _sourceResolver.identityFor(job.sourcePath),
     };
-    final files = <String>[];
-    for (final path in paths) {
-      await _collectFiles(path, files);
-    }
-    for (final path in files) {
-      final canonical = _canonical(path);
-      if (!existing.add(canonical)) continue;
+    final sources = await _sourceResolver.resolve(paths);
+    for (final source in sources) {
+      if (!existing.add(source.identity)) continue;
       final now = DateTime.now().toUtc();
       final job = TranscriptionJob(
         id: _uuid.v4(),
         batchId: _batchId,
-        sourcePath: path,
+        sourcePath: source.path,
         createdAt: now,
         updatedAt: now,
         status: JobStatus.pending,
-        queueIndex: _workspaceIds.length,
+        queueIndex: _inboxIds.length,
         options: _sessionOptions,
         translationOptions: TranslationOptions.fromSettings(
           _settings.translationSettings,
         ),
       );
       _jobs[job.id] = job;
-      _workspaceIds.add(job.id);
-      _selectedJobId ??= job.id;
+      _inboxIds.add(job.id);
       await _jobsRepository.save(job);
       notifyListeners();
       unawaited(_prepare(job.id));
     }
-  }
-
-  Future<void> _collectFiles(String path, List<String> result) async {
-    final type = await FileSystemEntity.type(path, followLinks: false);
-    if (type == FileSystemEntityType.file) {
-      if (!_isHidden(path)) result.add(p.absolute(path));
-      return;
-    }
-    if (type != FileSystemEntityType.directory) return;
-    await for (final entity in Directory(
-      path,
-    ).list(recursive: true, followLinks: false)) {
-      if (entity is File && !_isHidden(entity.path)) {
-        result.add(p.absolute(entity.path));
-      }
-    }
-  }
-
-  bool _isHidden(String path) => p
-      .split(p.normalize(path))
-      .any((part) => part.startsWith('.') && part != '.' && part != '..');
-
-  String _canonical(String path) {
-    final normalized = p.canonicalize(p.absolute(path));
-    return Platform.isWindows ? normalized.toLowerCase() : normalized;
   }
 
   Future<void> _prepare(String id) async {
@@ -394,7 +551,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> startReady() async {
     if (_processing || !_keyConfigured) return;
-    final queue = workspaceJobs
+    final queue = inboxJobs
         .where((job) => job.status.canTranscribe)
         .map((job) => job.id)
         .toList();
@@ -627,10 +784,10 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> cancelAll() async {
-    for (final job in workspaceJobs.where((item) => item.status.isActive)) {
+    for (final job in inboxJobs.where((item) => item.status.isActive)) {
       _cancelledIds.add(job.id);
     }
-    for (final job in workspaceJobs.where(
+    for (final job in inboxJobs.where(
       (item) => item.translationState.status.isActive,
     )) {
       _translationCancelledIds.add(job.id);
@@ -638,7 +795,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> cancelRemoteJobsForQuit() async {
-    final active = workspaceJobs.where((job) => job.isBusy).toList();
+    final active = inboxJobs.where((job) => job.isBusy).toList();
     for (final job in active) {
       if (job.translationState.status.isActive) {
         _translationCancelledIds.add(job.id);
@@ -686,7 +843,7 @@ class AppController extends ChangeNotifier {
           ? CleanupState.none
           : job.cleanupState,
     );
-    if (!_workspaceIds.contains(id)) _workspaceIds.add(id);
+    if (!_inboxIds.contains(id)) _inboxIds.add(id);
     notifyListeners();
     if (_keyConfigured && !_processing) {
       _processing = true;
@@ -697,10 +854,12 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  void continueReadyJob(String id) {
+  void continueInInbox(String id) {
     final job = _jobs[id];
     if (job == null || job.status != JobStatus.ready) return;
-    reopen(id);
+    if (!_inboxIds.contains(id)) _inboxIds.add(id);
+    _destination = AppDestination.inbox;
+    notifyListeners();
   }
 
   Future<String?> relink(String id, String sourcePath) async {
@@ -728,24 +887,23 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> removeFromWorkspace(String id) async {
+  Future<void> removeFromInbox(String id) async {
     final job = _jobs[id];
     if (job == null || job.isBusy) return;
-    _workspaceIds.remove(id);
+    _inboxIds.remove(id);
     if (job.document == null) {
       _jobs.remove(id);
       _playbackPositions.remove(id);
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
-    if (_selectedJobId == id) _selectedJobId = _workspaceIds.firstOrNull;
     notifyListeners();
   }
 
-  Future<void> startNewSession() async {
-    if (!canStartNewSession) return;
+  Future<void> startNewInboxBatch() async {
+    if (!canStartNewInboxBatch) return;
     final discardedIds = [
-      for (final id in _workspaceIds)
+      for (final id in _inboxIds)
         if (_jobs[id]?.document == null) id,
     ];
     for (final id in discardedIds) {
@@ -754,8 +912,7 @@ class AppController extends ChangeNotifier {
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
-    _workspaceIds.clear();
-    _selectedJobId = null;
+    _inboxIds.clear();
     _batchId = _uuid.v4();
     _sessionOptions = TranscriptionOptions(
       sonioxTranslation: _settings.sonioxTranslation,
@@ -768,8 +925,8 @@ class AppController extends ChangeNotifier {
     if (job == null || job.isBusy) return;
     _jobs.remove(id);
     _playbackPositions.remove(id);
-    _workspaceIds.remove(id);
-    if (_selectedJobId == id) _selectedJobId = null;
+    _inboxIds.remove(id);
+    if (_activeWorkspaceJobId == id) _activeWorkspaceJobId = null;
     await _media.deleteGeneratedMedia(id);
     await _jobsRepository.delete(id);
     notifyListeners();
@@ -786,20 +943,21 @@ class AppController extends ChangeNotifier {
       await _jobsRepository.delete(id);
       _jobs.remove(id);
       _playbackPositions.remove(id);
-      _workspaceIds.remove(id);
+      _inboxIds.remove(id);
     }
     await _media.clearGeneratedMediaExcept(_jobs.keys.toSet());
-    if (_selectedJobId != null && !_jobs.containsKey(_selectedJobId)) {
-      _selectedJobId = _workspaceIds.firstOrNull;
+    if (_activeWorkspaceJobId != null &&
+        !_jobs.containsKey(_activeWorkspaceJobId)) {
+      _activeWorkspaceJobId = null;
     }
     notifyListeners();
   }
 
-  void reopen(String id) {
-    if (!_jobs.containsKey(id)) return;
-    if (!_workspaceIds.contains(id)) _workspaceIds.add(id);
-    _selectedJobId = id;
-    _destinationIndex = 0;
+  void openInWorkspace(String id) {
+    final job = _jobs[id];
+    if (job?.document == null) return;
+    _activeWorkspaceJobId = id;
+    _destination = AppDestination.workspace;
     notifyListeners();
   }
 
@@ -864,7 +1022,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> updateSessionOptions(TranscriptionOptions value) async {
     _sessionOptions = value;
-    for (final job in workspaceJobs.where(
+    for (final job in inboxJobs.where(
       (job) =>
           job.status == JobStatus.pending ||
           job.status == JobStatus.probing ||
@@ -1349,7 +1507,7 @@ class AppController extends ChangeNotifier {
     final options = TranslationOptions.fromSettings(
       _settings.translationSettings,
     );
-    for (final job in workspaceJobs.where(
+    for (final job in inboxJobs.where(
       (job) => job.document == null && job.remoteTranscriptionId == null,
     )) {
       await _transition(job, translationOptions: options);
@@ -1357,7 +1515,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _updateQueuedSonioxTranslationOptions() async {
-    for (final job in workspaceJobs.where(
+    for (final job in inboxJobs.where(
       (job) => job.document == null && job.remoteTranscriptionId == null,
     )) {
       await _transition(
@@ -1695,7 +1853,7 @@ class AppController extends ChangeNotifier {
     final document = job?.document;
     if (job == null || brief == null || document == null) return '';
     final buffer = StringBuffer()
-      ..writeln('# ${job.fileName} — AI Brief')
+      ..writeln('# ${job.displayName} — AI Brief')
       ..writeln();
     if (brief.overview.trim().isNotEmpty) {
       buffer
@@ -1743,8 +1901,7 @@ class AppController extends ChangeNotifier {
   Future<String> exportAiBrief(String jobId, String directory) async {
     final job = _jobs[jobId];
     if (job?.aiBrief == null) throw StateError('Job has no AI Brief.');
-    final base = p
-        .basenameWithoutExtension(job!.fileName)
+    final base = (job!.displayTitle ?? p.basenameWithoutExtension(job.fileName))
         .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
         .replaceAll(RegExp(r'[. ]+$'), '')
         .trim();
@@ -1856,30 +2013,37 @@ class AppController extends ChangeNotifier {
     return _exporter.render(
       job!.document!,
       options,
-      title: job.fileName,
+      title: job.displayName,
       metadata: job.metadata,
     );
   }
 
-  Future<List<String>> exportCompleted(
+  Future<List<String>> exportJobs(
+    Iterable<String> ids,
     String directory,
     ExportOptions options,
   ) async {
     final results = <String>[];
-    for (final job in workspaceJobs.where((item) => item.document != null)) {
+    for (final id in ids) {
+      final job = _jobs[id];
+      if (job == null || job.document == null) continue;
       results.add(await _exporter.exportToDirectory(job, directory, options));
     }
     return results;
   }
 
-  Future<String> exportCompletedZip(
+  Future<String> exportJobsZip(
+    Iterable<String> ids,
     String destination,
     ExportOptions options,
-  ) => _exporter.exportZip(
-    workspaceJobs.where((job) => job.document != null).toList(),
-    destination,
-    options,
-  );
+  ) {
+    final jobs = ids
+        .map((id) => _jobs[id])
+        .whereType<TranscriptionJob>()
+        .where((job) => job.document != null)
+        .toList(growable: false);
+    return _exporter.exportZip(jobs, destination, options);
+  }
 
   Future<String?> loadWaveform(String jobId) async {
     final job = _jobs[jobId];
@@ -2001,11 +2165,17 @@ class AppController extends ChangeNotifier {
     String? remoteFileId,
     String? remoteTranscriptionId,
     CleanupState? cleanupState,
+    String? displayTitle,
+    String? groupId,
+    Set<String>? tagIds,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
+    bool clearDisplayTitle = false,
+    bool clearGroupId = false,
   }) async {
-    final updated = job.copyWith(
+    final current = _jobs[job.id] ?? job;
+    final updated = current.copyWith(
       sourcePath: sourcePath,
       status: status,
       queueIndex: queueIndex,
@@ -2022,17 +2192,18 @@ class AppController extends ChangeNotifier {
       remoteFileId: remoteFileId,
       remoteTranscriptionId: remoteTranscriptionId,
       cleanupState: cleanupState,
+      displayTitle: displayTitle,
+      groupId: groupId,
+      tagIds: tagIds,
       clearError: clearError,
       clearRemoteFileId: clearRemoteFileId,
       clearRemoteTranscriptionId: clearRemoteTranscriptionId,
+      clearDisplayTitle: clearDisplayTitle,
+      clearGroupId: clearGroupId,
     );
     _jobs[job.id] = updated;
     await _jobsRepository.save(updated);
     notifyListeners();
     return updated;
   }
-}
-
-extension _FirstOrNull<T> on Iterable<T> {
-  T? get firstOrNull => isEmpty ? null : first;
 }

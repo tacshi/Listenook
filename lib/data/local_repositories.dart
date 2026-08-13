@@ -19,6 +19,7 @@ class AppPaths {
   Directory get jobs => Directory(p.join(root.path, 'jobs'));
   Directory get temporary => Directory(p.join(root.path, 'temporary'));
   File get settings => File(p.join(root.path, 'settings.json'));
+  File get libraryCatalog => File(p.join(root.path, 'library_catalog.json'));
 
   static Future<AppPaths> create() async {
     final support = await getApplicationSupportDirectory();
@@ -208,6 +209,29 @@ class LocalJobRepository implements JobRepository {
     }
     return value;
   }
+}
+
+class JsonLibraryCatalogRepository implements LibraryCatalogRepository {
+  JsonLibraryCatalogRepository(this.paths);
+
+  final AppPaths paths;
+
+  @override
+  Future<LibraryCatalog> load() async {
+    if (!await paths.libraryCatalog.exists()) return const LibraryCatalog();
+    try {
+      final data = jsonDecode(await paths.libraryCatalog.readAsString());
+      return LibraryCatalog.fromJson((data as Map).cast<String, dynamic>());
+    } on Object {
+      return const LibraryCatalog();
+    }
+  }
+
+  @override
+  Future<void> save(LibraryCatalog catalog) => _atomicFileWriter.write(
+    paths.libraryCatalog,
+    jsonEncode(catalog.toJson()),
+  );
 }
 
 final _atomicFileWriter = _AtomicFileWriter();

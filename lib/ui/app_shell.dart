@@ -9,6 +9,7 @@ import 'package:window_manager/window_manager.dart';
 import '../l10n/strings.dart';
 import '../data/update_service.dart';
 import '../state/app_controller.dart';
+import 'inbox_page.dart';
 import 'library_page.dart';
 import 'review_fullscreen_controller.dart';
 import 'settings_page.dart';
@@ -65,7 +66,7 @@ class _AppShellState extends State<AppShell> with WindowListener {
 
   Future<Object?> _handleNativeNavigation(MethodCall call) async {
     if (call.method == 'showSettings') {
-      await _setDestination(2);
+      await _setDestination(AppDestination.settings);
       return null;
     }
     throw MissingPluginException('Unknown native navigation: ${call.method}');
@@ -209,9 +210,9 @@ class _AppShellState extends State<AppShell> with WindowListener {
     }
   }
 
-  Future<void> _setDestination(int index) async {
+  Future<void> _setDestination(AppDestination destination) async {
     await _fullscreenController.exit();
-    if (mounted) _controller.setDestination(index);
+    if (mounted) _controller.setDestination(destination);
   }
 
   Future<void> _addFiles() async {
@@ -221,16 +222,18 @@ class _AppShellState extends State<AppShell> with WindowListener {
     );
     final files = await openFiles(acceptedTypeGroups: [media]);
     if (files.isNotEmpty && mounted) {
-      await context.read<AppController>().addSources(
-        files.map((file) => file.path),
-      );
+      final controller = context.read<AppController>();
+      await controller.enqueueSources(files.map((file) => file.path));
+      if (mounted) controller.setDestination(AppDestination.inbox);
     }
   }
 
-  Future<void> _addFolder() async {
+  Future<void> _importFolder() async {
     final directory = await getDirectoryPath();
     if (directory != null && mounted) {
-      await context.read<AppController>().addSources([directory]);
+      final controller = context.read<AppController>();
+      await controller.enqueueSources([directory]);
+      if (mounted) controller.setDestination(AppDestination.inbox);
     }
   }
 
@@ -282,15 +285,22 @@ class _AppShellState extends State<AppShell> with WindowListener {
     final destinations = [
       _destination(
         context: context,
-        labelKey: 'workspace',
+        labelKey: 'inbox',
         shortcutKey: '1',
+        icon: Icons.inbox_outlined,
+        selectedIcon: Icons.inbox_rounded,
+      ),
+      _destination(
+        context: context,
+        labelKey: 'workspace',
+        shortcutKey: '2',
         icon: Icons.space_dashboard_outlined,
         selectedIcon: Icons.space_dashboard_rounded,
       ),
       _destination(
         context: context,
         labelKey: 'library',
-        shortcutKey: '2',
+        shortcutKey: '3',
         icon: Icons.library_books_outlined,
         selectedIcon: Icons.library_books_rounded,
       ),
@@ -300,17 +310,21 @@ class _AppShellState extends State<AppShell> with WindowListener {
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.digit1, meta: true): () =>
-            _setDestination(0),
+            _setDestination(AppDestination.inbox),
         const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
-            _setDestination(0),
+            _setDestination(AppDestination.inbox),
         const SingleActivator(LogicalKeyboardKey.digit2, meta: true): () =>
-            _setDestination(1),
+            _setDestination(AppDestination.workspace),
         const SingleActivator(LogicalKeyboardKey.digit2, control: true): () =>
-            _setDestination(1),
+            _setDestination(AppDestination.workspace),
+        const SingleActivator(LogicalKeyboardKey.digit3, meta: true): () =>
+            _setDestination(AppDestination.library),
+        const SingleActivator(LogicalKeyboardKey.digit3, control: true): () =>
+            _setDestination(AppDestination.library),
         const SingleActivator(LogicalKeyboardKey.comma, meta: true): () =>
-            _setDestination(2),
+            _setDestination(AppDestination.settings),
         const SingleActivator(LogicalKeyboardKey.comma, control: true): () =>
-            _setDestination(2),
+            _setDestination(AppDestination.settings),
         const SingleActivator(LogicalKeyboardKey.keyO, meta: true): _addFiles,
         const SingleActivator(LogicalKeyboardKey.keyO, control: true):
             _addFiles,
@@ -318,10 +332,16 @@ class _AppShellState extends State<AppShell> with WindowListener {
             _toggleSidebar,
         const SingleActivator(LogicalKeyboardKey.keyB, control: true):
             _toggleSidebar,
-        const SingleActivator(LogicalKeyboardKey.enter, meta: true):
-            controller.startReady,
-        const SingleActivator(LogicalKeyboardKey.enter, control: true):
-            controller.startReady,
+        const SingleActivator(LogicalKeyboardKey.enter, meta: true): () {
+          if (controller.destination == AppDestination.inbox) {
+            unawaited(controller.startReady());
+          }
+        },
+        const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
+          if (controller.destination == AppDestination.inbox) {
+            unawaited(controller.startReady());
+          }
+        },
       },
       child: Focus(
         autofocus: true,
@@ -336,12 +356,13 @@ class _AppShellState extends State<AppShell> with WindowListener {
                 AppWindowToolbar(
                   sidebarVisible: _sidebarVisible,
                   onToggleSidebar: _toggleSidebar,
-                ),
-              if (updates?.readyToRestart == true)
-                UpdateReadyBanner(
-                  version: updates!.release!.version.name,
-                  installing: updates.phase == UpdatePhase.installing,
-                  onRestart: () => unawaited(_restartForUpdate(updates)),
+                  updateVersion: updates?.readyToRestart == true
+                      ? updates!.release!.version.name
+                      : null,
+                  updateInstalling: updates?.phase == UpdatePhase.installing,
+                  onRestartUpdate: updates?.readyToRestart == true
+                      ? () => unawaited(_restartForUpdate(updates!))
+                      : null,
                 ),
               Expanded(
                 child: Row(
@@ -364,11 +385,18 @@ class _AppShellState extends State<AppShell> with WindowListener {
                                       minWidth: _compactSidebarWidth,
                                       minExtendedWidth: _extendedSidebarWidth,
                                       selectedIndex:
-                                          controller.destinationIndex < 2
-                                          ? controller.destinationIndex
-                                          : null,
+                                          switch (controller.destination) {
+                                            AppDestination.inbox => 0,
+                                            AppDestination.workspace => 1,
+                                            AppDestination.library => 2,
+                                            AppDestination.settings => null,
+                                          },
                                       onDestinationSelected: (index) =>
-                                          unawaited(_setDestination(index)),
+                                          unawaited(
+                                            _setDestination(
+                                              AppDestination.values[index],
+                                            ),
+                                          ),
                                       extended: sidebarExtended,
                                       leading: Padding(
                                         padding: const EdgeInsets.only(
@@ -397,13 +425,17 @@ class _AppShellState extends State<AppShell> with WindowListener {
                                           compactWidth: _compactSidebarWidth,
                                           extendedWidth: _extendedSidebarWidth,
                                           selected:
-                                              controller.destinationIndex == 2,
+                                              controller.destination ==
+                                              AppDestination.settings,
                                           label: settingsLabel,
                                           tooltip: settingsTooltip,
                                           icon: Icons.settings_outlined,
                                           selectedIcon: Icons.settings_rounded,
-                                          onPressed: () =>
-                                              unawaited(_setDestination(2)),
+                                          onPressed: () => unawaited(
+                                            _setDestination(
+                                              AppDestination.settings,
+                                            ),
+                                          ),
                                         ),
                                       ),
                                       destinations: destinations,
@@ -420,14 +452,21 @@ class _AppShellState extends State<AppShell> with WindowListener {
                     Expanded(
                       child: AnimatedSwitcher(
                         duration: const Duration(milliseconds: 220),
-                        child: switch (controller.destinationIndex) {
-                          1 => const LibraryPage(key: ValueKey('library')),
-                          2 => const SettingsPage(key: ValueKey('settings')),
-                          _ => WorkspacePage(
-                            key: const ValueKey('workspace'),
+                        child: switch (controller.destination) {
+                          AppDestination.inbox => InboxPage(
+                            key: const ValueKey('inbox'),
                             onAddFiles: _addFiles,
-                            onAddFolder: _addFolder,
+                            onImportFolder: _importFolder,
+                          ),
+                          AppDestination.workspace => WorkspacePage(
+                            key: const ValueKey('workspace'),
                             fullscreenController: _fullscreenController,
+                          ),
+                          AppDestination.library => const LibraryPage(
+                            key: ValueKey('library'),
+                          ),
+                          AppDestination.settings => const SettingsPage(
+                            key: ValueKey('settings'),
                           ),
                         },
                       ),
@@ -437,64 +476,6 @@ class _AppShellState extends State<AppShell> with WindowListener {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class UpdateReadyBanner extends StatelessWidget {
-  const UpdateReadyBanner({
-    super.key,
-    required this.version,
-    required this.installing,
-    required this.onRestart,
-  });
-
-  final String version;
-  final bool installing;
-  final VoidCallback onRestart;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Material(
-      key: const Key('update-ready-banner'),
-      color: colors.secondaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Row(
-          children: [
-            Icon(
-              Icons.system_update_alt_rounded,
-              color: colors.onSecondaryContainer,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                context.strings
-                    .t('update_ready')
-                    .replaceFirst('{version}', version),
-                style: TextStyle(color: colors.onSecondaryContainer),
-              ),
-            ),
-            const SizedBox(width: 12),
-            FilledButton.tonalIcon(
-              key: const Key('restart-to-update'),
-              onPressed: installing ? null : onRestart,
-              icon: installing
-                  ? const SizedBox.square(
-                      dimension: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.restart_alt_rounded),
-              label: Text(
-                context.strings.t(
-                  installing ? 'restarting_to_update' : 'restart_to_update',
-                ),
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -608,6 +589,9 @@ class AppWindowToolbar extends StatefulWidget {
     super.key,
     required this.sidebarVisible,
     required this.onToggleSidebar,
+    this.updateVersion,
+    this.updateInstalling = false,
+    this.onRestartUpdate,
   });
 
   static const macOSHeight = 32.0;
@@ -616,6 +600,9 @@ class AppWindowToolbar extends StatefulWidget {
 
   final bool sidebarVisible;
   final VoidCallback onToggleSidebar;
+  final String? updateVersion;
+  final bool updateInstalling;
+  final VoidCallback? onRestartUpdate;
 
   @override
   State<AppWindowToolbar> createState() => _AppWindowToolbarState();
@@ -659,6 +646,10 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
     final sidebarTooltip = context.strings.t(
       widget.sidebarVisible ? 'hide_sidebar' : 'show_sidebar',
     );
+    final updateTooltip = widget.updateInstalling
+        ? context.strings.t('restarting_to_update')
+        : '${context.strings.t('update_ready').replaceFirst('{version}', widget.updateVersion ?? '')} '
+              '${context.strings.t('restart_to_update')}';
     return DecoratedBox(
       key: const Key('app-window-toolbar'),
       decoration: BoxDecoration(
@@ -705,6 +696,28 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
               ),
             ),
             const SizedBox(width: 4),
+            if (widget.updateVersion != null) ...[
+              IconButton.filledTonal(
+                key: const Key('restart-to-update'),
+                tooltip: updateTooltip,
+                onPressed: widget.updateInstalling
+                    ? null
+                    : widget.onRestartUpdate,
+                icon: widget.updateInstalling
+                    ? const SizedBox.square(
+                        dimension: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.system_update_alt_rounded),
+                iconSize: 18,
+                padding: const EdgeInsets.all(6),
+                constraints: const BoxConstraints.tightFor(
+                  width: 32,
+                  height: 32,
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
             const Expanded(child: DragToMoveArea(child: SizedBox.expand())),
             if (windows) ...[
               Tooltip(

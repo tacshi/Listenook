@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -8,10 +9,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
 import 'package:meow_stt/l10n/strings.dart';
 import 'package:meow_stt/state/app_controller.dart';
 import 'package:meow_stt/ui/app_shell.dart';
+import 'package:meow_stt/ui/inbox_page.dart';
 import 'package:meow_stt/ui/library_page.dart';
 import 'package:meow_stt/ui/review_fullscreen_controller.dart';
 import 'package:meow_stt/ui/transcript_review.dart';
@@ -20,6 +23,26 @@ import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
+  test('wide video viewport derives its height from the available width', () {
+    expect(
+      videoViewportHeight(
+        width: 960,
+        aspectRatio: 16 / 9,
+        availableHeight: 700,
+      ),
+      540,
+    );
+    expect(
+      videoViewportHeight(
+        width: 960,
+        aspectRatio: 16 / 9,
+        availableHeight: 700,
+        maximumHeight: 300,
+      ),
+      300,
+    );
+  });
+
   test('current sentence remains active through the following silence', () {
     const segments = [
       TranscriptSegment(id: 'first', startMs: 100, endMs: 1000, text: 'First'),
@@ -86,6 +109,19 @@ void main() {
     expect(shouldRestartRepeatedSentence(valid, 1900), isTrue);
     expect(shouldRestartRepeatedSentence(valid, 2200), isTrue);
     expect(shouldRestartRepeatedSentence(invalid, 500), isFalse);
+  });
+
+  test('sentence repeat lets the current pass finish before restarting', () {
+    const segment = TranscriptSegment(
+      id: 'current',
+      startMs: 1000,
+      endMs: 1900,
+      text: 'Finish this pass',
+    );
+
+    expect(shouldRestartRepeatedSentence(segment, 1450), isFalse);
+    expect(shouldRestartRepeatedSentence(segment, 1899), isFalse);
+    expect(shouldRestartRepeatedSentence(segment, 1900), isTrue);
   });
 
   test('sentence repeat does not follow a transient next sentence', () {
@@ -1076,6 +1112,7 @@ void main() {
       settingsRepository: _Settings(),
       jobRepository: _Jobs([job('first'), job('second')]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -1545,6 +1582,7 @@ void main() {
         ),
       ]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -2445,6 +2483,7 @@ void main() {
       settingsRepository: _Settings(),
       jobRepository: _Jobs([]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -2495,6 +2534,7 @@ void main() {
       settingsRepository: _Settings(),
       jobRepository: _Jobs([]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -2600,7 +2640,12 @@ void main() {
         .map((tooltip) => tooltip.message);
     expect(
       tooltipMessages,
-      containsAll(['Workspace (⌘1)', 'Library (⌘2)', 'Settings (⌘,)']),
+      containsAll([
+        'Inbox (⌘1)',
+        'Workspace (⌘2)',
+        'Library (⌘3)',
+        'Settings (⌘,)',
+      ]),
     );
     expect(
       tester.widget<IconButton>(sidebarToggle).tooltip,
@@ -2608,17 +2653,18 @@ void main() {
     );
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-    await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit3);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(controller.destinationIndex, 1);
-    expect(find.byKey(const Key('library-page-title')), findsOneWidget);
+    expect(controller.destination, AppDestination.library);
+    expect(find.byKey(const Key('library-page-title')), findsNothing);
+    expect(find.byKey(const Key('library-search')), findsOneWidget);
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.comma);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(controller.destinationIndex, 2);
+    expect(controller.destination, AppDestination.settings);
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
     await tester.tap(find.byKey(const Key('soniox-key-field')));
     await tester.pump();
@@ -2627,8 +2673,9 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(controller.destinationIndex, 0);
-    expect(find.byKey(const Key('workspace-page-title')), findsOneWidget);
+    expect(controller.destination, AppDestination.inbox);
+    expect(find.byKey(const Key('inbox-page-title')), findsNothing);
+    expect(find.byKey(const Key('empty-add-files')), findsOneWidget);
 
     await messenger.handlePlatformMessage(
       'app.meowstt.desktop/navigation',
@@ -2638,25 +2685,25 @@ void main() {
       null,
     );
     await tester.pumpAndSettle();
-    expect(controller.destinationIndex, 2);
+    expect(controller.destination, AppDestination.settings);
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(controller.destinationIndex, 0);
+    expect(controller.destination, AppDestination.inbox);
 
     await tester.tap(settingsNavigation);
     await tester.pumpAndSettle();
-    expect(controller.destinationIndex, 2);
+    expect(controller.destination, AppDestination.settings);
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(controller.destinationIndex, 0);
+    expect(controller.destination, AppDestination.inbox);
 
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
@@ -2680,10 +2727,10 @@ void main() {
       Colors.transparent,
     );
     await mouse.moveTo(
-      tester.getCenter(find.byIcon(Icons.space_dashboard_rounded)),
+      tester.getCenter(find.byIcon(Icons.space_dashboard_outlined)),
     );
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Workspace (⌘1)'), findsOneWidget);
+    expect(find.text('Workspace (⌘2)'), findsOneWidget);
     await mouse.moveTo(tester.getCenter(sidebarToggle));
     await tester.pump(const Duration(seconds: 1));
     expect(find.text('Hide sidebar (⌘B)'), findsOneWidget);
@@ -2731,6 +2778,52 @@ void main() {
     expect(windowToolbar, findsOneWidget);
   });
 
+  testWidgets('collapsing the app sidebar preserves transcript pane width', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    const windowChannel = MethodChannel('window_manager');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      windowChannel,
+      (call) async => call.method == 'isFullScreen' ? false : null,
+    );
+    addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      metadata: _videoMetadata,
+      sourcePath: '/missing/test.mp4',
+      settings: const AppSettings(onboardingComplete: true),
+    );
+    addTearDown(controller.dispose);
+    controller.openInWorkspace('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: AppShell(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final transcript = find.byKey(const Key('video-review-transcript-pane'));
+    final media = find.byKey(const Key('video-review-media-pane'));
+    final transcriptWidth = tester.getSize(transcript).width;
+    final mediaWidth = tester.getSize(media).width;
+
+    await tester.tap(find.byKey(const Key('toggle-app-sidebar')));
+    await tester.pumpAndSettle();
+
+    expect(tester.getSize(transcript).width, closeTo(transcriptWidth, 1));
+    expect(tester.getSize(media).width, greaterThan(mediaWidth));
+  });
+
   testWidgets(
     'window close waits for review media before allowing native close',
     (tester) async {
@@ -2755,6 +2848,7 @@ void main() {
         settingsRepository: _Settings(),
         jobRepository: _Jobs([]),
         mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
         sonioxClient: _Soniox(),
         exporter: const DefaultTranscriptExporter(),
       );
@@ -2794,20 +2888,10 @@ void main() {
 
       mediaReleased.complete();
       await close;
-      expect(events, [
-        'media-start',
-        'media-done',
-        'prevent:false',
-        'close',
-      ]);
+      expect(events, ['media-start', 'media-done', 'prevent:false', 'close']);
 
       await appShellState.onWindowClose();
-      expect(events, [
-        'media-start',
-        'media-done',
-        'prevent:false',
-        'close',
-      ]);
+      expect(events, ['media-start', 'media-done', 'prevent:false', 'close']);
     },
   );
 
@@ -2848,7 +2932,7 @@ void main() {
     );
     addTearDown(controller.dispose);
     controller
-      ..reopen('job')
+      ..openInWorkspace('job')
       ..rememberPlaybackPosition('job', const Duration(milliseconds: 1600));
 
     await tester.pumpWidget(
@@ -2877,12 +2961,13 @@ void main() {
       isTrue,
     );
 
-    controller.setDestination(1);
+    controller.setDestination(AppDestination.library);
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('library-page-title')), findsOneWidget);
+    expect(find.byKey(const Key('library-page-title')), findsNothing);
+    expect(find.byKey(const Key('library-search')), findsOneWidget);
     expect(find.byType(TranscriptReview), findsNothing);
 
-    controller.setDestination(0);
+    controller.setDestination(AppDestination.workspace);
     await tester.pumpAndSettle();
 
     expect(
@@ -2961,173 +3046,20 @@ void main() {
     expect(find.byKey(const Key('window-close')), findsOneWidget);
   });
 
-  testWidgets(
-    'workspace header owns export all and queue owns status summary',
-    (tester) async {
-      _setTestWindow(tester, const Size(1240, 820));
-      final controller = await _controllerForDocument(_simpleDocument());
-      addTearDown(controller.dispose);
-      controller.reopen('job');
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: controller,
-          child: MaterialApp(
-            locale: const Locale('en'),
-            supportedLocales: AppStrings.supportedLocales,
-            localizationsDelegates: const [AppStrings.delegate],
-            home: Scaffold(
-              body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final pageTitle = find.byKey(const Key('workspace-page-title'));
-      expect(
-        tester.widget<Text>(pageTitle).style?.fontSize,
-        Theme.of(tester.element(pageTitle)).textTheme.titleLarge?.fontSize,
-      );
-      expect(find.byKey(const Key('header-add-folder')), findsNothing);
-      expect(find.byKey(const Key('header-add-files')), findsNothing);
-      expect(find.byKey(const Key('export-all')), findsOneWidget);
-      expect(find.text('Export all'), findsOneWidget);
-      expect(
-        find.byKey(const Key('file-queue-status-summary')),
-        findsOneWidget,
-      );
-      expect(find.byKey(const Key('queue-ready-status')), findsOneWidget);
-      expect(find.byKey(const Key('queue-processing-status')), findsOneWidget);
-      expect(find.byKey(const Key('queue-completed-status')), findsOneWidget);
-      expect(find.byKey(const Key('queue-failed-status')), findsNothing);
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('queue-ready-status')),
-          matching: find.text('0'),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('queue-processing-status')),
-          matching: find.text('0'),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('queue-completed-status')),
-          matching: find.text('1'),
-        ),
-        findsOneWidget,
-      );
-      final statusSummary = find.byKey(const Key('file-queue-status-summary'));
-      expect(
-        find.descendant(of: statusSummary, matching: find.text('Ready')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: statusSummary, matching: find.text('Processing')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: statusSummary, matching: find.text('Completed')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: statusSummary,
-          matching: find.text('Needs attention'),
-        ),
-        findsNothing,
-      );
-      expect(
-        find.text('Nothing uploads until you press Transcribe.'),
-        findsNothing,
-      );
-      expect(tester.takeException(), isNull);
-
-      await tester.tap(find.byKey(const Key('export-all')));
-      await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel').last);
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-    },
-  );
-
-  testWidgets('unexpected transcription failures show actionable guidance', (
+  testWidgets('workspace is editor-only and has a dedicated empty state', (
     tester,
   ) async {
-    _setTestWindow(tester, const Size(1240, 820));
-    final now = DateTime.now().toUtc();
     final controller = AppController(
       credentialStore: _Credentials(),
       settingsRepository: _Settings(),
-      jobRepository: _Jobs([
-        TranscriptionJob(
-          id: 'failed-job',
-          batchId: 'batch',
-          sourcePath: '/missing/podcast-01.m4a',
-          createdAt: now,
-          updatedAt: now,
-          status: JobStatus.failed,
-          errorCode: 'unexpected',
-        ),
-      ]),
+      jobRepository: _Jobs([]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.reopen('failed-job');
-
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: const MaterialApp(
-          locale: Locale('zh', 'CN'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [
-            AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          home: Scaffold(
-            body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('出现问题，请重试。'), findsNothing);
-    expect(find.text('转写失败。请检查源文件、API 密钥和网络连接。'), findsOneWidget);
-    expect(find.byKey(const Key('queue-failed-status')), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('queue-failed-status')),
-        matching: find.text('1'),
-      ),
-      findsOneWidget,
-    );
-  });
-
-  testWidgets('completed video collapses the queue and uses the wide split', (
-    tester,
-  ) async {
-    _setTestWindow(tester, const Size(1240, 820));
-    final controller = await _controllerForDocument(
-      _simpleDocument(),
-      metadata: _videoMetadata,
-      sourcePath: '/missing/test.mp4',
-    );
-    addTearDown(controller.dispose);
-    controller.reopen('job');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -3136,233 +3068,91 @@ void main() {
           locale: Locale('en'),
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: [AppStrings.delegate],
-          home: Scaffold(
-            body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
-          ),
+          home: Scaffold(body: WorkspacePage()),
         ),
       ),
     );
-    await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('file-queue-floating-button')), findsOneWidget);
-    expect(find.byKey(const Key('file-queue-rail')), findsNothing);
-    expect(
-      tester.getSize(find.byKey(const Key('expand-file-queue'))),
-      const Size.square(48),
-    );
-    final queueOpacity = find.byKey(const Key('file-queue-floating-opacity'));
-    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, .25);
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    addTearDown(mouse.removePointer);
-    await mouse.addPointer(location: Offset.zero);
-    await mouse.moveTo(
-      tester.getCenter(find.byKey(const Key('expand-file-queue'))),
-    );
-    await tester.pumpAndSettle();
-    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, 1);
-    await mouse.moveTo(const Offset(800, 20));
-    await tester.pumpAndSettle();
-    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, .25);
-
-    final queueFab = tester.widget<FloatingActionButton>(
-      find.byKey(const Key('expand-file-queue')),
-    );
-    queueFab.focusNode!.requestFocus();
-    await tester.pumpAndSettle();
-    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, 1);
-    queueFab.focusNode!.unfocus();
-    await tester.pumpAndSettle();
-    expect(tester.widget<AnimatedOpacity>(queueOpacity).opacity, .25);
-    final layout = tester.getRect(
-      find.byKey(const Key('workspace-review-layout')),
-    );
-    final collapsedReview = tester.getRect(find.byType(TranscriptReview));
-    final queueButton = tester.getRect(
-      find.byKey(const Key('expand-file-queue')),
-    );
-    expect(queueButton.left - collapsedReview.left, 16);
-    expect(collapsedReview.bottom - queueButton.bottom, 16);
-    expect(collapsedReview.left, layout.left);
-    final reviewState = tester.state(find.byType(TranscriptReview));
-    expect(find.byKey(const Key('video-review-split')), findsOneWidget);
-    expect(find.byKey(const Key('transcript-scroll')), findsOneWidget);
-    final initialMediaWidth = tester
-        .getSize(find.byKey(const Key('video-review-media-pane')))
-        .width;
-    final initialTranscriptWidth = tester
-        .getSize(find.byKey(const Key('video-review-transcript-pane')))
-        .width;
-    await tester.drag(
-      find.byKey(const Key('video-transcript-divider')),
-      const Offset(-100, 0),
-    );
-    await tester.pump();
-    expect(
-      tester.getSize(find.byKey(const Key('video-review-media-pane'))).width,
-      closeTo(initialMediaWidth - 100, 2),
-    );
-    expect(
-      tester
-          .getSize(find.byKey(const Key('video-review-transcript-pane')))
-          .width,
-      closeTo(initialTranscriptWidth + 100, 2),
-    );
-
-    await tester.tap(find.byKey(const Key('expand-file-queue')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 120));
-    final expandingReview = tester.getRect(find.byType(TranscriptReview));
-    final expandingQueue = tester.getRect(
-      find.byKey(const Key('file-queue-panel')),
-    );
-    expect(expandingReview.left, greaterThan(layout.left));
-    expect(expandingReview.left, lessThan(layout.left + 310));
-    expect(expandingQueue.left, lessThan(layout.left));
-    expect(expandingQueue.right, greaterThan(layout.left));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('file-queue-floating-button')), findsNothing);
-    expect(find.byKey(const Key('collapse-file-queue')), findsOneWidget);
-    final visibleStatusSummary = find.byKey(
-      const Key('file-queue-status-summary'),
-    );
-    expect(
-      find
-          .descendant(of: visibleStatusSummary, matching: find.text('Ready'))
-          .hitTestable(),
-      findsOneWidget,
-    );
-    expect(
-      find
-          .descendant(
-            of: visibleStatusSummary,
-            matching: find.text('Processing'),
-          )
-          .hitTestable(),
-      findsOneWidget,
-    );
-    expect(
-      find
-          .descendant(
-            of: visibleStatusSummary,
-            matching: find.text('Completed'),
-          )
-          .hitTestable(),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: visibleStatusSummary,
-        matching: find.text('Needs attention'),
-      ),
-      findsNothing,
-    );
-    final expandedReview = tester.getRect(find.byType(TranscriptReview));
-    final queuePanel = tester.getRect(
-      find.byKey(const Key('file-queue-panel')),
-    );
-    final collapseButton = tester.getRect(
-      find.byKey(const Key('collapse-file-queue')),
-    );
-    expect(expandedReview.left, layout.left + 310);
-    expect(queuePanel.left, layout.left);
-    expect(queuePanel.bottom - collapseButton.bottom, lessThanOrEqualTo(8));
-    expect(collapseButton.center.dy, greaterThan(queuePanel.center.dy));
-    expect(tester.state(find.byType(TranscriptReview)), same(reviewState));
-
-    controller.selectJob('job');
-    await tester.pump();
-    expect(find.byKey(const Key('file-queue-floating-button')), findsNothing);
-
-    await tester.tap(find.byKey(const Key('collapse-file-queue')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 120));
-    final collapsingReview = tester.getRect(find.byType(TranscriptReview));
-    expect(collapsingReview.left, greaterThan(layout.left));
-    expect(collapsingReview.left, lessThan(layout.left + 310));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('file-queue-floating-button')), findsOneWidget);
-    expect(tester.getRect(find.byType(TranscriptReview)).left, layout.left);
-    expect(tester.state(find.byType(TranscriptReview)), same(reviewState));
-    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('workspace-page-title')), findsNothing);
+    expect(find.byKey(const Key('workspace-empty-title')), findsOneWidget);
+    expect(find.byKey(const Key('workspace-go-to-inbox')), findsOneWidget);
+    expect(find.byKey(const Key('workspace-go-to-library')), findsOneWidget);
+    expect(find.byType(TranscriptReview), findsNothing);
+    expect(find.byKey(const Key('file-queue-panel')), findsNothing);
+    expect(find.byKey(const Key('empty-add-files')), findsNothing);
+    expect(find.byKey(const Key('export-inbox-completed')), findsNothing);
   });
 
-  testWidgets('queue selection exits fullscreen before replacing the review', (
+  testWidgets('inbox keeps completed batches visible until explicitly opened', (
     tester,
   ) async {
     _setTestWindow(tester, const Size(1240, 820));
-    final now = DateTime.now().toUtc();
-    final document = _simpleDocument();
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-inbox-ui-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final first = File('${directory.path}/first.wav');
+    final second = File('${directory.path}/second.wav');
+    await tester.runAsync(() async {
+      await first.writeAsBytes(const [1]);
+      await second.writeAsBytes(const [2]);
+    });
     final controller = AppController(
-      credentialStore: _Credentials(),
+      credentialStore: _ConfiguredCredentials(),
       settingsRepository: _Settings(),
-      jobRepository: _Jobs([
-        for (final id in ['first', 'second'])
-          TranscriptionJob(
-            id: id,
-            batchId: 'batch',
-            sourcePath: '/missing/$id.wav',
-            createdAt: now,
-            updatedAt: now,
-            status: JobStatus.completed,
-            document: document,
-          ),
-      ]),
+      jobRepository: _Jobs([]),
       mediaService: _Media(),
-      sonioxClient: _Soniox(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _TranscriptSoniox(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
-    await controller.initialize();
-    controller
-      ..reopen('first')
-      ..reopen('second')
-      ..selectJob('first');
-    final fullscreen = ReviewFullscreenController();
+    await controller.initialize().timeout(const Duration(seconds: 3));
+    await tester.runAsync(() async {
+      await controller
+          .enqueueSources([first.path, second.path])
+          .timeout(const Duration(seconds: 3));
+      await _waitForController(
+        () => controller.readyCount == 2,
+      ).timeout(const Duration(seconds: 3));
+      await controller.startReady().timeout(const Duration(seconds: 3));
+    });
 
+    expect(controller.completedCount, 2);
+    expect(controller.destination, AppDestination.inbox);
+    final firstJobId = controller.inboxJobs.first.id;
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
         value: controller,
-        child: MaterialApp(
-          locale: const Locale('en'),
+        child: const MaterialApp(
+          locale: Locale('en'),
           supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: const [AppStrings.delegate],
+          localizationsDelegates: [AppStrings.delegate],
           home: Scaffold(
-            body: WorkspacePage(
-              onAddFiles: _noop,
-              onAddFolder: _noop,
-              fullscreenController: fullscreen,
-            ),
+            body: InboxPage(onAddFiles: _noop, onImportFolder: _noop),
           ),
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
-    fullscreen.markEntered(navigator);
-    unawaited(
-      navigator.push<void>(
-        MaterialPageRoute(
-          builder: (_) => const Scaffold(
-            body: Text('Fullscreen route', key: Key('test-fullscreen-route')),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
+    expect(find.byType(TranscriptReview), findsNothing);
+    expect(find.byKey(const Key('file-queue-panel')), findsOneWidget);
+    expect(find.byIcon(Icons.open_in_new_rounded), findsNWidgets(2));
+    expect(find.byIcon(Icons.ios_share_rounded), findsNWidgets(3));
+    expect(find.byKey(const Key('export-inbox-completed')), findsOneWidget);
+    expect(find.text('Export completed (2)'), findsOneWidget);
 
-    final secondTile = find.ancestor(
-      of: find.text('second.wav', skipOffstage: false),
-      matching: find.byType(InkWell, skipOffstage: false),
-    );
-    tester.widget<InkWell>(secondTile.first).onTap!();
-    await tester.pumpAndSettle();
+    await controller.removeFromInbox(controller.inboxJobs.last.id);
+    await tester.pump();
+    expect(controller.completedCount, 1);
+    expect(find.byKey(const Key('export-inbox-completed')), findsNothing);
 
-    expect(find.byKey(const Key('test-fullscreen-route')), findsNothing);
-    expect(fullscreen.isActive, isFalse);
-    expect(controller.selectedJobId, 'second');
-    expect(find.byType(TranscriptReview), findsOneWidget);
-    expect(tester.takeException(), isNull);
+    await tester.tap(find.byKey(ValueKey('open-inbox-job-$firstJobId')));
+    await tester.pump();
+
+    expect(controller.activeWorkspaceJobId, firstJobId);
+    expect(controller.destination, AppDestination.workspace);
   });
 
   testWidgets('video review stacks cleanly at the minimum window size', (
@@ -3375,7 +3165,7 @@ void main() {
       sourcePath: '/missing/test.mp4',
     );
     addTearDown(controller.dispose);
-    controller.reopen('job');
+    controller.openInWorkspace('job');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -3389,9 +3179,7 @@ void main() {
               children: [
                 SizedBox(width: 64),
                 VerticalDivider(width: 1),
-                Expanded(
-                  child: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
-                ),
+                Expanded(child: WorkspacePage()),
               ],
             ),
           ),
@@ -3400,10 +3188,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('file-queue-floating-button')), findsOneWidget);
+    expect(find.byKey(const Key('file-queue-panel')), findsNothing);
     expect(find.byKey(const Key('file-queue-rail')), findsNothing);
-    expect(find.byKey(const Key('export-all')), findsOneWidget);
-    expect(find.text('Export all'), findsNothing);
+    expect(find.byKey(const Key('export-inbox-completed')), findsNothing);
     expect(find.byKey(const Key('video-review-stacked')), findsOneWidget);
     expect(find.byKey(const Key('video-review-split')), findsNothing);
     expect(find.byKey(const Key('video-transcript-divider')), findsNothing);
@@ -3422,7 +3209,7 @@ void main() {
       sourcePath: '/missing/test.mp4',
     );
     addTearDown(controller.dispose);
-    controller.reopen('job');
+    controller.openInWorkspace('job');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -3482,7 +3269,7 @@ void main() {
     );
     addTearDown(controller.dispose);
     controller
-      ..reopen('job')
+      ..openInWorkspace('job')
       ..rememberPlaybackPosition('job', const Duration(milliseconds: 1600));
 
     await tester.pumpWidget(
@@ -3499,14 +3286,7 @@ void main() {
     await tester.pumpAndSettle();
 
     const toggleKey = Key('video-audio-mode-toggle');
-    final panelRect = tester.getRect(
-      find.byKey(const Key('video-audio-mode-switcher')),
-    );
-    final toggleRect = tester.getRect(find.byKey(toggleKey));
-    final videoToggleCenter = toggleRect.center;
     expect(media.waveformRequests, 0);
-    expect(panelRect.right - toggleRect.right, closeTo(12, .1));
-    expect(panelRect.bottom - toggleRect.bottom, closeTo(12, .1));
     expect(find.byIcon(Icons.headphones_rounded), findsOneWidget);
     expect(
       tester.widget<IconButton>(find.byKey(toggleKey)).style?.backgroundColor,
@@ -3530,7 +3310,6 @@ void main() {
     await tester.tap(find.byKey(toggleKey));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 160));
-    final transitioningToggleCenter = tester.getCenter(find.byKey(toggleKey));
     await tester.pumpAndSettle();
     expect(media.waveformRequests, 1);
     expect(
@@ -3539,22 +3318,6 @@ void main() {
     );
     expect(find.byKey(const Key('audio-review-layout')), findsOneWidget);
     expect(find.byKey(const Key('video-review-split')), findsNothing);
-    final audioLayoutRect = tester.getRect(
-      find.byKey(const Key('audio-review-layout')),
-    );
-    final audioToggleRect = tester.getRect(find.byKey(toggleKey));
-    final audioToggleCenter = audioToggleRect.center;
-    expect(
-      transitioningToggleCenter.dx,
-      inExclusiveRange(videoToggleCenter.dx, audioToggleCenter.dx),
-    );
-    expect(
-      transitioningToggleCenter.dy,
-      inExclusiveRange(audioToggleCenter.dy, videoToggleCenter.dy),
-    );
-    expect(audioLayoutRect.width, greaterThan(panelRect.width));
-    expect(audioToggleRect.top, greaterThanOrEqualTo(audioLayoutRect.top));
-    expect(audioToggleRect.bottom, lessThanOrEqualTo(audioLayoutRect.bottom));
     expect(find.byKey(const Key('video-audio-mode-switcher')), findsNothing);
     expect(find.byIcon(Icons.videocam_rounded), findsOneWidget);
     expect(
@@ -3602,12 +3365,13 @@ void main() {
       settingsRepository: _Settings(),
       jobRepository: _Jobs([job('first'), job('second')]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.reopen('first');
+    controller.openInWorkspace('first');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -3619,7 +3383,7 @@ void main() {
           home: Scaffold(
             body: Consumer<AppController>(
               builder: (context, value, _) =>
-                  TranscriptReview(jobId: value.selectedJobId!),
+                  TranscriptReview(jobId: value.activeWorkspaceJobId!),
             ),
           ),
         ),
@@ -3635,7 +3399,7 @@ void main() {
       findsOneWidget,
     );
 
-    controller.reopen('second');
+    controller.openInWorkspace('second');
     await tester.pumpAndSettle();
 
     expect(
@@ -3659,7 +3423,7 @@ void main() {
       ),
     );
     addTearDown(controller.dispose);
-    controller.reopen('job');
+    controller.openInWorkspace('job');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -3675,61 +3439,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('video-audio-mode-toggle')), findsNothing);
-  });
-
-  testWidgets('fullscreen shortcut hint mirrors every playback binding', (
-    tester,
-  ) async {
-    Future<void> pump(Locale locale) => tester.pumpWidget(
-      MaterialApp(
-        locale: locale,
-        supportedLocales: AppStrings.supportedLocales,
-        localizationsDelegates: const [
-          AppStrings.delegate,
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        home: const Scaffold(
-          body: Align(
-            alignment: Alignment.topLeft,
-            child: SizedBox(width: 280, child: PlaybackShortcutsHint()),
-          ),
-        ),
-      ),
-    );
-
-    await pump(const Locale('en'));
-    expect(
-      tester.getSize(find.byKey(const Key('playback-shortcuts'))).height,
-      PlaybackShortcutsHint.preferredHeight,
-    );
-    expect(find.text('Fullscreen shortcuts'), findsOneWidget);
-    expect(find.text('Play / pause'), findsOneWidget);
-    expect(find.text('Back 5s'), findsOneWidget);
-    expect(find.text('Forward 5s'), findsOneWidget);
-    expect(find.text('Speed −0.25×'), findsOneWidget);
-    expect(find.text('Speed +0.25×'), findsOneWidget);
-    expect(find.text('Exit fullscreen'), findsOneWidget);
-    for (final id in [
-      'play-pause',
-      'seek-backward',
-      'seek-forward',
-      'decrease-speed',
-      'increase-speed',
-      'exit-fullscreen',
-    ]) {
-      expect(find.byKey(ValueKey('shortcut-key-$id')), findsOneWidget);
-    }
-
-    await pump(const Locale('zh'));
-    expect(find.text('全屏快捷键'), findsOneWidget);
-    expect(find.text('播放/暂停'), findsOneWidget);
-    expect(find.text('后退 5 秒'), findsOneWidget);
-    expect(find.text('前进 5 秒'), findsOneWidget);
-    expect(find.text('速度 −0.25×'), findsOneWidget);
-    expect(find.text('速度 +0.25×'), findsOneWidget);
-    expect(find.text('退出全屏'), findsOneWidget);
   });
 
   testWidgets('stacked video transport keeps mode and fullscreen aligned', (
@@ -3768,9 +3477,11 @@ void main() {
     final mode = tester.getRect(
       find.byKey(const Key('video-audio-mode-toggle')),
     );
+    final speed = tester.getRect(find.byKey(const Key('video-playback-speed')));
     final fullscreen = tester.getRect(
       find.byKey(const Key('video-fullscreen')),
     );
+    expect(speed.right, lessThanOrEqualTo(mode.left));
     expect(mode.right, lessThanOrEqualTo(fullscreen.left));
     expect(mode.center.dy, closeTo(fullscreen.center.dy, 1));
     expect(mode.top, greaterThanOrEqualTo(transport.top));
@@ -3839,6 +3550,8 @@ void main() {
     var forwardCalls = 0;
     var slowerCalls = 0;
     var fasterCalls = 0;
+    var repeatStarts = 0;
+    var repeatEnds = 0;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -3862,6 +3575,8 @@ void main() {
                   onSeekForward: () => forwardCalls++,
                   onDecreaseSpeed: () => slowerCalls++,
                   onIncreaseSpeed: () => fasterCalls++,
+                  onRepeatHoldStart: () => repeatStarts++,
+                  onRepeatHoldEnd: () => repeatEnds++,
                   child: const ColoredBox(
                     key: Key('fullscreen-video-surface'),
                     color: Colors.black,
@@ -3896,9 +3611,20 @@ void main() {
     expect(slowerCalls, 1);
     expect(fasterCalls, 1);
 
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyR);
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyR);
+    expect(repeatStarts, 1);
+    expect(repeatEnds, 0);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.keyR);
+    expect(repeatEnds, 1);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyR);
+    expect(repeatStarts, 2);
+
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
 
+    expect(repeatEnds, 2);
     expect(find.byKey(const Key('fullscreen-video-surface')), findsNothing);
     expect(find.byKey(const Key('workspace-content')), findsOneWidget);
   });
@@ -3921,6 +3647,8 @@ void main() {
           onSeekForward: _noop,
           onDecreaseSpeed: _noop,
           onIncreaseSpeed: _noop,
+          onRepeatHoldStart: _noop,
+          onRepeatHoldEnd: _noop,
           child: const ColoredBox(color: Colors.black),
         ),
       ),
@@ -3967,6 +3695,8 @@ void main() {
                 onSeekForward: () {},
                 onDecreaseSpeed: () {},
                 onIncreaseSpeed: () {},
+                onRepeatHoldStart: _noop,
+                onRepeatHoldEnd: _noop,
                 child: const ColoredBox(
                   key: Key('fullscreen-auto-hide-surface'),
                   color: Colors.black,
@@ -4077,6 +3807,8 @@ void main() {
                 onSeekForward: () {},
                 onDecreaseSpeed: () {},
                 onIncreaseSpeed: () {},
+                onRepeatHoldStart: _noop,
+                onRepeatHoldEnd: _noop,
                 child: const ColoredBox(color: Colors.black),
               );
             },
@@ -4131,57 +3863,7 @@ void main() {
     },
   );
 
-  testWidgets('new transcription resets the page without opening files', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(920, 640));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final controller = await _pumpSpeakerStrip(tester);
-    addTearDown(controller.dispose);
-    controller.reopen('job');
-    var addFilesCalls = 0;
-
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: MaterialApp(
-          locale: const Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: const [AppStrings.delegate],
-          home: Scaffold(
-            body: WorkspacePage(
-              onAddFiles: () => addFilesCalls++,
-              onAddFolder: () {},
-            ),
-          ),
-        ),
-      ),
-    );
-
-    expect(find.text('Hello'), findsOneWidget);
-    expect(find.byKey(const Key('header-add-folder')), findsNothing);
-    expect(find.byKey(const Key('header-add-files')), findsNothing);
-    expect(find.byKey(const Key('header-transcribe')), findsNothing);
-    expect(tester.takeException(), isNull);
-
-    await tester.tap(find.byKey(const Key('new-transcription')));
-    await tester.pumpAndSettle();
-
-    expect(addFilesCalls, 0);
-    expect(controller.workspaceJobs, isEmpty);
-    expect(find.byKey(const Key('new-transcription')), findsNothing);
-    expect(find.byKey(const Key('header-add-folder')), findsNothing);
-    expect(find.byKey(const Key('header-add-files')), findsNothing);
-    expect(find.byKey(const Key('header-transcribe')), findsNothing);
-    expect(find.byKey(const Key('empty-add-files')), findsOneWidget);
-    expect(
-      find.text('Review everything before MeowSTT uploads anything.'),
-      findsNothing,
-    );
-    expect(find.text('Batch drop · up to 5 hours each'), findsOneWidget);
-  });
-
-  testWidgets('language and context options belong to the workspace session', (
+  testWidgets('language and context options belong to the inbox batch', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1000, 700));
@@ -4201,12 +3883,13 @@ void main() {
         ),
       ]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.reopen('ready');
+    controller.continueInInbox('ready');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -4216,13 +3899,13 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: const [AppStrings.delegate],
           home: Scaffold(
-            body: WorkspacePage(onAddFiles: () {}, onAddFolder: () {}),
+            body: InboxPage(onAddFiles: () {}, onImportFolder: () {}),
           ),
         ),
       ),
     );
 
-    expect(find.byKey(const Key('header-add-folder')), findsOneWidget);
+    expect(find.byKey(const Key('header-import-folder')), findsOneWidget);
     expect(find.byKey(const Key('header-add-files')), findsOneWidget);
     expect(find.byKey(const Key('header-transcribe')), findsOneWidget);
     expect(find.widgetWithText(SwitchListTile, 'Speaker labels'), findsNothing);
@@ -4262,14 +3945,14 @@ void main() {
     await tester.pump();
 
     expect(controller.sessionOptions.contextTerms, ['MeowSTT', 'Soniox']);
-    expect(controller.workspaceJobs.single.options.languageHints, ['zh', 'en']);
-    expect(controller.workspaceJobs.single.options.contextTerms, [
+    expect(controller.inboxJobs.single.options.languageHints, ['zh', 'en']);
+    expect(controller.inboxJobs.single.options.contextTerms, [
       'MeowSTT',
       'Soniox',
     ]);
   });
 
-  testWidgets('workspace replaces LLM controls with Soniox translation', (
+  testWidgets('inbox replaces LLM controls with Soniox translation', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1000, 700));
@@ -4300,12 +3983,13 @@ void main() {
         ),
       ]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.reopen('ready');
+    controller.continueInInbox('ready');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -4315,7 +3999,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: [AppStrings.delegate],
           home: Scaffold(
-            body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
+            body: InboxPage(onAddFiles: _noop, onImportFolder: _noop),
           ),
         ),
       ),
@@ -4330,7 +4014,7 @@ void main() {
     expect(find.byKey(const Key('auto-translate-switch')), findsNothing);
   });
 
-  testWidgets('workspace keeps two panes at Windows initial content width', (
+  testWidgets('inbox keeps two panes at Windows initial content width', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(936, 700));
@@ -4346,16 +4030,17 @@ void main() {
           sourcePath: '/missing/test.wav',
           createdAt: now,
           updatedAt: now,
-          status: JobStatus.completed,
+          status: JobStatus.ready,
         ),
       ]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.reopen('job');
+    controller.continueInInbox('job');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -4365,14 +4050,14 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: [AppStrings.delegate],
           home: Scaffold(
-            body: WorkspacePage(onAddFiles: _noop, onAddFolder: _noop),
+            body: InboxPage(onAddFiles: _noop, onImportFolder: _noop),
           ),
         ),
       ),
     );
 
-    final queue = find.byKey(const Key('workspace-queue-pane'));
-    final detail = find.byKey(const Key('workspace-detail-pane'));
+    final queue = find.byKey(const Key('inbox-queue-pane'));
+    final detail = find.byKey(const Key('inbox-detail-pane'));
     expect(queue, findsOneWidget);
     expect(detail, findsOneWidget);
     expect(tester.getRect(queue).right, lessThan(tester.getRect(detail).left));
@@ -4475,7 +4160,7 @@ void main() {
     _setTestWindow(tester, const Size(1000, 700));
     final controller = await _controllerForDocument(_simpleDocument());
     addTearDown(controller.dispose);
-    controller.reopen('job');
+    controller.openInWorkspace('job');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -4645,6 +4330,7 @@ void main() {
           ),
       ]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -5164,6 +4850,7 @@ Future<AppController> _controllerForDocument(
       ),
     ]),
     mediaService: mediaService ?? _Media(),
+    sourceResolver: const LocalMediaSourceResolver(),
     sonioxClient: _Soniox(),
     exporter: const DefaultTranscriptExporter(),
     translationCredentialStore: translationCredentials,
@@ -5190,6 +4877,16 @@ void _setTestWindow(WidgetTester tester, Size size) {
   tester.view.physicalSize = size;
   addTearDown(tester.view.resetDevicePixelRatio);
   addTearDown(tester.view.resetPhysicalSize);
+}
+
+Future<void> _waitForController(bool Function() condition) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 3));
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('Controller condition was not reached.');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
 }
 
 TranscriptDocument _simpleDocument() {
@@ -5250,6 +4947,7 @@ Future<AppController> _pumpSpeakerStrip(WidgetTester tester) async {
       ),
     ]),
     mediaService: _Media(),
+    sourceResolver: const LocalMediaSourceResolver(),
     sonioxClient: _Soniox(),
     exporter: const DefaultTranscriptExporter(),
   );
@@ -5285,6 +4983,11 @@ class _Credentials implements CredentialStore {
 
   @override
   Future<void> writeApiKey(String key) async {}
+}
+
+class _ConfiguredCredentials extends _Credentials {
+  @override
+  Future<String?> readApiKey() async => 'configured';
 }
 
 class _BlockingTranslation implements TranslationService {
@@ -5501,4 +5204,13 @@ class _Soniox implements SonioxClient {
 
   @override
   Future<void> validateKey({String? apiKey}) async {}
+}
+
+class _TranscriptSoniox extends _Soniox {
+  @override
+  Future<Map<String, dynamic>> getTranscript(String id) async => {
+    'tokens': [
+      {'text': 'Done.', 'start_ms': 0, 'end_ms': 800, 'speaker': '1'},
+    ],
+  };
 }

@@ -1,9 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
 import 'package:meow_stt/l10n/strings.dart';
 import 'package:meow_stt/state/app_controller.dart';
@@ -11,6 +13,146 @@ import 'package:meow_stt/ui/library_page.dart';
 import 'package:provider/provider.dart';
 
 void main() {
+  testWidgets('Library visuals keep organizer metadata compact', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog()
+      ..value = const LibraryCatalog(
+        groups: [LibraryGroup(id: 'group-english', name: 'English')],
+        tags: [
+          LibraryTag(id: 'tag-practice', name: 'Practice'),
+          LibraryTag(id: 'tag-review', name: 'Review'),
+        ],
+      );
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'organized',
+          batchId: 'batch',
+          sourcePath: '/recordings/organized.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          groupId: 'group-english',
+          tagIds: const {'tag-practice', 'tag-review'},
+        ),
+        TranscriptionJob(
+          id: 'plain',
+          batchId: 'batch',
+          sourcePath: '/recordings/plain.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+        ),
+      ]),
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    final organizedCard = find.ancestor(
+      of: find.text('organized.wav'),
+      matching: find.byType(Card),
+    );
+    final plainCard = find.ancestor(
+      of: find.text('plain.wav'),
+      matching: find.byType(Card),
+    );
+    expect(find.text('English'), findsWidgets);
+    expect(find.text('Practice'), findsWidgets);
+    expect(find.text('Review'), findsWidgets);
+    expect(
+      tester.getSize(organizedCard).height,
+      lessThanOrEqualTo(tester.getSize(plainCard).height + 8),
+    );
+
+    Color tagPillColor(String tagId) => tester
+        .widget<Icon>(
+          find.descendant(
+            of: find.byKey(ValueKey('library-item-tag-organized-$tagId')),
+            matching: find.byIcon(Icons.sell_outlined),
+          ),
+        )
+        .color!;
+
+    final practiceColor = tagPillColor('tag-practice');
+    final reviewColor = tagPillColor('tag-review');
+    expect(practiceColor, isNot(reviewColor));
+    expect(
+      tester
+          .widget<Icon>(
+            find.descendant(
+              of: find.byKey(const ValueKey('library-tag-tag-practice')),
+              matching: find.byIcon(Icons.sell_outlined),
+            ),
+          )
+          .color,
+      practiceColor,
+    );
+  });
+
+  testWidgets('Library visuals status selection has no retained focus fill', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(const []),
+      libraryCatalogRepository: _Catalog(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    final dropdown = find.byType(DropdownButton<String>);
+    await tester.tap(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Completed').last);
+    await tester.pumpAndSettle();
+
+    final selected = tester.widget<DropdownButton<String>>(dropdown);
+    expect(selected.value, 'completed');
+    expect(selected.focusColor, Colors.transparent);
+  });
+
   testWidgets('Needs attention includes every actionable inactive job', (
     tester,
   ) async {
@@ -48,6 +190,7 @@ void main() {
         ),
       ]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -109,12 +252,13 @@ void main() {
         ),
       ]),
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: soniox,
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.setDestination(1);
+    controller.setDestination(AppDestination.library);
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -135,12 +279,1204 @@ void main() {
     await tester.tap(continueButton);
     await tester.pumpAndSettle();
 
-    expect(controller.destinationIndex, 0);
-    expect(controller.workspaceJobs.single.id, 'ready');
-    expect(controller.selectedJobId, 'ready');
-    expect(controller.workspaceJobs.single.status, JobStatus.ready);
+    expect(controller.destination, AppDestination.inbox);
+    expect(controller.inboxJobs.single.id, 'ready');
+    expect(controller.activeWorkspaceJobId, isNull);
+    expect(controller.inboxJobs.single.status, JobStatus.ready);
     expect(controller.processing, isFalse);
     expect(soniox.uploadCalls, 0);
+  });
+
+  testWidgets('Open enters Workspace without adding history to Inbox', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'completed',
+          batchId: 'batch',
+          sourcePath: '/missing/completed.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: const [
+              TranscriptSegment(
+                id: 'segment',
+                startMs: 0,
+                endMs: 1000,
+                text: 'Transcript',
+              ),
+            ],
+            speakers: const [],
+            updatedAt: now,
+          ),
+        ),
+      ]),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    expect(find.text('Export'), findsNothing);
+    expect(find.text('Open'), findsNothing);
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const ValueKey('export-library-job-completed')),
+          )
+          .tooltip,
+      'Export',
+    );
+    final openButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('open-library-job-completed')),
+    );
+    expect(openButton.tooltip, 'Open');
+    expect(
+      openButton.style?.backgroundColor?.resolve(const <WidgetState>{}),
+      Colors.transparent,
+    );
+    await tester.tap(find.byKey(const ValueKey('open-library-job-completed')));
+    await tester.pump();
+
+    expect(controller.destination, AppDestination.workspace);
+    expect(controller.activeWorkspaceJobId, 'completed');
+    expect(controller.inboxJobs, isEmpty);
+  });
+
+  testWidgets(
+    'Rename changes the display title but keeps the source filename',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'organized',
+          batchId: 'batch',
+          sourcePath: '/recordings/original.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+        ),
+      ]);
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: _Settings(),
+        jobRepository: jobs,
+        libraryCatalogRepository: _Catalog(),
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: LibraryPage()),
+          ),
+        ),
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('library-item-menu-organized')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rename'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('rename-library-item-field')),
+        'Weekly sync',
+      );
+      await tester.tap(find.byKey(const Key('confirm-rename-library-item')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Weekly sync'), findsOneWidget);
+      expect(find.text('original.wav'), findsOneWidget);
+      expect(jobs.saved['organized']!.sourcePath, '/recordings/original.wav');
+    },
+  );
+
+  testWidgets('A custom display title can be reset to the original filename', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'renamed',
+        batchId: 'batch',
+        sourcePath: '/recordings/original.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        displayTitle: 'Weekly sync',
+      ),
+    ]);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: jobs,
+      libraryCatalogRepository: _Catalog(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('library-item-menu-renamed')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Rename'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reset-library-item-title')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Weekly sync'), findsNothing);
+    expect(find.text('original.wav'), findsOneWidget);
+    expect(jobs.saved['renamed']!.displayTitle, isNull);
+  });
+
+  testWidgets('A reusable group can be created before it has items', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final catalog = _Catalog();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(const []),
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('add-library-group')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('library-organizer-name-field')),
+      'Work',
+    );
+    await tester.tap(find.byKey(const Key('confirm-library-organizer')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Work'), findsOneWidget);
+    expect(catalog.value.groups.single.name, 'Work');
+  });
+
+  testWidgets('Organizer names are unique after trimming and case folding', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final catalog = _Catalog()
+      ..value = const LibraryCatalog(
+        groups: [LibraryGroup(id: 'group-work', name: 'Work')],
+      );
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(const []),
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('add-library-group')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('library-organizer-name-field')),
+      ' work ',
+    );
+    await tester.tap(find.byKey(const Key('confirm-library-organizer')));
+    await tester.pump();
+
+    expect(find.text('A group with this name already exists.'), findsOneWidget);
+    expect(catalog.value.groups, hasLength(1));
+  });
+
+  testWidgets('Moving an item into a group makes the group browsable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog()
+      ..value = const LibraryCatalog(
+        groups: [LibraryGroup(id: 'group-work', name: 'Work')],
+      );
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'meeting',
+        batchId: 'batch',
+        sourcePath: '/recordings/meeting.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+      ),
+      TranscriptionJob(
+        id: 'personal',
+        batchId: 'batch',
+        sourcePath: '/recordings/personal.wav',
+        createdAt: now.subtract(const Duration(minutes: 1)),
+        updatedAt: now,
+        status: JobStatus.completed,
+      ),
+    ]);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: jobs,
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('library-item-menu-meeting')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Move to group'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('move-to-group-group-work')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('library-group-group-work')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('meeting.wav'), findsOneWidget);
+    expect(find.text('personal.wav'), findsNothing);
+    expect(jobs.saved['meeting']!.groupId, 'group-work');
+  });
+
+  testWidgets('Tag sidebar is read-only and hides reusable unused tags', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog()
+      ..value = const LibraryCatalog(
+        tags: [
+          LibraryTag(id: 'tag-used', name: 'Used'),
+          LibraryTag(id: 'tag-unused', name: 'Unused'),
+        ],
+      );
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'meeting',
+          batchId: 'batch',
+          sourcePath: '/recordings/meeting.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          tagIds: const {'tag-used'},
+        ),
+      ]),
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('add-library-tag')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('library-tag-menu-tag-used')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('library-tag-tag-used')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('library-tag-tag-used')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('library-tag-tag-unused')), findsNothing);
+  });
+
+  testWidgets('Manage tags creates and assigns a custom tag', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'meeting',
+        batchId: 'batch',
+        sourcePath: '/recordings/meeting.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+      ),
+      TranscriptionJob(
+        id: 'other',
+        batchId: 'batch',
+        sourcePath: '/recordings/other.wav',
+        createdAt: now.subtract(const Duration(minutes: 1)),
+        updatedAt: now,
+        status: JobStatus.completed,
+      ),
+    ]);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: jobs,
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('library-item-menu-meeting')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Manage tags'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('new-library-tag-field')),
+      ' Important ',
+    );
+    await tester.tap(find.byKey(const Key('add-library-tag-in-dialog')));
+    await tester.pump();
+    expect(find.text('Important'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-library-tags')));
+    await tester.pumpAndSettle();
+
+    expect(catalog.value.tags.single.name, 'Important');
+    final tagId = catalog.value.tags.single.id;
+    expect(jobs.saved['meeting']!.tagIds, {tagId});
+    await tester.tap(find.byKey(ValueKey('library-tag-$tagId')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('meeting.wav'), findsOneWidget);
+    expect(find.text('other.wav'), findsNothing);
+  });
+
+  testWidgets(
+    'Manage tags detaches a tag while keeping it reusable off the sidebar',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final now = DateTime.now().toUtc();
+      final catalog = _Catalog()
+        ..value = const LibraryCatalog(
+          tags: [LibraryTag(id: 'tag-important', name: 'Important')],
+        );
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'meeting',
+          batchId: 'batch',
+          sourcePath: '/recordings/meeting.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          tagIds: const {'tag-important'},
+        ),
+      ]);
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: _Settings(),
+        jobRepository: jobs,
+        libraryCatalogRepository: catalog,
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: LibraryPage()),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const ValueKey('library-item-menu-meeting')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Manage tags'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('library-tag-option-tag-important')),
+      );
+      await tester.tap(find.byKey(const Key('confirm-library-tags')));
+      await tester.pumpAndSettle();
+
+      expect(jobs.saved['meeting']!.tagIds, isEmpty);
+      expect(catalog.value.tags.single.name, 'Important');
+      expect(
+        find.byKey(const ValueKey('library-tag-tag-important')),
+        findsNothing,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('library-item-menu-meeting')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Manage tags'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('library-tag-option-tag-important')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('Detaching the active last tag returns to all items', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog()
+      ..value = const LibraryCatalog(
+        tags: [LibraryTag(id: 'tag-important', name: 'Important')],
+      );
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'meeting',
+        batchId: 'batch',
+        sourcePath: '/recordings/meeting.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        tagIds: const {'tag-important'},
+      ),
+    ]);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: jobs,
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('library-tag-tag-important')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('library-item-menu-meeting')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Manage tags'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('library-tag-option-tag-important')),
+    );
+    await tester.tap(find.byKey(const Key('confirm-library-tags')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('meeting.wav'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('library-tag-tag-important')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('Cancelling Manage tags discards staged custom tags', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'meeting',
+        batchId: 'batch',
+        sourcePath: '/recordings/meeting.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+      ),
+    ]);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: jobs,
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('library-item-menu-meeting')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Manage tags'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('new-library-tag-field')),
+      'Draft',
+    );
+    await tester.tap(find.byKey(const Key('add-library-tag-in-dialog')));
+    await tester.pump();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(catalog.value.tags, isEmpty);
+    expect(jobs.saved['meeting']!.tagIds, isEmpty);
+    expect(find.text('Draft'), findsNothing);
+  });
+
+  for (final testCase in [
+    (
+      locale: const Locale('en'),
+      menuLabel: 'Manage tags',
+      requiredMessage: 'Enter a tag name.',
+      duplicateMessage: 'A tag with this name already exists.',
+      tooLongMessage: 'Tag names can be up to 60 characters.',
+    ),
+    (
+      locale: const Locale('zh', 'CN'),
+      menuLabel: '管理标签',
+      requiredMessage: '请输入标签名称。',
+      duplicateMessage: '已存在同名标签。',
+      tooLongMessage: '标签名称不能超过 60 个字符。',
+    ),
+  ]) {
+    testWidgets(
+      'Manage tags validates custom names in ${testCase.locale.languageCode}',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1200, 800));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final now = DateTime.now().toUtc();
+        final catalog = _Catalog()
+          ..value = const LibraryCatalog(
+            tags: [LibraryTag(id: 'tag-important', name: 'Important')],
+          );
+        final jobs = _Jobs([
+          TranscriptionJob(
+            id: 'meeting',
+            batchId: 'batch',
+            sourcePath: '/recordings/meeting.wav',
+            createdAt: now,
+            updatedAt: now,
+            status: JobStatus.completed,
+          ),
+        ]);
+        final controller = AppController(
+          credentialStore: _Credentials(),
+          settingsRepository: _Settings(),
+          jobRepository: jobs,
+          libraryCatalogRepository: catalog,
+          mediaService: _Media(),
+          sourceResolver: const LocalMediaSourceResolver(),
+          sonioxClient: _Soniox(),
+          exporter: const DefaultTranscriptExporter(),
+        );
+        addTearDown(controller.dispose);
+        await controller.initialize();
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider.value(
+            value: controller,
+            child: MaterialApp(
+              locale: testCase.locale,
+              supportedLocales: AppStrings.supportedLocales,
+              localizationsDelegates: const [
+                AppStrings.delegate,
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              home: const Scaffold(body: LibraryPage()),
+            ),
+          ),
+        );
+
+        await tester.tap(
+          find.byKey(const ValueKey('library-item-menu-meeting')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(testCase.menuLabel));
+        await tester.pumpAndSettle();
+
+        final field = find.byKey(const Key('new-library-tag-field'));
+        final addButton = find.byKey(const Key('add-library-tag-in-dialog'));
+        await tester.tap(addButton);
+        await tester.pump();
+        expect(find.text(testCase.requiredMessage), findsOneWidget);
+
+        await tester.enterText(field, ' important ');
+        await tester.tap(addButton);
+        await tester.pump();
+        expect(find.text(testCase.duplicateMessage), findsOneWidget);
+
+        await tester.enterText(field, List.filled(61, 'x').join());
+        await tester.tap(addButton);
+        await tester.pump();
+        expect(find.text(testCase.tooLongMessage), findsOneWidget);
+
+        await tester.enterText(field, ' Custom ');
+        await tester.tap(addButton);
+        await tester.pump();
+        expect(find.text('Custom'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('confirm-library-tags')));
+        await tester.pumpAndSettle();
+
+        expect(
+          catalog.value.tags.map((tag) => tag.name),
+          orderedEquals(['Important', 'Custom']),
+        );
+        final customTagId = catalog.value.tags.last.id;
+        expect(jobs.saved['meeting']!.tagIds, {customTagId});
+      },
+    );
+  }
+
+  testWidgets('Deleting a group unfiles its items without deleting them', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog()
+      ..value = const LibraryCatalog(
+        groups: [LibraryGroup(id: 'group-work', name: 'Work')],
+      );
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'meeting',
+        batchId: 'batch',
+        sourcePath: '/recordings/meeting.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        groupId: 'group-work',
+      ),
+    ]);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: jobs,
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('library-group-menu-group-work')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete group'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-delete-organizer')));
+    await tester.pumpAndSettle();
+
+    expect(catalog.value.groups, isEmpty);
+    expect(jobs.saved['meeting'], isNotNull);
+    expect(jobs.saved['meeting']!.groupId, isNull);
+    expect(find.text('meeting.wav'), findsOneWidget);
+  });
+
+  testWidgets('Multi-select moves all selected items together', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog()
+      ..value = const LibraryCatalog(
+        groups: [LibraryGroup(id: 'group-work', name: 'Work')],
+      );
+    final jobs = _Jobs([
+      for (final id in ['one', 'two'])
+        TranscriptionJob(
+          id: id,
+          batchId: 'batch',
+          sourcePath: '/recordings/$id.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+        ),
+    ]);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: jobs,
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('toggle-library-selection')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('select-library-item-one')));
+    await tester.tap(find.byKey(const ValueKey('select-library-item-two')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('bulk-move-library-items')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('move-to-group-group-work')));
+    await tester.pumpAndSettle();
+
+    expect(jobs.saved['one']!.groupId, 'group-work');
+    expect(jobs.saved['two']!.groupId, 'group-work');
+  });
+
+  testWidgets(
+    'Bulk Manage tags applies mixed and custom tags to all selected',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final now = DateTime.now().toUtc();
+      final catalog = _Catalog()
+        ..value = const LibraryCatalog(
+          tags: [LibraryTag(id: 'tag-important', name: 'Important')],
+        );
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'one',
+          batchId: 'batch',
+          sourcePath: '/recordings/one.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          tagIds: const {'tag-important'},
+        ),
+        TranscriptionJob(
+          id: 'two',
+          batchId: 'batch',
+          sourcePath: '/recordings/two.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+        ),
+      ]);
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: _Settings(),
+        jobRepository: jobs,
+        libraryCatalogRepository: catalog,
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: LibraryPage()),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('toggle-library-selection')));
+      await tester.pump();
+      await tester.tap(find.text('Select all visible'));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('bulk-tag-library-items')));
+      await tester.pumpAndSettle();
+
+      final importantOption = find.byKey(
+        const ValueKey('library-tag-option-tag-important'),
+      );
+      expect(tester.widget<CheckboxListTile>(importantOption).value, isNull);
+      await tester.tap(importantOption);
+      await tester.enterText(
+        find.byKey(const Key('new-library-tag-field')),
+        'Team',
+      );
+      await tester.tap(find.byKey(const Key('confirm-library-tags')));
+      await tester.pumpAndSettle();
+
+      final teamTagId = catalog.value.tags
+          .singleWhere((tag) => tag.name == 'Team')
+          .id;
+      expect(jobs.saved['one']!.tagIds, {'tag-important', teamTagId});
+      expect(jobs.saved['two']!.tagIds, {'tag-important', teamTagId});
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('library-tag-tag-important')),
+          matching: find.text('2'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey('library-tag-$teamTagId')),
+          matching: find.text('2'),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('Bulk removal confirms before deleting selected library items', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      for (final id in ['one', 'two'])
+        TranscriptionJob(
+          id: id,
+          batchId: 'batch',
+          sourcePath: '/recordings/$id.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+        ),
+    ]);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: jobs,
+      libraryCatalogRepository: _Catalog(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('toggle-library-selection')));
+    await tester.pump();
+    await tester.tap(find.text('Select all visible'));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('bulk-remove-library-items')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('2 selected'), findsWidgets);
+    await tester.tap(find.byKey(const Key('confirm-bulk-remove')));
+    await tester.pumpAndSettle();
+
+    expect(jobs.saved, isEmpty);
+    expect(find.text('one.wav'), findsNothing);
+    expect(find.text('two.wav'), findsNothing);
+  });
+
+  testWidgets('Changing the visible search scope clears hidden selections', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        for (final id in ['one', 'two'])
+          TranscriptionJob(
+            id: id,
+            batchId: 'batch',
+            sourcePath: '/recordings/$id.wav',
+            createdAt: now,
+            updatedAt: now,
+            status: JobStatus.completed,
+          ),
+      ]),
+      libraryCatalogRepository: _Catalog(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('toggle-library-selection')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('select-library-item-one')));
+    await tester.enterText(find.byKey(const Key('library-search')), 'two');
+    await tester.pump();
+
+    expect(find.text('0 selected'), findsOneWidget);
+    expect(find.text('one.wav'), findsNothing);
+    expect(
+      tester
+          .widget<Checkbox>(
+            find.byKey(const ValueKey('select-library-item-two')),
+          )
+          .value,
+      isFalse,
+    );
+  });
+
+  testWidgets('Search matches group and tag names as well as item titles', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog()
+      ..value = const LibraryCatalog(
+        groups: [LibraryGroup(id: 'group-work', name: 'Client Work')],
+        tags: [LibraryTag(id: 'tag-important', name: 'Important')],
+      );
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'meeting',
+          batchId: 'batch',
+          sourcePath: '/recordings/meeting.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          groupId: 'group-work',
+          tagIds: const {'tag-important'},
+        ),
+        TranscriptionJob(
+          id: 'other',
+          batchId: 'batch',
+          sourcePath: '/recordings/other.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+        ),
+      ]),
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('library-search')),
+      'Client Work',
+    );
+    await tester.pump();
+    expect(find.text('meeting.wav'), findsOneWidget);
+    expect(find.text('other.wav'), findsNothing);
+
+    await tester.enterText(
+      find.byKey(const Key('library-search')),
+      'Important',
+    );
+    await tester.pump();
+    expect(find.text('meeting.wav'), findsOneWidget);
   });
 
   testWidgets('Clear All confirms and removes inactive history', (
@@ -177,6 +1513,7 @@ void main() {
       settingsRepository: _Settings(),
       jobRepository: jobs,
       mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
     );
@@ -195,11 +1532,8 @@ void main() {
       ),
     );
 
-    final pageTitle = find.byKey(const Key('library-page-title'));
-    expect(
-      tester.widget<Text>(pageTitle).style?.fontSize,
-      Theme.of(tester.element(pageTitle)).textTheme.titleLarge?.fontSize,
-    );
+    expect(find.byKey(const Key('library-page-title')), findsNothing);
+    expect(find.byKey(const Key('library-search')), findsOneWidget);
     expect(find.text('history.wav'), findsOneWidget);
     await tester.tap(find.byKey(const Key('clear-all-history')));
     await tester.pumpAndSettle();
@@ -264,6 +1598,16 @@ class _Jobs implements JobRepository {
 
   @override
   Future<void> save(TranscriptionJob job) async => saved[job.id] = job;
+}
+
+class _Catalog implements LibraryCatalogRepository {
+  LibraryCatalog value = const LibraryCatalog();
+
+  @override
+  Future<LibraryCatalog> load() async => value;
+
+  @override
+  Future<void> save(LibraryCatalog catalog) async => value = catalog;
 }
 
 class _Media implements MediaService {

@@ -16,8 +16,9 @@ import '../core/models.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
+import 'job_actions.dart';
 import 'review_fullscreen_controller.dart';
-import 'workspace_page.dart';
+import 'transcript_export_dialog.dart';
 
 class TranscriptReview extends StatefulWidget {
   const TranscriptReview({
@@ -39,7 +40,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   static const _reviewDividerWidth = 9.0;
   static const _minimumReviewPaneWidth = 280.0;
   static const _mediaModeTransitionDuration = Duration(milliseconds: 320);
-  static const _missingSourceAudioHeight = 96.0;
+  static const _missingSourceAudioHeight = 112.0;
 
   Player? _player;
   LatestSeekDispatcher? _seekDispatcher;
@@ -63,7 +64,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
   double _videoAspectRatio = 16 / 9;
   double _playbackRate = 1;
   bool _playing = false;
-  String? _repeatingSegmentId;
+  String? _manualRepeatingSegmentId;
+  String? _heldRepeatingSegmentId;
   bool _repeatRestartPending = false;
   bool _repeatRestartQueued = false;
   bool _repeatRestartQueuedResume = false;
@@ -84,7 +86,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   String? _waveformPath;
   bool _waveformLoading = false;
   _ReviewMediaMode _mediaMode = _ReviewMediaMode.video;
-  double _videoPaneFraction = .55;
+  double? _transcriptPaneWidth;
   int _sourceRequest = 0;
 
   ReviewFullscreenController get _fullscreenController =>
@@ -97,6 +99,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _position = _appController.playbackPositionFor(widget.jobId);
     _localFullscreenController = ReviewFullscreenController();
     _fullscreenController.registerMediaShutdown(this, _shutdownMedia);
+    HardwareKeyboard.instance.addHandler(_handleRepeatShortcut);
     windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
   }
@@ -108,7 +111,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   @override
+  void onWindowBlur() => _endSentenceRepeatHold();
+
+  @override
   void onWindowLeaveFullScreen() {
+    _endSentenceRepeatHold();
     unawaited(_fullscreenController.exit());
   }
 
@@ -156,7 +163,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _duration = Duration.zero;
       _videoAspectRatio = 16 / 9;
       _playing = false;
-      _repeatingSegmentId = null;
+      _manualRepeatingSegmentId = null;
+      _heldRepeatingSegmentId = null;
       _repeatRestartQueued = false;
       _repeatRestartQueuedResume = false;
       _followPlayback = true;
@@ -253,6 +261,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
       .firstOrNull
       ?.document;
 
+  String? get _repeatingSegmentId =>
+      _heldRepeatingSegmentId ?? _manualRepeatingSegmentId;
+
   TranscriptSegment? get _repeatingSegment {
     final segmentId = _repeatingSegmentId;
     if (segmentId == null) return null;
@@ -333,6 +344,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   @override
   void dispose() {
+    _endSentenceRepeatHold(notify: false);
+    HardwareKeyboard.instance.removeHandler(_handleRepeatShortcut);
     _rememberPlaybackPosition(widget.jobId);
     _fullscreenController.unregisterMediaShutdown(this);
     windowManager.removeListener(this);
@@ -480,24 +493,26 @@ class _TranscriptReviewState extends State<TranscriptReview>
                 final sideBySide = constraints.maxWidth >= 840;
                 final availableWidth =
                     constraints.maxWidth - _reviewDividerWidth;
-                final maximumVideoWidth =
+                final maximumPaneWidth =
                     availableWidth - _minimumReviewPaneWidth;
-                final videoWidth = sideBySide
-                    ? (availableWidth * _videoPaneFraction)
-                          .clamp(_minimumReviewPaneWidth, maximumVideoWidth)
+                final preferredTranscriptWidth =
+                    _transcriptPaneWidth ?? availableWidth * .45;
+                final transcriptWidth = sideBySide
+                    ? preferredTranscriptWidth
+                          .clamp(_minimumReviewPaneWidth, maximumPaneWidth)
                           .toDouble()
+                    : constraints.maxWidth;
+                if (sideBySide && _transcriptPaneWidth == null) {
+                  _transcriptPaneWidth = transcriptWidth;
+                }
+                final videoWidth = sideBySide
+                    ? availableWidth - transcriptWidth
                     : constraints.maxWidth;
                 final stackedVideoHeight = (constraints.maxHeight * .4)
                     .clamp(180.0, 300.0)
                     .toDouble();
-                final shortcutsHeight =
-                    controller.settings.showFullscreenShortcuts
-                    ? PlaybackShortcutsHint.preferredHeight
-                    : 0.0;
                 final stackedMediaHeight =
-                    stackedVideoHeight +
-                    VideoTransport.height +
-                    shortcutsHeight;
+                    stackedVideoHeight + VideoTransport.height;
                 final videoMediaRect = sideBySide
                     ? Rect.fromLTWH(0, 0, videoWidth, constraints.maxHeight)
                     : Rect.fromLTWH(
@@ -512,9 +527,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                 final videoTranscriptRect = Rect.fromLTWH(
                   sideBySide ? videoWidth + _reviewDividerWidth : 0,
                   videoTranscriptTop,
-                  sideBySide
-                      ? constraints.maxWidth - videoWidth - _reviewDividerWidth
-                      : constraints.maxWidth,
+                  sideBySide ? transcriptWidth : constraints.maxWidth,
                   (constraints.maxHeight - videoTranscriptTop)
                       .clamp(0.0, constraints.maxHeight)
                       .toDouble(),
@@ -536,27 +549,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
                       .clamp(0.0, constraints.maxHeight)
                       .toDouble(),
                 );
-                final videoButtonOffset = sideBySide
-                    ? Offset(
-                        videoWidth - _MediaModeButton.size - 12,
-                        constraints.maxHeight - _MediaModeButton.size - 12,
-                      )
-                    : Offset(
-                        constraints.maxWidth - _MediaModeButton.size - 10 - 48,
-                        stackedVideoHeight +
-                            (VideoTransport.height - _MediaModeButton.size) / 2,
-                      );
-                final audioButtonOffset = Offset(
-                  constraints.maxWidth - _MediaModeButton.size - 10,
-                  (audioMediaHeight - _MediaModeButton.size) / 2,
-                );
                 final media = _buildMediaArea(
                   job,
                   presentation: audioMode
                       ? _ReviewMediaMode.audio
                       : _ReviewMediaMode.video,
                   fillHeight: !audioMode && sideBySide,
-                  videoHeight: stackedVideoHeight,
+                  videoHeight: sideBySide ? null : stackedVideoHeight,
                 );
                 final layoutMarkerKey = audioMode
                     ? const Key('audio-review-layout')
@@ -577,11 +576,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
                     final transcriptRect = Rect.lerp(
                       videoTranscriptRect,
                       audioTranscriptRect,
-                      progress,
-                    )!;
-                    final buttonOffset = Offset.lerp(
-                      videoButtonOffset,
-                      audioButtonOffset,
                       progress,
                     )!;
                     return Stack(
@@ -669,19 +663,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
                             ),
                           ),
                         ),
-                        Positioned(
-                          key: const ValueKey('media-mode-button-slot'),
-                          left: buttonOffset.dx,
-                          top: buttonOffset.dy,
-                          child: canSwitchMediaMode
-                              ? _MediaModeButton(
-                                  destination: audioMode
-                                      ? _ReviewMediaMode.video
-                                      : _ReviewMediaMode.audio,
-                                  onPressed: () => _toggleMediaMode(job),
-                                )
-                              : const SizedBox.shrink(),
-                        ),
                       ],
                     );
                   },
@@ -695,12 +676,15 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   void _resizeReviewPanes(double delta, double availableWidth) {
-    final maximumVideoWidth = availableWidth - _minimumReviewPaneWidth;
-    final currentWidth = availableWidth * _videoPaneFraction;
-    final nextWidth = (currentWidth + delta)
-        .clamp(_minimumReviewPaneWidth, maximumVideoWidth)
+    final maximumPaneWidth = availableWidth - _minimumReviewPaneWidth;
+    final currentWidth = (_transcriptPaneWidth ?? availableWidth * .45).clamp(
+      _minimumReviewPaneWidth,
+      maximumPaneWidth,
+    );
+    final nextWidth = (currentWidth - delta)
+        .clamp(_minimumReviewPaneWidth, maximumPaneWidth)
         .toDouble();
-    setState(() => _videoPaneFraction = nextWidth / availableWidth);
+    setState(() => _transcriptPaneWidth = nextWidth);
   }
 
   Widget _buildMediaArea(
@@ -714,15 +698,18 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final canSwitchMediaMode = _supportsMediaModeSwitch(job);
     final audioMode =
         canSwitchMediaMode && presentation == _ReviewMediaMode.audio;
-    final showFullscreenShortcuts = context
-        .read<AppController>()
-        .settings
-        .showFullscreenShortcuts;
     if (!File(job.sourcePath).existsSync()) {
       final banner = MaterialBanner(
         content: Text(context.strings.t('source_missing')),
         leading: const Icon(Icons.link_off_rounded),
         actions: [
+          if (canSwitchMediaMode)
+            _MediaModeButton(
+              destination: audioMode
+                  ? _ReviewMediaMode.video
+                  : _ReviewMediaMode.audio,
+              onPressed: () => _toggleMediaMode(job),
+            ),
           TextButton(
             onPressed: () async {
               final linked = await chooseAndRelink(context, job.id);
@@ -761,7 +748,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       waveformLoading: _waveformLoading,
       onPlayPause: _player!.playOrPause,
       onSeek: _seek,
-      reserveModeButtonSpace: audioMode,
+      onSwitchToVideoMode: audioMode ? () => _toggleMediaMode(job) : null,
     );
     if (audioMode) return audio;
     late final Widget pane;
@@ -775,7 +762,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
         videoAspectRatio: _videoAspectRatio,
         maxVideoHeight: videoHeight,
         centerInAvailableHeight: fillHeight,
-        showFullscreenShortcuts: showFullscreenShortcuts,
         isFullscreenActive: () => fullscreenController.isActive,
         playing: _playing,
         playbackRate: _playbackRate,
@@ -790,9 +776,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
         onPlaybackRateChanged: _setPlaybackRate,
         onDecreaseSpeed: () => _changePlaybackRate(-.25),
         onIncreaseSpeed: () => _changePlaybackRate(.25),
+        onRepeatHoldStart: _beginHoldingCurrentSentence,
+        onRepeatHoldEnd: _endSentenceRepeatHold,
         onEnterNativeFullscreen: _enterNativeFullscreen,
         onExitNativeFullscreen: _exitNativeFullscreen,
-        reserveModeButtonSpace: canSwitchMediaMode && !fillHeight,
+        onSwitchToAudioMode: canSwitchMediaMode
+            ? () => _toggleMediaMode(job)
+            : null,
       );
       pane = video;
     } else {
@@ -800,12 +790,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     }
     if (!fillHeight && hasVideo) {
       return SizedBox(
-        height:
-            (videoHeight ?? 180) +
-            56 +
-            (showFullscreenShortcuts
-                ? PlaybackShortcutsHint.preferredHeight
-                : 0),
+        height: (videoHeight ?? 180) + VideoTransport.height,
         child: pane,
       );
     }
@@ -1031,6 +1016,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   Future<void> _exitNativeFullscreen() async {
+    _endSentenceRepeatHold();
     _fullscreenController.markExited();
     await defaultExitNativeFullscreen();
   }
@@ -1056,17 +1042,109 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _player != null && segment.endMs > segment.startMs;
 
   void _toggleSentenceRepeat(TranscriptSegment segment) {
-    if (_repeatingSegmentId == segment.id) {
+    if (_manualRepeatingSegmentId == segment.id) {
       setState(() {
-        _repeatingSegmentId = null;
+        _manualRepeatingSegmentId = null;
         _repeatRestartQueued = false;
         _repeatRestartQueuedResume = false;
       });
       return;
     }
     if (!_canRepeat(segment)) return;
-    setState(() => _repeatingSegmentId = segment.id);
+    setState(() => _manualRepeatingSegmentId = segment.id);
     _queueRepeatRestart(resumeAfterSeek: true);
+  }
+
+  bool _handleRepeatShortcut(KeyEvent event) {
+    if (_fullscreenController.isActive) return false;
+    if (event.logicalKey != LogicalKeyboardKey.keyR) {
+      return false;
+    }
+    if (event is KeyUpEvent) {
+      if (_heldRepeatingSegmentId == null) return false;
+      _endSentenceRepeatHold();
+      return true;
+    }
+    if (_appController.destination != AppDestination.workspace ||
+        ModalRoute.of(context)?.isCurrent == false) {
+      return false;
+    }
+    if (_primaryFocusIsEditable()) return false;
+    if (event is KeyRepeatEvent) {
+      return _heldRepeatingSegmentId != null;
+    }
+    if (event is! KeyDownEvent || _shortcutModifierPressed()) {
+      return false;
+    }
+    return _beginHoldingCurrentSentence();
+  }
+
+  bool _beginHoldingCurrentSentence() {
+    if (_heldRepeatingSegmentId != null) return true;
+    final document = _document;
+    final player = _player;
+    if (document == null || player == null) return false;
+    final index = currentTranscriptSegmentIndex(
+      document.segments,
+      _position.inMilliseconds,
+    );
+    if (index == null) return false;
+    final segment = document.segments[index];
+    if (!_canRepeat(segment)) return false;
+    setState(() => _heldRepeatingSegmentId = segment.id);
+    unawaited(_ensurePlaybackContinues(player));
+    return true;
+  }
+
+  void _endSentenceRepeatHold({bool notify = true}) {
+    final heldSegmentId = _heldRepeatingSegmentId;
+    if (heldSegmentId == null) return;
+    final restoredSegmentId = _manualRepeatingSegmentId;
+    final player = _player;
+    if (notify && mounted) {
+      setState(() => _heldRepeatingSegmentId = null);
+    } else {
+      _heldRepeatingSegmentId = null;
+    }
+    _repeatRestartQueued = false;
+    _repeatRestartQueuedResume = false;
+    if (notify &&
+        restoredSegmentId != null &&
+        restoredSegmentId != heldSegmentId) {
+      _queueRepeatRestart(resumeAfterSeek: _player?.state.playing ?? false);
+    }
+    if (notify && player != null) {
+      unawaited(_ensurePlaybackContinues(player));
+    }
+  }
+
+  Future<void> _ensurePlaybackContinues(Player player) async {
+    try {
+      await _seekDispatcher?.idle;
+    } on Object {
+      return;
+    }
+    if (!mounted || !identical(_player, player) || player.state.playing) return;
+    try {
+      await player.play();
+    } on Object {
+      // Media teardown can race a lost key-up during navigation or shutdown.
+    }
+  }
+
+  bool _primaryFocusIsEditable() {
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    if (focusContext == null) return false;
+    return focusContext.widget is EditableText ||
+        focusContext.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  bool _shortcutModifierPressed() {
+    final keyboard = HardwareKeyboard.instance;
+    return keyboard.isControlPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isShiftPressed;
   }
 
   void _queueRepeatRestart({bool resumeAfterSeek = false}) {
@@ -1761,7 +1839,8 @@ class _AiBriefEmpty extends StatelessWidget {
               if (!controller.aiBriefConfigured) ...[
                 const SizedBox(height: 8),
                 TextButton(
-                  onPressed: () => controller.setDestination(2),
+                  onPressed: () =>
+                      controller.setDestination(AppDestination.settings),
                   child: Text(context.strings.t('ai_brief_configure')),
                 ),
               ],
@@ -2510,7 +2589,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   Widget _filename(BuildContext context) => Padding(
     padding: const EdgeInsets.only(right: 12),
     child: Text(
-      job.fileName,
+      job.displayName,
       key: const Key('review-filename'),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
@@ -2817,7 +2896,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
       case _TranscriptMoreAction.copy:
         unawaited(_copyTranscript(context, controller, settings));
       case _TranscriptMoreAction.export:
-        unawaited(showExportDialog(context, jobId: job.id));
+        unawaited(showTranscriptExportDialog(context, jobIds: [job.id]));
     }
   }
 
@@ -3604,7 +3683,6 @@ class _MediaPane extends StatelessWidget {
     required this.videoAspectRatio,
     required this.maxVideoHeight,
     required this.centerInAvailableHeight,
-    required this.showFullscreenShortcuts,
     required this.isFullscreenActive,
     required this.playing,
     required this.playbackRate,
@@ -3619,9 +3697,11 @@ class _MediaPane extends StatelessWidget {
     required this.onPlaybackRateChanged,
     required this.onDecreaseSpeed,
     required this.onIncreaseSpeed,
+    required this.onRepeatHoldStart,
+    required this.onRepeatHoldEnd,
     required this.onEnterNativeFullscreen,
     required this.onExitNativeFullscreen,
-    required this.reserveModeButtonSpace,
+    required this.onSwitchToAudioMode,
   });
 
   final TranscriptionJob job;
@@ -3632,7 +3712,6 @@ class _MediaPane extends StatelessWidget {
   final double videoAspectRatio;
   final double? maxVideoHeight;
   final bool centerInAvailableHeight;
-  final bool showFullscreenShortcuts;
   final bool Function() isFullscreenActive;
   final bool playing;
   final double playbackRate;
@@ -3647,9 +3726,11 @@ class _MediaPane extends StatelessWidget {
   final Future<void> Function(double) onPlaybackRateChanged;
   final Future<void> Function() onDecreaseSpeed;
   final Future<void> Function() onIncreaseSpeed;
+  final VoidCallback onRepeatHoldStart;
+  final VoidCallback onRepeatHoldEnd;
   final Future<void> Function() onEnterNativeFullscreen;
   final Future<void> Function() onExitNativeFullscreen;
-  final bool reserveModeButtonSpace;
+  final VoidCallback? onSwitchToAudioMode;
 
   @override
   Widget build(BuildContext context) {
@@ -3669,23 +3750,22 @@ class _MediaPane extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         const transportHeight = VideoTransport.height;
-        final shortcutsHeight = showFullscreenShortcuts
-            ? PlaybackShortcutsHint.preferredHeight
-            : 0.0;
         final aspect = videoAspectRatio.isFinite && videoAspectRatio > 0
             ? videoAspectRatio
             : 16 / 9;
         final heightFromWidth = constraints.maxWidth / aspect;
         final availableHeight = constraints.maxHeight.isFinite
-            ? (constraints.maxHeight - transportHeight - shortcutsHeight).clamp(
+            ? (constraints.maxHeight - transportHeight).clamp(
                 0.0,
                 double.infinity,
               )
             : heightFromWidth;
-        final heightLimit = maxVideoHeight == null
-            ? availableHeight
-            : availableHeight.clamp(0.0, maxVideoHeight!);
-        final viewportHeight = heightFromWidth.clamp(0.0, heightLimit);
+        final viewportHeight = videoViewportHeight(
+          width: constraints.maxWidth,
+          aspectRatio: aspect,
+          availableHeight: availableHeight,
+          maximumHeight: maxVideoHeight,
+        );
         return Column(
           mainAxisSize: centerInAvailableHeight
               ? MainAxisSize.max
@@ -3718,6 +3798,8 @@ class _MediaPane extends StatelessWidget {
                         onSeekForward: () => unawaited(onSeekForward()),
                         onDecreaseSpeed: () => unawaited(onDecreaseSpeed()),
                         onIncreaseSpeed: () => unawaited(onIncreaseSpeed()),
+                        onRepeatHoldStart: onRepeatHoldStart,
+                        onRepeatHoldEnd: onRepeatHoldEnd,
                         child: const SizedBox.expand(),
                       )
                     : const SizedBox.shrink(),
@@ -3733,15 +3815,27 @@ class _MediaPane extends StatelessWidget {
               onPlayPause: onPlayPause,
               onSeek: onSeek,
               onPlaybackRateChanged: onPlaybackRateChanged,
-              reserveModeButtonSpace: reserveModeButtonSpace,
+              onSwitchToAudioMode: onSwitchToAudioMode,
               onFullscreen: onFullscreen,
             ),
-            if (showFullscreenShortcuts) const PlaybackShortcutsHint(),
           ],
         );
       },
     );
   }
+}
+
+double videoViewportHeight({
+  required double width,
+  required double aspectRatio,
+  required double availableHeight,
+  double? maximumHeight,
+}) {
+  final heightFromWidth = width / aspectRatio;
+  final heightLimit = maximumHeight == null
+      ? availableHeight
+      : availableHeight.clamp(0.0, maximumHeight);
+  return heightFromWidth.clamp(0.0, heightLimit).toDouble();
 }
 
 class VideoTransport extends StatelessWidget {
@@ -3756,7 +3850,6 @@ class VideoTransport extends StatelessWidget {
     required this.onPlaybackRateChanged,
     required this.onFullscreen,
     this.onSwitchToAudioMode,
-    this.reserveModeButtonSpace = false,
   });
 
   static const height = 56.0;
@@ -3769,7 +3862,6 @@ class VideoTransport extends StatelessWidget {
   final TranscriptSeekCallback onSeek;
   final Future<void> Function(double) onPlaybackRateChanged;
   final VoidCallback? onSwitchToAudioMode;
-  final bool reserveModeButtonSpace;
   final Future<void> Function() onFullscreen;
 
   @override
@@ -3817,9 +3909,7 @@ class VideoTransport extends StatelessWidget {
             _MediaModeButton(
               destination: _ReviewMediaMode.audio,
               onPressed: onSwitchToAudioMode!,
-            )
-          else if (reserveModeButtonSpace)
-            const SizedBox.square(dimension: _MediaModeButton.size),
+            ),
           IconButton(
             key: const Key('video-fullscreen'),
             tooltip: context.strings.t('fullscreen'),
@@ -3877,154 +3967,6 @@ String formatPlaybackRate(double rate) {
   return '$value×';
 }
 
-class PlaybackShortcutsHint extends StatelessWidget {
-  const PlaybackShortcutsHint({super.key});
-
-  static const preferredHeight = 128.0;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    key: const Key('playback-shortcuts'),
-    height: preferredHeight,
-    child: Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 620),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                context.strings.t('fullscreen_shortcuts'),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 8),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final columns = constraints.maxWidth >= 520 ? 3 : 2;
-                  const spacing = 12.0;
-                  final itemWidth =
-                      (constraints.maxWidth - spacing * (columns - 1)) /
-                      columns;
-                  return Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: spacing,
-                    runSpacing: 8,
-                    children: [
-                      _ShortcutHint(
-                        id: 'play-pause',
-                        width: itemWidth,
-                        keyLabel: 'Space',
-                        description: context.strings.t('shortcut_play_pause'),
-                      ),
-                      _ShortcutHint(
-                        id: 'seek-backward',
-                        width: itemWidth,
-                        keyLabel: '←',
-                        description: context.strings.t(
-                          'shortcut_seek_backward',
-                        ),
-                      ),
-                      _ShortcutHint(
-                        id: 'seek-forward',
-                        width: itemWidth,
-                        keyLabel: '→',
-                        description: context.strings.t('shortcut_seek_forward'),
-                      ),
-                      _ShortcutHint(
-                        id: 'decrease-speed',
-                        width: itemWidth,
-                        keyLabel: 'X',
-                        description: context.strings.t(
-                          'shortcut_decrease_speed',
-                        ),
-                      ),
-                      _ShortcutHint(
-                        id: 'increase-speed',
-                        width: itemWidth,
-                        keyLabel: 'C',
-                        description: context.strings.t(
-                          'shortcut_increase_speed',
-                        ),
-                      ),
-                      _ShortcutHint(
-                        id: 'exit-fullscreen',
-                        width: itemWidth,
-                        keyLabel: 'Esc',
-                        description: context.strings.t('exit_fullscreen'),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-class _ShortcutHint extends StatelessWidget {
-  const _ShortcutHint({
-    required this.id,
-    required this.width,
-    required this.keyLabel,
-    required this.description,
-  });
-
-  final String id;
-  final double width;
-  final String keyLabel;
-  final String description;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return SizedBox(
-      width: width,
-      child: Semantics(
-        label: '$keyLabel: $description',
-        child: Row(
-          children: [
-            Container(
-              key: ValueKey('shortcut-key-$id'),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: colors.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(5),
-                border: Border.all(color: colors.outlineVariant),
-              ),
-              child: Text(
-                keyLabel,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: colors.onSurfaceVariant,
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(width: 5),
-            Expanded(
-              child: Text(
-                description,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: colors.onSurfaceVariant,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class VideoFullscreenKeyboardRegion extends StatefulWidget {
   const VideoFullscreenKeyboardRegion({
     super.key,
@@ -4040,6 +3982,8 @@ class VideoFullscreenKeyboardRegion extends StatefulWidget {
     required this.onSeekForward,
     required this.onDecreaseSpeed,
     required this.onIncreaseSpeed,
+    required this.onRepeatHoldStart,
+    required this.onRepeatHoldEnd,
     required this.child,
   });
 
@@ -4058,6 +4002,8 @@ class VideoFullscreenKeyboardRegion extends StatefulWidget {
   final VoidCallback onSeekForward;
   final VoidCallback onDecreaseSpeed;
   final VoidCallback onIncreaseSpeed;
+  final VoidCallback onRepeatHoldStart;
+  final VoidCallback onRepeatHoldEnd;
   final Widget child;
 
   @override
@@ -4072,6 +4018,7 @@ class _VideoFullscreenKeyboardRegionState
   Timer? _hideTimer;
   bool _controlsVisible = true;
   bool _scrubbing = false;
+  bool _repeatKeyHeld = false;
 
   @override
   void initState() {
@@ -4095,6 +4042,45 @@ class _VideoFullscreenKeyboardRegionState
   void dispose() {
     _hideTimer?.cancel();
     super.dispose();
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode _, KeyEvent event) {
+    if (event.logicalKey != LogicalKeyboardKey.keyR) {
+      return KeyEventResult.ignored;
+    }
+    if (event is KeyUpEvent) {
+      if (!_repeatKeyHeld) return KeyEventResult.ignored;
+      _releaseRepeatKey();
+      return KeyEventResult.handled;
+    }
+    if (event is KeyRepeatEvent) {
+      return _repeatKeyHeld ? KeyEventResult.handled : KeyEventResult.ignored;
+    }
+    if (event is! KeyDownEvent || _fullscreenShortcutModifierPressed()) {
+      return KeyEventResult.ignored;
+    }
+    _repeatKeyHeld = true;
+    widget.onRepeatHoldStart();
+    return KeyEventResult.handled;
+  }
+
+  bool _fullscreenShortcutModifierPressed() {
+    final keyboard = HardwareKeyboard.instance;
+    return keyboard.isControlPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isShiftPressed;
+  }
+
+  void _releaseRepeatKey() {
+    if (!_repeatKeyHeld) return;
+    _repeatKeyHeld = false;
+    widget.onRepeatHoldEnd();
+  }
+
+  void _exit() {
+    _releaseRepeatKey();
+    widget.onExit();
   }
 
   void _restartHideTimer() {
@@ -4136,7 +4122,7 @@ class _VideoFullscreenKeyboardRegionState
     final text = widget.subtitle?.trim();
     return CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): widget.onExit,
+        const SingleActivator(LogicalKeyboardKey.escape): _exit,
         const SingleActivator(LogicalKeyboardKey.space): () =>
             _runWithVisibleControls(widget.onPlayPause),
         const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
@@ -4150,6 +4136,7 @@ class _VideoFullscreenKeyboardRegionState
       },
       child: Focus(
         autofocus: true,
+        onKeyEvent: _handleKeyEvent,
         child: LayoutBuilder(
           builder: (context, constraints) {
             final fontSize = (constraints.maxWidth / 40).clamp(18.0, 32.0);
@@ -4333,7 +4320,7 @@ class _VideoFullscreenKeyboardRegionState
               IconButton(
                 key: const Key('fullscreen-exit'),
                 tooltip: context.strings.t('exit_fullscreen'),
-                onPressed: () => _runWithVisibleControls(widget.onExit),
+                onPressed: () => _runWithVisibleControls(_exit),
                 color: Colors.white,
                 iconSize: 30,
                 icon: const Icon(Icons.fullscreen_exit_rounded),
@@ -4408,7 +4395,6 @@ class AudioTransport extends StatelessWidget {
     required this.onPlayPause,
     required this.onSeek,
     this.onSwitchToVideoMode,
-    this.reserveModeButtonSpace = false,
   });
 
   static const height = 64.0;
@@ -4421,7 +4407,6 @@ class AudioTransport extends StatelessWidget {
   final Future<void> Function() onPlayPause;
   final Future<void> Function(Duration) onSeek;
   final VoidCallback? onSwitchToVideoMode;
-  final bool reserveModeButtonSpace;
 
   @override
   Widget build(BuildContext context) => SizedBox(
@@ -4466,9 +4451,7 @@ class AudioTransport extends StatelessWidget {
             _MediaModeButton(
               destination: _ReviewMediaMode.video,
               onPressed: onSwitchToVideoMode!,
-            )
-          else if (reserveModeButtonSpace)
-            const SizedBox.square(dimension: _MediaModeButton.size),
+            ),
         ],
       ),
     ),
