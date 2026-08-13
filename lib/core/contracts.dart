@@ -113,6 +113,11 @@ abstract interface class JobRepository {
   Future<void> delete(String id);
 }
 
+abstract interface class LibraryCatalogRepository {
+  Future<LibraryCatalog> load();
+  Future<void> save(LibraryCatalog catalog);
+}
+
 abstract interface class MediaService {
   bool canUploadDirectly(String path, MediaMetadata metadata);
   Future<MediaMetadata> inspect(String sourcePath);

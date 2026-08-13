@@ -358,4 +358,36 @@ void main() {
       expect(archive.files.map((file) => file.name).toSet(), hasLength(2));
     },
   );
+
+  test(
+    'exports use a custom display title without changing the source',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-display-title-export-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final now = DateTime.utc(2026, 8, 13);
+      final job = TranscriptionJob(
+        id: 'renamed',
+        batchId: 'batch',
+        sourcePath: '/recordings/original.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        displayTitle: 'Weekly sync',
+        document: document,
+      );
+
+      final output = await exporter.exportToDirectory(
+        job,
+        directory.path,
+        const ExportOptions(format: ExportFormat.markdown),
+      );
+      final contents = await File(output).readAsString();
+
+      expect(File(output).uri.pathSegments.last, 'Weekly sync.md');
+      expect(contents, contains('# Weekly sync'));
+      expect(job.sourcePath, '/recordings/original.wav');
+    },
+  );
 }

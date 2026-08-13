@@ -23,6 +23,7 @@ class AppController extends ChangeNotifier {
     required CredentialStore credentialStore,
     required SettingsRepository settingsRepository,
     required JobRepository jobRepository,
+    LibraryCatalogRepository? libraryCatalogRepository,
     required MediaService mediaService,
     required MediaSourceResolver sourceResolver,
     required SonioxClient sonioxClient,
@@ -35,6 +36,7 @@ class AppController extends ChangeNotifier {
   }) : _credentials = credentialStore,
        _settingsRepository = settingsRepository,
        _jobsRepository = jobRepository,
+       _libraryCatalogRepository = libraryCatalogRepository,
        _media = mediaService,
        _soniox = sonioxClient,
        _exporter = exporter,
@@ -48,6 +50,7 @@ class AppController extends ChangeNotifier {
   final CredentialStore _credentials;
   final SettingsRepository _settingsRepository;
   final JobRepository _jobsRepository;
+  final LibraryCatalogRepository? _libraryCatalogRepository;
   final MediaService _media;
   final SonioxClient _soniox;
   final TranscriptExporter _exporter;
@@ -71,9 +74,38 @@ class AppController extends ChangeNotifier {
   AppDestination _destination = AppDestination.inbox;
   String? _activeWorkspaceJobId;
   AppSettings _settings = const AppSettings();
+  LibraryCatalog _libraryCatalog = const LibraryCatalog();
   TranscriptionOptions _sessionOptions = const TranscriptionOptions();
 
   AppSettings get settings => _settings;
+  LibraryCatalog get libraryCatalog => _libraryCatalog;
+  List<LibraryGroup> get libraryGroups {
+    final groups = List<LibraryGroup>.of(_libraryCatalog.groups)
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return groups;
+  }
+
+  List<LibraryTag> get libraryTags {
+    final tags = List<LibraryTag>.of(_libraryCatalog.tags)
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return tags;
+  }
+
+  LibraryGroup? libraryGroupById(String? id) {
+    if (id == null) return null;
+    for (final group in _libraryCatalog.groups) {
+      if (group.id == id) return group;
+    }
+    return null;
+  }
+
+  LibraryTag? libraryTagById(String id) {
+    for (final tag in _libraryCatalog.tags) {
+      if (tag.id == id) return tag;
+    }
+    return null;
+  }
+
   TranscriptionOptions get sessionOptions => _sessionOptions;
   bool get initializing => _initializing;
   bool get processing => _processing;
@@ -141,6 +173,8 @@ class AppController extends ChangeNotifier {
       !inboxJobs.any((job) => job.isBusy);
 
   Future<void> initialize() async {
+    _libraryCatalog =
+        await _libraryCatalogRepository?.load() ?? const LibraryCatalog();
     _settings = await _settingsRepository.load();
     var settingsChanged = false;
     if (_settings.translationSettings.targetLanguage.isEmpty) {
@@ -272,6 +306,159 @@ class AppController extends ChangeNotifier {
     if (_destination == destination) return;
     _destination = destination;
     notifyListeners();
+  }
+
+  Future<void> renameLibraryItem(String id, String? title) async {
+    final job = _jobs[id];
+    if (job == null) return;
+    final normalized = title?.trim();
+    if (normalized != null && normalized.length > 200) {
+      throw ArgumentError.value(title, 'title', 'Title is too long.');
+    }
+    await _transition(
+      job,
+      displayTitle: normalized,
+      clearDisplayTitle: normalized == null || normalized.isEmpty,
+    );
+  }
+
+  Future<LibraryGroup> createLibraryGroup(String name) async {
+    final normalized = _validateOrganizerName(name);
+    if (_libraryCatalog.groups.any(
+      (group) => group.name.toLowerCase() == normalized.toLowerCase(),
+    )) {
+      throw ArgumentError.value(name, 'name', 'Group name already exists.');
+    }
+    final group = LibraryGroup(id: _uuid.v4(), name: normalized);
+    _libraryCatalog = _libraryCatalog.copyWith(
+      groups: [..._libraryCatalog.groups, group],
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+    return group;
+  }
+
+  Future<LibraryTag> createLibraryTag(String name) async {
+    final normalized = _validateOrganizerName(name);
+    if (_libraryCatalog.tags.any(
+      (tag) => tag.name.toLowerCase() == normalized.toLowerCase(),
+    )) {
+      throw ArgumentError.value(name, 'name', 'Tag name already exists.');
+    }
+    final tag = LibraryTag(id: _uuid.v4(), name: normalized);
+    _libraryCatalog = _libraryCatalog.copyWith(
+      tags: [..._libraryCatalog.tags, tag],
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+    return tag;
+  }
+
+  Future<void> renameLibraryGroup(String id, String name) async {
+    final normalized = _validateOrganizerName(name);
+    if (_libraryCatalog.groups.any(
+      (group) =>
+          group.id != id &&
+          group.name.toLowerCase() == normalized.toLowerCase(),
+    )) {
+      throw ArgumentError.value(name, 'name', 'Group name already exists.');
+    }
+    if (libraryGroupById(id) == null) return;
+    _libraryCatalog = _libraryCatalog.copyWith(
+      groups: [
+        for (final group in _libraryCatalog.groups)
+          if (group.id == id) group.copyWith(name: normalized) else group,
+      ],
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+  }
+
+  Future<void> deleteLibraryGroup(String id) async {
+    if (libraryGroupById(id) == null) return;
+    for (final job in _jobs.values.where((job) => job.groupId == id).toList()) {
+      await _transition(job, clearGroupId: true);
+    }
+    _libraryCatalog = _libraryCatalog.copyWith(
+      groups: _libraryCatalog.groups
+          .where((group) => group.id != id)
+          .toList(growable: false),
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+  }
+
+  Future<void> renameLibraryTag(String id, String name) async {
+    final normalized = _validateOrganizerName(name);
+    if (_libraryCatalog.tags.any(
+      (tag) =>
+          tag.id != id && tag.name.toLowerCase() == normalized.toLowerCase(),
+    )) {
+      throw ArgumentError.value(name, 'name', 'Tag name already exists.');
+    }
+    if (libraryTagById(id) == null) return;
+    _libraryCatalog = _libraryCatalog.copyWith(
+      tags: [
+        for (final tag in _libraryCatalog.tags)
+          if (tag.id == id) tag.copyWith(name: normalized) else tag,
+      ],
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+  }
+
+  Future<void> deleteLibraryTag(String id) async {
+    if (libraryTagById(id) == null) return;
+    for (final job
+        in _jobs.values.where((job) => job.tagIds.contains(id)).toList()) {
+      await _transition(job, tagIds: Set<String>.of(job.tagIds)..remove(id));
+    }
+    _libraryCatalog = _libraryCatalog.copyWith(
+      tags: _libraryCatalog.tags
+          .where((tag) => tag.id != id)
+          .toList(growable: false),
+    );
+    await _libraryCatalogRepository?.save(_libraryCatalog);
+    notifyListeners();
+  }
+
+  Future<void> moveLibraryItems(Iterable<String> ids, String? groupId) async {
+    if (groupId != null && libraryGroupById(groupId) == null) {
+      throw ArgumentError.value(groupId, 'groupId', 'Unknown group.');
+    }
+    for (final id in ids.toSet()) {
+      final job = _jobs[id];
+      if (job == null || job.groupId == groupId) continue;
+      await _transition(job, groupId: groupId, clearGroupId: groupId == null);
+    }
+  }
+
+  Future<void> updateLibraryItemTags(
+    Iterable<String> ids, {
+    Set<String> addTagIds = const {},
+    Set<String> removeTagIds = const {},
+  }) async {
+    final knownTagIds = _libraryCatalog.tags.map((tag) => tag.id).toSet();
+    if (!knownTagIds.containsAll(addTagIds)) {
+      throw ArgumentError.value(addTagIds, 'addTagIds', 'Unknown tag.');
+    }
+    for (final id in ids.toSet()) {
+      final job = _jobs[id];
+      if (job == null) continue;
+      final updatedTagIds = Set<String>.of(job.tagIds)
+        ..addAll(addTagIds)
+        ..removeAll(removeTagIds);
+      if (setEquals(updatedTagIds, job.tagIds)) continue;
+      await _transition(job, tagIds: updatedTagIds);
+    }
+  }
+
+  String _validateOrganizerName(String name) {
+    final normalized = name.trim();
+    if (normalized.isEmpty || normalized.length > 60) {
+      throw ArgumentError.value(name, 'name', 'Invalid organizer name.');
+    }
+    return normalized;
   }
 
   void reorderInbox(int oldIndex, int newIndex) {
@@ -1666,7 +1853,7 @@ class AppController extends ChangeNotifier {
     final document = job?.document;
     if (job == null || brief == null || document == null) return '';
     final buffer = StringBuffer()
-      ..writeln('# ${job.fileName} — AI Brief')
+      ..writeln('# ${job.displayName} — AI Brief')
       ..writeln();
     if (brief.overview.trim().isNotEmpty) {
       buffer
@@ -1714,8 +1901,7 @@ class AppController extends ChangeNotifier {
   Future<String> exportAiBrief(String jobId, String directory) async {
     final job = _jobs[jobId];
     if (job?.aiBrief == null) throw StateError('Job has no AI Brief.');
-    final base = p
-        .basenameWithoutExtension(job!.fileName)
+    final base = (job!.displayTitle ?? p.basenameWithoutExtension(job.fileName))
         .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
         .replaceAll(RegExp(r'[. ]+$'), '')
         .trim();
@@ -1827,7 +2013,7 @@ class AppController extends ChangeNotifier {
     return _exporter.render(
       job!.document!,
       options,
-      title: job.fileName,
+      title: job.displayName,
       metadata: job.metadata,
     );
   }
@@ -1979,11 +2165,17 @@ class AppController extends ChangeNotifier {
     String? remoteFileId,
     String? remoteTranscriptionId,
     CleanupState? cleanupState,
+    String? displayTitle,
+    String? groupId,
+    Set<String>? tagIds,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
+    bool clearDisplayTitle = false,
+    bool clearGroupId = false,
   }) async {
-    final updated = job.copyWith(
+    final current = _jobs[job.id] ?? job;
+    final updated = current.copyWith(
       sourcePath: sourcePath,
       status: status,
       queueIndex: queueIndex,
@@ -2000,9 +2192,14 @@ class AppController extends ChangeNotifier {
       remoteFileId: remoteFileId,
       remoteTranscriptionId: remoteTranscriptionId,
       cleanupState: cleanupState,
+      displayTitle: displayTitle,
+      groupId: groupId,
+      tagIds: tagIds,
       clearError: clearError,
       clearRemoteFileId: clearRemoteFileId,
       clearRemoteTranscriptionId: clearRemoteTranscriptionId,
+      clearDisplayTitle: clearDisplayTitle,
+      clearGroupId: clearGroupId,
     );
     _jobs[job.id] = updated;
     await _jobsRepository.save(updated);

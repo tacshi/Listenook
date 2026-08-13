@@ -842,6 +842,53 @@ void main() {
     );
   });
 
+  test('background progress preserves library metadata edits', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'meow-library-metadata-progress-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/submitted.wav');
+    await file.writeAsBytes([1]);
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'submitted',
+        batchId: 'batch',
+        sourcePath: file.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.processing,
+        metadata: const MediaMetadata(
+          sizeBytes: 1,
+          durationMs: 1000,
+          hasAudio: true,
+          hasVideo: false,
+          formatName: 'wav',
+        ),
+        remoteFileId: 'file-submitted',
+        remoteTranscriptionId: 'tx-submitted',
+        cleanupState: CleanupState.pending,
+      ),
+    ]);
+    final pollingGate = Completer<void>();
+    final controller = _controller(
+      jobs: jobs,
+      soniox: _Soniox(pollingGate: pollingGate),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await _waitFor(() => controller.processing);
+
+    await controller.renameLibraryItem('submitted', 'Customer interview');
+    pollingGate.complete();
+    await _waitFor(
+      () => controller.inboxJobs.single.status == JobStatus.completed,
+    );
+
+    expect(controller.inboxJobs.single.displayName, 'Customer interview');
+    expect(jobs.saved['submitted']!.displayTitle, 'Customer interview');
+  });
+
   test(
     'retry ignores empty transcript segments and completes partial job',
     () async {

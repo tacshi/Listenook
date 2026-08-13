@@ -101,9 +101,41 @@ void main() {
     expect(job.translationState.status, TranslationStatus.idle);
     expect(job.translationOptions.enabled, isFalse);
     expect(job.options.sonioxTranslation.enabled, isFalse);
+    expect(job.displayTitle, isNull);
+    expect(job.displayName, 'recording.wav');
+    expect(job.groupId, isNull);
+    expect(job.tagIds, isEmpty);
   });
 
-  test('version 4 manifests round-trip translation without credentials', () {
+  test(
+    'version 5 manifests preserve library metadata without renaming source',
+    () {
+      final now = DateTime.utc(2026, 8, 13);
+      final job = TranscriptionJob(
+        id: 'organized',
+        batchId: 'batch',
+        sourcePath: '/recordings/original.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        displayTitle: 'Weekly sync',
+        groupId: 'work',
+        tagIds: const {'important', 'meeting'},
+      );
+
+      final json = job.toJson();
+      final restored = TranscriptionJob.fromJson(json);
+
+      expect(json['manifest_version'], 5);
+      expect(restored.sourcePath, '/recordings/original.wav');
+      expect(restored.fileName, 'original.wav');
+      expect(restored.displayName, 'Weekly sync');
+      expect(restored.groupId, 'work');
+      expect(restored.tagIds, {'important', 'meeting'});
+    },
+  );
+
+  test('version 5 manifests round-trip translation without credentials', () {
     final now = DateTime.utc(2026, 8, 11);
     final job = TranscriptionJob(
       id: 'translated',
@@ -160,7 +192,7 @@ void main() {
     final json = job.toJson();
     final restored = TranscriptionJob.fromJson(json);
 
-    expect(json['manifest_version'], 4);
+    expect(json['manifest_version'], 5);
     expect(job.toJsonString(), isNot(contains('api_key')));
     expect(restored.document!.segments.single.translatedText, '你好');
     expect(restored.translationState.status, TranslationStatus.completed);
@@ -183,7 +215,7 @@ void main() {
     expect(appSettings.sonioxTranslation.targetLanguage, 'ja');
   });
 
-  test('version 4 manifests round-trip evidence-backed AI Briefs', () {
+  test('version 5 manifests round-trip evidence-backed AI Briefs', () {
     final now = DateTime.utc(2026, 8, 12);
     final job = TranscriptionJob(
       id: 'brief',
@@ -288,6 +320,63 @@ void main() {
       isFalse,
     );
   });
+
+  test(
+    'library catalog atomically persists reusable empty organizers',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'meowstt-library-catalog-',
+      );
+      addTearDown(() => temporary.delete(recursive: true));
+      final paths = AppPaths.forTesting(temporary.path);
+      final repository = JsonLibraryCatalogRepository(paths);
+
+      await repository.save(
+        const LibraryCatalog(
+          groups: [LibraryGroup(id: 'group-work', name: 'Work')],
+          tags: [LibraryTag(id: 'tag-urgent', name: 'Urgent')],
+        ),
+      );
+      final restored = await repository.load();
+
+      expect(restored.groups.single.name, 'Work');
+      expect(restored.tags.single.name, 'Urgent');
+      expect(
+        File('${temporary.path}/library_catalog.json.tmp').existsSync(),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'missing or corrupt catalogs do not prevent jobs from loading',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'meowstt-corrupt-library-catalog-',
+      );
+      addTearDown(() => temporary.delete(recursive: true));
+      final paths = AppPaths.forTesting(temporary.path);
+      final catalogRepository = JsonLibraryCatalogRepository(paths);
+      final jobRepository = LocalJobRepository(paths);
+      final now = DateTime.utc(2026, 8, 13);
+      await jobRepository.save(
+        TranscriptionJob(
+          id: 'survives',
+          batchId: 'batch',
+          sourcePath: '/recordings/survives.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+        ),
+      );
+
+      expect((await catalogRepository.load()).groups, isEmpty);
+      await paths.libraryCatalog.writeAsString('{not-json');
+
+      expect((await catalogRepository.load()).tags, isEmpty);
+      expect((await jobRepository.loadAll()).single.id, 'survives');
+    },
+  );
 
   test('concurrent progress and stage saves do not collide', () async {
     final temporary = await Directory.systemTemp.createTemp('meowstt-race-');

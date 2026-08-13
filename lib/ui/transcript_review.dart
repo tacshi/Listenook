@@ -2589,7 +2589,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   Widget _filename(BuildContext context) => Padding(
     padding: const EdgeInsets.only(right: 12),
     child: Text(
-      job.fileName,
+      job.displayName,
       key: const Key('review-filename'),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,

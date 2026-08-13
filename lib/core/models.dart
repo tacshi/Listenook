@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 4;
+const int manifestVersion = 5;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 enum JobStatus {
@@ -1329,6 +1329,59 @@ class AppSettings {
   }
 }
 
+class LibraryGroup {
+  const LibraryGroup({required this.id, required this.name});
+
+  final String id;
+  final String name;
+
+  LibraryGroup copyWith({String? name}) =>
+      LibraryGroup(id: id, name: name ?? this.name);
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name};
+
+  factory LibraryGroup.fromJson(Map<String, dynamic> json) =>
+      LibraryGroup(id: json['id'] as String, name: json['name'] as String);
+}
+
+class LibraryTag {
+  const LibraryTag({required this.id, required this.name});
+
+  final String id;
+  final String name;
+
+  LibraryTag copyWith({String? name}) =>
+      LibraryTag(id: id, name: name ?? this.name);
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name};
+
+  factory LibraryTag.fromJson(Map<String, dynamic> json) =>
+      LibraryTag(id: json['id'] as String, name: json['name'] as String);
+}
+
+class LibraryCatalog {
+  const LibraryCatalog({this.groups = const [], this.tags = const []});
+
+  final List<LibraryGroup> groups;
+  final List<LibraryTag> tags;
+
+  LibraryCatalog copyWith({
+    List<LibraryGroup>? groups,
+    List<LibraryTag>? tags,
+  }) => LibraryCatalog(groups: groups ?? this.groups, tags: tags ?? this.tags);
+
+  Map<String, dynamic> toJson() => {
+    'version': 1,
+    'groups': groups.map((group) => group.toJson()).toList(),
+    'tags': tags.map((tag) => tag.toJson()).toList(),
+  };
+
+  factory LibraryCatalog.fromJson(Map<String, dynamic>? json) => LibraryCatalog(
+    groups: _mapList(json?['groups'], LibraryGroup.fromJson),
+    tags: _mapList(json?['tags'], LibraryTag.fromJson),
+  );
+}
+
 class TranscriptionJob {
   const TranscriptionJob({
     required this.id,
@@ -1351,6 +1404,9 @@ class TranscriptionJob {
     this.translationState = const TranslationState(),
     this.aiBrief,
     this.aiGenerationState = const AiGenerationState(),
+    this.displayTitle,
+    this.groupId,
+    this.tagIds = const {},
   });
 
   final String id;
@@ -1373,6 +1429,9 @@ class TranscriptionJob {
   final TranslationState translationState;
   final AiBrief? aiBrief;
   final AiGenerationState aiGenerationState;
+  final String? displayTitle;
+  final String? groupId;
+  final Set<String> tagIds;
 
   bool get isBusy =>
       status.isActive ||
@@ -1380,6 +1439,10 @@ class TranscriptionJob {
       aiGenerationState.status.isActive;
 
   String get fileName => sourcePath.replaceAll('\\', '/').split('/').last;
+  String get displayName {
+    final title = displayTitle?.trim();
+    return title == null || title.isEmpty ? fileName : title;
+  }
 
   TranscriptionJob copyWith({
     String? sourcePath,
@@ -1398,10 +1461,15 @@ class TranscriptionJob {
     TranslationState? translationState,
     AiBrief? aiBrief,
     AiGenerationState? aiGenerationState,
+    String? displayTitle,
+    String? groupId,
+    Set<String>? tagIds,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
     bool clearAiBrief = false,
+    bool clearDisplayTitle = false,
+    bool clearGroupId = false,
   }) => TranscriptionJob(
     id: id,
     batchId: batchId,
@@ -1425,6 +1493,9 @@ class TranscriptionJob {
     translationState: translationState ?? this.translationState,
     aiBrief: clearAiBrief ? null : aiBrief ?? this.aiBrief,
     aiGenerationState: aiGenerationState ?? this.aiGenerationState,
+    displayTitle: clearDisplayTitle ? null : displayTitle ?? this.displayTitle,
+    groupId: clearGroupId ? null : groupId ?? this.groupId,
+    tagIds: tagIds ?? this.tagIds,
   );
 
   Map<String, dynamic> toJson() => {
@@ -1450,6 +1521,9 @@ class TranscriptionJob {
     'translation_state': translationState.toJson(),
     if (aiBrief case final value?) 'ai_brief': value.toJson(),
     'ai_generation_state': aiGenerationState.toJson(),
+    if (displayTitle case final value?) 'display_title': value,
+    if (groupId case final value?) 'group_id': value,
+    if (tagIds.isNotEmpty) 'tag_ids': tagIds.toList()..sort(),
   };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -1500,6 +1574,17 @@ class TranscriptionJob {
       aiGenerationState: AiGenerationState.fromJson(
         (json['ai_generation_state'] as Map?)?.cast<String, dynamic>(),
       ),
+      displayTitle: switch (json['display_title']) {
+        final String value when value.trim().isNotEmpty => value.trim(),
+        _ => null,
+      },
+      groupId: switch (json['group_id']) {
+        final String value when value.trim().isNotEmpty => value.trim(),
+        _ => null,
+      },
+      tagIds: _strings(
+        json['tag_ids'],
+      ).map((value) => value.trim()).where((value) => value.isNotEmpty).toSet(),
     );
   }
 }

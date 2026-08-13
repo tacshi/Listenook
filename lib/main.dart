@@ -43,6 +43,7 @@ Future<void> main() async {
     credentialStore: credentials,
     settingsRepository: settingsRepository,
     jobRepository: LocalJobRepository(paths),
+    libraryCatalogRepository: JsonLibraryCatalogRepository(paths),
     mediaService: media,
     sourceResolver: const LocalMediaSourceResolver(),
     sonioxClient: SonioxApiClient(credentials),
