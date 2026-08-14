@@ -962,7 +962,7 @@ void main() {
     final translatedDecoration = translatedCard.decoration as BoxDecoration;
     final pendingDecoration = pendingCard.decoration as BoxDecoration;
     expect(translatedDecoration.color, isNotNull);
-    expect(translatedDecoration.border, isNotNull);
+    expect(translatedDecoration.border, isNull);
     expect(pendingDecoration.color, isNull);
     expect(pendingDecoration.border, isNull);
 
@@ -1015,6 +1015,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await _selectTranslationView(tester, 'Translated');
     await tester.drag(
       find.byKey(const Key('video-transcript-divider')),
       const Offset(500, 0),
@@ -1050,6 +1051,23 @@ void main() {
     expect(
       tester.getRect(find.byKey(const Key('review-toolbar-more'))).right,
       closeTo(tester.getRect(toolbar).right, 0.1),
+    );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('segment-group-segment'))),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .getRect(find.byKey(const ValueKey('translated-retranslate-segment')))
+          .right,
+      lessThanOrEqualTo(
+        tester
+            .getRect(find.byKey(const ValueKey('translated-segment-segment')))
+            .right,
+      ),
     );
     await tester.tap(find.byKey(const Key('review-toolbar-more')));
     await tester.pumpAndSettle();
@@ -1323,6 +1341,234 @@ void main() {
         matching: find.byKey(repeatKey),
       ),
       findsNothing,
+    );
+  });
+
+  testWidgets('translation modes share one calm grouped sentence layout', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'grouped',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Original sentence.',
+            translatedText: '翻译句子。',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      translationState: const TranslationState(
+        status: TranslationStatus.completed,
+        targetLanguage: 'zh-Hans',
+        completedSegments: 1,
+        totalSegments: 1,
+      ),
+      settings: _configuredTranslationAppSettings,
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    const groupKey = ValueKey('segment-group-grouped');
+    expect(find.byKey(groupKey), findsOneWidget);
+    expect(
+      find.descendant(of: find.byKey(groupKey), matching: find.byType(Card)),
+      findsNothing,
+    );
+
+    await _selectTranslationView(tester, 'Bilingual');
+    final source = find.byKey(const ValueKey('segment-text-grouped'));
+    final translation = find.byKey(const ValueKey('translated-text-grouped'));
+    expect(source, findsOneWidget);
+    expect(translation, findsOneWidget);
+    expect(
+      tester.getTopLeft(source).dx,
+      closeTo(tester.getTopLeft(translation).dx, 1),
+    );
+    expect(
+      tester.getTopLeft(source).dy,
+      lessThan(tester.getTopLeft(translation).dy),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(groupKey),
+        matching: find.byKey(const ValueKey('segment-repeat-grouped')),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('translated hover actions are direct and layout-stable', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'actions',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Original sentence.',
+            translatedText: '翻译句子。',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      translationState: const TranslationState(
+        status: TranslationStatus.completed,
+        targetLanguage: 'zh-Hans',
+        completedSegments: 1,
+        totalSegments: 1,
+      ),
+      settings: _configuredTranslationAppSettings,
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _selectTranslationView(tester, 'Translated');
+
+    const groupKey = ValueKey('segment-group-actions');
+    final text = find.byKey(const ValueKey('translated-text-actions'));
+    final editOpacity = find.byKey(
+      const ValueKey('translated-edit-opacity-actions'),
+    );
+    final retranslateOpacity = find.byKey(
+      const ValueKey('translated-retranslate-opacity-actions'),
+    );
+    final textRect = tester.getRect(text);
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(retranslateOpacity).opacity, 0);
+    expect(
+      find.descendant(
+        of: find.byKey(groupKey),
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+      findsNothing,
+    );
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(find.byKey(groupKey)));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<AnimatedOpacity>(editOpacity).opacity, 1);
+    expect(tester.widget<AnimatedOpacity>(retranslateOpacity).opacity, 1);
+    expect(tester.getRect(text), textRect);
+  });
+
+  testWidgets('bilingual source and translation edit independently', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'editable-pair',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Original sentence.',
+            translatedText: '翻译句子。',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      translationState: const TranslationState(
+        status: TranslationStatus.completed,
+        targetLanguage: 'zh-Hans',
+        completedSegments: 1,
+        totalSegments: 1,
+      ),
+      settings: _configuredTranslationAppSettings,
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _selectTranslationView(tester, 'Bilingual');
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(
+      tester.getCenter(
+        find.byKey(const ValueKey('segment-text-editable-pair')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('segment-edit-editable-pair')));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('segment-editor-editable-pair')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('translated-field-editable-pair')),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('segment-cancel-editable-pair')),
+    );
+    await tester.pump();
+
+    await mouse.moveTo(
+      tester.getCenter(
+        find.byKey(const ValueKey('translated-text-editable-pair')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('translated-edit-editable-pair')),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('segment-editor-editable-pair')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('translated-field-editable-pair')),
+      findsOneWidget,
     );
   });
 
@@ -1855,7 +2101,7 @@ void main() {
     expect(position.pixels, greaterThan(0));
   });
 
-  testWidgets('timestamp sits above repeat and repeat aligns with text', (
+  testWidgets('metadata and trailing actions align with sentence text', (
     tester,
   ) async {
     const segment = TranscriptSegment(
@@ -1931,14 +2177,9 @@ void main() {
     );
     expect(
       tester
-          .getTopRight(find.byKey(const ValueKey('segment-timestamp-aligned')))
+          .getTopLeft(find.byKey(const ValueKey('segment-timestamp-aligned')))
           .dx,
-      closeTo(
-        tester
-            .getTopRight(find.byKey(const ValueKey('segment-repeat-aligned')))
-            .dx,
-        1,
-      ),
+      closeTo(tester.getTopLeft(transcriptText).dx, 1),
     );
 
     await pump(showSpeaker: false);
@@ -2198,7 +2439,7 @@ void main() {
     expect(_backgroundTexts(tester), isEmpty);
   });
 
-  testWidgets('read-only sentences stay borderless in light and dark themes', (
+  testWidgets('current sentences use a soft fill without adding a border', (
     tester,
   ) async {
     for (final brightness in Brightness.values) {
@@ -2246,7 +2487,7 @@ void main() {
       );
       final decoration = card.decoration as BoxDecoration;
       expect(decoration.border, isNull);
-      expect(decoration.color, isNull);
+      expect(decoration.color, isNotNull);
       expect(_backgroundTexts(tester), ['Themed']);
     }
   });
@@ -2287,7 +2528,7 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const ValueKey('segment-card-compact'))).height,
-      lessThanOrEqualTo(44),
+      lessThanOrEqualTo(48),
     );
     expect(find.byIcon(Icons.play_circle_outline_rounded), findsNothing);
     expect(
@@ -2426,8 +2667,8 @@ void main() {
     final cancel = find.byKey(const ValueKey('segment-cancel-editable'));
     final save = find.byKey(const ValueKey('segment-save-editable'));
     expect(editor, findsOneWidget);
-    expect(tester.getCenter(cancel).dx, closeTo(tester.getCenter(save).dx, 1));
-    expect(tester.getCenter(cancel).dy, lessThan(tester.getCenter(save).dy));
+    expect(tester.getCenter(cancel).dx, lessThan(tester.getCenter(save).dx));
+    expect(tester.getCenter(cancel).dy, closeTo(tester.getCenter(save).dy, 1));
     await tester.enterText(editor, 'Unsaved draft');
     await tester.tap(cancel);
     await tester.pump();
@@ -2584,6 +2825,13 @@ void main() {
       ),
     );
 
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('segment-card-editable'))),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('segment-edit-editable')));
     await tester.pump();
     final editor = find.byKey(const ValueKey('segment-editor-editable'));
@@ -4335,17 +4583,32 @@ void main() {
       ),
     );
 
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('segment-card-first'))),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('segment-edit-first')));
     await tester.pump();
     await tester.enterText(
       find.byKey(const ValueKey('segment-editor-first')),
       'First draft',
     );
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('segment-card-second'))),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('segment-edit-second')));
     await tester.pump();
 
     expect(find.byKey(const ValueKey('segment-editor-first')), findsNothing);
     expect(find.byKey(const ValueKey('segment-editor-second')), findsOneWidget);
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('segment-card-first'))),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('segment-edit-first')));
     await tester.pump();
     final reopened = tester.widget<TextField>(
@@ -4420,7 +4683,7 @@ void main() {
     );
     final decoration = currentCard.decoration as BoxDecoration;
     expect(decoration.border, isNull);
-    expect(decoration.color, isNull);
+    expect(decoration.color, isNotNull);
   });
 
   testWidgets('focus keeps an already visible current sentence in place', (
