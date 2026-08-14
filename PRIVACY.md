@@ -3,6 +3,23 @@
 MeowSTT has no developer-operated backend, telemetry, cloud sync, advertising,
 or analytics.
 
+Inbox folder monitoring is optional and entirely local. When configured,
+MeowSTT recursively reads directory metadata for supported audio and video
+files and stores the selected folder, selected extensions, pause/login
+preferences, canonical source paths, byte sizes, modification times, handled
+state, and optional local job IDs in an atomic JSON ledger under Application
+Support. This ledger prevents an unchanged file from being repeatedly added,
+including after a restart or local history deletion. MeowSTT never moves,
+renames, changes, or deletes source media. Discovery alone never uploads or
+transcribes a file; the user must still press **Transcribe**.
+
+After an Inbox folder is configured, closing the window may leave MeowSTT
+running in the macOS menu bar or Windows notification area so monitoring and
+active jobs can continue. Optional launch at login is disabled by default.
+When the window is hidden, the operating system may show a grouped local
+notification for newly discovered files. Notification permission can be
+denied without disabling monitoring; the tray waiting count remains available.
+
 When you explicitly start transcription, MeowSTT uploads the selected media
 directly to Soniox using your API key. It creates one Soniox file and one Soniox
 transcription resource per job. After transcript retrieval—or after cancellation

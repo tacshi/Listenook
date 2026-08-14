@@ -1,7 +1,17 @@
 import 'dart:convert';
 
-const int manifestVersion = 5;
+const int manifestVersion = 6;
 const int maxMediaDurationMs = 300 * 60 * 1000;
+
+const Set<String> supportedMonitoredMediaExtensions = {
+  'mp3',
+  'wav',
+  'm4a',
+  'ogg',
+  'mp4',
+  'mkv',
+  'avi',
+};
 
 enum JobStatus {
   pending,
@@ -174,6 +184,19 @@ enum AppThemeMode { system, light, dark }
 enum AppLocaleMode { system, english, simplifiedChinese }
 
 enum CleanupState { none, pending, complete }
+
+enum JobSourceOrigin { manual, monitoredFolder }
+
+enum InboxMonitorStatus {
+  unconfigured,
+  scanning,
+  active,
+  paused,
+  unavailable,
+  error,
+}
+
+enum MonitoredFileDisposition { queued, completed, dismissed }
 
 class JobProgress {
   const JobProgress({required this.stage, this.fraction, this.detail});
@@ -380,11 +403,12 @@ class TranscriptDocument {
   TranscriptDocument copyWith({
     List<TranscriptSegment>? segments,
     List<SpeakerProfile>? speakers,
+    bool preserveUpdatedAt = false,
   }) => TranscriptDocument(
     tokens: tokens,
     segments: segments ?? this.segments,
     speakers: speakers ?? this.speakers,
-    updatedAt: DateTime.now().toUtc(),
+    updatedAt: preserveUpdatedAt ? updatedAt : DateTime.now().toUtc(),
   );
 
   Map<String, dynamic> toJson() => {
@@ -1485,6 +1509,191 @@ class LibraryCatalog {
   );
 }
 
+class InboxMonitorConfig {
+  const InboxMonitorConfig({
+    this.folderPath = '',
+    this.paused = false,
+    this.extensions = supportedMonitoredMediaExtensions,
+    this.launchAtLogin = false,
+    this.showTrayIcon = true,
+  });
+
+  final String folderPath;
+  final bool paused;
+  final Set<String> extensions;
+  final bool launchAtLogin;
+  final bool showTrayIcon;
+
+  bool get isConfigured => folderPath.trim().isNotEmpty;
+
+  InboxMonitorConfig copyWith({
+    String? folderPath,
+    bool? paused,
+    Set<String>? extensions,
+    bool? launchAtLogin,
+    bool? showTrayIcon,
+  }) => InboxMonitorConfig(
+    folderPath: folderPath ?? this.folderPath,
+    paused: paused ?? this.paused,
+    extensions: extensions ?? this.extensions,
+    launchAtLogin: launchAtLogin ?? this.launchAtLogin,
+    showTrayIcon: showTrayIcon ?? this.showTrayIcon,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'folder_path': folderPath,
+    'paused': paused,
+    'extensions': extensions.toList()..sort(),
+    'launch_at_login': launchAtLogin,
+    'show_tray_icon': showTrayIcon,
+  };
+
+  factory InboxMonitorConfig.fromJson(Map<String, dynamic>? json) {
+    final extensions = _strings(json?['extensions'])
+        .map((value) => value.trim().toLowerCase().replaceFirst('.', ''))
+        .where(supportedMonitoredMediaExtensions.contains)
+        .toSet();
+    return InboxMonitorConfig(
+      folderPath: json?['folder_path'] as String? ?? '',
+      paused: json?['paused'] as bool? ?? false,
+      extensions: extensions.isEmpty
+          ? supportedMonitoredMediaExtensions
+          : extensions,
+      launchAtLogin: json?['launch_at_login'] as bool? ?? false,
+      showTrayIcon: json?['show_tray_icon'] as bool? ?? true,
+    );
+  }
+}
+
+class SourceFingerprint {
+  const SourceFingerprint({
+    required this.identity,
+    required this.path,
+    required this.sizeBytes,
+    required this.modifiedAt,
+  });
+
+  final String identity;
+  final String path;
+  final int sizeBytes;
+  final DateTime modifiedAt;
+
+  bool sameVersion(SourceFingerprint other) =>
+      identity == other.identity &&
+      sizeBytes == other.sizeBytes &&
+      modifiedAt.isAtSameMomentAs(other.modifiedAt);
+
+  Map<String, dynamic> toJson() => {
+    'identity': identity,
+    'path': path,
+    'size_bytes': sizeBytes,
+    'modified_at': modifiedAt.toUtc().toIso8601String(),
+  };
+
+  factory SourceFingerprint.fromJson(Map<String, dynamic> json) =>
+      SourceFingerprint(
+        identity: json['identity'] as String? ?? json['path'] as String? ?? '',
+        path: json['path'] as String? ?? '',
+        sizeBytes: (json['size_bytes'] as num?)?.toInt() ?? 0,
+        modifiedAt:
+            _date(json['modified_at']) ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      );
+}
+
+class MonitoredFileRecord {
+  const MonitoredFileRecord({
+    required this.fingerprint,
+    required this.disposition,
+    required this.updatedAt,
+    this.jobId,
+  });
+
+  final SourceFingerprint fingerprint;
+  final MonitoredFileDisposition disposition;
+  final DateTime updatedAt;
+  final String? jobId;
+
+  MonitoredFileRecord copyWith({
+    SourceFingerprint? fingerprint,
+    MonitoredFileDisposition? disposition,
+    DateTime? updatedAt,
+    String? jobId,
+  }) => MonitoredFileRecord(
+    fingerprint: fingerprint ?? this.fingerprint,
+    disposition: disposition ?? this.disposition,
+    updatedAt: updatedAt ?? this.updatedAt,
+    jobId: jobId ?? this.jobId,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'fingerprint': fingerprint.toJson(),
+    'disposition': disposition.name,
+    'updated_at': updatedAt.toUtc().toIso8601String(),
+    if (jobId case final value?) 'job_id': value,
+  };
+
+  factory MonitoredFileRecord.fromJson(Map<String, dynamic> json) =>
+      MonitoredFileRecord(
+        fingerprint: SourceFingerprint.fromJson(
+          (json['fingerprint'] as Map?)?.cast<String, dynamic>() ?? const {},
+        ),
+        disposition:
+            _enumByName(MonitoredFileDisposition.values, json['disposition']) ??
+            MonitoredFileDisposition.dismissed,
+        updatedAt: _date(json['updated_at']) ?? DateTime.now().toUtc(),
+        jobId: json['job_id'] as String?,
+      );
+}
+
+class InboxMonitorStorage {
+  const InboxMonitorStorage({
+    this.config = const InboxMonitorConfig(),
+    this.records = const {},
+  });
+
+  final InboxMonitorConfig config;
+  final Map<String, MonitoredFileRecord> records;
+
+  InboxMonitorStorage copyWith({
+    InboxMonitorConfig? config,
+    Map<String, MonitoredFileRecord>? records,
+  }) => InboxMonitorStorage(
+    config: config ?? this.config,
+    records: records ?? this.records,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'version': 1,
+    'config': config.toJson(),
+    'records': {
+      for (final entry in records.entries) entry.key: entry.value.toJson(),
+    },
+  };
+
+  factory InboxMonitorStorage.fromJson(Map<String, dynamic>? json) {
+    final rawRecords = json?['records'];
+    final records = <String, MonitoredFileRecord>{};
+    if (rawRecords is Map) {
+      for (final entry in rawRecords.entries) {
+        if (entry.key is! String || entry.value is! Map) continue;
+        final record = MonitoredFileRecord.fromJson(
+          (entry.value as Map).cast<String, dynamic>(),
+        );
+        if (record.fingerprint.identity.isNotEmpty) {
+          records[entry.key as String] = record;
+        }
+      }
+    }
+    return InboxMonitorStorage(
+      config: InboxMonitorConfig.fromJson(
+        (json?['config'] as Map?)?.cast<String, dynamic>(),
+      ),
+      records: records,
+    );
+  }
+}
+
 class TranscriptionJob {
   const TranscriptionJob({
     required this.id,
@@ -1510,6 +1719,8 @@ class TranscriptionJob {
     this.displayTitle,
     this.groupId,
     this.tagIds = const {},
+    this.sourceOrigin = JobSourceOrigin.manual,
+    this.sourceFingerprint,
   });
 
   final String id;
@@ -1535,6 +1746,8 @@ class TranscriptionJob {
   final String? displayTitle;
   final String? groupId;
   final Set<String> tagIds;
+  final JobSourceOrigin sourceOrigin;
+  final SourceFingerprint? sourceFingerprint;
 
   bool get isBusy =>
       status.isActive ||
@@ -1567,6 +1780,8 @@ class TranscriptionJob {
     String? displayTitle,
     String? groupId,
     Set<String>? tagIds,
+    JobSourceOrigin? sourceOrigin,
+    SourceFingerprint? sourceFingerprint,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
@@ -1599,6 +1814,8 @@ class TranscriptionJob {
     displayTitle: clearDisplayTitle ? null : displayTitle ?? this.displayTitle,
     groupId: clearGroupId ? null : groupId ?? this.groupId,
     tagIds: tagIds ?? this.tagIds,
+    sourceOrigin: sourceOrigin ?? this.sourceOrigin,
+    sourceFingerprint: sourceFingerprint ?? this.sourceFingerprint,
   );
 
   Map<String, dynamic> toJson() => {
@@ -1627,6 +1844,9 @@ class TranscriptionJob {
     if (displayTitle case final value?) 'display_title': value,
     if (groupId case final value?) 'group_id': value,
     if (tagIds.isNotEmpty) 'tag_ids': tagIds.toList()..sort(),
+    'source_origin': sourceOrigin.name,
+    if (sourceFingerprint case final value?)
+      'source_fingerprint': value.toJson(),
   };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -1688,6 +1908,14 @@ class TranscriptionJob {
       tagIds: _strings(
         json['tag_ids'],
       ).map((value) => value.trim()).where((value) => value.isNotEmpty).toSet(),
+      sourceOrigin:
+          _enumByName(JobSourceOrigin.values, json['source_origin']) ??
+          JobSourceOrigin.manual,
+      sourceFingerprint: json['source_fingerprint'] is Map
+          ? SourceFingerprint.fromJson(
+              (json['source_fingerprint'] as Map).cast<String, dynamic>(),
+            )
+          : null,
     );
   }
 }

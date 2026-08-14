@@ -20,6 +20,7 @@ class AppPaths {
   Directory get temporary => Directory(p.join(root.path, 'temporary'));
   File get settings => File(p.join(root.path, 'settings.json'));
   File get libraryCatalog => File(p.join(root.path, 'library_catalog.json'));
+  File get inboxMonitor => File(p.join(root.path, 'inbox_monitor.json'));
 
   static Future<AppPaths> create() async {
     final support = await getApplicationSupportDirectory();
@@ -232,6 +233,31 @@ class JsonLibraryCatalogRepository implements LibraryCatalogRepository {
     paths.libraryCatalog,
     jsonEncode(catalog.toJson()),
   );
+}
+
+class JsonInboxMonitorRepository implements InboxMonitorRepository {
+  JsonInboxMonitorRepository(this.paths);
+
+  final AppPaths paths;
+
+  @override
+  Future<InboxMonitorStorage> load() async {
+    if (!await paths.inboxMonitor.exists()) {
+      return const InboxMonitorStorage();
+    }
+    try {
+      final data = jsonDecode(await paths.inboxMonitor.readAsString());
+      return InboxMonitorStorage.fromJson(
+        (data as Map).cast<String, dynamic>(),
+      );
+    } on Object {
+      return const InboxMonitorStorage();
+    }
+  }
+
+  @override
+  Future<void> save(InboxMonitorStorage storage) =>
+      _atomicFileWriter.write(paths.inboxMonitor, jsonEncode(storage.toJson()));
 }
 
 final _atomicFileWriter = _AtomicFileWriter();

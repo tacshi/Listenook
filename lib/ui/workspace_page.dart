@@ -81,28 +81,13 @@ class _EmptyWorkspace extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 22),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  FilledButton.icon(
-                    key: const Key('workspace-go-to-inbox'),
-                    onPressed: () => context
-                        .read<AppController>()
-                        .setDestination(AppDestination.inbox),
-                    icon: const Icon(Icons.inbox_rounded),
-                    label: Text(context.strings.t('go_to_inbox')),
-                  ),
-                  OutlinedButton.icon(
-                    key: const Key('workspace-go-to-library'),
-                    onPressed: () => context
-                        .read<AppController>()
-                        .setDestination(AppDestination.library),
-                    icon: const Icon(Icons.library_books_outlined),
-                    label: Text(context.strings.t('browse_library')),
-                  ),
-                ],
+              OutlinedButton.icon(
+                key: const Key('workspace-go-to-library'),
+                onPressed: () => context.read<AppController>().setDestination(
+                  AppDestination.library,
+                ),
+                icon: const Icon(Icons.library_books_outlined),
+                label: Text(context.strings.t('browse_library')),
               ),
             ],
           ),

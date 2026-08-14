@@ -70,12 +70,17 @@ meowstt_sign_app_bundle() {
     component_sign_args+=(--options runtime)
     if [[ "$mode" == "release" ]]; then component_sign_args+=(--timestamp); fi
   fi
+  local component_roots=("$app/Contents/Frameworks" "$app/Contents/MacOS")
+  if [[ -d "$app/Contents/Library/LoginItems" ]]; then
+    component_roots+=("$app/Contents/Library/LoginItems")
+  fi
   while IFS= read -r -d '' component; do
     codesign "${component_sign_args[@]}" "$component" || return 1
   done < <(
-    find "$app/Contents/Frameworks" "$app/Contents/MacOS" -depth \
+    find "${component_roots[@]}" -depth \
       \( -type d -name '*.framework' -o -type d -name '*.appex' \
-      -o -type d -name '*.xpc' -o -type f -name '*.dylib' \) -print0
+      -o -type d -name '*.xpc' -o -type d -name '*.app' \
+      -o -type f -name '*.dylib' \) -print0
   )
 
   local sign_args=(--force --sign "$identity" --entitlements "$entitlements")

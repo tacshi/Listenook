@@ -7,6 +7,7 @@ import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'job_actions.dart';
+import 'inbox_monitor_setup_dialog.dart';
 import 'transcript_export_dialog.dart';
 
 class InboxPage extends StatefulWidget {
@@ -54,6 +55,8 @@ class _InboxPageState extends State<InboxPage> {
                 ),
                 const SizedBox(height: 12),
               ],
+              const _InboxMonitorPanel(),
+              const SizedBox(height: 12),
               if (controller.inboxJobs.isEmpty)
                 Expanded(
                   child: _EmptyDropZone(
@@ -66,6 +69,137 @@ class _InboxPageState extends State<InboxPage> {
                 Expanded(child: _InboxBody(dragging: _dragging)),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InboxMonitorPanel extends StatelessWidget {
+  const _InboxMonitorPanel();
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.watch<AppController>();
+    if (!controller.inboxMonitorConfigured) {
+      final colors = Theme.of(context).colorScheme;
+      return Container(
+        key: const Key('inbox-monitor-setup-card'),
+        decoration: BoxDecoration(
+          color: colors.surfaceContainerLow,
+          border: Border.all(color: colors.outlineVariant),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+          child: Row(
+            children: [
+              Icon(
+                Icons.folder_copy_outlined,
+                size: 20,
+                color: colors.onSurfaceVariant,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  context.strings.t('inbox_monitor_inline_hint'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              TextButton.icon(
+                key: const Key('inbox-monitor-choose-folder'),
+                onPressed: () => showInboxMonitorSetupDialog(context),
+                icon: const Icon(Icons.tune_rounded, size: 18),
+                label: Text(context.strings.t('inbox_monitor_setup_action')),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final config = controller.inboxMonitorConfig;
+    final statusKey = switch (controller.inboxMonitorStatus) {
+      InboxMonitorStatus.scanning => 'inbox_monitor_scanning',
+      InboxMonitorStatus.paused => 'inbox_monitor_paused',
+      InboxMonitorStatus.unavailable => 'inbox_monitor_unavailable',
+      InboxMonitorStatus.error => 'inbox_monitor_error',
+      _ => 'inbox_monitor_active',
+    };
+    final statusColor = switch (controller.inboxMonitorStatus) {
+      InboxMonitorStatus.unavailable ||
+      InboxMonitorStatus.error => Theme.of(context).colorScheme.error,
+      InboxMonitorStatus.paused => Theme.of(context).colorScheme.tertiary,
+      _ => Colors.green,
+    };
+    final folder = config.folderPath.replaceAll('\\', '/').split('/').last;
+    final summary = context.strings
+        .t('inbox_monitor_status_summary')
+        .replaceFirst('{folder}', folder)
+        .replaceFirst('{types}', '${config.extensions.length}')
+        .replaceFirst('{count}', '${controller.monitoredWaitingCount}');
+    return Card(
+      key: const Key('inbox-monitor-status-card'),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            Icon(Icons.circle, size: 11, color: statusColor),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    context.strings.t(statusKey),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  Text(
+                    summary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              key: const Key('inbox-monitor-rescan'),
+              tooltip: context.strings.t('inbox_monitor_rescan'),
+              onPressed: config.paused ? null : controller.rescanInboxMonitor,
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+            TextButton.icon(
+              key: const Key('inbox-monitor-pause-resume'),
+              onPressed: () => controller.setInboxMonitorPaused(!config.paused),
+              icon: Icon(
+                config.paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+              ),
+              label: Text(
+                context.strings.t(
+                  config.paused
+                      ? 'inbox_monitor_resume'
+                      : 'inbox_monitor_pause',
+                ),
+              ),
+            ),
+            TextButton(
+              key: const Key('inbox-monitor-change'),
+              onPressed: () => showInboxMonitorSetupDialog(context),
+              child: Text(context.strings.t('inbox_monitor_change')),
+            ),
+            IconButton(
+              key: const Key('inbox-monitor-remove-folder'),
+              tooltip: context.strings.t('inbox_monitor_remove_folder'),
+              onPressed: controller.clearInboxMonitor,
+              icon: const Icon(Icons.folder_off_outlined),
+            ),
+          ],
         ),
       ),
     );
@@ -784,11 +918,30 @@ class _JobTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    job.displayName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          job.displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      if (job.sourceOrigin ==
+                          JobSourceOrigin.monitoredFolder) ...[
+                        const SizedBox(width: 6),
+                        Tooltip(
+                          message: context.strings.t('inbox_monitor_source'),
+                          child: Icon(
+                            Icons.folder_special_outlined,
+                            key: ValueKey('monitored-source-${job.id}'),
+                            size: 16,
+                            color: color.primary,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Text(

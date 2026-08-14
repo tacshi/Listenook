@@ -14,6 +14,14 @@ The package name is `meow_stt`. Its permanent desktop identity is
 
 - Recursive folder and multi-file drag/drop with hidden-file filtering and
   canonical-path deduplication.
+- An optional monitored Inbox folder that recursively discovers stable matching
+  media for review without uploading or transcribing it. A durable fingerprint
+  ledger prevents unchanged files from being rediscovered after restart or
+  history deletion; changed versions become eligible again.
+- A macOS menu-bar/Windows tray companion that keeps monitoring and active work
+  running after the configured app window closes, with pause, restore, Settings,
+  notification, and explicit Quit actions. Optional launch at login starts in
+  the background and is off by default.
 - libmpv validation for readability, audio streams, supported media, and the
   Soniox 300-minute limit. Inputs are limited to MP3, WAV, M4A, OGG, MP4, MKV,
   and AVI.
@@ -57,6 +65,12 @@ transcript tokens, original and translated edits, AI Brief drafts and evidence,
 generation progress, and only the remote IDs owned by that job—never media
 copies or API keys. Cleanup deletes only those owned Soniox
 file/transcription IDs.
+Inbox monitoring stores its folder configuration plus canonical path, byte
+size, modification time, disposition, and optional job ID in a separate atomic
+Application Support JSON file. It never moves, modifies, deletes, or uploads a
+monitored source. Discovery notifications are sent only while the window is
+hidden; pressing **Transcribe** remains the point at which media can leave the
+device.
 See [PRIVACY.md](PRIVACY.md).
 
 ## Development

@@ -1,11 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
+import 'package:tray_manager/tray_manager.dart' as tray;
 import 'package:window_manager/window_manager.dart';
 
+import '../core/models.dart';
+import '../data/desktop_runtime.dart';
 import '../l10n/strings.dart';
 import '../data/update_service.dart';
 import '../state/app_controller.dart';
@@ -24,7 +29,8 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> with WindowListener {
+class _AppShellState extends State<AppShell>
+    with WindowListener, tray.TrayListener, WidgetsBindingObserver {
   static const _nativeNavigationChannel = MethodChannel(
     'app.meowstt.desktop/navigation',
   );
@@ -36,8 +42,16 @@ class _AppShellState extends State<AppShell> with WindowListener {
   bool _closeDialogOpen = false;
   bool _windowClosing = false;
   bool _windowFullscreen = false;
+  bool _windowHidden = false;
+  bool _trayReady = false;
+  String? _lastTraySignature;
+  Timer? _traySyncTimer;
+  Timer? _notificationTimer;
+  int _pendingDiscoveries = 0;
+  Set<String> _knownMonitoredJobs = const {};
   late final ReviewFullscreenController _fullscreenController;
   late final AppController _controller;
+  DesktopRuntime? _desktopRuntime;
   UpdateService? _updates;
 
   @override
@@ -46,30 +60,224 @@ class _AppShellState extends State<AppShell> with WindowListener {
     _fullscreenController =
         widget.reviewController ?? ReviewFullscreenController();
     _controller = context.read<AppController>();
+    _desktopRuntime = Provider.of<DesktopRuntime?>(context, listen: false);
     _updates = Provider.of<UpdateService?>(context, listen: false);
+    _knownMonitoredJobs = _monitoredJobIds();
+    _controller.addListener(_handleControllerChange);
+    WidgetsBinding.instance.addObserver(this);
     windowManager.addListener(this);
+    tray.trayManager.addListener(this);
     _nativeNavigationChannel.setMethodCallHandler(_handleNativeNavigation);
     unawaited(windowManager.setPreventClose(true));
     unawaited(_syncWindowFullscreen());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showOnboarding();
       unawaited(_updates?.start());
+      unawaited(_initializeDesktopRuntime());
+      _scheduleTraySync();
     });
   }
 
   @override
   void dispose() {
+    _traySyncTimer?.cancel();
+    _notificationTimer?.cancel();
+    _controller.removeListener(_handleControllerChange);
+    WidgetsBinding.instance.removeObserver(this);
     windowManager.removeListener(this);
+    tray.trayManager.removeListener(this);
     _nativeNavigationChannel.setMethodCallHandler(null);
     super.dispose();
   }
 
   Future<Object?> _handleNativeNavigation(MethodCall call) async {
+    if (call.method == 'showInbox') {
+      await _restoreInbox();
+      return null;
+    }
     if (call.method == 'showSettings') {
-      await _setDestination(AppDestination.settings);
+      await _restoreWindow(AppDestination.settings);
+      return null;
+    }
+    if (call.method == 'requestQuit') {
+      await _requestQuit();
       return null;
     }
     throw MissingPluginException('Unknown native navigation: ${call.method}');
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _controller.inboxMonitorConfigured) {
+      unawaited(_controller.rescanInboxMonitor());
+    }
+  }
+
+  Set<String> _monitoredJobIds() => _controller.inboxJobs
+      .where((job) => job.sourceOrigin == JobSourceOrigin.monitoredFolder)
+      .map((job) => job.id)
+      .toSet();
+
+  void _handleControllerChange() {
+    if (!mounted) return;
+    final current = _monitoredJobIds();
+    final discovered = current.difference(_knownMonitoredJobs).length;
+    _knownMonitoredJobs = current;
+    if (discovered > 0 && _windowHidden) {
+      _pendingDiscoveries += discovered;
+      _notificationTimer?.cancel();
+      _notificationTimer = Timer(
+        const Duration(seconds: 1),
+        _showDiscoveryNotification,
+      );
+    }
+    _scheduleTraySync();
+  }
+
+  Future<void> _initializeDesktopRuntime() async {
+    await _desktopRuntime?.initialize(onNotificationSelected: _restoreInbox);
+    try {
+      _windowHidden = !await windowManager.isVisible();
+    } on Object {
+      // The window channel is unavailable in widget tests.
+    }
+  }
+
+  void _scheduleTraySync() {
+    _traySyncTimer?.cancel();
+    _traySyncTimer = Timer(const Duration(milliseconds: 100), _syncTray);
+  }
+
+  Future<void> _syncTray() async {
+    if (!mounted) return;
+    final controller = _controller;
+    final strings = context.strings;
+    if (!controller.inboxMonitorConfig.showTrayIcon) {
+      if (_trayReady) {
+        try {
+          await tray.trayManager.destroy();
+        } on Object {
+          // Desktop plugins are intentionally unavailable in widget tests.
+        }
+      }
+      _trayReady = false;
+      _lastTraySignature = null;
+      return;
+    }
+    final config = controller.inboxMonitorConfig;
+    final signature = <Object?>[
+      config.folderPath,
+      config.paused,
+      controller.inboxMonitorStatus,
+      controller.monitoredWaitingCount,
+      strings.isZh,
+    ].join('|');
+    if (_trayReady && signature == _lastTraySignature) return;
+    _lastTraySignature = signature;
+    final configured = controller.inboxMonitorConfigured;
+    final folder = configured ? p.basename(config.folderPath) : '';
+    final status = switch (controller.inboxMonitorStatus) {
+      InboxMonitorStatus.scanning => strings.t('inbox_monitor_scanning'),
+      InboxMonitorStatus.paused => strings.t('inbox_monitor_paused'),
+      InboxMonitorStatus.unconfigured => strings.t(
+        'inbox_monitor_not_configured',
+      ),
+      InboxMonitorStatus.unavailable => strings.t('inbox_monitor_unavailable'),
+      InboxMonitorStatus.error => strings.t('inbox_monitor_error'),
+      _ => strings.t('inbox_monitor_active'),
+    };
+    try {
+      if (!_trayReady) {
+        await tray.trayManager.setIcon(
+          Platform.isWindows
+              ? 'assets/branding/tray/meowstt-tray.ico'
+              : 'assets/branding/tray/meowstt-tray-template.png',
+          isTemplate: Platform.isMacOS,
+          iconSize: 18,
+        );
+        await tray.trayManager.setToolTip('MeowSTT');
+      }
+      await tray.trayManager.setContextMenu(
+        tray.Menu(
+          items: [
+            tray.MenuItem(
+              key: 'status',
+              label: configured
+                  ? '$folder · $status · ${controller.monitoredWaitingCount} ${strings.t('inbox')}'
+                  : status,
+              disabled: true,
+            ),
+            tray.MenuItem.separator(),
+            tray.MenuItem(
+              key: 'open-inbox',
+              label: strings.t('tray_open_inbox'),
+            ),
+            if (configured)
+              tray.MenuItem(
+                key: 'toggle-monitor',
+                label: strings.t(
+                  config.paused
+                      ? 'inbox_monitor_resume'
+                      : 'inbox_monitor_pause',
+                ),
+              ),
+            tray.MenuItem(
+              key: 'settings',
+              label: strings.t('tray_open_settings'),
+            ),
+            tray.MenuItem.separator(),
+            tray.MenuItem(key: 'quit', label: strings.t('tray_quit')),
+          ],
+        ),
+      );
+      _trayReady = true;
+    } on Object {
+      _trayReady = false;
+    }
+  }
+
+  Future<void> _showDiscoveryNotification() async {
+    if (!_windowHidden || _pendingDiscoveries == 0 || !mounted) return;
+    final count = _pendingDiscoveries;
+    _pendingDiscoveries = 0;
+    await _desktopRuntime?.showDiscoveryNotification(
+      title: context.strings.t('monitor_notification_title'),
+      body: context.strings
+          .t('monitor_notification_body')
+          .replaceFirst('{count}', '$count'),
+    );
+  }
+
+  @override
+  void onTrayIconMouseDown() {
+    if (Platform.isWindows) {
+      unawaited(_restoreInbox());
+    } else {
+      unawaited(tray.trayManager.popUpContextMenu());
+    }
+  }
+
+  @override
+  void onTrayMenuItemClick(tray.MenuItem menuItem) {
+    switch (menuItem.key) {
+      case 'open-inbox':
+        unawaited(_restoreInbox());
+        return;
+      case 'toggle-monitor':
+        unawaited(
+          _controller.setInboxMonitorPaused(
+            !_controller.inboxMonitorConfig.paused,
+          ),
+        );
+        return;
+      case 'settings':
+        unawaited(_restoreWindow(AppDestination.settings));
+        return;
+      case 'quit':
+        unawaited(_requestQuit());
+        return;
+    }
   }
 
   Future<void> _syncWindowFullscreen() async {
@@ -125,6 +333,41 @@ class _AppShellState extends State<AppShell> with WindowListener {
 
   @override
   Future<void> onWindowClose() async {
+    if (_controller.inboxMonitorConfig.showTrayIcon) {
+      await _hideToTray();
+      return;
+    }
+    await _requestQuit();
+  }
+
+  Future<void> _hideToTray() async {
+    try {
+      await _fullscreenController.exit();
+      await _fullscreenController.shutdownMedia();
+      await windowManager.setSkipTaskbar(true);
+      await windowManager.hide();
+      _windowHidden = true;
+      _scheduleTraySync();
+    } on Object {
+      // The window channel is unavailable in widget tests.
+    }
+  }
+
+  Future<void> _restoreInbox() => _restoreWindow(AppDestination.inbox);
+
+  Future<void> _restoreWindow(AppDestination destination) async {
+    await _setDestination(destination);
+    try {
+      await windowManager.setSkipTaskbar(false);
+      await windowManager.show();
+      await windowManager.focus();
+      _windowHidden = false;
+    } on Object {
+      // The window channel is unavailable in widget tests.
+    }
+  }
+
+  Future<void> _requestQuit() async {
     final controller = _controller;
     if (!controller.hasActiveWork) {
       await _destroyWindow();
@@ -167,6 +410,14 @@ class _AppShellState extends State<AppShell> with WindowListener {
     try {
       await _fullscreenController.exit();
       await _fullscreenController.shutdownMedia();
+      if (_trayReady) {
+        try {
+          await tray.trayManager.destroy();
+        } on Object {
+          // Desktop plugins are intentionally unavailable in widget tests.
+        }
+      }
+      await _controller.shutdown();
       await windowManager.setPreventClose(false);
       await windowManager.close();
     } on Object {

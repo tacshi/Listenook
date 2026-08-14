@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'core/models.dart';
+import 'data/desktop_runtime.dart';
 import 'data/update_service.dart';
 import 'l10n/strings.dart';
 import 'state/app_controller.dart';
@@ -14,15 +15,18 @@ class MeowSttApp extends StatelessWidget {
     super.key,
     required this.controller,
     required this.updates,
+    required this.desktopRuntime,
   });
   final AppController controller;
   final UpdateService updates;
+  final DesktopRuntime desktopRuntime;
 
   @override
   Widget build(BuildContext context) => MultiProvider(
     providers: [
       ChangeNotifierProvider.value(value: controller),
       ChangeNotifierProvider.value(value: updates),
+      Provider.value(value: desktopRuntime),
     ],
     child: Consumer<AppController>(
       builder: (context, state, _) => MaterialApp(

@@ -796,13 +796,15 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final aspect = _videoAspectRatio.isFinite && _videoAspectRatio > 0
         ? _videoAspectRatio
         : 16 / 9;
-    final maximumViewportHeight =
-        (constraints.maxHeight * .52 - VideoTransport.height)
+    final availableViewportHeight =
+        (constraints.maxHeight - VideoTransport.height - 1)
             .clamp(0.0, double.infinity)
             .toDouble();
-    final viewportHeight = (leftWidth / aspect)
-        .clamp(0.0, maximumViewportHeight)
-        .toDouble();
+    final viewportHeight = videoViewportHeight(
+      width: leftWidth,
+      aspectRatio: aspect,
+      availableHeight: availableViewportHeight,
+    );
     final mediaHeight = viewportHeight + VideoTransport.height;
     final sourcePane = Column(
       key: const Key('video-ai-brief-source-column'),
@@ -997,89 +999,56 @@ class _TranscriptReviewState extends State<TranscriptReview>
                       ? 0
                       : .5,
                   scrollDirection: Axis.vertical,
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
                   itemCount: segments.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 4),
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (context, index) {
                     final segment = segments[index];
-                    return Column(
-                      children: [
-                        if (_viewMode != TranslationViewMode.translated)
-                          TranscriptSegmentEditor(
-                            key: ValueKey(segment.id),
-                            segment: segment,
-                            tokens: _tokensBySegment[segment.id] ?? const [],
-                            positionMs: _position.inMilliseconds,
-                            isCurrent: query.isEmpty && index == currentIndex,
-                            query: query,
-                            speakerName: context.strings.speakerName(
-                              document.speakerName(segment.speaker),
-                            ),
-                            showSpeaker: controller.settings.showSpeakers,
-                            showTimestamp: controller.settings.showTimestamps,
-                            highlightTranslated:
-                                job.translationState.status.isActive &&
-                                segment.hasTranslation,
-                            isEditing: _editingSegmentId == segment.id,
-                            isRepeating: _repeatingSegmentId == segment.id,
-                            onToggleRepeat: _canRepeat(segment)
-                                ? () => _toggleSentenceRepeat(segment)
-                                : null,
-                            onSeek: ({required reason}) => unawaited(
-                              _seek(
-                                Duration(milliseconds: segment.startMs),
-                                reason: reason,
-                              ),
-                            ),
-                            onEdit: () => _startEditing(segment.id),
-                            onCancel: () => _cancelEditing(segment.id),
-                            onSave: (text) => _saveSegment(segment.id, text),
-                          ),
-                        if (_viewMode != TranslationViewMode.original)
-                          _TranslatedSegmentEditor(
-                            key: ValueKey('translated-${segment.id}'),
-                            segment: segment,
-                            isCurrent: query.isEmpty && index == currentIndex,
-                            query: query,
-                            showTimestamp: controller.settings.showTimestamps,
-                            highlightTranslated:
-                                job.translationState.status.isActive &&
-                                segment.hasTranslation,
-                            isEditing:
-                                _editingTranslationSegmentId == segment.id,
-                            showRepeatAction:
-                                _viewMode == TranslationViewMode.translated,
-                            isRepeating:
-                                _viewMode == TranslationViewMode.translated &&
-                                _repeatingSegmentId == segment.id,
-                            onToggleRepeat:
-                                _viewMode == TranslationViewMode.translated &&
-                                    _canRepeat(segment)
-                                ? () => _toggleSentenceRepeat(segment)
-                                : null,
-                            onSeek: ({required reason}) => unawaited(
-                              _seek(
-                                Duration(milliseconds: segment.startMs),
-                                reason: reason,
-                              ),
-                            ),
-                            onEdit: () => _startTranslationEditing(segment.id),
-                            onCancel: () =>
-                                _cancelTranslationEditing(segment.id),
-                            onSave: (text) =>
-                                _saveTranslation(segment.id, text),
-                            onRetranslate:
-                                job.translationState.status.isActive ||
-                                    !controller.translationConfigured
-                                ? null
-                                : () => context
-                                      .read<AppController>()
-                                      .retranslateSegment(
-                                        widget.jobId,
-                                        segment.id,
-                                      ),
-                          ),
-                      ],
+                    return _TranscriptSegmentGroup(
+                      key: ValueKey('group-${segment.id}'),
+                      segment: segment,
+                      tokens: _tokensBySegment[segment.id] ?? const [],
+                      positionMs: _position.inMilliseconds,
+                      isCurrent: query.isEmpty && index == currentIndex,
+                      viewMode: _viewMode,
+                      query: query,
+                      speakerName: context.strings.speakerName(
+                        document.speakerName(segment.speaker),
+                      ),
+                      showSpeaker: controller.settings.showSpeakers,
+                      showTimestamp: controller.settings.showTimestamps,
+                      highlightTranslated:
+                          job.translationState.status.isActive &&
+                          segment.hasTranslation,
+                      isEditingOriginal: _editingSegmentId == segment.id,
+                      isEditingTranslation:
+                          _editingTranslationSegmentId == segment.id,
+                      isRepeating: _repeatingSegmentId == segment.id,
+                      onToggleRepeat: _canRepeat(segment)
+                          ? () => _toggleSentenceRepeat(segment)
+                          : null,
+                      onSeek: ({required reason}) => unawaited(
+                        _seek(
+                          Duration(milliseconds: segment.startMs),
+                          reason: reason,
+                        ),
+                      ),
+                      onEditOriginal: () => _startEditing(segment.id),
+                      onCancelOriginal: () => _cancelEditing(segment.id),
+                      onSaveOriginal: (text) => _saveSegment(segment.id, text),
+                      onEditTranslation: () =>
+                          _startTranslationEditing(segment.id),
+                      onCancelTranslation: () =>
+                          _cancelTranslationEditing(segment.id),
+                      onSaveTranslation: (text) =>
+                          _saveTranslation(segment.id, text),
+                      onRetranslate:
+                          job.translationState.status.isActive ||
+                              !controller.translationConfigured
+                          ? null
+                          : () => context
+                                .read<AppController>()
+                                .retranslateSegment(widget.jobId, segment.id),
                     );
                   },
                 ),
@@ -1955,9 +1924,10 @@ class _AiBriefPane extends StatelessWidget {
               if (brief.overview.trim().isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _AiBriefSectionCard(
+                  id: 'overview',
                   title: context.strings.t('overview'),
                   icon: Icons.summarize_outlined,
-                  onCopy: () => _copyBriefText(context, brief.overview),
+                  onEdit: () => _editOverview(context, job),
                   onRegenerate: state.status.isActive
                       ? null
                       : () => _regenerateAiSection(
@@ -1975,14 +1945,6 @@ class _AiBriefPane extends StatelessWidget {
                         segmentIds: brief.overviewEvidenceSegmentIds,
                         onEvidence: onEvidence,
                       ),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton.icon(
-                          onPressed: () => _editOverview(context, job),
-                          icon: const Icon(Icons.edit_outlined, size: 18),
-                          label: Text(context.strings.t('edit')),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -1990,18 +1952,9 @@ class _AiBriefPane extends StatelessWidget {
               if (brief.chapters.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _AiBriefSectionCard(
+                  id: 'chapters',
                   title: context.strings.t('chapters'),
                   icon: Icons.view_timeline_outlined,
-                  onCopy: () => _copyBriefText(
-                    context,
-                    brief.chapters
-                        .map(
-                          (item) =>
-                              '${_evidenceRange(document, item.evidenceSegmentIds)} '
-                              '${item.title}\n${item.summary}',
-                        )
-                        .join('\n\n'),
-                  ),
                   onRegenerate: state.status.isActive
                       ? null
                       : () => _regenerateAiSection(
@@ -2026,15 +1979,9 @@ class _AiBriefPane extends StatelessWidget {
                 if (brief.insights.any((item) => item.type == type)) ...[
                   const SizedBox(height: 12),
                   _AiBriefSectionCard(
+                    id: 'insight-${type.name}',
                     title: _insightTitle(context, type),
                     icon: _insightIcon(type),
-                    onCopy: () => _copyBriefText(
-                      context,
-                      brief.insights
-                          .where((item) => item.type == type)
-                          .map((item) => '- ${item.text}')
-                          .join('\n'),
-                    ),
                     onRegenerate: state.status.isActive
                         ? null
                         : () => _regenerateAiSection(
@@ -2068,18 +2015,16 @@ class _AiBriefPane extends StatelessWidget {
               if (brief.languageNotes.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _AiBriefSectionCard(
+                  id: 'language-notes',
                   title: context.strings.t('language_notes'),
                   icon: Icons.menu_book_outlined,
-                  onCopy: () => _copyBriefText(
-                    context,
-                    brief.languageNotes
-                        .map(
-                          (note) =>
-                              '${_languageNoteKindLabel(context, note.kind)}: '
-                              '${note.term}\n${note.explanation}\n'
-                              '“${note.sourceExcerpt}”',
-                        )
-                        .join('\n\n'),
+                  headerMeta: Chip(
+                    avatar: const Icon(Icons.trending_up_rounded, size: 16),
+                    label: Text(
+                      _learningLevelLabel(context, brief.learningLevel),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   onRegenerate: state.status.isActive
                       ? null
@@ -2091,37 +2036,6 @@ class _AiBriefPane extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: [
-                          Chip(
-                            avatar: const Icon(
-                              Icons.language_rounded,
-                              size: 16,
-                            ),
-                            label: Text(
-                              brief.learningLanguage == null
-                                  ? context.strings.t(
-                                      'ai_brief_learning_language_auto',
-                                    )
-                                  : context.strings.translationLanguageName(
-                                      brief.learningLanguage!,
-                                    ),
-                            ),
-                          ),
-                          Chip(
-                            avatar: const Icon(
-                              Icons.trending_up_rounded,
-                              size: 16,
-                            ),
-                            label: Text(
-                              _learningLevelLabel(context, brief.learningLevel),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
                       for (final kind in AiLanguageNoteKind.values)
                         if (brief.languageNotes.any(
                           (item) => item.kind == kind,
@@ -2283,56 +2197,151 @@ class _AiBriefProgress extends StatelessWidget {
   }
 }
 
-class _AiBriefSectionCard extends StatelessWidget {
+class _AiBriefSectionCard extends StatefulWidget {
   const _AiBriefSectionCard({
+    required this.id,
     required this.title,
     required this.icon,
-    required this.onCopy,
+    this.headerMeta,
+    this.onEdit,
     required this.onRegenerate,
     required this.child,
   });
 
+  final String id;
   final String title;
   final IconData icon;
-  final VoidCallback onCopy;
+  final Widget? headerMeta;
+  final VoidCallback? onEdit;
   final VoidCallback? onRegenerate;
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Card(
-    margin: EdgeInsets.zero,
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 8, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+  State<_AiBriefSectionCard> createState() => _AiBriefSectionCardState();
+}
+
+class _AiBriefSectionCardState extends State<_AiBriefSectionCard> {
+  bool _hovered = false;
+  bool _menuOpen = false;
+  bool _actionsFocused = false;
+
+  bool get _showActions => _hovered || _menuOpen || _actionsFocused;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: Card(
+      key: ValueKey('ai-brief-section-${widget.id}'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              key: ValueKey('ai-brief-section-header-${widget.id}'),
+              children: [
+                Icon(widget.icon, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          widget.title,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (widget.headerMeta != null) ...[
+                        const SizedBox(width: 10),
+                        Flexible(
+                          flex: 2,
+                          child: KeyedSubtree(
+                            key: ValueKey('ai-brief-section-meta-${widget.id}'),
+                            child: widget.headerMeta!,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-              ),
-              IconButton(
-                tooltip: context.strings.t('copy_section'),
-                onPressed: onCopy,
-                icon: const Icon(Icons.copy_outlined, size: 19),
-              ),
-              IconButton(
-                tooltip: context.strings.t('regenerate_section'),
-                onPressed: onRegenerate,
-                icon: const Icon(Icons.refresh_rounded, size: 20),
-              ),
-            ],
-          ),
-          const Divider(height: 8),
-          Padding(padding: const EdgeInsets.fromLTRB(4, 8, 6, 0), child: child),
-        ],
+                if (widget.onEdit != null || widget.onRegenerate != null)
+                  Focus(
+                    onFocusChange: (value) =>
+                        setState(() => _actionsFocused = value),
+                    child: AnimatedOpacity(
+                      key: ValueKey('ai-brief-section-actions-${widget.id}'),
+                      opacity: _showActions ? 1 : 0,
+                      duration: const Duration(milliseconds: 120),
+                      child: IgnorePointer(
+                        ignoring: !_showActions,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (widget.onEdit != null)
+                              IconButton(
+                                key: ValueKey(
+                                  'ai-brief-section-edit-${widget.id}',
+                                ),
+                                tooltip: context.strings.t('edit'),
+                                onPressed: widget.onEdit,
+                                icon: const Icon(Icons.edit_outlined, size: 19),
+                              ),
+                            if (widget.onRegenerate != null)
+                              PopupMenuButton<String>(
+                                key: ValueKey(
+                                  'ai-brief-section-menu-${widget.id}',
+                                ),
+                                tooltip: context.strings.t('more_actions'),
+                                onOpened: () =>
+                                    setState(() => _menuOpen = true),
+                                onCanceled: () =>
+                                    setState(() => _menuOpen = false),
+                                onSelected: (value) {
+                                  setState(() => _menuOpen = false);
+                                  if (value == 'regenerate') {
+                                    widget.onRegenerate?.call();
+                                  }
+                                },
+                                itemBuilder: (context) => [
+                                  PopupMenuItem(
+                                    value: 'regenerate',
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.refresh_rounded,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            context.strings.t(
+                                              'regenerate_section',
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const Divider(height: 8),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 6, 0),
+              child: widget.child,
+            ),
+          ],
+        ),
       ),
     ),
   );
@@ -2496,7 +2505,7 @@ class _AiInsightTile extends StatelessWidget {
   );
 }
 
-class _AiLanguageNoteTile extends StatelessWidget {
+class _AiLanguageNoteTile extends StatefulWidget {
   const _AiLanguageNoteTile({
     required this.job,
     required this.document,
@@ -2510,80 +2519,114 @@ class _AiLanguageNoteTile extends StatelessWidget {
   final Future<void> Function(String) onEvidence;
 
   @override
-  Widget build(BuildContext context) => Card.outlined(
-    key: ValueKey('ai-language-note-${note.id}'),
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  note.term,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+  State<_AiLanguageNoteTile> createState() => _AiLanguageNoteTileState();
+}
+
+class _AiLanguageNoteTileState extends State<_AiLanguageNoteTile> {
+  bool _hovered = false;
+  bool _menuOpen = false;
+  bool _menuFocused = false;
+
+  bool get _showMenu => _hovered || _menuOpen || _menuFocused;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: Card.outlined(
+      key: ValueKey('ai-language-note-${widget.note.id}'),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.note.term,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
-              ),
-              PopupMenuButton<String>(
-                key: ValueKey('ai-language-note-menu-${note.id}'),
-                onSelected: (value) {
-                  if (value == 'edit') {
-                    _editLanguageNote(context, job, note);
-                  }
-                  if (value == 'delete') {
-                    context.read<AppController>().deleteAiLanguageNote(
-                      job.id,
-                      note.id,
-                    );
-                  }
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    value: 'edit',
-                    child: Text(context.strings.t('edit_item')),
+                Focus(
+                  onFocusChange: (value) =>
+                      setState(() => _menuFocused = value),
+                  child: AnimatedOpacity(
+                    key: ValueKey(
+                      'ai-language-note-menu-reveal-${widget.note.id}',
+                    ),
+                    opacity: _showMenu ? 1 : 0,
+                    duration: const Duration(milliseconds: 120),
+                    child: IgnorePointer(
+                      ignoring: !_showMenu,
+                      child: PopupMenuButton<String>(
+                        key: ValueKey(
+                          'ai-language-note-menu-${widget.note.id}',
+                        ),
+                        onOpened: () => setState(() => _menuOpen = true),
+                        onCanceled: () => setState(() => _menuOpen = false),
+                        onSelected: (value) {
+                          setState(() => _menuOpen = false);
+                          if (value == 'edit') {
+                            _editLanguageNote(context, widget.job, widget.note);
+                          }
+                          if (value == 'delete') {
+                            context.read<AppController>().deleteAiLanguageNote(
+                              widget.job.id,
+                              widget.note.id,
+                            );
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          PopupMenuItem(
+                            value: 'edit',
+                            child: Text(context.strings.t('edit_item')),
+                          ),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Text(context.strings.t('delete_item')),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                  PopupMenuItem(
-                    value: 'delete',
-                    child: Text(context.strings.t('delete_item')),
+                ),
+              ],
+            ),
+            if (widget.note.explanation.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(widget.note.explanation),
+            ],
+            if (widget.note.sourceExcerpt.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
                   ),
-                ],
+                  child: Text(
+                    '“${widget.note.sourceExcerpt}”',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
               ),
             ],
-          ),
-          if (note.explanation.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(note.explanation),
-          ],
-          if (note.sourceExcerpt.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                child: Text(
-                  '“${note.sourceExcerpt}”',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic),
-                ),
-              ),
+            const SizedBox(height: 8),
+            _EvidenceChips(
+              document: widget.document,
+              segmentIds: widget.note.evidenceSegmentIds,
+              onEvidence: widget.onEvidence,
             ),
           ],
-          const SizedBox(height: 8),
-          _EvidenceChips(
-            document: document,
-            segmentIds: note.evidenceSegmentIds,
-            onEvidence: onEvidence,
-          ),
-        ],
+        ),
       ),
     ),
   );
@@ -2609,8 +2652,8 @@ class _EvidenceChips extends StatelessWidget {
         .toList();
     if (evidence.isEmpty) return const SizedBox.shrink();
     return Wrap(
-      spacing: 6,
-      runSpacing: 4,
+      spacing: 4,
+      runSpacing: 3,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Text(
@@ -2620,8 +2663,19 @@ class _EvidenceChips extends StatelessWidget {
         for (final item in evidence)
           ActionChip(
             key: ValueKey('ai-evidence-${item.id}'),
-            avatar: const Icon(Icons.play_arrow_rounded, size: 16),
-            label: Text(formatClock(item.segment!.startMs)),
+            avatarBoxConstraints: const BoxConstraints.tightFor(
+              width: 14,
+              height: 14,
+            ),
+            avatar: const Icon(Icons.play_arrow_rounded, size: 14),
+            label: Text(
+              formatClock(item.segment!.startMs),
+              style: Theme.of(context).textTheme.labelSmall,
+            ),
+            padding: EdgeInsets.zero,
+            labelPadding: const EdgeInsets.only(left: 2, right: 6),
+            visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             onPressed: () => onEvidence(item.id),
           ),
       ],
@@ -3038,8 +3092,6 @@ enum _TranscriptMoreAction {
   export,
 }
 
-enum _AiBriefMoreAction { copy, export }
-
 enum _ReviewToolbarRole { global, transcript, aiBrief }
 
 class _UnifiedReviewToolbar extends StatelessWidget {
@@ -3063,6 +3115,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   static const _mediumBreakpoint = 700.0;
   static const _paneFullBreakpoint = 700.0;
   static const _paneMediumBreakpoint = 520.0;
+  static const _paneDirectActionsBreakpoint = 400.0;
 
   final _ReviewToolbarRole role;
   final TranscriptionJob job;
@@ -3138,25 +3191,23 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           if (searchVisible) return _buildPaneSearchRow(context);
           final full = constraints.maxWidth >= _paneFullBreakpoint;
           final medium = constraints.maxWidth >= _paneMediumBreakpoint;
+          final showDirectActions =
+              constraints.maxWidth >= _paneDirectActionsBreakpoint;
           return Row(
             key: const Key('transcript-pane-toolbar-row'),
             children: [
-              Expanded(
-                child: Text(
-                  context.strings.t('transcript'),
-                  key: const Key('transcript-pane-title'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              if (_translationStarted && medium)
+                _TranslationViewDropdown(
+                  value: viewMode,
+                  compact: !full,
+                  onChanged: onViewModeChanged,
                 ),
-              ),
+              const Spacer(),
               _buildTranscriptActions(
                 context,
                 controller,
-                full: full,
                 medium: medium,
+                showDirectActions: showDirectActions,
               ),
             ],
           );
@@ -3173,28 +3224,22 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     height: 52,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: LayoutBuilder(
-        builder: (context, constraints) => Row(
-          key: const Key('ai-brief-pane-toolbar-row'),
-          children: [
-            Expanded(
-              child: Text(
-                context.strings.t('ai_brief'),
-                key: const Key('ai-brief-pane-title'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-              ),
+      child: Row(
+        key: const Key('ai-brief-pane-toolbar-row'),
+        children: [
+          Expanded(
+            child: Text(
+              context.strings.t('ai_brief'),
+              key: const Key('ai-brief-pane-title'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
-            _buildAiBriefActions(
-              context,
-              controller,
-              full: constraints.maxWidth >= 480,
-            ),
-          ],
-        ),
+          ),
+          _buildAiBriefActions(context, controller),
+        ],
       ),
     ),
   );
@@ -3267,8 +3312,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   Widget _buildTranscriptActions(
     BuildContext context,
     AppController controller, {
-    required bool full,
     required bool medium,
+    required bool showDirectActions,
   }) {
     final settings = controller.settings;
     return Row(
@@ -3282,7 +3327,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.search_rounded),
         ),
-        if (full) ...[
+        if (showDirectActions) ...[
           IconButton(
             key: const Key('toggle-speaker-labels'),
             tooltip: context.strings.t('speaker_labels'),
@@ -3312,22 +3357,43 @@ class _UnifiedReviewToolbar extends StatelessWidget {
             selectedIcon: const Icon(Icons.schedule_rounded),
           ),
         ],
-        if (_translationStarted && medium) ...[
-          const SizedBox(width: 4),
-          _TranslationViewDropdown(
-            value: viewMode,
-            compact: !full,
-            onChanged: onViewModeChanged,
-          ),
-        ],
         _focusButton(context),
         if (job.translationState.status.isActive)
           _TranslationActionIconButton(job: job, controller: controller),
+        if (showDirectActions) ...[
+          IconButton(
+            key: const Key('copy-transcript-toolbar'),
+            tooltip: context.strings.t('copy'),
+            onPressed: () => _runTranscriptMoreAction(
+              context,
+              controller,
+              settings,
+              _TranscriptMoreAction.copy,
+            ),
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.copy_all_outlined),
+          ),
+          IconButton(
+            key: const Key('export-transcript-toolbar'),
+            tooltip: context.strings.t('export'),
+            onPressed: () => _runTranscriptMoreAction(
+              context,
+              controller,
+              settings,
+              _TranscriptMoreAction.export,
+            ),
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.ios_share_rounded),
+          ),
+        ],
         _transcriptMoreMenu(
           context,
           controller,
-          includeViewToggles: !full,
+          includeViewToggles: !showDirectActions,
           includeViewMode: !medium,
+          includeDocumentActions: !showDirectActions,
         ),
       ],
     );
@@ -3347,6 +3413,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     AppController controller, {
     required bool includeViewToggles,
     required bool includeViewMode,
+    required bool includeDocumentActions,
   }) {
     final settings = controller.settings;
     final translationAction = _translationToolbarAction(
@@ -3358,8 +3425,15 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     final translateIcon = _translationStarted
         ? _translationToolbarActionIcon(translationAction)
         : Icons.translate_rounded;
-    final entries = <PopupMenuEntry<_TranscriptMoreAction>>[
-      if (includeViewToggles) ...[
+    final entries = <PopupMenuEntry<_TranscriptMoreAction>>[];
+    void addSection(List<PopupMenuEntry<_TranscriptMoreAction>> section) {
+      if (section.isEmpty) return;
+      if (entries.isNotEmpty) entries.add(const PopupMenuDivider());
+      entries.addAll(section);
+    }
+
+    if (includeViewToggles) {
+      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
         CheckedPopupMenuItem(
           key: const Key('more-toggle-speakers'),
           value: _TranscriptMoreAction.toggleSpeakers,
@@ -3372,9 +3446,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           checked: settings.showTimestamps,
           child: Text(context.strings.t('timestamps')),
         ),
-      ],
-      if (includeViewMode && _translationStarted) ...[
-        if (includeViewToggles) const PopupMenuDivider(),
+      ]);
+    }
+    if (includeViewMode && _translationStarted) {
+      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
         CheckedPopupMenuItem(
           key: const Key('translation-mode-original-menu'),
           value: _TranscriptMoreAction.original,
@@ -3393,9 +3468,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           checked: viewMode == TranslationViewMode.bilingual,
           child: Text(context.strings.t('bilingual')),
         ),
-      ],
-      if (job.translationState.status.isActive == false) ...[
-        const PopupMenuDivider(),
+      ]);
+    }
+    if (job.translationState.status.isActive == false) {
+      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
         _menuItem(
           key: const Key('translate-transcript'),
           value: _TranscriptMoreAction.translate,
@@ -3403,19 +3479,25 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           label: translateLabel,
           enabled: controller.translationConfigured,
         ),
-      ],
-      const PopupMenuDivider(),
-      _menuItem(
-        value: _TranscriptMoreAction.copy,
-        icon: Icons.copy_all_outlined,
-        label: context.strings.t('copy'),
-      ),
-      _menuItem(
-        value: _TranscriptMoreAction.export,
-        icon: Icons.ios_share_rounded,
-        label: context.strings.t('export'),
-      ),
-    ];
+      ]);
+    }
+    if (includeDocumentActions) {
+      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
+        _menuItem(
+          key: const Key('copy-transcript-menu'),
+          value: _TranscriptMoreAction.copy,
+          icon: Icons.copy_all_outlined,
+          label: context.strings.t('copy'),
+        ),
+        _menuItem(
+          key: const Key('export-transcript-menu'),
+          value: _TranscriptMoreAction.export,
+          icon: Icons.ios_share_rounded,
+          label: context.strings.t('export'),
+        ),
+      ]);
+    }
+    if (entries.isEmpty) return const SizedBox.shrink();
     return SizedBox.square(
       dimension: 40,
       child: PopupMenuButton<_TranscriptMoreAction>(
@@ -3517,11 +3599,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     }
   }
 
-  Widget _buildAiBriefActions(
-    BuildContext context,
-    AppController controller, {
-    required bool full,
-  }) {
+  Widget _buildAiBriefActions(BuildContext context, AppController controller) {
     final active = job.aiGenerationState.status.isActive;
     if (active) {
       return IconButton(
@@ -3537,27 +3615,23 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (full) ...[
-          IconButton(
-            key: const Key('copy-ai-brief-toolbar'),
-            tooltip: context.strings.t('copy_brief'),
-            onPressed: () => _copyBriefText(
-              context,
-              controller.renderAiBriefMarkdown(job.id),
-            ),
-            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.copy_all_outlined),
-          ),
-          IconButton(
-            key: const Key('export-ai-brief-toolbar'),
-            tooltip: context.strings.t('export_brief'),
-            onPressed: () => _exportBrief(context, job.id),
-            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.ios_share_rounded),
-          ),
-        ],
+        IconButton(
+          key: const Key('copy-ai-brief-toolbar'),
+          tooltip: context.strings.t('copy_brief'),
+          onPressed: () =>
+              _copyBriefText(context, controller.renderAiBriefMarkdown(job.id)),
+          constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+          padding: EdgeInsets.zero,
+          icon: const Icon(Icons.copy_all_outlined),
+        ),
+        IconButton(
+          key: const Key('export-ai-brief-toolbar'),
+          tooltip: context.strings.t('export_brief'),
+          onPressed: () => _exportBrief(context, job.id),
+          constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+          padding: EdgeInsets.zero,
+          icon: const Icon(Icons.ios_share_rounded),
+        ),
         IconButton(
           key: const Key('refresh-ai-brief-toolbar'),
           tooltip: context.strings.t('refresh_ai_brief'),
@@ -3566,37 +3640,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.refresh_rounded),
         ),
-        if (!full)
-          SizedBox.square(
-            dimension: 40,
-            child: PopupMenuButton<_AiBriefMoreAction>(
-              key: const Key('ai-brief-toolbar-more'),
-              tooltip: context.strings.t('more_actions'),
-              padding: EdgeInsets.zero,
-              onSelected: (action) {
-                switch (action) {
-                  case _AiBriefMoreAction.copy:
-                    _copyBriefText(
-                      context,
-                      controller.renderAiBriefMarkdown(job.id),
-                    );
-                  case _AiBriefMoreAction.export:
-                    unawaited(_exportBrief(context, job.id));
-                }
-              },
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: _AiBriefMoreAction.copy,
-                  child: Text(context.strings.t('copy_brief')),
-                ),
-                PopupMenuItem(
-                  value: _AiBriefMoreAction.export,
-                  child: Text(context.strings.t('export_brief')),
-                ),
-              ],
-              icon: const Icon(Icons.more_horiz_rounded),
-            ),
-          ),
       ],
     );
   }
@@ -3615,6 +3658,7 @@ class _TranslationViewDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
+    key: const Key('translation-view-mode-control'),
     width: compact ? 108 : 112,
     height: 40,
     padding: const EdgeInsets.only(left: 12, right: 8),
@@ -3986,6 +4030,280 @@ Future<bool?> _confirmTranslationReplacement(BuildContext context) =>
       ),
     );
 
+class _TranscriptSegmentGroup extends StatefulWidget {
+  const _TranscriptSegmentGroup({
+    super.key,
+    required this.segment,
+    required this.tokens,
+    required this.positionMs,
+    required this.isCurrent,
+    required this.viewMode,
+    required this.query,
+    required this.speakerName,
+    required this.showSpeaker,
+    required this.showTimestamp,
+    required this.highlightTranslated,
+    required this.isEditingOriginal,
+    required this.isEditingTranslation,
+    required this.isRepeating,
+    required this.onToggleRepeat,
+    required this.onSeek,
+    required this.onEditOriginal,
+    required this.onCancelOriginal,
+    required this.onSaveOriginal,
+    required this.onEditTranslation,
+    required this.onCancelTranslation,
+    required this.onSaveTranslation,
+    required this.onRetranslate,
+  });
+
+  final TranscriptSegment segment;
+  final List<TranscriptToken> tokens;
+  final int positionMs;
+  final bool isCurrent;
+  final TranslationViewMode viewMode;
+  final String query;
+  final String speakerName;
+  final bool showSpeaker;
+  final bool showTimestamp;
+  final bool highlightTranslated;
+  final bool isEditingOriginal;
+  final bool isEditingTranslation;
+  final bool isRepeating;
+  final VoidCallback? onToggleRepeat;
+  final TranscriptSegmentSeekCallback onSeek;
+  final VoidCallback onEditOriginal;
+  final VoidCallback onCancelOriginal;
+  final Future<void> Function(String) onSaveOriginal;
+  final VoidCallback onEditTranslation;
+  final VoidCallback onCancelTranslation;
+  final Future<void> Function(String) onSaveTranslation;
+  final Future<void> Function()? onRetranslate;
+
+  @override
+  State<_TranscriptSegmentGroup> createState() =>
+      _TranscriptSegmentGroupState();
+}
+
+class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final showOriginal = widget.viewMode != TranslationViewMode.translated;
+    final showTranslation = widget.viewMode != TranslationViewMode.original;
+    return MouseRegion(
+      key: ValueKey('segment-group-${widget.segment.id}'),
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: _TranscriptSegmentSurface(
+        surfaceKey: ValueKey(
+          widget.viewMode == TranslationViewMode.translated
+              ? 'translated-segment-${widget.segment.id}'
+              : 'segment-card-${widget.segment.id}',
+        ),
+        hovered: _hovered,
+        isCurrent: widget.isCurrent,
+        isEditing: widget.isEditingOriginal || widget.isEditingTranslation,
+        highlightTranslated: widget.highlightTranslated,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (widget.showTimestamp ||
+                (widget.showSpeaker && widget.speakerName.isNotEmpty))
+              _TranscriptSegmentMetadata(
+                segment: widget.segment,
+                query: widget.query,
+                speakerName: widget.speakerName,
+                showSpeaker: widget.showSpeaker,
+                showTimestamp: widget.showTimestamp,
+                onSeek: widget.onSeek,
+              ),
+            if (showOriginal)
+              TranscriptSegmentEditor(
+                key: ValueKey(widget.segment.id),
+                segment: widget.segment,
+                tokens: widget.tokens,
+                positionMs: widget.positionMs,
+                isCurrent: widget.isCurrent,
+                query: widget.query,
+                speakerName: widget.speakerName,
+                showSpeaker: false,
+                showTimestamp: false,
+                isEditing: widget.isEditingOriginal,
+                isRepeating: widget.isRepeating,
+                embedded: true,
+                groupHovered: _hovered,
+                onToggleRepeat: widget.onToggleRepeat,
+                onSeek: widget.onSeek,
+                onEdit: widget.onEditOriginal,
+                onCancel: widget.onCancelOriginal,
+                onSave: widget.onSaveOriginal,
+              ),
+            if (showOriginal && showTranslation) const SizedBox(height: 6),
+            if (showTranslation)
+              KeyedSubtree(
+                key: widget.viewMode == TranslationViewMode.bilingual
+                    ? ValueKey('translated-segment-${widget.segment.id}')
+                    : null,
+                child: _TranslatedSegmentEditor(
+                  key: ValueKey('translated-${widget.segment.id}'),
+                  segment: widget.segment,
+                  isCurrent: widget.isCurrent,
+                  query: widget.query,
+                  showTimestamp: false,
+                  highlightTranslated: false,
+                  isEditing: widget.isEditingTranslation,
+                  showRepeatAction:
+                      widget.viewMode == TranslationViewMode.translated,
+                  isRepeating:
+                      widget.viewMode == TranslationViewMode.translated &&
+                      widget.isRepeating,
+                  embedded: true,
+                  groupHovered: _hovered,
+                  bilingual: widget.viewMode == TranslationViewMode.bilingual,
+                  onToggleRepeat:
+                      widget.viewMode == TranslationViewMode.translated
+                      ? widget.onToggleRepeat
+                      : null,
+                  onSeek: widget.onSeek,
+                  onEdit: widget.onEditTranslation,
+                  onCancel: widget.onCancelTranslation,
+                  onSave: widget.onSaveTranslation,
+                  onRetranslate: widget.onRetranslate,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TranscriptSegmentSurface extends StatelessWidget {
+  const _TranscriptSegmentSurface({
+    required this.surfaceKey,
+    required this.hovered,
+    required this.isCurrent,
+    required this.isEditing,
+    required this.highlightTranslated,
+    required this.padding,
+    required this.child,
+  });
+
+  final Key surfaceKey;
+  final bool hovered;
+  final bool isCurrent;
+  final bool isEditing;
+  final bool highlightTranslated;
+  final EdgeInsetsGeometry padding;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final backgroundColor = isCurrent
+        ? colors.primaryContainer.withValues(alpha: .28)
+        : isEditing
+        ? colors.surfaceContainerLow
+        : hovered
+        ? colors.surfaceContainerLow
+        : highlightTranslated
+        ? _translatedSegmentHighlightColor(context)
+        : null;
+    return DecoratedBox(
+      key: surfaceKey,
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(10),
+        border: isEditing ? Border.all(color: colors.outlineVariant) : null,
+      ),
+      child: Stack(
+        children: [
+          Padding(padding: padding, child: child),
+          Positioned(
+            left: 0,
+            top: 8,
+            bottom: 8,
+            child: AnimatedContainer(
+              key: ValueKey('segment-current-indicator-$surfaceKey'),
+              duration: const Duration(milliseconds: 120),
+              width: 3,
+              decoration: BoxDecoration(
+                color: isCurrent ? colors.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TranscriptSegmentMetadata extends StatelessWidget {
+  const _TranscriptSegmentMetadata({
+    required this.segment,
+    required this.query,
+    required this.speakerName,
+    required this.showSpeaker,
+    required this.showTimestamp,
+    required this.onSeek,
+  });
+
+  final TranscriptSegment segment;
+  final String query;
+  final String speakerName;
+  final bool showSpeaker;
+  final bool showTimestamp;
+  final TranscriptSegmentSeekCallback onSeek;
+
+  @override
+  Widget build(BuildContext context) {
+    final showsSpeaker = showSpeaker && speakerName.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (showTimestamp)
+            TextButton(
+              key: ValueKey('segment-timestamp-${segment.id}'),
+              onPressed: () =>
+                  onSeek(reason: TranscriptSeekReason.sentenceClick),
+              style: TextButton.styleFrom(
+                minimumSize: Size.zero,
+                padding: EdgeInsets.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(
+                formatClock(segment.startMs),
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ),
+          if (showTimestamp && showsSpeaker) const SizedBox(width: 8),
+          if (showsSpeaker)
+            Expanded(
+              child: SearchHighlightedText(
+                key: ValueKey('segment-speaker-${segment.id}'),
+                text: speakerName,
+                query: query,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: _speakerColor(context, segment.speaker ?? speakerName),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TranslatedSegmentEditor extends StatefulWidget {
   const _TranslatedSegmentEditor({
     super.key,
@@ -3997,6 +4315,9 @@ class _TranslatedSegmentEditor extends StatefulWidget {
     required this.isEditing,
     required this.showRepeatAction,
     required this.isRepeating,
+    this.embedded = false,
+    this.groupHovered = false,
+    this.bilingual = false,
     required this.onToggleRepeat,
     required this.onSeek,
     required this.onEdit,
@@ -4013,6 +4334,9 @@ class _TranslatedSegmentEditor extends StatefulWidget {
   final bool isEditing;
   final bool showRepeatAction;
   final bool isRepeating;
+  final bool embedded;
+  final bool groupHovered;
+  final bool bilingual;
   final VoidCallback? onToggleRepeat;
   final TranscriptSegmentSeekCallback onSeek;
   final VoidCallback onEdit;
@@ -4057,126 +4381,236 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
 
   void _seek() => widget.onSeek(reason: TranscriptSeekReason.sentenceClick);
 
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    await widget.onSave(_draft.text);
+    if (mounted) setState(() => _saving = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final translated = widget.segment.translatedText?.trim();
     final fallback = translated == null || translated.isEmpty;
+    final textStyle = widget.bilingual
+        ? Theme.of(
+            context,
+          ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant)
+        : Theme.of(context).textTheme.bodyLarge;
+    final line = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (widget.showTimestamp)
+          _TranscriptSegmentMetadata(
+            segment: widget.segment,
+            query: widget.query,
+            speakerName: '',
+            showSpeaker: false,
+            showTimestamp: true,
+            onSeek: widget.onSeek,
+          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: widget.isEditing
+                  ? SelectionContainer.disabled(
+                      child: CallbackShortcuts(
+                        bindings: {
+                          const SingleActivator(
+                            LogicalKeyboardKey.enter,
+                            meta: true,
+                          ): _save,
+                          const SingleActivator(
+                            LogicalKeyboardKey.enter,
+                            control: true,
+                          ): _save,
+                          const SingleActivator(LogicalKeyboardKey.escape):
+                              widget.onCancel,
+                        },
+                        child: TextField(
+                          key: ValueKey(
+                            'translated-field-${widget.segment.id}',
+                          ),
+                          controller: _draft,
+                          autofocus: true,
+                          minLines: 1,
+                          maxLines: null,
+                          style: textStyle,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            filled: false,
+                            contentPadding: EdgeInsets.all(4),
+                            border: InputBorder.none,
+                          ),
+                        ),
+                      ),
+                    )
+                  : InkWell(
+                      key: ValueKey('translated-text-${widget.segment.id}'),
+                      onTap: _seek,
+                      hoverColor: Colors.transparent,
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: SearchHighlightedText(
+                          text: fallback ? widget.segment.text : translated,
+                          query: widget.query,
+                          style: textStyle?.copyWith(
+                            fontStyle: fallback ? FontStyle.italic : null,
+                            color: fallback
+                                ? colors.onSurfaceVariant
+                                : textStyle.color,
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
+            const SizedBox(width: 4),
+            _buildActions(context),
+          ],
+        ),
+      ],
+    );
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: Card(
-        key: ValueKey('translated-segment-${widget.segment.id}'),
-        margin: const EdgeInsets.only(top: 4),
-        color: widget.isCurrent
-            ? colors.primaryContainer.withValues(alpha: .35)
-            : widget.highlightTranslated
-            ? _translatedSegmentHighlightColor(context)
-            : colors.surfaceContainerLow,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (widget.showTimestamp)
-                TextButton(
-                  onPressed: _seek,
-                  child: Text(formatClock(widget.segment.startMs)),
-                ),
-              Expanded(
-                child: widget.isEditing
-                    ? TextField(
-                        key: ValueKey('translated-field-${widget.segment.id}'),
-                        controller: _draft,
-                        autofocus: true,
-                        minLines: 1,
-                        maxLines: null,
-                      )
-                    : InkWell(
-                        onTap: _seek,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 8,
-                          ),
-                          child: SearchHighlightedText(
-                            text: fallback ? widget.segment.text : translated,
-                            query: widget.query,
-                            style: TextStyle(
-                              fontStyle: fallback ? FontStyle.italic : null,
-                              color: fallback ? colors.onSurfaceVariant : null,
-                            ),
-                          ),
-                        ),
-                      ),
+      child: widget.embedded
+          ? KeyedSubtree(
+              key: ValueKey('translated-line-${widget.segment.id}'),
+              child: line,
+            )
+          : _TranscriptSegmentSurface(
+              surfaceKey: ValueKey('translated-segment-${widget.segment.id}'),
+              hovered: _hovered,
+              isCurrent: widget.isCurrent,
+              isEditing: widget.isEditing,
+              highlightTranslated: widget.highlightTranslated,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: line,
+            ),
+    );
+  }
+
+  Widget _buildActions(BuildContext context) {
+    if (widget.isEditing) {
+      final actionCount = (widget.isRepeating ? 1 : 0) + 2;
+      return SizedBox(
+        width: actionCount * 32,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (widget.isRepeating)
+              _SentenceRepeatButton(
+                segmentId: widget.segment.id,
+                isRepeating: true,
+                onPressed: widget.onToggleRepeat,
               ),
-              if (widget.isEditing) ...[
-                if (widget.isRepeating)
-                  _SentenceRepeatButton(
-                    segmentId: widget.segment.id,
-                    isRepeating: true,
-                    onPressed: widget.onToggleRepeat,
-                  ),
-                IconButton(
-                  tooltip: context.strings.t('cancel'),
-                  onPressed: _saving ? null : widget.onCancel,
-                  icon: const Icon(Icons.close_rounded),
+            IconButton(
+              key: ValueKey('translated-cancel-${widget.segment.id}'),
+              tooltip: context.strings.t('cancel'),
+              onPressed: _saving ? null : widget.onCancel,
+              style: _compactSegmentActionStyle(context),
+              icon: const Icon(Icons.close_rounded, size: 18),
+            ),
+            IconButton(
+              key: ValueKey('translated-save-${widget.segment.id}'),
+              tooltip: context.strings.t('save'),
+              onPressed: _saving ? null : _save,
+              style: _compactSegmentActionStyle(context),
+              icon: _saving
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.check_rounded, size: 18),
+            ),
+          ],
+        ),
+      );
+    }
+    final repeatVisible =
+        widget.groupHovered || _hovered || _actionFocused || widget.isRepeating;
+    final lineActionsVisible = _hovered || _actionFocused;
+    final actionCount =
+        (widget.showRepeatAction ? 1 : 0) +
+        1 +
+        (widget.onRetranslate != null ? 1 : 0);
+    return Focus(
+      onFocusChange: (value) => setState(() => _actionFocused = value),
+      child: SizedBox(
+        width: actionCount * 32,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (widget.showRepeatAction)
+              _SegmentActionVisibility(
+                opacityKey: ValueKey(
+                  'segment-repeat-opacity-${widget.segment.id}',
                 ),
-                IconButton(
-                  tooltip: context.strings.t('save'),
-                  onPressed: _saving
-                      ? null
-                      : () async {
-                          setState(() => _saving = true);
-                          await widget.onSave(_draft.text);
-                          if (mounted) setState(() => _saving = false);
-                        },
-                  icon: const Icon(Icons.check_rounded),
+                visible: repeatVisible,
+                child: _SentenceRepeatButton(
+                  segmentId: widget.segment.id,
+                  isRepeating: widget.isRepeating,
+                  onPressed: widget.onToggleRepeat,
                 ),
-              ] else ...[
-                if (widget.showRepeatAction)
-                  Focus(
-                    onFocusChange: (value) =>
-                        setState(() => _actionFocused = value),
-                    child: AnimatedOpacity(
-                      opacity: _hovered || _actionFocused || widget.isRepeating
-                          ? 1
-                          : 0,
-                      duration: const Duration(milliseconds: 120),
-                      child: _SentenceRepeatButton(
-                        segmentId: widget.segment.id,
-                        isRepeating: widget.isRepeating,
-                        onPressed: widget.onToggleRepeat,
-                      ),
-                    ),
-                  ),
-                PopupMenuButton<String>(
-                  tooltip: context.strings.t('more_actions'),
-                  onSelected: (value) {
-                    if (value == 'edit') widget.onEdit();
-                    if (value == 'retranslate') widget.onRetranslate?.call();
-                  },
-                  itemBuilder: (context) => [
-                    PopupMenuItem(
-                      value: 'edit',
-                      child: Text(context.strings.t('edit_translation')),
-                    ),
-                    if (widget.onRetranslate != null)
-                      PopupMenuItem(
-                        value: 'retranslate',
-                        child: Text(
-                          context.strings.t('retranslate_segment_with_llm'),
-                        ),
-                      ),
-                  ],
+              ),
+            _SegmentActionVisibility(
+              opacityKey: ValueKey(
+                'translated-edit-opacity-${widget.segment.id}',
+              ),
+              visible: lineActionsVisible,
+              child: IconButton(
+                key: ValueKey('translated-edit-${widget.segment.id}'),
+                tooltip: context.strings.t('edit_translation'),
+                onPressed: widget.onEdit,
+                style: _compactSegmentActionStyle(context),
+                icon: const Icon(Icons.edit_outlined, size: 18),
+              ),
+            ),
+            if (widget.onRetranslate != null)
+              _SegmentActionVisibility(
+                opacityKey: ValueKey(
+                  'translated-retranslate-opacity-${widget.segment.id}',
                 ),
-              ],
-            ],
-          ),
+                visible: lineActionsVisible,
+                child: IconButton(
+                  key: ValueKey('translated-retranslate-${widget.segment.id}'),
+                  tooltip: context.strings.t('retranslate_segment_with_llm'),
+                  onPressed: widget.onRetranslate,
+                  style: _compactSegmentActionStyle(context),
+                  icon: const Icon(Icons.translate_rounded, size: 18),
+                ),
+              ),
+          ],
         ),
       ),
     );
   }
+}
+
+class _SegmentActionVisibility extends StatelessWidget {
+  const _SegmentActionVisibility({
+    this.opacityKey,
+    required this.visible,
+    required this.child,
+  });
+
+  final Key? opacityKey;
+  final bool visible;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    ignoring: !visible,
+    child: AnimatedOpacity(
+      key: opacityKey,
+      opacity: visible ? 1 : 0,
+      duration: const Duration(milliseconds: 120),
+      child: child,
+    ),
+  );
 }
 
 class _SentenceRepeatButton extends StatelessWidget {
@@ -4214,8 +4648,8 @@ ButtonStyle _compactSegmentActionStyle(
       ? Theme.of(context).colorScheme.primaryContainer
       : null,
   minimumSize: Size.zero,
-  fixedSize: const Size(32, 28),
-  maximumSize: const Size(32, 28),
+  fixedSize: const Size.square(32),
+  maximumSize: const Size.square(32),
   padding: EdgeInsets.zero,
   visualDensity: VisualDensity.compact,
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -5410,6 +5844,8 @@ class TranscriptSegmentEditor extends StatefulWidget {
     this.highlightTranslated = false,
     required this.isEditing,
     this.isRepeating = false,
+    this.embedded = false,
+    this.groupHovered = false,
     this.onToggleRepeat,
     required this.onSeek,
     required this.onEdit,
@@ -5428,6 +5864,8 @@ class TranscriptSegmentEditor extends StatefulWidget {
   final bool highlightTranslated;
   final bool isEditing;
   final bool isRepeating;
+  final bool embedded;
+  final bool groupHovered;
   final VoidCallback? onToggleRepeat;
   final TranscriptSegmentSeekCallback onSeek;
   final VoidCallback onEdit;
@@ -5444,7 +5882,6 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
   late final FocusNode _fieldFocus;
   bool _hovered = false;
   bool _actionFocused = false;
-  bool _repeatFocused = false;
   bool _saving = false;
 
   @override
@@ -5495,146 +5932,50 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final translatedColor = _translationStatusColor(
-      context,
-      TranslationStatus.completed,
+    final line = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (widget.showTimestamp || _showsSpeaker)
+          _TranscriptSegmentMetadata(
+            segment: widget.segment,
+            query: widget.query,
+            speakerName: widget.speakerName,
+            showSpeaker: widget.showSpeaker,
+            showTimestamp: widget.showTimestamp,
+            onSeek: widget.onSeek,
+          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: _buildContent(context)),
+            const SizedBox(width: 4),
+            _buildActions(context),
+          ],
+        ),
+      ],
     );
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: DecoratedBox(
-        key: ValueKey('segment-card-${widget.segment.id}'),
-        decoration: BoxDecoration(
-          color: widget.isEditing
-              ? colors.surfaceContainerLow
-              : widget.highlightTranslated
-              ? _translatedSegmentHighlightColor(context)
-              : _hovered
-              ? colors.surfaceContainerLow
-              : null,
-          borderRadius: BorderRadius.circular(12),
-          border: widget.isEditing
-              ? Border.all(color: colors.outlineVariant)
-              : widget.highlightTranslated
-              ? Border.all(color: translatedColor.withValues(alpha: .35))
-              : null,
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 4, 6, 4),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (widget.showTimestamp || _showsSpeaker)
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(width: _leadingWidth),
-                        Expanded(
-                          child: _showsSpeaker
-                              ? _buildSpeaker(context)
-                              : widget.showTimestamp
-                              ? Padding(
-                                  padding: const EdgeInsets.only(left: 4),
-                                  child: Align(
-                                    alignment: Alignment.topLeft,
-                                    child: _buildTimestamp(context),
-                                  ),
-                                )
-                              : const SizedBox.shrink(),
-                        ),
-                        const SizedBox(width: 36),
-                      ],
-                    ),
-                    if (widget.showTimestamp && _showsSpeaker)
-                      Positioned(
-                        top: 0,
-                        left: _leadingWidth,
-                        child: FractionalTranslation(
-                          translation: const Offset(-1, 0),
-                          child: _buildTimestamp(context),
-                        ),
-                      ),
-                  ],
-                ),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: _leadingWidth,
-                    child: Align(
-                      alignment: Alignment.topRight,
-                      child: _buildRepeatAction(context),
-                    ),
-                  ),
-                  Expanded(child: _buildContent(context)),
-                  const SizedBox(width: 4),
-                  _buildActions(context),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
+      child: widget.embedded
+          ? KeyedSubtree(
+              key: ValueKey('segment-original-line-${widget.segment.id}'),
+              child: line,
+            )
+          : _TranscriptSegmentSurface(
+              surfaceKey: ValueKey('segment-card-${widget.segment.id}'),
+              hovered: _hovered,
+              isCurrent: widget.isCurrent,
+              isEditing: widget.isEditing,
+              highlightTranslated: widget.highlightTranslated,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: line,
+            ),
     );
   }
 
   bool get _showsSpeaker => widget.showSpeaker && widget.speakerName.isNotEmpty;
-
-  double get _leadingWidth => 32;
-
-  Widget _buildTimestamp(BuildContext context) => TextButton(
-    key: ValueKey('segment-timestamp-${widget.segment.id}'),
-    onPressed: _seek,
-    style: TextButton.styleFrom(
-      minimumSize: Size.zero,
-      padding: EdgeInsets.zero,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      alignment: Alignment.topRight,
-    ),
-    child: Text(
-      formatClock(widget.segment.startMs),
-      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-        color: Theme.of(context).colorScheme.primary,
-      ),
-    ),
-  );
-
-  Widget _buildSpeaker(BuildContext context) => Padding(
-    key: ValueKey('segment-speaker-${widget.segment.id}'),
-    padding: const EdgeInsets.only(left: 4, bottom: 4),
-    child: SearchHighlightedText(
-      text: widget.speakerName,
-      query: widget.query,
-      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-        color: _speakerColor(
-          context,
-          widget.segment.speaker ?? widget.speakerName,
-        ),
-        fontWeight: FontWeight.w700,
-      ),
-    ),
-  );
-
-  Widget _buildRepeatAction(BuildContext context) {
-    final visible = _hovered || _repeatFocused || widget.isRepeating;
-    return Focus(
-      onFocusChange: (value) => setState(() => _repeatFocused = value),
-      child: AnimatedOpacity(
-        key: ValueKey('segment-repeat-opacity-${widget.segment.id}'),
-        opacity: visible ? 1 : 0,
-        duration: const Duration(milliseconds: 120),
-        child: _SentenceRepeatButton(
-          segmentId: widget.segment.id,
-          isRepeating: widget.isRepeating,
-          onPressed: widget.onToggleRepeat,
-        ),
-      ),
-    );
-  }
 
   Widget _buildContent(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -5695,47 +6036,72 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
 
   Widget _buildActions(BuildContext context) {
     if (widget.isEditing) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            key: ValueKey('segment-cancel-${widget.segment.id}'),
-            tooltip: context.strings.t('cancel'),
-            onPressed: _saving ? null : widget.onCancel,
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.close_rounded, size: 18),
-          ),
-          IconButton(
-            key: ValueKey('segment-save-${widget.segment.id}'),
-            tooltip: context.strings.t('save'),
-            onPressed: _saving ? null : _save,
-            visualDensity: VisualDensity.compact,
-            icon: _saving
-                ? const SizedBox.square(
-                    dimension: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.check_rounded, size: 18),
-          ),
-        ],
-      );
-    }
-    final visible = _hovered || _actionFocused;
-    return Focus(
-      onFocusChange: (value) => setState(() => _actionFocused = value),
-      child: AnimatedOpacity(
-        key: ValueKey('segment-edit-opacity-${widget.segment.id}'),
-        opacity: visible ? 1 : 0,
-        duration: const Duration(milliseconds: 120),
-        child: Column(
+      final actionCount = (widget.isRepeating ? 1 : 0) + 2;
+      return SizedBox(
+        width: actionCount * 32,
+        child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (widget.isRepeating)
+              _SentenceRepeatButton(
+                segmentId: widget.segment.id,
+                isRepeating: true,
+                onPressed: widget.onToggleRepeat,
+              ),
             IconButton(
-              key: ValueKey('segment-edit-${widget.segment.id}'),
-              tooltip: context.strings.t('edit'),
-              onPressed: widget.onEdit,
+              key: ValueKey('segment-cancel-${widget.segment.id}'),
+              tooltip: context.strings.t('cancel'),
+              onPressed: _saving ? null : widget.onCancel,
               style: _compactSegmentActionStyle(context),
-              icon: const Icon(Icons.edit_outlined, size: 18),
+              icon: const Icon(Icons.close_rounded, size: 18),
+            ),
+            IconButton(
+              key: ValueKey('segment-save-${widget.segment.id}'),
+              tooltip: context.strings.t('save'),
+              onPressed: _saving ? null : _save,
+              style: _compactSegmentActionStyle(context),
+              icon: _saving
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.check_rounded, size: 18),
+            ),
+          ],
+        ),
+      );
+    }
+    final repeatVisible =
+        widget.groupHovered || _hovered || _actionFocused || widget.isRepeating;
+    final editVisible = _hovered || _actionFocused;
+    return Focus(
+      onFocusChange: (value) => setState(() => _actionFocused = value),
+      child: SizedBox(
+        width: 64,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SegmentActionVisibility(
+              opacityKey: ValueKey(
+                'segment-repeat-opacity-${widget.segment.id}',
+              ),
+              visible: repeatVisible,
+              child: _SentenceRepeatButton(
+                segmentId: widget.segment.id,
+                isRepeating: widget.isRepeating,
+                onPressed: widget.onToggleRepeat,
+              ),
+            ),
+            _SegmentActionVisibility(
+              opacityKey: ValueKey('segment-edit-opacity-${widget.segment.id}'),
+              visible: editVisible,
+              child: IconButton(
+                key: ValueKey('segment-edit-${widget.segment.id}'),
+                tooltip: context.strings.t('edit'),
+                onPressed: widget.onEdit,
+                style: _compactSegmentActionStyle(context),
+                icon: const Icon(Icons.edit_outlined, size: 18),
+              ),
             ),
           ],
         ),
