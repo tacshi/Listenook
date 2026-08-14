@@ -39,6 +39,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     with WindowListener {
   static const _reviewDividerWidth = 9.0;
   static const _minimumReviewPaneWidth = 280.0;
+  static const _minimumCompanionPaneWidth = 420.0;
   static const _mediaModeTransitionDuration = Duration(milliseconds: 320);
   static const _missingSourceAudioHeight = 112.0;
 
@@ -46,6 +47,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   LatestSeekDispatcher? _seekDispatcher;
   VideoController? _video;
   final _search = TextEditingController();
+  final _aiBriefScroll = ScrollController();
   final _transcriptScroll = ItemScrollController();
   final _transcriptPositions = ItemPositionsListener.create();
   StreamSubscription<Duration>? _positionSubscription;
@@ -87,6 +89,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
   bool _waveformLoading = false;
   _ReviewMediaMode _mediaMode = _ReviewMediaMode.video;
   double? _transcriptPaneWidth;
+  double? _companionLeftPaneFraction;
+  bool _companionLayoutActive = false;
   int _sourceRequest = 0;
 
   ReviewFullscreenController get _fullscreenController =>
@@ -181,6 +185,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _waveformPath = null;
       _waveformLoading = false;
       _mediaMode = _ReviewMediaMode.video;
+      _companionLeftPaneFraction = null;
+      _companionLayoutActive = false;
+      if (_aiBriefScroll.hasClients) _aiBriefScroll.jumpTo(0);
       _openSource();
     }
   }
@@ -361,6 +368,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _fullscreenController.unregisterMediaShutdown(this);
     windowManager.removeListener(this);
     _search.dispose();
+    _aiBriefScroll.dispose();
     unawaited(_shutdownMedia());
     super.dispose();
   }
@@ -442,6 +450,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       child: Column(
         children: [
           _UnifiedReviewToolbar(
+            role: _ReviewToolbarRole.global,
             job: job,
             viewMode: _viewMode,
             showAiBrief: _showAiBrief,
@@ -479,13 +488,61 @@ class _TranscriptReviewState extends State<TranscriptReview>
                 final canSwitchMediaMode = _supportsMediaModeSwitch(job);
                 final audioMode =
                     canSwitchMediaMode && _mediaMode == _ReviewMediaMode.audio;
-                final transcript = _buildTranscriptPane(
+                final transcriptPane = _buildTranscriptPane(
                   controller: controller,
                   job: job,
                   document: document,
                   query: query,
                   segments: segments,
                   currentIndex: currentIndex,
+                );
+                final aiBriefPane = _buildAiBriefPane(
+                  job: job,
+                  document: document,
+                );
+                final companionAvailable =
+                    constraints.maxWidth >=
+                    (_minimumCompanionPaneWidth * 2 + _reviewDividerWidth);
+                final companionActive = _showAiBrief && companionAvailable;
+                _companionLayoutActive = companionActive;
+
+                if (companionActive) {
+                  if (!hasVideo || audioMode) {
+                    return Column(
+                      key: const Key('audio-ai-brief-companion'),
+                      children: [
+                        KeyedSubtree(
+                          key: const Key('audio-ai-brief-media'),
+                          child: _buildMediaArea(
+                            job,
+                            presentation: _ReviewMediaMode.audio,
+                            fillHeight: false,
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        Expanded(
+                          child: _buildCompanionSplit(
+                            width: constraints.maxWidth,
+                            left: transcriptPane,
+                            right: aiBriefPane,
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+                  return _buildVideoCompanion(
+                    constraints: constraints,
+                    job: job,
+                    transcriptPane: transcriptPane,
+                    aiBriefPane: aiBriefPane,
+                  );
+                }
+
+                final selectedPane = IndexedStack(
+                  key: const Key('review-tabbed-content'),
+                  index: _showAiBrief ? 1 : 0,
+                  sizing: StackFit.expand,
+                  children: [transcriptPane, aiBriefPane],
                 );
                 if (!hasVideo) {
                   return Column(
@@ -497,7 +554,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                         fillHeight: false,
                       ),
                       const Divider(height: 1),
-                      Expanded(child: transcript),
+                      Expanded(child: selectedPane),
                     ],
                   );
                 }
@@ -634,7 +691,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                           rect: transcriptRect,
                           child: SizedBox.expand(
                             key: const Key('video-review-transcript-pane'),
-                            child: transcript,
+                            child: selectedPane,
                           ),
                         ),
                         Positioned(
@@ -697,6 +754,98 @@ class _TranscriptReviewState extends State<TranscriptReview>
         .clamp(_minimumReviewPaneWidth, maximumPaneWidth)
         .toDouble();
     setState(() => _transcriptPaneWidth = nextWidth);
+  }
+
+  Widget _buildCompanionSplit({
+    required double width,
+    required Widget left,
+    required Widget right,
+  }) {
+    final availableWidth = width - _reviewDividerWidth;
+    final leftWidth = _resolvedCompanionLeftWidth(availableWidth);
+    return Row(
+      key: const Key('ai-brief-companion-split'),
+      children: [
+        SizedBox(
+          key: const Key('ai-brief-companion-source-pane'),
+          width: leftWidth,
+          child: left,
+        ),
+        _ReviewSplitDivider(
+          dividerKey: const Key('ai-brief-companion-divider'),
+          onDragUpdate: (delta) => _resizeCompanionPanes(delta, availableWidth),
+        ),
+        Expanded(
+          child: SizedBox.expand(
+            key: const Key('ai-brief-companion-brief-pane'),
+            child: right,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVideoCompanion({
+    required BoxConstraints constraints,
+    required TranscriptionJob job,
+    required Widget transcriptPane,
+    required Widget aiBriefPane,
+  }) {
+    final availableWidth = constraints.maxWidth - _reviewDividerWidth;
+    final leftWidth = _resolvedCompanionLeftWidth(availableWidth);
+    final aspect = _videoAspectRatio.isFinite && _videoAspectRatio > 0
+        ? _videoAspectRatio
+        : 16 / 9;
+    final maximumViewportHeight =
+        (constraints.maxHeight * .52 - VideoTransport.height)
+            .clamp(0.0, double.infinity)
+            .toDouble();
+    final viewportHeight = (leftWidth / aspect)
+        .clamp(0.0, maximumViewportHeight)
+        .toDouble();
+    final mediaHeight = viewportHeight + VideoTransport.height;
+    final sourcePane = Column(
+      key: const Key('video-ai-brief-source-column'),
+      children: [
+        SizedBox(
+          key: const Key('video-ai-brief-media'),
+          height: mediaHeight,
+          child: _buildMediaArea(
+            job,
+            presentation: _ReviewMediaMode.video,
+            fillHeight: true,
+            videoHeight: viewportHeight,
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(child: transcriptPane),
+      ],
+    );
+    return KeyedSubtree(
+      key: const Key('video-ai-brief-companion'),
+      child: _buildCompanionSplit(
+        width: constraints.maxWidth,
+        left: sourcePane,
+        right: aiBriefPane,
+      ),
+    );
+  }
+
+  double _resolvedCompanionLeftWidth(double availableWidth) {
+    final maximumLeftWidth = availableWidth - _minimumCompanionPaneWidth;
+    final preferred = availableWidth * (_companionLeftPaneFraction ?? .5);
+    return preferred
+        .clamp(_minimumCompanionPaneWidth, maximumLeftWidth)
+        .toDouble();
+  }
+
+  void _resizeCompanionPanes(double delta, double availableWidth) {
+    final maximumLeftWidth = availableWidth - _minimumCompanionPaneWidth;
+    final currentWidth = _resolvedCompanionLeftWidth(availableWidth);
+    final nextWidth = (currentWidth + delta)
+        .clamp(_minimumCompanionPaneWidth, maximumLeftWidth)
+        .toDouble();
+    setState(() => _companionLeftPaneFraction = nextWidth / availableWidth);
   }
 
   Widget _buildMediaArea(
@@ -940,19 +1089,72 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ),
       ],
     );
-    return IndexedStack(
-      index: _showAiBrief ? 1 : 0,
+    return Column(
+      key: const Key('transcript-pane'),
       children: [
-        transcript,
-        _AiBriefPane(
+        _UnifiedReviewToolbar(
+          role: _ReviewToolbarRole.transcript,
           job: job,
-          document: document,
-          onGenerate: () => _showAiBriefDialog(job),
-          onEvidence: _openAiEvidence,
+          viewMode: _viewMode,
+          showAiBrief: _showAiBrief,
+          search: _search,
+          searchVisible: _searchVisible,
+          onTabChanged: (_) {},
+          onViewModeChanged: (value) => setState(() => _viewMode = value),
+          onOpenSearch: () => setState(() => _searchVisible = true),
+          onCloseSearch: _closeTranscriptSearch,
+          onSearch: () {
+            setState(() {});
+            if (_search.text.trim().isEmpty) {
+              _queueFocusCurrent(force: true);
+            }
+          },
+          onFocusCurrentSentence: document.segments.isEmpty
+              ? null
+              : _focusCurrentSentence,
+          onGenerateAiBrief: () => _showAiBriefDialog(job),
         ),
+        const Divider(height: 1),
+        Expanded(child: transcript),
       ],
     );
   }
+
+  Widget _buildAiBriefPane({
+    required TranscriptionJob job,
+    required TranscriptDocument document,
+  }) => Column(
+    key: const Key('ai-brief-pane'),
+    children: [
+      _UnifiedReviewToolbar(
+        role: _ReviewToolbarRole.aiBrief,
+        job: job,
+        viewMode: _viewMode,
+        showAiBrief: _showAiBrief,
+        search: _search,
+        searchVisible: _searchVisible,
+        onTabChanged: (_) {},
+        onViewModeChanged: (value) => setState(() => _viewMode = value),
+        onOpenSearch: () => setState(() => _searchVisible = true),
+        onCloseSearch: _closeTranscriptSearch,
+        onSearch: () => setState(() {}),
+        onFocusCurrentSentence: document.segments.isEmpty
+            ? null
+            : _focusCurrentSentence,
+        onGenerateAiBrief: () => _showAiBriefDialog(job),
+      ),
+      const Divider(height: 1),
+      Expanded(
+        child: _AiBriefPane(
+          job: job,
+          document: document,
+          scrollController: _aiBriefScroll,
+          onGenerate: () => _showAiBriefDialog(job),
+          onEvidence: _openAiEvidence,
+        ),
+      ),
+    ],
+  );
 
   Future<void> _showAiBriefDialog(TranscriptionJob job) async {
     final controller = context.read<AppController>();
@@ -1005,8 +1207,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
         .where((item) => item.id == segmentId)
         .firstOrNull;
     if (segment == null) return;
+    final keepCompanionOpen = _showAiBrief && _companionLayoutActive;
     setState(() {
-      _showAiBrief = false;
+      if (!keepCompanionOpen) _showAiBrief = false;
       _searchVisible = false;
       _search.clear();
       _followPlayback = true;
@@ -1392,8 +1595,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
 }
 
 class _ReviewSplitDivider extends StatelessWidget {
-  const _ReviewSplitDivider({required this.onDragUpdate});
+  const _ReviewSplitDivider({
+    this.dividerKey = const Key('video-transcript-divider'),
+    required this.onDragUpdate,
+  });
 
+  final Key dividerKey;
   final ValueChanged<double> onDragUpdate;
 
   @override
@@ -1402,7 +1609,7 @@ class _ReviewSplitDivider extends StatelessWidget {
     child: MouseRegion(
       cursor: SystemMouseCursors.resizeColumn,
       child: GestureDetector(
-        key: const Key('video-transcript-divider'),
+        key: dividerKey,
         behavior: HitTestBehavior.opaque,
         onHorizontalDragUpdate: (details) => onDragUpdate(details.delta.dx),
         child: SizedBox(
@@ -1669,12 +1876,14 @@ class _AiBriefPane extends StatelessWidget {
   const _AiBriefPane({
     required this.job,
     required this.document,
+    required this.scrollController,
     required this.onGenerate,
     required this.onEvidence,
   });
 
   final TranscriptionJob job;
   final TranscriptDocument document;
+  final ScrollController scrollController;
   final VoidCallback onGenerate;
   final Future<void> Function(String segmentId) onEvidence;
 
@@ -1728,6 +1937,7 @@ class _AiBriefPane extends StatelessWidget {
         Expanded(
           child: ListView(
             key: const Key('ai-brief-scroll'),
+            controller: scrollController,
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
             children: [
               Row(
@@ -2830,8 +3040,11 @@ enum _TranscriptMoreAction {
 
 enum _AiBriefMoreAction { copy, export }
 
+enum _ReviewToolbarRole { global, transcript, aiBrief }
+
 class _UnifiedReviewToolbar extends StatelessWidget {
   const _UnifiedReviewToolbar({
+    required this.role,
     required this.job,
     required this.viewMode,
     required this.showAiBrief,
@@ -2848,7 +3061,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
 
   static const _fullBreakpoint = 900.0;
   static const _mediumBreakpoint = 700.0;
+  static const _paneFullBreakpoint = 700.0;
+  static const _paneMediumBreakpoint = 520.0;
 
+  final _ReviewToolbarRole role;
   final TranscriptionJob job;
   final TranslationViewMode viewMode;
   final bool showAiBrief;
@@ -2870,6 +3086,20 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
+    return switch (role) {
+      _ReviewToolbarRole.global => _buildGlobalHeader(context),
+      _ReviewToolbarRole.transcript => _buildTranscriptPaneHeader(
+        context,
+        controller,
+      ),
+      _ReviewToolbarRole.aiBrief => _buildAiBriefPaneHeader(
+        context,
+        controller,
+      ),
+    };
+  }
+
+  Widget _buildGlobalHeader(BuildContext context) {
     return SizedBox(
       key: const Key('review-header'),
       height: 64,
@@ -2877,67 +3107,97 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            var full = constraints.maxWidth >= _fullBreakpoint;
-            var medium = constraints.maxWidth >= _mediumBreakpoint;
-            var tabWidth = full ? 256.0 : (medium ? 228.0 : 196.0);
-            var sideWidth = (constraints.maxWidth - tabWidth) / 2;
-
-            if (full && sideWidth < _transcriptActionsWidth(full: true)) {
-              full = false;
-              tabWidth = 228;
-              sideWidth = (constraints.maxWidth - tabWidth) / 2;
-            }
-            if (medium &&
-                !full &&
-                sideWidth < _transcriptActionsWidth(full: false)) {
-              medium = false;
-              tabWidth = 196;
-              sideWidth = (constraints.maxWidth - tabWidth) / 2;
-            }
-
-            return searchVisible && !showAiBrief
-                ? _buildSearchRow(context, tabWidth, sideWidth)
-                : Row(
-                    key: const Key('review-toolbar-row'),
-                    children: [
-                      SizedBox(width: sideWidth, child: _filename(context)),
-                      _tabs(tabWidth),
-                      SizedBox(
-                        width: sideWidth,
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: showAiBrief
-                              ? _buildAiBriefActions(
-                                  context,
-                                  controller,
-                                  full: full,
-                                )
-                              : _buildTranscriptActions(
-                                  context,
-                                  controller,
-                                  full: full,
-                                  medium: medium,
-                                ),
-                        ),
-                      ),
-                    ],
-                  );
+            final full = constraints.maxWidth >= _fullBreakpoint;
+            final medium = constraints.maxWidth >= _mediumBreakpoint;
+            final tabWidth = full ? 256.0 : (medium ? 228.0 : 196.0);
+            final sideWidth = (constraints.maxWidth - tabWidth) / 2;
+            return Row(
+              key: const Key('review-toolbar-row'),
+              children: [
+                SizedBox(width: sideWidth, child: _filename(context)),
+                _tabs(tabWidth),
+                SizedBox(width: sideWidth),
+              ],
+            );
           },
         ),
       ),
     );
   }
 
-  double _transcriptActionsWidth({required bool full}) {
-    if (full) {
-      return 200 +
-          (_translationStarted ? 116 : 0) +
-          (job.translationState.status.isActive ? 40 : 0);
-    }
-    return 120 +
-        (_translationStarted ? 112 : 0) +
-        (job.translationState.status.isActive ? 40 : 0);
-  }
+  Widget _buildTranscriptPaneHeader(
+    BuildContext context,
+    AppController controller,
+  ) => SizedBox(
+    key: const Key('transcript-pane-header'),
+    height: 52,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (searchVisible) return _buildPaneSearchRow(context);
+          final full = constraints.maxWidth >= _paneFullBreakpoint;
+          final medium = constraints.maxWidth >= _paneMediumBreakpoint;
+          return Row(
+            key: const Key('transcript-pane-toolbar-row'),
+            children: [
+              Expanded(
+                child: Text(
+                  context.strings.t('transcript'),
+                  key: const Key('transcript-pane-title'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              _buildTranscriptActions(
+                context,
+                controller,
+                full: full,
+                medium: medium,
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+
+  Widget _buildAiBriefPaneHeader(
+    BuildContext context,
+    AppController controller,
+  ) => SizedBox(
+    key: const Key('ai-brief-pane-header'),
+    height: 52,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: LayoutBuilder(
+        builder: (context, constraints) => Row(
+          key: const Key('ai-brief-pane-toolbar-row'),
+          children: [
+            Expanded(
+              child: Text(
+                context.strings.t('ai_brief'),
+                key: const Key('ai-brief-pane-title'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            _buildAiBriefActions(
+              context,
+              controller,
+              full: constraints.maxWidth >= 480,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   Widget _tabs(double width) => _ReviewContentTabs(
     width: width,
@@ -2958,72 +3218,45 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     ),
   );
 
-  Widget _buildSearchRow(
-    BuildContext context,
-    double tabWidth,
-    double sideWidth,
-  ) => Row(
+  Widget _buildPaneSearchRow(BuildContext context) => Row(
     key: const Key('review-toolbar-search-row'),
     children: [
-      SizedBox(width: sideWidth, child: _filename(context)),
-      _tabs(tabWidth),
-      SizedBox(
-        width: sideWidth,
-        child: Align(
-          alignment: Alignment.centerRight,
-          child: SizedBox(
-            width: sideWidth.clamp(0, 480).toDouble(),
-            child: Row(
-              children: [
-                IconButton(
-                  key: const Key('close-transcript-search'),
-                  tooltip: context.strings.t('close_search'),
-                  onPressed: onCloseSearch,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 40,
-                    height: 40,
-                  ),
-                  padding: EdgeInsets.zero,
-                  icon: const Icon(Icons.arrow_back_rounded),
-                ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: CallbackShortcuts(
-                    bindings: {
-                      const SingleActivator(LogicalKeyboardKey.escape):
-                          onCloseSearch,
-                    },
-                    child: TextField(
-                      key: const Key('transcript-search-field'),
-                      autofocus: true,
-                      controller: search,
-                      onChanged: (_) => onSearch(),
-                      decoration: InputDecoration(
-                        isDense: true,
-                        hintText: context.strings.t('search_transcript'),
-                        prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                        prefixIconConstraints: const BoxConstraints(
-                          minWidth: 36,
-                        ),
-                        suffixIconConstraints: const BoxConstraints(
-                          minWidth: 36,
-                        ),
-                        suffixIcon: search.text.isEmpty
-                            ? null
-                            : IconButton(
-                                key: const Key('clear-transcript-search'),
-                                tooltip: context.strings.t('clear_search'),
-                                onPressed: () {
-                                  search.clear();
-                                  onSearch();
-                                },
-                                icon: const Icon(Icons.close_rounded, size: 18),
-                              ),
-                      ),
+      IconButton(
+        key: const Key('close-transcript-search'),
+        tooltip: context.strings.t('close_search'),
+        onPressed: onCloseSearch,
+        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.arrow_back_rounded),
+      ),
+      const SizedBox(width: 4),
+      Expanded(
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): onCloseSearch,
+          },
+          child: TextField(
+            key: const Key('transcript-search-field'),
+            autofocus: true,
+            controller: search,
+            onChanged: (_) => onSearch(),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: context.strings.t('search_transcript'),
+              prefixIcon: const Icon(Icons.search_rounded, size: 20),
+              prefixIconConstraints: const BoxConstraints(minWidth: 36),
+              suffixIconConstraints: const BoxConstraints(minWidth: 36),
+              suffixIcon: search.text.isEmpty
+                  ? null
+                  : IconButton(
+                      key: const Key('clear-transcript-search'),
+                      tooltip: context.strings.t('clear_search'),
+                      onPressed: () {
+                        search.clear();
+                        onSearch();
+                      },
+                      icon: const Icon(Icons.close_rounded, size: 18),
                     ),
-                  ),
-                ),
-              ],
             ),
           ),
         ),
