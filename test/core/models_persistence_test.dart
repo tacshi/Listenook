@@ -105,10 +105,92 @@ void main() {
     expect(job.displayName, 'recording.wav');
     expect(job.groupId, isNull);
     expect(job.tagIds, isEmpty);
+    expect(job.sourceOrigin, JobSourceOrigin.manual);
+    expect(job.sourceFingerprint, isNull);
+  });
+
+  test('version 6 manifests round-trip monitored source provenance', () {
+    final now = DateTime.utc(2026, 8, 14, 8, 30);
+    final fingerprint = SourceFingerprint(
+      identity: '/inbox/meeting.wav',
+      path: '/inbox/meeting.wav',
+      sizeBytes: 4096,
+      modifiedAt: now,
+    );
+    final restored = TranscriptionJob.fromJson(
+      TranscriptionJob(
+        id: 'monitored',
+        batchId: 'batch',
+        sourcePath: fingerprint.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.ready,
+        sourceOrigin: JobSourceOrigin.monitoredFolder,
+        sourceFingerprint: fingerprint,
+      ).toJson(),
+    );
+
+    expect(restored.sourceOrigin, JobSourceOrigin.monitoredFolder);
+    expect(restored.sourceFingerprint?.sameVersion(fingerprint), isTrue);
+    expect(restored.toJson()['manifest_version'], 6);
+  });
+
+  test('Inbox monitor configuration and ledger persist atomically', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'meowstt-monitor-store-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final paths = AppPaths.forTesting(temporary.path);
+    final repository = JsonInboxMonitorRepository(paths);
+    final now = DateTime.utc(2026, 8, 14);
+    final fingerprint = SourceFingerprint(
+      identity: '/watch/clip.mp4',
+      path: '/watch/clip.mp4',
+      sizeBytes: 99,
+      modifiedAt: now,
+    );
+    final storage = InboxMonitorStorage(
+      config: const InboxMonitorConfig(
+        folderPath: '/watch',
+        paused: true,
+        extensions: {'wav', 'mp4'},
+        launchAtLogin: true,
+        showTrayIcon: false,
+      ),
+      records: {
+        fingerprint.identity: MonitoredFileRecord(
+          fingerprint: fingerprint,
+          disposition: MonitoredFileDisposition.dismissed,
+          updatedAt: now,
+          jobId: 'job-1',
+        ),
+      },
+    );
+
+    await repository.save(storage);
+    final restored = await repository.load();
+
+    expect(restored.config.folderPath, '/watch');
+    expect(restored.config.paused, isTrue);
+    expect(restored.config.extensions, {'wav', 'mp4'});
+    expect(restored.config.launchAtLogin, isTrue);
+    expect(restored.config.showTrayIcon, isFalse);
+    expect(InboxMonitorConfig.fromJson(const {}).showTrayIcon, isTrue);
+    expect(
+      restored.records[fingerprint.identity]?.disposition,
+      MonitoredFileDisposition.dismissed,
+    );
+    expect(await paths.inboxMonitor.exists(), isTrue);
+    expect(
+      temporary.listSync().whereType<File>().any(
+        (file) => file.path.endsWith('.tmp'),
+      ),
+      isFalse,
+    );
   });
 
   test(
-    'version 5 manifests preserve library metadata without renaming source',
+    'version 6 manifests preserve library metadata without renaming source',
     () {
       final now = DateTime.utc(2026, 8, 13);
       final job = TranscriptionJob(
@@ -126,7 +208,7 @@ void main() {
       final json = job.toJson();
       final restored = TranscriptionJob.fromJson(json);
 
-      expect(json['manifest_version'], 5);
+      expect(json['manifest_version'], 6);
       expect(restored.sourcePath, '/recordings/original.wav');
       expect(restored.fileName, 'original.wav');
       expect(restored.displayName, 'Weekly sync');
@@ -135,7 +217,7 @@ void main() {
     },
   );
 
-  test('version 5 manifests round-trip translation without credentials', () {
+  test('version 6 manifests round-trip translation without credentials', () {
     final now = DateTime.utc(2026, 8, 11);
     final job = TranscriptionJob(
       id: 'translated',
@@ -192,7 +274,7 @@ void main() {
     final json = job.toJson();
     final restored = TranscriptionJob.fromJson(json);
 
-    expect(json['manifest_version'], 5);
+    expect(json['manifest_version'], 6);
     expect(job.toJsonString(), isNot(contains('api_key')));
     expect(restored.document!.segments.single.translatedText, '你好');
     expect(restored.translationState.status, TranslationStatus.completed);
@@ -215,7 +297,7 @@ void main() {
     expect(appSettings.sonioxTranslation.targetLanguage, 'ja');
   });
 
-  test('version 5 manifests round-trip evidence-backed AI Briefs', () {
+  test('version 6 manifests round-trip evidence-backed AI Briefs', () {
     final now = DateTime.utc(2026, 8, 12);
     final job = TranscriptionJob(
       id: 'brief',

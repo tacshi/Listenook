@@ -3041,6 +3041,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.settings);
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
+    await tester.tap(find.text('Transcription'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('soniox-key-field')));
     await tester.pump();
 
@@ -3063,9 +3065,13 @@ void main() {
     expect(controller.destination, AppDestination.settings);
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
 
-    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-    await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
-    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await messenger.handlePlatformMessage(
+      'app.meowstt.desktop/navigation',
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('showInbox'),
+      ),
+      null,
+    );
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.inbox);
 
@@ -3232,6 +3238,7 @@ void main() {
       await controller.updateSettings(
         controller.settings.copyWith(onboardingComplete: true),
       );
+      await controller.setDesktopTrayIconVisible(false);
       final reviewController = ReviewFullscreenController();
       final mediaReleased = Completer<void>();
       final mediaOwner = Object();
@@ -3269,6 +3276,86 @@ void main() {
       expect(events, ['media-start', 'media-done', 'prevent:false', 'close']);
     },
   );
+
+  testWidgets('menu bar item and close-to-menu-bar work without an Inbox folder', (
+    tester,
+  ) async {
+    const windowChannel = MethodChannel('window_manager');
+    const trayChannel = MethodChannel('tray_manager');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final events = <String>[];
+    messenger.setMockMethodCallHandler(windowChannel, (call) async {
+      if (call.method == 'isFullScreen') return false;
+      if (call.method == 'isVisible') return true;
+      if (call.method == 'setPreventClose') {
+        final arguments = call.arguments as Map<Object?, Object?>;
+        events.add('prevent:${arguments['isPreventClose']}');
+      }
+      if (call.method == 'setSkipTaskbar') events.add('skip-taskbar');
+      if (call.method == 'hide') events.add('hide');
+      if (call.method == 'close') events.add('close');
+      return null;
+    });
+    messenger.setMockMethodCallHandler(trayChannel, (call) async {
+      events.add('tray:${call.method}');
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
+    addTearDown(() => messenger.setMockMethodCallHandler(trayChannel, null));
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([]),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.updateSettings(
+      controller.settings.copyWith(onboardingComplete: true),
+    );
+    await controller.setDesktopTrayIconVisible(false);
+    expect(controller.inboxMonitorConfigured, isFalse);
+    expect(controller.inboxMonitorConfig.showTrayIcon, isFalse);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: AppShell(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(events, isNot(contains('tray:setIcon')));
+
+    await controller.setDesktopTrayIconVisible(true);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+    expect(events, contains('tray:setIcon'));
+    events.clear();
+
+    final dynamic appShellState = tester.state(find.byType(AppShell));
+    await appShellState.onWindowClose();
+
+    expect(events, containsAllInOrder(['skip-taskbar', 'hide']));
+    expect(events, isNot(contains('close')));
+    expect(events, isNot(contains('prevent:false')));
+
+    events.clear();
+    await controller.setDesktopTrayIconVisible(false);
+    await tester.pump();
+    await appShellState.onWindowClose();
+
+    expect(events, containsAllInOrder(['prevent:false', 'close']));
+    expect(events, isNot(contains('hide')));
+  });
 
   testWidgets('playback position is restored after switching app tabs', (
     tester,

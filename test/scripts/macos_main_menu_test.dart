@@ -15,4 +15,24 @@ void main() {
     },
     skip: !Platform.isMacOS,
   );
+
+  test('macOS Quit is routed through Flutter and embeds the login helper', () {
+    final menu = File(
+      '${Directory.current.path}/macos/Runner/Base.lproj/MainMenu.xib',
+    ).readAsStringSync();
+    final project = File(
+      '${Directory.current.path}/macos/Runner.xcodeproj/project.pbxproj',
+    ).readAsStringSync();
+    final delegate = File(
+      '${Directory.current.path}/macos/Runner/AppDelegate.swift',
+    ).readAsStringSync();
+
+    expect(menu, contains('selector="requestQuit:"'));
+    expect(delegate, contains('SMAppService.mainApp'));
+    expect(delegate, contains('SMLoginItemSetEnabled'));
+    expect(delegate, contains('applicationShouldHandleReopen'));
+    expect(delegate, contains('invokeNavigation("showInbox"'));
+    expect(project, contains('Embed Login Items'));
+    expect(project, contains('app.meowstt.desktop.Launcher'));
+  }, skip: !Platform.isMacOS);
 }

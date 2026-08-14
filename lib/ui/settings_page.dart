@@ -1,11 +1,15 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/models.dart';
+import '../data/desktop_runtime.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
+import 'inbox_monitor_setup_dialog.dart';
 
 typedef ExternalUrlLauncher = Future<bool> Function(Uri url);
 
@@ -42,7 +46,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final settings = controller.settings;
     return SafeArea(
       child: DefaultTabController(
-        length: 4,
+        length: 5,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -67,6 +71,10 @@ class _SettingsPageState extends State<SettingsPage> {
                 tabAlignment: TabAlignment.start,
                 tabs: [
                   Tab(
+                    icon: const Icon(Icons.tune_rounded),
+                    text: context.strings.t('settings_general'),
+                  ),
+                  Tab(
                     icon: const Icon(Icons.transcribe_rounded),
                     text: context.strings.t('settings_transcription'),
                   ),
@@ -89,10 +97,11 @@ class _SettingsPageState extends State<SettingsPage> {
             Expanded(
               child: TabBarView(
                 children: [
+                  _generalTab(context, controller),
                   _transcriptionTab(context, controller, settings),
                   _appearanceTab(context, controller, settings),
                   _shortcutsTab(context),
-                  _systemTab(context, controller),
+                  _aboutTab(context),
                 ],
               ),
             ),
@@ -427,19 +436,61 @@ class _SettingsPageState extends State<SettingsPage> {
     ]);
   }
 
-  Widget _systemTab(BuildContext context, AppController controller) =>
-      _tabList([
-        _Section(
-          title: context.strings.t('privacy'),
-          icon: Icons.shield_outlined,
-          child: Text(context.strings.t('privacy_body')),
+  Widget _generalTab(BuildContext context, AppController controller) {
+    final config = controller.inboxMonitorConfig;
+    final macOS = Platform.isMacOS;
+    return _tabList([
+      _ToggleSection(
+        key: const Key('settings-launch-at-login'),
+        title: context.strings.t('inbox_monitor_launch_at_login'),
+        subtitle: config.showTrayIcon
+            ? context.strings.t(
+                macOS
+                    ? 'desktop_menu_bar_launch_hint'
+                    : 'desktop_tray_launch_hint',
+              )
+            : null,
+        icon: Icons.login_rounded,
+        value: config.launchAtLogin,
+        onChanged: (enabled) async {
+          await controller.setInboxMonitorLaunchAtLogin(enabled);
+          if (!context.mounted) return;
+          await Provider.of<DesktopRuntime?>(
+            context,
+            listen: false,
+          )?.setLaunchAtLogin(enabled);
+        },
+      ),
+      _ToggleSection(
+        key: const Key('settings-show-tray-icon'),
+        title: context.strings.t(
+          macOS ? 'desktop_menu_bar_icon' : 'desktop_tray_icon',
         ),
-        _Section(
-          title: context.strings.t('notices'),
-          icon: Icons.article_outlined,
-          child: Text(context.strings.t('notices_body')),
-        ),
-      ]);
+        subtitle: context.strings.t('desktop_icon_hint'),
+        icon: macOS ? Icons.menu_rounded : Icons.move_to_inbox_outlined,
+        value: config.showTrayIcon,
+        onChanged: controller.setDesktopTrayIconVisible,
+      ),
+      _Section(
+        title: context.strings.t('inbox_monitor_settings_title'),
+        icon: Icons.folder_special_outlined,
+        child: _InboxMonitorSettings(controller: controller),
+      ),
+    ]);
+  }
+
+  Widget _aboutTab(BuildContext context) => _tabList([
+    _Section(
+      title: context.strings.t('privacy'),
+      icon: Icons.shield_outlined,
+      child: Text(context.strings.t('privacy_body')),
+    ),
+    _Section(
+      title: context.strings.t('notices'),
+      icon: Icons.article_outlined,
+      child: Text(context.strings.t('notices_body')),
+    ),
+  ]);
 
   Future<void> _saveKey(AppController controller) async {
     final candidate = _key.text.trim();
@@ -1030,6 +1081,138 @@ class _ShortcutRow extends StatelessWidget {
       ),
     );
   }
+}
+
+class _InboxMonitorSettings extends StatelessWidget {
+  const _InboxMonitorSettings({required this.controller});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final config = controller.inboxMonitorConfig;
+    final configured = config.isConfigured;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          configured
+              ? config.folderPath
+              : context.strings.t('inbox_monitor_not_configured'),
+          key: const Key('settings-inbox-monitor-path'),
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 6),
+        Text(
+          context.strings.t('inbox_monitor_settings_body'),
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton.tonalIcon(
+              key: const Key('settings-inbox-monitor-setup'),
+              onPressed: () => showInboxMonitorSetupDialog(context),
+              icon: Icon(
+                configured ? Icons.tune_rounded : Icons.create_new_folder,
+              ),
+              label: Text(
+                context.strings.t(
+                  configured
+                      ? 'inbox_monitor_change'
+                      : 'inbox_monitor_choose_folder',
+                ),
+              ),
+            ),
+            if (configured)
+              OutlinedButton.icon(
+                key: const Key('settings-inbox-monitor-pause'),
+                onPressed: () =>
+                    controller.setInboxMonitorPaused(!config.paused),
+                icon: Icon(
+                  config.paused ? Icons.play_arrow_rounded : Icons.pause,
+                ),
+                label: Text(
+                  context.strings.t(
+                    config.paused
+                        ? 'inbox_monitor_resume'
+                        : 'inbox_monitor_pause',
+                  ),
+                ),
+              ),
+            if (configured)
+              TextButton.icon(
+                key: const Key('settings-inbox-monitor-remove-folder'),
+                onPressed: controller.clearInboxMonitor,
+                icon: const Icon(Icons.folder_off_outlined),
+                label: Text(context.strings.t('inbox_monitor_remove_folder')),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ToggleSection extends StatelessWidget {
+  const _ToggleSection({
+    super.key,
+    required this.title,
+    this.subtitle,
+    required this.icon,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final String? subtitle;
+  final IconData icon;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Icon(icon, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (subtitle case final value?) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      value,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            Switch.adaptive(value: value, onChanged: onChanged),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _Section extends StatelessWidget {

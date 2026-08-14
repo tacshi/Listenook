@@ -10,6 +10,7 @@ import '../core/contracts.dart';
 import '../core/models.dart';
 import '../core/transcript_parser.dart';
 import '../data/openai_translation_service.dart';
+import '../data/inbox_folder_monitor.dart';
 import '../data/process_media_service.dart';
 import '../data/soniox_api_client.dart';
 import '../data/transcript_exporter.dart';
@@ -31,6 +32,8 @@ class AppController extends ChangeNotifier {
     TranslationCredentialStore? translationCredentialStore,
     TranslationService? translationService,
     AiBriefService? aiBriefService,
+    InboxMonitorRepository? inboxMonitorRepository,
+    InboxFolderMonitor? inboxFolderMonitor,
     TranscriptParser parser = const TranscriptParser(),
     Uuid uuid = const Uuid(),
   }) : _credentials = credentialStore,
@@ -44,6 +47,8 @@ class AppController extends ChangeNotifier {
        _translationCredentials = translationCredentialStore,
        _translationService = translationService,
        _aiBriefService = aiBriefService,
+       _inboxMonitorRepository = inboxMonitorRepository,
+       _inboxFolderMonitor = inboxFolderMonitor,
        _parser = parser,
        _uuid = uuid;
 
@@ -58,6 +63,8 @@ class AppController extends ChangeNotifier {
   final TranslationCredentialStore? _translationCredentials;
   final TranslationService? _translationService;
   final AiBriefService? _aiBriefService;
+  final InboxMonitorRepository? _inboxMonitorRepository;
+  final InboxFolderMonitor? _inboxFolderMonitor;
   final TranscriptParser _parser;
   final Uuid _uuid;
   final Map<String, TranscriptionJob> _jobs = {};
@@ -66,18 +73,41 @@ class AppController extends ChangeNotifier {
   final Set<String> _cancelledIds = {};
   final Set<String> _translationCancelledIds = {};
   final Set<String> _aiBriefCancelledIds = {};
+  final Set<String> _monitorCandidatesInFlight = {};
   String _batchId = '';
   bool _processing = false;
   bool _initializing = true;
   bool _keyConfigured = false;
   bool _translationKeyConfigured = false;
+  bool _monitorShutDown = false;
   AppDestination _destination = AppDestination.inbox;
   String? _activeWorkspaceJobId;
   AppSettings _settings = const AppSettings();
   LibraryCatalog _libraryCatalog = const LibraryCatalog();
   TranscriptionOptions _sessionOptions = const TranscriptionOptions();
+  InboxMonitorStorage _inboxMonitorStorage = const InboxMonitorStorage();
+  InboxMonitorStatus _inboxMonitorStatus = InboxMonitorStatus.unconfigured;
+  String? _inboxMonitorError;
 
   AppSettings get settings => _settings;
+  InboxMonitorConfig get inboxMonitorConfig => _inboxMonitorStorage.config;
+  InboxMonitorStatus get inboxMonitorStatus => _inboxMonitorStatus;
+  String? get inboxMonitorError => _inboxMonitorError;
+  bool get inboxMonitorConfigured => inboxMonitorConfig.isConfigured;
+  int get monitoredWaitingCount => inboxJobs
+      .where(
+        (job) =>
+            job.sourceOrigin == JobSourceOrigin.monitoredFolder &&
+            job.document == null,
+      )
+      .length;
+  int get monitoredHandledCount => _inboxMonitorStorage.records.values
+      .where(
+        (record) =>
+            record.disposition == MonitoredFileDisposition.completed ||
+            record.disposition == MonitoredFileDisposition.dismissed,
+      )
+      .length;
   LibraryCatalog get libraryCatalog => _libraryCatalog;
   List<LibraryGroup> get libraryGroups {
     final groups = List<LibraryGroup>.of(_libraryCatalog.groups)
@@ -176,6 +206,8 @@ class AppController extends ChangeNotifier {
     _libraryCatalog =
         await _libraryCatalogRepository?.load() ?? const LibraryCatalog();
     _settings = await _settingsRepository.load();
+    _inboxMonitorStorage =
+        await _inboxMonitorRepository?.load() ?? const InboxMonitorStorage();
     var settingsChanged = false;
     if (_settings.translationSettings.targetLanguage.isEmpty) {
       _settings = _settings.copyWith(
@@ -287,8 +319,10 @@ class AppController extends ChangeNotifier {
       _sessionOptions = interrupted.first.options;
       _inboxIds.addAll(interrupted.map((job) => job.id));
     }
+    await _seedMonitorLedgerFromJobs(loaded);
     _initializing = false;
     notifyListeners();
+    await _restartInboxMonitor();
     unawaited(_recover(interrupted));
     unawaited(_retryPendingCleanup(loaded));
   }
@@ -301,6 +335,281 @@ class AppController extends ChangeNotifier {
     if (store is CredentialAvailabilityStore) return store.hasApiKey();
     return (await read())?.isNotEmpty ?? false;
   }
+
+  Future<void> configureInboxMonitor({
+    required String folderPath,
+    required Set<String> extensions,
+    required bool launchAtLogin,
+  }) async {
+    final normalizedExtensions = extensions
+        .map((value) => value.trim().toLowerCase().replaceFirst('.', ''))
+        .where(supportedMonitoredMediaExtensions.contains)
+        .toSet();
+    if (normalizedExtensions.isEmpty) {
+      throw ArgumentError.value(
+        extensions,
+        'extensions',
+        'Select a file type.',
+      );
+    }
+    final absolute = p.canonicalize(p.absolute(folderPath));
+    if (!await Directory(absolute).exists()) {
+      throw ArgumentError.value(folderPath, 'folderPath', 'Folder not found.');
+    }
+    _inboxMonitorStorage = _inboxMonitorStorage.copyWith(
+      config: InboxMonitorConfig(
+        folderPath: absolute,
+        extensions: normalizedExtensions,
+        launchAtLogin: launchAtLogin,
+        showTrayIcon: inboxMonitorConfig.showTrayIcon,
+      ),
+    );
+    await _seedMonitorLedgerFromJobs(allJobs);
+    await _persistInboxMonitor();
+    notifyListeners();
+    await _restartInboxMonitor();
+  }
+
+  Future<void> setInboxMonitorPaused(bool paused) async {
+    if (!inboxMonitorConfigured || inboxMonitorConfig.paused == paused) return;
+    _inboxMonitorStorage = _inboxMonitorStorage.copyWith(
+      config: inboxMonitorConfig.copyWith(paused: paused),
+    );
+    await _persistInboxMonitor();
+    notifyListeners();
+    await _restartInboxMonitor();
+  }
+
+  Future<void> clearInboxMonitor() async {
+    if (!inboxMonitorConfigured) return;
+    final config = inboxMonitorConfig;
+    _inboxMonitorStorage = _inboxMonitorStorage.copyWith(
+      config: InboxMonitorConfig(
+        extensions: config.extensions,
+        launchAtLogin: config.launchAtLogin,
+        showTrayIcon: config.showTrayIcon,
+      ),
+    );
+    await _persistInboxMonitor();
+    notifyListeners();
+    await _restartInboxMonitor();
+  }
+
+  Future<void> setInboxMonitorLaunchAtLogin(bool enabled) async {
+    if (inboxMonitorConfig.launchAtLogin == enabled) {
+      return;
+    }
+    _inboxMonitorStorage = _inboxMonitorStorage.copyWith(
+      config: inboxMonitorConfig.copyWith(launchAtLogin: enabled),
+    );
+    await _persistInboxMonitor();
+    notifyListeners();
+  }
+
+  Future<void> setDesktopTrayIconVisible(bool visible) async {
+    if (inboxMonitorConfig.showTrayIcon == visible) return;
+    _inboxMonitorStorage = _inboxMonitorStorage.copyWith(
+      config: inboxMonitorConfig.copyWith(showTrayIcon: visible),
+    );
+    await _persistInboxMonitor();
+    notifyListeners();
+  }
+
+  Future<void> rescanInboxMonitor() =>
+      _inboxFolderMonitor?.scanNow() ?? Future<void>.value();
+
+  Future<void> _restartInboxMonitor() async {
+    final monitor = _inboxFolderMonitor;
+    if (monitor == null) {
+      _setInboxMonitorStatus(
+        inboxMonitorConfigured
+            ? (inboxMonitorConfig.paused
+                  ? InboxMonitorStatus.paused
+                  : InboxMonitorStatus.active)
+            : InboxMonitorStatus.unconfigured,
+        null,
+      );
+      return;
+    }
+    await monitor.start(
+      inboxMonitorConfig,
+      onCandidate: _enqueueMonitoredCandidate,
+      onSnapshot: _reconcileMonitoredSnapshot,
+      onStatus: _setInboxMonitorStatus,
+    );
+  }
+
+  Future<void> _reconcileMonitoredSnapshot(Set<String> identities) async {
+    if (!inboxMonitorConfigured) return;
+    final records = Map<String, MonitoredFileRecord>.of(
+      _inboxMonitorStorage.records,
+    );
+    final removedJobs = <TranscriptionJob>[];
+    var recordsChanged = false;
+    for (final entry in _inboxMonitorStorage.records.entries) {
+      if (identities.contains(entry.key) ||
+          entry.value.disposition != MonitoredFileDisposition.queued) {
+        continue;
+      }
+      final jobId = entry.value.jobId;
+      final job = jobId == null ? null : _jobs[jobId];
+      if (job != null && !_canRemoveMissingMonitoredJob(job)) continue;
+      records.remove(entry.key);
+      recordsChanged = true;
+      if (job != null) removedJobs.add(job);
+    }
+    if (!recordsChanged) return;
+    for (final job in removedJobs) {
+      _inboxIds.remove(job.id);
+      _jobs.remove(job.id);
+      _playbackPositions.remove(job.id);
+      await _media.deleteGeneratedMedia(job.id);
+      await _jobsRepository.delete(job.id);
+    }
+    _inboxMonitorStorage = _inboxMonitorStorage.copyWith(records: records);
+    await _persistInboxMonitor();
+    notifyListeners();
+  }
+
+  bool _canRemoveMissingMonitoredJob(TranscriptionJob job) {
+    if (job.sourceOrigin != JobSourceOrigin.monitoredFolder ||
+        job.document != null) {
+      return false;
+    }
+    return switch (job.status) {
+      JobStatus.pending ||
+      JobStatus.probing ||
+      JobStatus.ready ||
+      JobStatus.paused ||
+      JobStatus.missingSource => true,
+      JobStatus.failed =>
+        job.metadata == null &&
+            job.remoteFileId == null &&
+            job.remoteTranscriptionId == null,
+      _ => false,
+    };
+  }
+
+  void _setInboxMonitorStatus(InboxMonitorStatus status, String? error) {
+    if (_inboxMonitorStatus == status && _inboxMonitorError == error) return;
+    _inboxMonitorStatus = status;
+    _inboxMonitorError = error;
+    notifyListeners();
+  }
+
+  Future<void> _seedMonitorLedgerFromJobs(
+    Iterable<TranscriptionJob> jobs,
+  ) async {
+    if (!inboxMonitorConfigured) return;
+    final records = Map<String, MonitoredFileRecord>.of(
+      _inboxMonitorStorage.records,
+    );
+    var changed = false;
+    for (final job in jobs) {
+      if (job.status != JobStatus.completed && job.status != JobStatus.empty) {
+        continue;
+      }
+      if (!_pathIsInMonitoredFolder(job.sourcePath)) continue;
+      final fingerprint =
+          job.sourceFingerprint ??
+          await fingerprintMonitoredFile(job.sourcePath);
+      if (fingerprint == null) continue;
+      final current = records[fingerprint.identity];
+      if (current != null && current.fingerprint.sameVersion(fingerprint)) {
+        continue;
+      }
+      records[fingerprint.identity] = MonitoredFileRecord(
+        fingerprint: fingerprint,
+        disposition: MonitoredFileDisposition.completed,
+        updatedAt: DateTime.now().toUtc(),
+        jobId: job.id,
+      );
+      changed = true;
+    }
+    if (!changed) return;
+    _inboxMonitorStorage = _inboxMonitorStorage.copyWith(records: records);
+    await _persistInboxMonitor();
+  }
+
+  Future<void> _enqueueMonitoredCandidate(SourceFingerprint fingerprint) async {
+    final existing = _inboxMonitorStorage.records[fingerprint.identity];
+    if (existing != null && existing.fingerprint.sameVersion(fingerprint)) {
+      return;
+    }
+    if (!_monitorCandidatesInFlight.add(fingerprint.identity)) return;
+    try {
+      for (final job in _jobs.values) {
+        final known = job.sourceFingerprint;
+        if (known == null || !known.sameVersion(fingerprint)) continue;
+        await _recordMonitoredFile(
+          job,
+          job.document != null ||
+                  job.status == JobStatus.completed ||
+                  job.status == JobStatus.empty
+              ? MonitoredFileDisposition.completed
+              : MonitoredFileDisposition.queued,
+          fingerprint: fingerprint,
+        );
+        return;
+      }
+      final job = await _enqueueResolvedSource(
+        ResolvedMediaSource(
+          path: fingerprint.path,
+          identity: fingerprint.identity,
+        ),
+        sourceOrigin: JobSourceOrigin.monitoredFolder,
+        fingerprint: fingerprint,
+      );
+      if (job != null) {
+        await _recordMonitoredFile(
+          job,
+          MonitoredFileDisposition.queued,
+          fingerprint: fingerprint,
+        );
+      }
+    } finally {
+      _monitorCandidatesInFlight.remove(fingerprint.identity);
+    }
+  }
+
+  Future<void> _recordMonitoredFile(
+    TranscriptionJob job,
+    MonitoredFileDisposition disposition, {
+    SourceFingerprint? fingerprint,
+  }) async {
+    final value = fingerprint ?? job.sourceFingerprint;
+    if (value == null || !inboxMonitorConfigured) return;
+    final records = Map<String, MonitoredFileRecord>.of(
+      _inboxMonitorStorage.records,
+    );
+    final current = records[value.identity];
+    if (current != null &&
+        current.fingerprint.sameVersion(value) &&
+        current.disposition == disposition &&
+        current.jobId == job.id) {
+      return;
+    }
+    records[value.identity] = MonitoredFileRecord(
+      fingerprint: value,
+      disposition: disposition,
+      updatedAt: DateTime.now().toUtc(),
+      jobId: job.id,
+    );
+    _inboxMonitorStorage = _inboxMonitorStorage.copyWith(records: records);
+    await _persistInboxMonitor();
+    notifyListeners();
+  }
+
+  bool _pathIsInMonitoredFolder(String path) {
+    if (!inboxMonitorConfigured) return false;
+    final folder = monitoredPathIdentity(inboxMonitorConfig.folderPath);
+    final candidate = monitoredPathIdentity(path);
+    return candidate == folder || p.isWithin(folder, candidate);
+  }
+
+  Future<void> _persistInboxMonitor() =>
+      _inboxMonitorRepository?.save(_inboxMonitorStorage) ??
+      Future<void>.value();
 
   void setDestination(AppDestination destination) {
     if (_destination == destination) return;
@@ -492,26 +801,42 @@ class AppController extends ChangeNotifier {
     final sources = await _sourceResolver.resolve(paths);
     for (final source in sources) {
       if (!existing.add(source.identity)) continue;
-      final now = DateTime.now().toUtc();
-      final job = TranscriptionJob(
-        id: _uuid.v4(),
-        batchId: _batchId,
-        sourcePath: source.path,
-        createdAt: now,
-        updatedAt: now,
-        status: JobStatus.pending,
-        queueIndex: _inboxIds.length,
-        options: _sessionOptions,
-        translationOptions: TranslationOptions.fromSettings(
-          _settings.translationSettings,
-        ),
+      await _enqueueResolvedSource(
+        source,
+        sourceOrigin: JobSourceOrigin.manual,
+        fingerprint: await fingerprintMonitoredFile(source.path),
       );
-      _jobs[job.id] = job;
-      _inboxIds.add(job.id);
-      await _jobsRepository.save(job);
-      notifyListeners();
-      unawaited(_prepare(job.id));
     }
+  }
+
+  Future<TranscriptionJob?> _enqueueResolvedSource(
+    ResolvedMediaSource source, {
+    required JobSourceOrigin sourceOrigin,
+    SourceFingerprint? fingerprint,
+  }) async {
+    if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
+    final now = DateTime.now().toUtc();
+    final job = TranscriptionJob(
+      id: _uuid.v4(),
+      batchId: _batchId,
+      sourcePath: source.path,
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.pending,
+      queueIndex: _inboxIds.length,
+      options: _sessionOptions,
+      translationOptions: TranslationOptions.fromSettings(
+        _settings.translationSettings,
+      ),
+      sourceOrigin: sourceOrigin,
+      sourceFingerprint: fingerprint,
+    );
+    _jobs[job.id] = job;
+    _inboxIds.add(job.id);
+    await _jobsRepository.save(job);
+    notifyListeners();
+    unawaited(_prepare(job.id));
+    return job;
   }
 
   Future<void> _prepare(String id) async {
@@ -525,6 +850,7 @@ class AppController extends ChangeNotifier {
     );
     try {
       final metadata = await _media.inspect(job.sourcePath);
+      if (!_jobs.containsKey(id)) return;
       await _transition(
         job,
         status: _processing ? JobStatus.paused : JobStatus.ready,
@@ -535,6 +861,7 @@ class AppController extends ChangeNotifier {
         ),
       );
     } on MediaException catch (error) {
+      if (!_jobs.containsKey(id)) return;
       await _transition(
         job,
         status: error.code == 'missing_source'
@@ -545,6 +872,7 @@ class AppController extends ChangeNotifier {
         progress: const JobProgress(stage: 'failed'),
       );
     } on Object catch (error) {
+      if (!_jobs.containsKey(id)) return;
       await _fail(job, 'media_error', _safeError(error));
     }
   }
@@ -892,6 +1220,9 @@ class AppController extends ChangeNotifier {
     if (job == null || job.isBusy) return;
     _inboxIds.remove(id);
     if (job.document == null) {
+      if (_pathIsInMonitoredFolder(job.sourcePath)) {
+        await _recordMonitoredFile(job, MonitoredFileDisposition.dismissed);
+      }
       _jobs.remove(id);
       _playbackPositions.remove(id);
       await _media.deleteGeneratedMedia(id);
@@ -907,6 +1238,13 @@ class AppController extends ChangeNotifier {
         if (_jobs[id]?.document == null) id,
     ];
     for (final id in discardedIds) {
+      final discarded = _jobs[id];
+      if (discarded != null && _pathIsInMonitoredFolder(discarded.sourcePath)) {
+        await _recordMonitoredFile(
+          discarded,
+          MonitoredFileDisposition.dismissed,
+        );
+      }
       _jobs.remove(id);
       _playbackPositions.remove(id);
       await _media.deleteGeneratedMedia(id);
@@ -2313,7 +2651,33 @@ class AppController extends ChangeNotifier {
     );
     _jobs[job.id] = updated;
     await _jobsRepository.save(updated);
+    if ((updated.status == JobStatus.completed ||
+            updated.status == JobStatus.empty) &&
+        _pathIsInMonitoredFolder(updated.sourcePath)) {
+      final fingerprint =
+          updated.sourceFingerprint ??
+          await fingerprintMonitoredFile(updated.sourcePath);
+      if (fingerprint != null) {
+        await _recordMonitoredFile(
+          updated,
+          MonitoredFileDisposition.completed,
+          fingerprint: fingerprint,
+        );
+      }
+    }
     notifyListeners();
     return updated;
+  }
+
+  Future<void> shutdown() async {
+    if (_monitorShutDown) return;
+    _monitorShutDown = true;
+    await _inboxFolderMonitor?.dispose();
+  }
+
+  @override
+  void dispose() {
+    unawaited(shutdown());
+    super.dispose();
   }
 }

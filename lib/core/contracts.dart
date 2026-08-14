@@ -120,6 +120,30 @@ abstract interface class LibraryCatalogRepository {
   Future<void> save(LibraryCatalog catalog);
 }
 
+abstract interface class InboxMonitorRepository {
+  Future<InboxMonitorStorage> load();
+  Future<void> save(InboxMonitorStorage storage);
+}
+
+typedef MonitoredFileCallback =
+    Future<void> Function(SourceFingerprint fingerprint);
+typedef MonitoredFilesSnapshotCallback =
+    Future<void> Function(Set<String> identities);
+typedef InboxMonitorStatusCallback =
+    void Function(InboxMonitorStatus status, String? error);
+
+abstract interface class InboxFolderMonitor {
+  Future<void> start(
+    InboxMonitorConfig config, {
+    required MonitoredFileCallback onCandidate,
+    required MonitoredFilesSnapshotCallback onSnapshot,
+    required InboxMonitorStatusCallback onStatus,
+  });
+  Future<void> scanNow();
+  Future<void> stop();
+  Future<void> dispose();
+}
+
 abstract interface class MediaService {
   bool canUploadDirectly(String path, MediaMetadata metadata);
   Future<MediaMetadata> inspect(String sourcePath);

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/data/inbox_folder_monitor.dart';
 import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/openai_translation_service.dart';
 import 'package:meow_stt/data/process_media_service.dart';
@@ -1295,6 +1296,196 @@ void main() {
       );
     },
   );
+
+  test(
+    'monitored discovery waits for Transcribe and dismissal survives rescans',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-monitor-controller-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/meeting.wav');
+      await source.writeAsBytes(const [1, 2, 3]);
+      final monitor = _InboxMonitor();
+      final monitorRepository = _InboxMonitorRepository();
+      final soniox = _Soniox();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: soniox,
+        inboxMonitor: monitor,
+        inboxMonitorRepository: monitorRepository,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.configureInboxMonitor(
+        folderPath: directory.path,
+        extensions: const {'wav'},
+        launchAtLogin: false,
+      );
+
+      await monitor.emit(source.path);
+      await _waitFor(() => controller.readyCount == 1);
+
+      final discovered = controller.inboxJobs.single;
+      expect(discovered.sourceOrigin, JobSourceOrigin.monitoredFolder);
+      expect(discovered.sourceFingerprint, isNotNull);
+      expect(soniox.uploadCalls, 0);
+      expect(
+        monitorRepository.value.records.values.single.disposition,
+        MonitoredFileDisposition.queued,
+      );
+
+      await controller.removeFromInbox(discovered.id);
+      expect(controller.inboxJobs, isEmpty);
+      expect(
+        monitorRepository.value.records.values.single.disposition,
+        MonitoredFileDisposition.dismissed,
+      );
+
+      await monitor.emit(source.path);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(controller.inboxJobs, isEmpty);
+
+      await controller.enqueueSources([source.path]);
+      await _waitFor(() => controller.readyCount == 1);
+      expect(controller.inboxJobs.single.sourceOrigin, JobSourceOrigin.manual);
+    },
+  );
+
+  test(
+    'completed monitored version stays handled after history deletion',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-monitor-history-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/meeting.wav');
+      await source.writeAsBytes(const [1, 2, 3]);
+      final monitor = _InboxMonitor();
+      final monitorRepository = _InboxMonitorRepository();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        inboxMonitor: monitor,
+        inboxMonitorRepository: monitorRepository,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.configureInboxMonitor(
+        folderPath: directory.path,
+        extensions: const {'wav'},
+        launchAtLogin: false,
+      );
+      await monitor.emit(source.path);
+      await _waitFor(() => controller.readyCount == 1);
+
+      await controller.startReady();
+      final completedId = controller.inboxJobs.single.id;
+      expect(controller.completedCount, 1);
+      expect(
+        monitorRepository.value.records.values.single.disposition,
+        MonitoredFileDisposition.completed,
+      );
+
+      await controller.deleteHistory(completedId);
+      await monitor.emit(source.path);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(controller.inboxJobs, isEmpty);
+
+      await source.writeAsBytes(const [4, 5], mode: FileMode.append);
+      await source.setLastModified(
+        DateTime.now().add(const Duration(seconds: 2)),
+      );
+      await monitor.emit(source.path);
+      await _waitFor(() => controller.readyCount == 1);
+      expect(controller.inboxJobs.single.id, isNot(completedId));
+    },
+  );
+
+  test(
+    'removed monitored source drops an unstarted job and can be re-added',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-monitor-removal-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/meeting.wav');
+      await source.writeAsBytes(const [1, 2, 3]);
+      final monitor = _InboxMonitor();
+      final monitorRepository = _InboxMonitorRepository();
+      final jobs = _Jobs();
+      final controller = _controller(
+        jobs: jobs,
+        soniox: _Soniox(),
+        inboxMonitor: monitor,
+        inboxMonitorRepository: monitorRepository,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.configureInboxMonitor(
+        folderPath: directory.path,
+        extensions: const {'wav'},
+        launchAtLogin: false,
+      );
+      await monitor.emit(source.path);
+      await _waitFor(() => controller.readyCount == 1);
+      final removedJobId = controller.inboxJobs.single.id;
+
+      await source.delete();
+      await monitor.emitSnapshot(const {});
+
+      expect(controller.inboxJobs, isEmpty);
+      expect(jobs.saved, isEmpty);
+      expect(monitorRepository.value.records, isEmpty);
+
+      await source.writeAsBytes(const [1, 2, 3]);
+      await monitor.emit(source.path);
+      await _waitFor(() => controller.readyCount == 1);
+      expect(controller.inboxJobs.single.id, isNot(removedJobId));
+    },
+  );
+
+  test(
+    'removed monitored source preserves active and completed work',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-monitor-active-removal-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/meeting.wav');
+      await source.writeAsBytes(const [1, 2, 3]);
+      final monitor = _InboxMonitor();
+      final pollingGate = Completer<void>();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(pollingGate: pollingGate),
+        inboxMonitor: monitor,
+        inboxMonitorRepository: _InboxMonitorRepository(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.configureInboxMonitor(
+        folderPath: directory.path,
+        extensions: const {'wav'},
+        launchAtLogin: false,
+      );
+      await monitor.emit(source.path);
+      await _waitFor(() => controller.readyCount == 1);
+      final jobId = controller.inboxJobs.single.id;
+      final processing = controller.startReady();
+      await _waitFor(() => controller.inboxJobs.single.status.isActive);
+
+      await source.delete();
+      await monitor.emitSnapshot(const {});
+      expect(controller.inboxJobs.single.id, jobId);
+
+      pollingGate.complete();
+      await processing;
+      expect(controller.inboxJobs.single.status, JobStatus.completed);
+      await monitor.emitSnapshot(const {});
+      expect(controller.inboxJobs.single.id, jobId);
+    },
+  );
 }
 
 TranscriptDocument _document(DateTime now) => TranscriptDocument(
@@ -1321,6 +1512,8 @@ AppController _controller({
   TranslationService? translationService,
   AiBriefService? aiBriefService,
   TranscriptExporter? exporter,
+  InboxMonitorRepository? inboxMonitorRepository,
+  InboxFolderMonitor? inboxMonitor,
 }) => AppController(
   credentialStore: credentials ?? _Credentials(),
   settingsRepository: settings ?? _Settings(),
@@ -1332,6 +1525,8 @@ AppController _controller({
   translationCredentialStore: translationCredentials,
   translationService: translationService,
   aiBriefService: aiBriefService,
+  inboxMonitorRepository: inboxMonitorRepository,
+  inboxFolderMonitor: inboxMonitor,
 );
 
 class _RecordingExporter implements TranscriptExporter {
@@ -1418,6 +1613,63 @@ class _Settings implements SettingsRepository {
 
   @override
   Future<void> save(AppSettings settings) async => value = settings;
+}
+
+class _InboxMonitorRepository implements InboxMonitorRepository {
+  InboxMonitorStorage value = const InboxMonitorStorage();
+
+  @override
+  Future<InboxMonitorStorage> load() async => value;
+
+  @override
+  Future<void> save(InboxMonitorStorage storage) async => value = storage;
+}
+
+class _InboxMonitor implements InboxFolderMonitor {
+  MonitoredFileCallback? _onCandidate;
+  MonitoredFilesSnapshotCallback? _onSnapshot;
+  InboxMonitorConfig config = const InboxMonitorConfig();
+
+  Future<void> emit(String path) async {
+    final fingerprint = await fingerprintMonitoredFile(path);
+    if (fingerprint != null) await _onCandidate?.call(fingerprint);
+  }
+
+  Future<void> emitSnapshot(Set<String> identities) async {
+    await _onSnapshot?.call(identities);
+  }
+
+  @override
+  Future<void> dispose() => stop();
+
+  @override
+  Future<void> scanNow() async {}
+
+  @override
+  Future<void> start(
+    InboxMonitorConfig config, {
+    required MonitoredFileCallback onCandidate,
+    required MonitoredFilesSnapshotCallback onSnapshot,
+    required InboxMonitorStatusCallback onStatus,
+  }) async {
+    this.config = config;
+    _onCandidate = onCandidate;
+    _onSnapshot = onSnapshot;
+    onStatus(
+      !config.isConfigured
+          ? InboxMonitorStatus.unconfigured
+          : config.paused
+          ? InboxMonitorStatus.paused
+          : InboxMonitorStatus.active,
+      null,
+    );
+  }
+
+  @override
+  Future<void> stop() async {
+    _onCandidate = null;
+    _onSnapshot = null;
+  }
 }
 
 class _TranslationCredentials implements TranslationCredentialStore {

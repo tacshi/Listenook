@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +13,57 @@ import 'package:meow_stt/ui/settings_page.dart';
 import 'package:provider/provider.dart';
 
 void main() {
+  testWidgets('configured Inbox monitor can return to no-folder state', (
+    tester,
+  ) async {
+    final directory = Directory.systemTemp.createTempSync(
+      'meow-settings-remove-monitor-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.runAsync(
+      () => controller.configureInboxMonitor(
+        folderPath: directory.path,
+        extensions: const {'wav'},
+        launchAtLogin: false,
+      ),
+    );
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: SettingsPage()),
+        ),
+      ),
+    );
+
+    await tester.tap(
+      find.byKey(const Key('settings-inbox-monitor-remove-folder')),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(controller.inboxMonitorConfigured, isFalse);
+    expect(find.text('Inbox folder is not configured.'), findsOneWidget);
+    expect(
+      find.byKey(const Key('settings-inbox-monitor-remove-folder')),
+      findsNothing,
+    );
+  });
+
   testWidgets('stored API keys have no reveal controls', (tester) async {
     final credentials = _Credentials()..value = 'soniox-secret';
     final translationCredentials = _TranslationCredentials()
@@ -39,6 +92,8 @@ void main() {
         ),
       ),
     );
+    await tester.tap(find.text('Transcription'));
+    await tester.pumpAndSettle();
 
     final sonioxKeyField = tester.widget<TextField>(
       find.byKey(const Key('soniox-key-field')),
@@ -112,15 +167,79 @@ void main() {
       tester.widget<Text>(pageTitle).style?.fontSize,
       Theme.of(tester.element(pageTitle)).textTheme.titleLarge?.fontSize,
     );
+    expect(find.text('General'), findsOneWidget);
     expect(find.text('Transcription'), findsOneWidget);
     expect(find.text('Appearance'), findsWidgets);
     expect(find.text('Shortcuts'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
+    expect(find.byIcon(Icons.tune_rounded), findsOneWidget);
     expect(find.byIcon(Icons.transcribe_rounded), findsOneWidget);
     expect(find.byIcon(Icons.keyboard_outlined), findsOneWidget);
     expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
     expect(find.text('Batch options'), findsNothing);
     expect(find.text('Concurrent jobs'), findsNothing);
+    expect(find.text('Inbox monitoring').hitTestable(), findsOneWidget);
+    expect(find.text('Background'), findsNothing);
+    expect(find.text('Show menu bar icon'), findsOneWidget);
+    expect(
+      find.text('Keeps MeowSTT available after its window is closed.'),
+      findsOneWidget,
+    );
+    expect(find.text('Starts hidden in the menu bar.'), findsOneWidget);
+    final traySetting = find.byKey(const Key('settings-show-tray-icon'));
+    final traySwitch = find.descendant(
+      of: traySetting,
+      matching: find.byType(Switch),
+    );
+    expect(tester.widget<Switch>(traySwitch).value, isTrue);
+    expect(tester.widget<Switch>(traySwitch).onChanged, isNotNull);
+    await tester.tap(traySwitch);
+    await tester.pumpAndSettle();
+    expect(controller.inboxMonitorConfig.showTrayIcon, isFalse);
+    expect(find.text('Starts hidden in the menu bar.'), findsNothing);
+    final startupSetting = find.byKey(const Key('settings-launch-at-login'));
+    final startupSwitch = tester.widget<Switch>(
+      find.descendant(of: startupSetting, matching: find.byType(Switch)),
+    );
+    expect(startupSwitch.onChanged, isNotNull);
+    final startupTitle = tester.widget<Text>(
+      find.text('Launch MeowSTT at login'),
+    );
+    final settingsTheme = Theme.of(tester.element(startupSetting)).textTheme;
+    expect(startupTitle.style?.fontSize, settingsTheme.titleMedium?.fontSize);
+    final menuBarCard = find.ancestor(
+      of: find.text('Show menu bar icon'),
+      matching: find.byType(Card),
+    );
+    final startupCard = find.ancestor(
+      of: find.text('Launch MeowSTT at login'),
+      matching: find.byType(Card),
+    );
+    final inboxMonitoringCard = find.ancestor(
+      of: find.text('Inbox monitoring'),
+      matching: find.byType(Card),
+    );
+    expect(menuBarCard, findsOneWidget);
+    expect(startupCard, findsOneWidget);
+    expect(inboxMonitoringCard, findsOneWidget);
+    expect(menuBarCard.evaluate().single, isNot(startupCard.evaluate().single));
+    expect(
+      tester.getTopLeft(startupCard).dy,
+      lessThan(tester.getTopLeft(menuBarCard).dy),
+    );
+    expect(
+      tester.getTopLeft(menuBarCard).dy,
+      lessThan(tester.getTopLeft(inboxMonitoringCard).dy),
+    );
+    await tester.tap(
+      find.descendant(of: startupSetting, matching: find.byType(Switch)),
+    );
+    await tester.pumpAndSettle();
+    expect(controller.inboxMonitorConfig.launchAtLogin, isTrue);
+    expect(find.text('Privacy').hitTestable(), findsNothing);
+
+    await tester.tap(find.text('Transcription'));
+    await tester.pumpAndSettle();
 
     final createKeyLink = find.byKey(const Key('create-soniox-key-link'));
     expect(find.text('Create a Soniox API key'), findsOneWidget);
@@ -267,6 +386,7 @@ void main() {
     await tester.tap(find.text('About'));
     await tester.pumpAndSettle();
     expect(find.text('Media engine diagnostics'), findsNothing);
+    expect(find.text('Inbox monitoring').hitTestable(), findsNothing);
     expect(find.text('Privacy').hitTestable(), findsOneWidget);
     expect(find.text('Third-party notices').hitTestable(), findsOneWidget);
   });
@@ -308,6 +428,7 @@ void main() {
       ),
     );
 
+    expect(find.text('通用'), findsOneWidget);
     await tester.tap(find.text('快捷键'));
     await tester.pumpAndSettle();
     expect(find.text('应用').hitTestable(), findsOneWidget);
@@ -367,6 +488,8 @@ void main() {
           ),
         ),
       );
+      await tester.tap(find.text('Transcription'));
+      await tester.pumpAndSettle();
 
       final baseUrl = find.byKey(const Key('translation-base-url-field'));
       final model = find.byKey(const Key('translation-model-field'));
