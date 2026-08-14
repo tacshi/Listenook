@@ -1095,6 +1095,92 @@ void main() {
     expect(updated.aiBrief!.isStaleFor(updated.document!), isTrue);
   });
 
+  test('translation changes keep an existing AI Brief current', () async {
+    final now = DateTime.utc(2026, 8, 12);
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'segment',
+          startMs: 0,
+          endMs: 1000,
+          text: 'Transcript',
+          translatedText: 'Ancienne traduction',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: now,
+    );
+    final job = TranscriptionJob(
+      id: 'translated-brief',
+      batchId: 'batch',
+      sourcePath: '/brief.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      document: document,
+      translationState: const TranslationState(
+        status: TranslationStatus.completed,
+        targetLanguage: 'fr',
+        completedSegments: 1,
+        totalSegments: 1,
+      ),
+      aiBrief: AiBrief(
+        overview: 'Current overview',
+        overviewEvidenceSegmentIds: const ['segment'],
+        chapters: const [],
+        insights: const [],
+        outputLanguage: 'en',
+        model: 'brief-model',
+        selectedSections: const {AiBriefSection.overview},
+        generatedAt: now,
+        sourceTranscriptUpdatedAt: now,
+      ),
+    );
+    final controller = _controller(
+      jobs: _Jobs([job]),
+      soniox: _Soniox(),
+      settings: _Settings(
+        const AppSettings(
+          translationSettings: TranslationSettings(
+            provider: TranslationProviderTemplate.openAi,
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'translation-model',
+            targetLanguage: 'zh-Hans',
+          ),
+        ),
+      ),
+      translationCredentials: _TranslationCredentials(),
+      translationService: _SuccessfulTranslation(),
+    );
+    await controller.initialize();
+
+    await controller.translateJob(
+      job.id,
+      targetLanguage: 'zh-Hans',
+      replaceExisting: true,
+    );
+
+    var updated = controller.allJobs.single;
+    expect(updated.document!.segments.single.translatedText, '补充翻译。');
+    expect(updated.document!.updatedAt, now);
+    expect(updated.aiBrief!.isStaleFor(updated.document!), isFalse);
+
+    await controller.updateTranslatedSegment(job.id, 'segment', '');
+
+    updated = controller.allJobs.single;
+    expect(updated.document!.segments.single.translatedText, isNull);
+    expect(updated.document!.updatedAt, now);
+    expect(updated.aiBrief!.isStaleFor(updated.document!), isFalse);
+
+    await controller.updateTranslatedSegment(job.id, 'segment', '手动翻译');
+
+    updated = controller.allJobs.single;
+    expect(updated.document!.segments.single.translatedText, '手动翻译');
+    expect(updated.document!.updatedAt, now);
+    expect(updated.aiBrief!.isStaleFor(updated.document!), isFalse);
+  });
+
   test('interrupted AI Brief generation preserves prior output', () async {
     final now = DateTime.utc(2026, 8, 12);
     final job = TranscriptionJob(

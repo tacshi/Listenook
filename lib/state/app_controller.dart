@@ -1248,6 +1248,7 @@ class AppController extends ChangeNotifier {
           for (final segment in document.segments)
             segment.copyWith(clearTranslatedText: true),
         ],
+        preserveUpdatedAt: true,
       );
     }
     final updated = await _transition(
@@ -1315,7 +1316,7 @@ class AppController extends ChangeNotifier {
     final progress = _translationProgress(segments);
     await _transition(
       job,
-      document: document.copyWith(segments: segments),
+      document: document.copyWith(segments: segments, preserveUpdatedAt: true),
       translationState: job.translationState.copyWith(
         status: progress.completed == progress.total
             ? TranslationStatus.completed
@@ -1409,7 +1410,10 @@ class AppController extends ChangeNotifier {
           final progress = _translationProgress(segments);
           current = await _transition(
             current,
-            document: latest.copyWith(segments: segments),
+            document: latest.copyWith(
+              segments: segments,
+              preserveUpdatedAt: true,
+            ),
             translationState: current.translationState.copyWith(
               status: TranslationStatus.translating,
               completedSegments: progress.completed,

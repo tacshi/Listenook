@@ -380,11 +380,12 @@ class TranscriptDocument {
   TranscriptDocument copyWith({
     List<TranscriptSegment>? segments,
     List<SpeakerProfile>? speakers,
+    bool preserveUpdatedAt = false,
   }) => TranscriptDocument(
     tokens: tokens,
     segments: segments ?? this.segments,
     speakers: speakers ?? this.speakers,
-    updatedAt: DateTime.now().toUtc(),
+    updatedAt: preserveUpdatedAt ? updatedAt : DateTime.now().toUtc(),
   );
 
   Map<String, dynamic> toJson() => {

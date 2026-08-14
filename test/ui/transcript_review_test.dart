@@ -4608,14 +4608,31 @@ void main() {
     tester,
   ) async {
     _setTestWindow(tester, const Size(1240, 820));
-    final document = _simpleDocument();
+    final now = DateTime.now().toUtc();
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: [
+        for (var index = 0; index < 8; index++)
+          TranscriptSegment(
+            id: index == 0 ? 'segment' : 'segment-$index',
+            startMs: index * 75000,
+            endMs: index * 75000 + 1000,
+            text: index == 0 ? 'Hello' : 'Sentence $index',
+          ),
+      ],
+      speakers: const [],
+      updatedAt: now,
+    );
     final overview = List.generate(
       180,
       (index) => 'Grounded overview sentence $index.',
     ).join(' ');
     final brief = AiBrief(
       overview: overview,
-      overviewEvidenceSegmentIds: const ['segment'],
+      overviewEvidenceSegmentIds: [
+        for (var index = 0; index < 8; index++)
+          index == 0 ? 'segment' : 'segment-$index',
+      ],
       chapters: const [],
       insights: const [],
       outputLanguage: 'en',
@@ -4684,6 +4701,26 @@ void main() {
 
     final aiBriefScroll = find.byKey(const Key('ai-brief-scroll'));
     final evidence = find.byKey(const Key('ai-evidence-segment'));
+    final evidenceSize = tester.getSize(evidence);
+    expect(evidenceSize.height, greaterThanOrEqualTo(24));
+    expect(evidenceSize.height, lessThanOrEqualTo(28));
+    expect(evidenceSize.width, lessThanOrEqualTo(84));
+    final evidenceChips = find.descendant(
+      of: aiBriefScroll,
+      matching: find.byType(ActionChip),
+    );
+    expect(evidenceChips, findsNWidgets(8));
+    for (final chip in evidenceChips.evaluate()) {
+      final size = tester.getSize(find.byWidget(chip.widget));
+      expect(size.height, inInclusiveRange(24, 28));
+      expect(size.width, lessThanOrEqualTo(84));
+    }
+    final evidenceRows = evidenceChips
+        .evaluate()
+        .map((chip) => tester.getTopLeft(find.byWidget(chip.widget)).dy.round())
+        .toSet();
+    expect(evidenceRows.length, greaterThan(1));
+    expect(tester.takeException(), isNull);
     final aiBriefScrollable = find.descendant(
       of: aiBriefScroll,
       matching: find.byType(Scrollable),
@@ -4719,16 +4756,11 @@ void main() {
 
     tester.view.physicalSize = const Size(400, 700);
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('copy-ai-brief-toolbar')), findsNothing);
-    expect(find.byKey(const Key('export-ai-brief-toolbar')), findsNothing);
+    expect(find.byKey(const Key('copy-ai-brief-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('export-ai-brief-toolbar')), findsOneWidget);
     expect(find.byKey(const Key('refresh-ai-brief-toolbar')), findsOneWidget);
-    expect(find.byKey(const Key('ai-brief-toolbar-more')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('ai-brief-toolbar-more')));
-    await tester.pumpAndSettle();
-    expect(find.text('Copy brief'), findsOneWidget);
-    expect(find.text('Export Markdown'), findsOneWidget);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('ai-brief-toolbar-more')), findsNothing);
+    expect(tester.takeException(), isNull);
 
     await tester.scrollUntilVisible(
       evidence,
@@ -4749,6 +4781,93 @@ void main() {
     expect(find.byKey(const Key('ai-brief-scroll')), findsNothing);
     expect(find.byKey(const Key('transcript-scroll')), findsOneWidget);
     expect(find.text('Hello'), findsOneWidget);
+  });
+
+  testWidgets('translation-only changes keep the AI Brief banner hidden', (
+    tester,
+  ) async {
+    final document = _simpleDocument();
+    final controller = await _controllerForDocument(
+      document,
+      settings: _configuredTranslationAppSettings,
+      translationService: _ImmediateTranslation(),
+      translationCredentials: _LlmCredentials(),
+      aiBrief: _overviewBrief(document, overview: 'Current overview'),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.translateJob('job', targetLanguage: 'zh-Hans');
+    expect(
+      controller.allJobs.single.document!.segments.single.translatedText,
+      '翻译。',
+    );
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(_reviewTab('AI Brief'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('ai-brief-outdated')), findsNothing);
+    expect(find.text('Current overview'), findsOneWidget);
+  });
+
+  testWidgets('AI Brief section actions appear only on hover', (tester) async {
+    _setTestWindow(tester, const Size(1000, 760));
+    final document = _simpleDocument();
+    final controller = await _controllerForDocument(
+      document,
+      aiBrief: _overviewBrief(document, overview: 'Current overview'),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(_reviewTab('AI Brief'));
+    await tester.pumpAndSettle();
+
+    final section = find.byKey(const Key('ai-brief-section-overview'));
+    final actions = find.byKey(const Key('ai-brief-section-actions-overview'));
+    expect(tester.widget<AnimatedOpacity>(actions).opacity, 0);
+    expect(
+      find.descendant(of: section, matching: find.byIcon(Icons.copy_outlined)),
+      findsNothing,
+    );
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    final sectionSize = tester.getSize(section);
+    await mouse.moveTo(tester.getCenter(section));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<AnimatedOpacity>(actions).opacity, 1);
+    expect(tester.getSize(section), sectionSize);
+    expect(
+      find.byKey(const Key('ai-brief-section-edit-overview')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('ai-brief-section-menu-overview')));
+    await tester.pumpAndSettle();
+    expect(find.text('Regenerate section'), findsOneWidget);
   });
 
   testWidgets('creating an AI Brief starts directly and renders output', (
@@ -4860,7 +4979,51 @@ void main() {
     expect(find.text('Useful expressions'), findsOneWidget);
     expect(find.text('Hello'), findsWidgets);
     expect(find.text('A friendly greeting.'), findsOneWidget);
-    expect(find.byKey(const Key('ai-language-note-note')), findsOneWidget);
+    final languageNotesSection = find.byKey(
+      const Key('ai-brief-section-language-notes'),
+    );
+    expect(
+      find.descendant(
+        of: languageNotesSection,
+        matching: find.byIcon(Icons.language_rounded),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('ai-brief-section-header-language-notes')),
+        matching: find.text('Advanced (C1–C2)'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .getBottomLeft(
+            find.byKey(const Key('ai-brief-section-meta-language-notes')),
+          )
+          .dy,
+      lessThan(tester.getTopLeft(find.text('Useful expressions')).dy),
+    );
+    tester.view.physicalSize = const Size(400, 760);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    tester.view.physicalSize = const Size(1000, 760);
+    await tester.pumpAndSettle();
+    final noteTile = find.byKey(const Key('ai-language-note-note'));
+    final noteMenuReveal = find.byKey(
+      const Key('ai-language-note-menu-reveal-note'),
+    );
+    expect(noteTile, findsOneWidget);
+    expect(tester.widget<AnimatedOpacity>(noteMenuReveal).opacity, 0);
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    final tileSizeBeforeHover = tester.getSize(noteTile);
+    await mouse.moveTo(tester.getCenter(noteTile));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(noteMenuReveal).opacity, 1);
+    expect(tester.getSize(noteTile), tileSizeBeforeHover);
 
     await tester.tap(find.byKey(const Key('ai-language-note-menu-note')));
     await tester.pumpAndSettle();
@@ -4874,6 +5037,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('An edited explanation.'), findsOneWidget);
 
+    await mouse.moveTo(Offset.zero);
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(noteMenuReveal).opacity, 0);
+    await mouse.moveTo(tester.getCenter(noteTile));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('ai-language-note-menu-note')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete item').last);
@@ -5578,6 +5746,34 @@ class _BlockingTranslation implements TranslationService {
   }) async {
     started.complete();
     await release.future;
+  }
+}
+
+class _ImmediateTranslation implements TranslationService {
+  @override
+  Future<List<String>> listModels(
+    TranslationSettings settings, {
+    String? candidateApiKey,
+  }) async => const [];
+
+  @override
+  Future<void> translate({
+    required TranslationSettings settings,
+    required String targetLanguage,
+    required List<TranscriptSegment> segments,
+    required Future<void> Function(
+      Map<String, String> translatedBySegmentId,
+      int completedSegments,
+      int totalSegments,
+    )
+    onBatch,
+    CancelCheck? shouldCancel,
+  }) async {
+    await onBatch(
+      {for (final segment in segments) segment.id: '翻译。'},
+      segments.length,
+      segments.length,
+    );
   }
 }
 

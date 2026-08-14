@@ -1957,9 +1957,10 @@ class _AiBriefPane extends StatelessWidget {
               if (brief.overview.trim().isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _AiBriefSectionCard(
+                  id: 'overview',
                   title: context.strings.t('overview'),
                   icon: Icons.summarize_outlined,
-                  onCopy: () => _copyBriefText(context, brief.overview),
+                  onEdit: () => _editOverview(context, job),
                   onRegenerate: state.status.isActive
                       ? null
                       : () => _regenerateAiSection(
@@ -1977,14 +1978,6 @@ class _AiBriefPane extends StatelessWidget {
                         segmentIds: brief.overviewEvidenceSegmentIds,
                         onEvidence: onEvidence,
                       ),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton.icon(
-                          onPressed: () => _editOverview(context, job),
-                          icon: const Icon(Icons.edit_outlined, size: 18),
-                          label: Text(context.strings.t('edit')),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -1992,18 +1985,9 @@ class _AiBriefPane extends StatelessWidget {
               if (brief.chapters.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _AiBriefSectionCard(
+                  id: 'chapters',
                   title: context.strings.t('chapters'),
                   icon: Icons.view_timeline_outlined,
-                  onCopy: () => _copyBriefText(
-                    context,
-                    brief.chapters
-                        .map(
-                          (item) =>
-                              '${_evidenceRange(document, item.evidenceSegmentIds)} '
-                              '${item.title}\n${item.summary}',
-                        )
-                        .join('\n\n'),
-                  ),
                   onRegenerate: state.status.isActive
                       ? null
                       : () => _regenerateAiSection(
@@ -2028,15 +2012,9 @@ class _AiBriefPane extends StatelessWidget {
                 if (brief.insights.any((item) => item.type == type)) ...[
                   const SizedBox(height: 12),
                   _AiBriefSectionCard(
+                    id: 'insight-${type.name}',
                     title: _insightTitle(context, type),
                     icon: _insightIcon(type),
-                    onCopy: () => _copyBriefText(
-                      context,
-                      brief.insights
-                          .where((item) => item.type == type)
-                          .map((item) => '- ${item.text}')
-                          .join('\n'),
-                    ),
                     onRegenerate: state.status.isActive
                         ? null
                         : () => _regenerateAiSection(
@@ -2070,18 +2048,16 @@ class _AiBriefPane extends StatelessWidget {
               if (brief.languageNotes.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _AiBriefSectionCard(
+                  id: 'language-notes',
                   title: context.strings.t('language_notes'),
                   icon: Icons.menu_book_outlined,
-                  onCopy: () => _copyBriefText(
-                    context,
-                    brief.languageNotes
-                        .map(
-                          (note) =>
-                              '${_languageNoteKindLabel(context, note.kind)}: '
-                              '${note.term}\n${note.explanation}\n'
-                              '“${note.sourceExcerpt}”',
-                        )
-                        .join('\n\n'),
+                  headerMeta: Chip(
+                    avatar: const Icon(Icons.trending_up_rounded, size: 16),
+                    label: Text(
+                      _learningLevelLabel(context, brief.learningLevel),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   onRegenerate: state.status.isActive
                       ? null
@@ -2093,37 +2069,6 @@ class _AiBriefPane extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: [
-                          Chip(
-                            avatar: const Icon(
-                              Icons.language_rounded,
-                              size: 16,
-                            ),
-                            label: Text(
-                              brief.learningLanguage == null
-                                  ? context.strings.t(
-                                      'ai_brief_learning_language_auto',
-                                    )
-                                  : context.strings.translationLanguageName(
-                                      brief.learningLanguage!,
-                                    ),
-                            ),
-                          ),
-                          Chip(
-                            avatar: const Icon(
-                              Icons.trending_up_rounded,
-                              size: 16,
-                            ),
-                            label: Text(
-                              _learningLevelLabel(context, brief.learningLevel),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
                       for (final kind in AiLanguageNoteKind.values)
                         if (brief.languageNotes.any(
                           (item) => item.kind == kind,
@@ -2285,56 +2230,151 @@ class _AiBriefProgress extends StatelessWidget {
   }
 }
 
-class _AiBriefSectionCard extends StatelessWidget {
+class _AiBriefSectionCard extends StatefulWidget {
   const _AiBriefSectionCard({
+    required this.id,
     required this.title,
     required this.icon,
-    required this.onCopy,
+    this.headerMeta,
+    this.onEdit,
     required this.onRegenerate,
     required this.child,
   });
 
+  final String id;
   final String title;
   final IconData icon;
-  final VoidCallback onCopy;
+  final Widget? headerMeta;
+  final VoidCallback? onEdit;
   final VoidCallback? onRegenerate;
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Card(
-    margin: EdgeInsets.zero,
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 8, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+  State<_AiBriefSectionCard> createState() => _AiBriefSectionCardState();
+}
+
+class _AiBriefSectionCardState extends State<_AiBriefSectionCard> {
+  bool _hovered = false;
+  bool _menuOpen = false;
+  bool _actionsFocused = false;
+
+  bool get _showActions => _hovered || _menuOpen || _actionsFocused;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: Card(
+      key: ValueKey('ai-brief-section-${widget.id}'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              key: ValueKey('ai-brief-section-header-${widget.id}'),
+              children: [
+                Icon(widget.icon, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          widget.title,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (widget.headerMeta != null) ...[
+                        const SizedBox(width: 10),
+                        Flexible(
+                          flex: 2,
+                          child: KeyedSubtree(
+                            key: ValueKey('ai-brief-section-meta-${widget.id}'),
+                            child: widget.headerMeta!,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-              ),
-              IconButton(
-                tooltip: context.strings.t('copy_section'),
-                onPressed: onCopy,
-                icon: const Icon(Icons.copy_outlined, size: 19),
-              ),
-              IconButton(
-                tooltip: context.strings.t('regenerate_section'),
-                onPressed: onRegenerate,
-                icon: const Icon(Icons.refresh_rounded, size: 20),
-              ),
-            ],
-          ),
-          const Divider(height: 8),
-          Padding(padding: const EdgeInsets.fromLTRB(4, 8, 6, 0), child: child),
-        ],
+                if (widget.onEdit != null || widget.onRegenerate != null)
+                  Focus(
+                    onFocusChange: (value) =>
+                        setState(() => _actionsFocused = value),
+                    child: AnimatedOpacity(
+                      key: ValueKey('ai-brief-section-actions-${widget.id}'),
+                      opacity: _showActions ? 1 : 0,
+                      duration: const Duration(milliseconds: 120),
+                      child: IgnorePointer(
+                        ignoring: !_showActions,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (widget.onEdit != null)
+                              IconButton(
+                                key: ValueKey(
+                                  'ai-brief-section-edit-${widget.id}',
+                                ),
+                                tooltip: context.strings.t('edit'),
+                                onPressed: widget.onEdit,
+                                icon: const Icon(Icons.edit_outlined, size: 19),
+                              ),
+                            if (widget.onRegenerate != null)
+                              PopupMenuButton<String>(
+                                key: ValueKey(
+                                  'ai-brief-section-menu-${widget.id}',
+                                ),
+                                tooltip: context.strings.t('more_actions'),
+                                onOpened: () =>
+                                    setState(() => _menuOpen = true),
+                                onCanceled: () =>
+                                    setState(() => _menuOpen = false),
+                                onSelected: (value) {
+                                  setState(() => _menuOpen = false);
+                                  if (value == 'regenerate') {
+                                    widget.onRegenerate?.call();
+                                  }
+                                },
+                                itemBuilder: (context) => [
+                                  PopupMenuItem(
+                                    value: 'regenerate',
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.refresh_rounded,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            context.strings.t(
+                                              'regenerate_section',
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const Divider(height: 8),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 6, 0),
+              child: widget.child,
+            ),
+          ],
+        ),
       ),
     ),
   );
@@ -2498,7 +2538,7 @@ class _AiInsightTile extends StatelessWidget {
   );
 }
 
-class _AiLanguageNoteTile extends StatelessWidget {
+class _AiLanguageNoteTile extends StatefulWidget {
   const _AiLanguageNoteTile({
     required this.job,
     required this.document,
@@ -2512,80 +2552,114 @@ class _AiLanguageNoteTile extends StatelessWidget {
   final Future<void> Function(String) onEvidence;
 
   @override
-  Widget build(BuildContext context) => Card.outlined(
-    key: ValueKey('ai-language-note-${note.id}'),
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  note.term,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+  State<_AiLanguageNoteTile> createState() => _AiLanguageNoteTileState();
+}
+
+class _AiLanguageNoteTileState extends State<_AiLanguageNoteTile> {
+  bool _hovered = false;
+  bool _menuOpen = false;
+  bool _menuFocused = false;
+
+  bool get _showMenu => _hovered || _menuOpen || _menuFocused;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: Card.outlined(
+      key: ValueKey('ai-language-note-${widget.note.id}'),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.note.term,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
-              ),
-              PopupMenuButton<String>(
-                key: ValueKey('ai-language-note-menu-${note.id}'),
-                onSelected: (value) {
-                  if (value == 'edit') {
-                    _editLanguageNote(context, job, note);
-                  }
-                  if (value == 'delete') {
-                    context.read<AppController>().deleteAiLanguageNote(
-                      job.id,
-                      note.id,
-                    );
-                  }
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    value: 'edit',
-                    child: Text(context.strings.t('edit_item')),
+                Focus(
+                  onFocusChange: (value) =>
+                      setState(() => _menuFocused = value),
+                  child: AnimatedOpacity(
+                    key: ValueKey(
+                      'ai-language-note-menu-reveal-${widget.note.id}',
+                    ),
+                    opacity: _showMenu ? 1 : 0,
+                    duration: const Duration(milliseconds: 120),
+                    child: IgnorePointer(
+                      ignoring: !_showMenu,
+                      child: PopupMenuButton<String>(
+                        key: ValueKey(
+                          'ai-language-note-menu-${widget.note.id}',
+                        ),
+                        onOpened: () => setState(() => _menuOpen = true),
+                        onCanceled: () => setState(() => _menuOpen = false),
+                        onSelected: (value) {
+                          setState(() => _menuOpen = false);
+                          if (value == 'edit') {
+                            _editLanguageNote(context, widget.job, widget.note);
+                          }
+                          if (value == 'delete') {
+                            context.read<AppController>().deleteAiLanguageNote(
+                              widget.job.id,
+                              widget.note.id,
+                            );
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          PopupMenuItem(
+                            value: 'edit',
+                            child: Text(context.strings.t('edit_item')),
+                          ),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Text(context.strings.t('delete_item')),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                  PopupMenuItem(
-                    value: 'delete',
-                    child: Text(context.strings.t('delete_item')),
+                ),
+              ],
+            ),
+            if (widget.note.explanation.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(widget.note.explanation),
+            ],
+            if (widget.note.sourceExcerpt.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
                   ),
-                ],
+                  child: Text(
+                    '“${widget.note.sourceExcerpt}”',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
               ),
             ],
-          ),
-          if (note.explanation.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(note.explanation),
-          ],
-          if (note.sourceExcerpt.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                child: Text(
-                  '“${note.sourceExcerpt}”',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic),
-                ),
-              ),
+            const SizedBox(height: 8),
+            _EvidenceChips(
+              document: widget.document,
+              segmentIds: widget.note.evidenceSegmentIds,
+              onEvidence: widget.onEvidence,
             ),
           ],
-          const SizedBox(height: 8),
-          _EvidenceChips(
-            document: document,
-            segmentIds: note.evidenceSegmentIds,
-            onEvidence: onEvidence,
-          ),
-        ],
+        ),
       ),
     ),
   );
@@ -2611,8 +2685,8 @@ class _EvidenceChips extends StatelessWidget {
         .toList();
     if (evidence.isEmpty) return const SizedBox.shrink();
     return Wrap(
-      spacing: 6,
-      runSpacing: 4,
+      spacing: 4,
+      runSpacing: 3,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Text(
@@ -2622,8 +2696,19 @@ class _EvidenceChips extends StatelessWidget {
         for (final item in evidence)
           ActionChip(
             key: ValueKey('ai-evidence-${item.id}'),
-            avatar: const Icon(Icons.play_arrow_rounded, size: 16),
-            label: Text(formatClock(item.segment!.startMs)),
+            avatarBoxConstraints: const BoxConstraints.tightFor(
+              width: 14,
+              height: 14,
+            ),
+            avatar: const Icon(Icons.play_arrow_rounded, size: 14),
+            label: Text(
+              formatClock(item.segment!.startMs),
+              style: Theme.of(context).textTheme.labelSmall,
+            ),
+            padding: EdgeInsets.zero,
+            labelPadding: const EdgeInsets.only(left: 2, right: 6),
+            visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             onPressed: () => onEvidence(item.id),
           ),
       ],
@@ -3040,8 +3125,6 @@ enum _TranscriptMoreAction {
   export,
 }
 
-enum _AiBriefMoreAction { copy, export }
-
 enum _ReviewToolbarRole { global, transcript, aiBrief }
 
 class _UnifiedReviewToolbar extends StatelessWidget {
@@ -3174,28 +3257,22 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     height: 52,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: LayoutBuilder(
-        builder: (context, constraints) => Row(
-          key: const Key('ai-brief-pane-toolbar-row'),
-          children: [
-            Expanded(
-              child: Text(
-                context.strings.t('ai_brief'),
-                key: const Key('ai-brief-pane-title'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-              ),
+      child: Row(
+        key: const Key('ai-brief-pane-toolbar-row'),
+        children: [
+          Expanded(
+            child: Text(
+              context.strings.t('ai_brief'),
+              key: const Key('ai-brief-pane-title'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
-            _buildAiBriefActions(
-              context,
-              controller,
-              full: constraints.maxWidth >= 480,
-            ),
-          ],
-        ),
+          ),
+          _buildAiBriefActions(context, controller),
+        ],
       ),
     ),
   );
@@ -3555,11 +3632,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     }
   }
 
-  Widget _buildAiBriefActions(
-    BuildContext context,
-    AppController controller, {
-    required bool full,
-  }) {
+  Widget _buildAiBriefActions(BuildContext context, AppController controller) {
     final active = job.aiGenerationState.status.isActive;
     if (active) {
       return IconButton(
@@ -3575,27 +3648,23 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (full) ...[
-          IconButton(
-            key: const Key('copy-ai-brief-toolbar'),
-            tooltip: context.strings.t('copy_brief'),
-            onPressed: () => _copyBriefText(
-              context,
-              controller.renderAiBriefMarkdown(job.id),
-            ),
-            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.copy_all_outlined),
-          ),
-          IconButton(
-            key: const Key('export-ai-brief-toolbar'),
-            tooltip: context.strings.t('export_brief'),
-            onPressed: () => _exportBrief(context, job.id),
-            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.ios_share_rounded),
-          ),
-        ],
+        IconButton(
+          key: const Key('copy-ai-brief-toolbar'),
+          tooltip: context.strings.t('copy_brief'),
+          onPressed: () =>
+              _copyBriefText(context, controller.renderAiBriefMarkdown(job.id)),
+          constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+          padding: EdgeInsets.zero,
+          icon: const Icon(Icons.copy_all_outlined),
+        ),
+        IconButton(
+          key: const Key('export-ai-brief-toolbar'),
+          tooltip: context.strings.t('export_brief'),
+          onPressed: () => _exportBrief(context, job.id),
+          constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+          padding: EdgeInsets.zero,
+          icon: const Icon(Icons.ios_share_rounded),
+        ),
         IconButton(
           key: const Key('refresh-ai-brief-toolbar'),
           tooltip: context.strings.t('refresh_ai_brief'),
@@ -3604,37 +3673,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.refresh_rounded),
         ),
-        if (!full)
-          SizedBox.square(
-            dimension: 40,
-            child: PopupMenuButton<_AiBriefMoreAction>(
-              key: const Key('ai-brief-toolbar-more'),
-              tooltip: context.strings.t('more_actions'),
-              padding: EdgeInsets.zero,
-              onSelected: (action) {
-                switch (action) {
-                  case _AiBriefMoreAction.copy:
-                    _copyBriefText(
-                      context,
-                      controller.renderAiBriefMarkdown(job.id),
-                    );
-                  case _AiBriefMoreAction.export:
-                    unawaited(_exportBrief(context, job.id));
-                }
-              },
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: _AiBriefMoreAction.copy,
-                  child: Text(context.strings.t('copy_brief')),
-                ),
-                PopupMenuItem(
-                  value: _AiBriefMoreAction.export,
-                  child: Text(context.strings.t('export_brief')),
-                ),
-              ],
-              icon: const Icon(Icons.more_horiz_rounded),
-            ),
-          ),
       ],
     );
   }
