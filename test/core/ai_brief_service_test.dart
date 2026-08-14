@@ -154,6 +154,153 @@ void main() {
     expect(brief.overview, 'Recovered.');
   });
 
+  test(
+    'creates level-aware language notes and rejects ungrounded examples',
+    () async {
+      final client = _LlmClient([
+        jsonEncode({
+          'overview': '',
+          'overview_evidence': <String>[],
+          'chapters': <Object>[],
+          'insights': <Object>[],
+          'language_notes': [
+            {
+              'kind': 'expression',
+              'term': 'build a trustworthy brief',
+              'explanation': '表示制作一份可靠、可核查的简报。',
+              'source_excerpt': 'build a trustworthy brief',
+              'evidence': ['s1'],
+            },
+            {
+              'kind': 'expression',
+              'term': '  BUILD A TRUSTWORTHY BRIEF ',
+              'explanation': '重复内容。',
+              'source_excerpt': 'build a trustworthy brief',
+              'evidence': ['s1'],
+            },
+            {
+              'kind': 'grammar',
+              'term': 'should + verb',
+              'explanation': '用于表达建议。',
+              'source_excerpt': 'We should build',
+              'evidence': ['s1'],
+            },
+            {
+              'kind': 'vocabulary',
+              'term': 'invented',
+              'explanation': '不受支持。',
+              'source_excerpt': 'This was never said.',
+              'evidence': ['s1'],
+            },
+            {
+              'kind': 'vocabulary',
+              'term': 'missing evidence',
+              'explanation': '不受支持。',
+              'source_excerpt': 'Ship',
+              'evidence': ['missing'],
+            },
+          ],
+        }),
+      ]);
+      final document = TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 's1',
+            startMs: 0,
+            endMs: 1000,
+            text: 'We should build a trustworthy brief.',
+            language: 'en',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.utc(2026, 8, 12),
+      );
+
+      final brief = await DefaultAiBriefService(client).generate(
+        settings: settings,
+        document: document,
+        sections: const {AiBriefSection.languageNotes},
+        outputLanguage: 'zh-Hans',
+        learningLevel: AiLearningLevel.beginner,
+      );
+
+      expect(brief.languageNotes, hasLength(2));
+      expect(brief.languageNotes.map((item) => item.kind), [
+        AiLanguageNoteKind.expression,
+        AiLanguageNoteKind.grammar,
+      ]);
+      expect(brief.learningLanguage, isNull);
+      expect(brief.learningLevel, AiLearningLevel.beginner);
+      expect(client.prompts.single, contains('language code "en"'));
+      expect(client.prompts.single, contains('at beginner level'));
+      expect(client.prompts.single, contains('[language=en]'));
+    },
+  );
+
+  test('language notes use the explicit language during synthesis', () async {
+    final candidate = jsonEncode({
+      'overview': '',
+      'overview_evidence': <String>[],
+      'chapters': <Object>[],
+      'insights': <Object>[],
+      'language_notes': <Object>[],
+    });
+    final client = _LlmClient([
+      candidate,
+      candidate,
+      jsonEncode({
+        'overview': '',
+        'overview_evidence': <String>[],
+        'chapters': <Object>[],
+        'insights': <Object>[],
+        'language_notes': [
+          {
+            'kind': 'vocabulary',
+            'term': 'a',
+            'explanation': 'An advanced explanation.',
+            'source_excerpt': 'a',
+            'evidence': ['s1'],
+          },
+        ],
+      }),
+    ]);
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: [
+        TranscriptSegment(
+          id: 's1',
+          startMs: 0,
+          endMs: 1,
+          text: List.filled(5000, 'a').join(),
+        ),
+        TranscriptSegment(
+          id: 's2',
+          startMs: 2,
+          endMs: 3,
+          text: List.filled(5000, 'b').join(),
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.utc(2026, 8, 12),
+    );
+
+    final brief = await DefaultAiBriefService(client).generate(
+      settings: settings,
+      document: document,
+      sections: const {AiBriefSection.languageNotes},
+      outputLanguage: 'en',
+      learningLanguage: 'ja',
+      learningLevel: AiLearningLevel.advanced,
+    );
+
+    expect(brief.languageNotes.single.term, 'a');
+    expect(brief.learningLanguage, 'ja');
+    expect(client.prompts.last, contains('language code "ja"'));
+    expect(client.prompts.last, contains('at advanced level'));
+    expect(client.prompts.last, contains('Select 6–12 high-value notes'));
+  });
+
   test('cancellation stops before contacting the LLM', () async {
     final client = _LlmClient(const []);
 

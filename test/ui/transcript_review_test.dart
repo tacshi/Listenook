@@ -4717,6 +4717,92 @@ void main() {
     expect(find.byKey(const Key('ai-evidence-segment')), findsOneWidget);
   });
 
+  testWidgets('Language notes are opt-in and preserve learner settings', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1000, 760));
+    final service = _ImmediateAiBrief();
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      settings: const AppSettings(
+        translationSettings: TranslationSettings(
+          baseUrl: 'https://llm.example/v1',
+          model: 'brief-model',
+        ),
+      ),
+      translationCredentials: _LlmCredentials(),
+      aiBriefService: service,
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('AI Brief').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('ai-brief-empty-action')));
+    await tester.pumpAndSettle();
+
+    final chipFinder = find.byKey(const Key('ai-brief-section-languageNotes'));
+    expect(tester.widget<FilterChip>(chipFinder).selected, isFalse);
+    expect(find.byKey(const Key('ai-brief-learning-language')), findsNothing);
+    expect(find.byKey(const Key('ai-brief-learning-level')), findsNothing);
+
+    await tester.tap(chipFinder);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('ai-brief-learning-language')), findsOneWidget);
+    expect(find.text('Auto-detect'), findsOneWidget);
+    expect(find.text('Intermediate (B1–B2)'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('ai-brief-learning-language')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Japanese').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('ai-brief-learning-level')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Advanced (C1–C2)').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('confirm-create-ai-brief')));
+    await tester.pumpAndSettle();
+
+    expect(service.lastSections, contains(AiBriefSection.languageNotes));
+    expect(service.lastLearningLanguage, 'ja');
+    expect(service.lastLearningLevel, AiLearningLevel.advanced);
+    expect(find.text('Language notes'), findsOneWidget);
+    expect(find.text('Useful expressions'), findsOneWidget);
+    expect(find.text('Hello'), findsWidgets);
+    expect(find.text('A friendly greeting.'), findsOneWidget);
+    expect(find.byKey(const Key('ai-language-note-note')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('ai-language-note-menu-note')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit item').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('ai-language-note-explanation')),
+      'An edited explanation.',
+    );
+    await tester.tap(find.text('Save').last);
+    await tester.pumpAndSettle();
+    expect(find.text('An edited explanation.'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('ai-language-note-menu-note')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete item').last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('ai-language-note-note')), findsNothing);
+  });
+
   testWidgets('AI Brief progress uses natural stage language', (tester) async {
     final service = _PendingAiBrief();
     final controller = await _controllerForDocument(
@@ -5141,6 +5227,10 @@ class _LlmCredentials implements TranslationCredentialStore {
 }
 
 class _ImmediateAiBrief implements AiBriefService {
+  Set<AiBriefSection> lastSections = const {};
+  String? lastLearningLanguage;
+  AiLearningLevel? lastLearningLevel;
+
   @override
   int estimateRequestCount(
     TranscriptDocument document,
@@ -5153,9 +5243,14 @@ class _ImmediateAiBrief implements AiBriefService {
     required TranscriptDocument document,
     required Set<AiBriefSection> sections,
     required String outputLanguage,
+    String? learningLanguage,
+    AiLearningLevel learningLevel = AiLearningLevel.intermediate,
     AiBriefProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
+    lastSections = Set<AiBriefSection>.of(sections);
+    lastLearningLanguage = learningLanguage;
+    lastLearningLevel = learningLevel;
     await onProgress?.call('analyzing', 1, 2);
     await onProgress?.call('synthesizing', 2, 2);
     return AiBrief(
@@ -5163,6 +5258,20 @@ class _ImmediateAiBrief implements AiBriefService {
       overviewEvidenceSegmentIds: [document.segments.first.id],
       chapters: const [],
       insights: const [],
+      languageNotes: sections.contains(AiBriefSection.languageNotes)
+          ? [
+              AiLanguageNote(
+                id: 'note',
+                kind: AiLanguageNoteKind.expression,
+                term: 'Hello',
+                explanation: 'A friendly greeting.',
+                sourceExcerpt: 'Hello',
+                evidenceSegmentIds: [document.segments.first.id],
+              ),
+            ]
+          : const [],
+      learningLanguage: learningLanguage,
+      learningLevel: learningLevel,
       outputLanguage: outputLanguage,
       model: settings.model,
       selectedSections: sections,
@@ -5188,6 +5297,8 @@ class _PendingAiBrief implements AiBriefService {
     required TranscriptDocument document,
     required Set<AiBriefSection> sections,
     required String outputLanguage,
+    String? learningLanguage,
+    AiLearningLevel learningLevel = AiLearningLevel.intermediate,
     AiBriefProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
@@ -5198,6 +5309,8 @@ class _PendingAiBrief implements AiBriefService {
       overviewEvidenceSegmentIds: [document.segments.first.id],
       chapters: const [],
       insights: const [],
+      learningLanguage: learningLanguage,
+      learningLevel: learningLevel,
       outputLanguage: outputLanguage,
       model: settings.model,
       selectedSections: sections,

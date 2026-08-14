@@ -32,9 +32,9 @@ The package name is `meow_stt`. Its permanent desktop identity is
   partial-result recovery, retry-missing and per-segment retranslation, and
   Original/Translated/Bilingual copy and exports.
 - User-invoked AI Briefs with editable overviews, chapters, key ideas,
-  decisions, action items, and open questions. Generated items retain
-  timestamped transcript evidence that seeks the source media, and briefs can
-  be copied or exported as Markdown.
+  decisions, action items, open questions, and opt-in, level-aware language
+  notes. Generated items retain timestamped transcript evidence that seeks the
+  source media, and briefs can be copied or exported as Markdown.
 - A single editable AI-provider configuration shared by LLM translation and
   AI Briefs, with VoiceTale-style provider templates. Custom starts blank;
   templates only prefill the Base URL, and model selection is enabled after a

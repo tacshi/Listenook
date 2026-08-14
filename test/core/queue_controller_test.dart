@@ -1135,6 +1135,80 @@ void main() {
       AiGenerationStatus.interrupted,
     );
   });
+
+  test(
+    'language settings survive retry and section regeneration preserves edits',
+    () async {
+      final now = DateTime.utc(2026, 8, 12);
+      final job = TranscriptionJob(
+        id: 'learning-brief',
+        batchId: 'batch',
+        sourcePath: '/learning.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        document: _document(now),
+      );
+      final briefService = _AiBrief();
+      final controller = _controller(
+        jobs: _Jobs([job]),
+        soniox: _Soniox(),
+        settings: _Settings(
+          const AppSettings(
+            translationSettings: TranslationSettings(
+              baseUrl: 'https://llm.example/v1',
+              model: 'brief-model',
+            ),
+          ),
+        ),
+        translationCredentials: _TranslationCredentials(),
+        aiBriefService: briefService,
+      );
+      await controller.initialize();
+
+      await controller.generateAiBrief(
+        job.id,
+        sections: const {AiBriefSection.overview, AiBriefSection.languageNotes},
+        outputLanguage: 'zh-Hans',
+        learningLanguage: 'ja',
+        learningLevel: AiLearningLevel.advanced,
+      );
+      await controller.updateAiBriefOverview(job.id, 'Keep this edit');
+
+      briefService.error = const AiBriefException('ai_brief_rate_limit');
+      await controller.generateAiBrief(
+        job.id,
+        sections: const {AiBriefSection.languageNotes},
+        outputLanguage: 'zh-Hans',
+        learningLanguage: 'fr',
+        learningLevel: AiLearningLevel.beginner,
+        mergeSections: true,
+      );
+      expect(
+        controller.allJobs.single.aiGenerationState.status,
+        AiGenerationStatus.failed,
+      );
+
+      briefService.error = null;
+      await controller.retryAiBrief(job.id);
+
+      final restored = controller.allJobs.single;
+      expect(restored.aiBrief?.overview, 'Keep this edit');
+      expect(restored.aiBrief?.languageNotes.single.term, 'Transcript 2');
+      expect(restored.aiBrief?.learningLanguage, 'fr');
+      expect(restored.aiBrief?.learningLevel, AiLearningLevel.beginner);
+      expect(briefService.lastLearningLanguage, 'fr');
+      expect(briefService.lastLearningLevel, AiLearningLevel.beginner);
+      expect(
+        controller.renderAiBriefMarkdown(job.id),
+        contains('## Language Notes'),
+      );
+      expect(
+        controller.renderAiBriefMarkdown(job.id),
+        contains('> Transcript'),
+      );
+    },
+  );
 }
 
 TranscriptDocument _document(DateTime now) => TranscriptDocument(
@@ -1359,6 +1433,9 @@ class _SuccessfulTranslation implements TranslationService {
 
 class _AiBrief implements AiBriefService {
   AiBriefException? error;
+  String? lastLearningLanguage;
+  AiLearningLevel? lastLearningLevel;
+  var successfulGenerations = 0;
 
   @override
   int estimateRequestCount(
@@ -1372,16 +1449,35 @@ class _AiBrief implements AiBriefService {
     required TranscriptDocument document,
     required Set<AiBriefSection> sections,
     required String outputLanguage,
+    String? learningLanguage,
+    AiLearningLevel learningLevel = AiLearningLevel.intermediate,
     AiBriefProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
     if (error case final value?) throw value;
+    lastLearningLanguage = learningLanguage;
+    lastLearningLevel = learningLevel;
+    successfulGenerations++;
     await onProgress?.call('analyzing', 1, 1);
     return AiBrief(
       overview: 'Grounded overview',
       overviewEvidenceSegmentIds: [document.segments.single.id],
       chapters: const [],
       insights: const [],
+      languageNotes: sections.contains(AiBriefSection.languageNotes)
+          ? [
+              AiLanguageNote(
+                id: 'note-$successfulGenerations',
+                kind: AiLanguageNoteKind.vocabulary,
+                term: 'Transcript $successfulGenerations',
+                explanation: 'A learning explanation.',
+                sourceExcerpt: 'Transcript',
+                evidenceSegmentIds: [document.segments.single.id],
+              ),
+            ]
+          : const [],
+      learningLanguage: learningLanguage,
+      learningLevel: learningLevel,
       outputLanguage: outputLanguage,
       model: settings.model,
       selectedSections: sections,

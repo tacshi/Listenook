@@ -97,6 +97,8 @@ abstract interface class AiBriefService {
     required TranscriptDocument document,
     required Set<AiBriefSection> sections,
     required String outputLanguage,
+    String? learningLanguage,
+    AiLearningLevel learningLevel = AiLearningLevel.intermediate,
     AiBriefProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   });

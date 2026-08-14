@@ -256,11 +256,24 @@ void main() {
             evidenceSegmentIds: ['s1'],
           ),
         ],
+        languageNotes: const [
+          AiLanguageNote(
+            id: 'l1',
+            kind: AiLanguageNoteKind.expression,
+            term: 'Supported statement',
+            explanation: 'A reusable expression.',
+            sourceExcerpt: 'Supported statement.',
+            evidenceSegmentIds: ['s1'],
+          ),
+        ],
+        learningLanguage: 'en',
+        learningLevel: AiLearningLevel.advanced,
         outputLanguage: 'en',
         model: 'brief-model',
         selectedSections: const {
           AiBriefSection.overview,
           AiBriefSection.actionItems,
+          AiBriefSection.languageNotes,
         },
         generatedAt: now,
         sourceTranscriptUpdatedAt: now,
@@ -269,7 +282,12 @@ void main() {
         status: AiGenerationStatus.completed,
         model: 'brief-model',
         outputLanguage: 'en',
-        selectedSections: {AiBriefSection.overview},
+        learningLanguage: 'en',
+        learningLevel: AiLearningLevel.advanced,
+        selectedSections: {
+          AiBriefSection.overview,
+          AiBriefSection.languageNotes,
+        },
       ),
     );
 
@@ -279,8 +297,37 @@ void main() {
     expect(restored.aiBrief?.overviewEvidenceSegmentIds, ['s1']);
     expect(restored.aiBrief?.chapters.single.title, 'Opening');
     expect(restored.aiBrief?.insights.single.type, AiInsightType.actionItem);
+    expect(
+      restored.aiBrief?.languageNotes.single.kind,
+      AiLanguageNoteKind.expression,
+    );
+    expect(restored.aiBrief?.learningLanguage, 'en');
+    expect(restored.aiBrief?.learningLevel, AiLearningLevel.advanced);
     expect(restored.aiGenerationState.status, AiGenerationStatus.completed);
+    expect(restored.aiGenerationState.learningLanguage, 'en');
+    expect(restored.aiGenerationState.learningLevel, AiLearningLevel.advanced);
     expect(job.toJsonString(), isNot(contains('api_key')));
+  });
+
+  test('older AI Brief JSON uses backward-compatible learning defaults', () {
+    final restored = AiBrief.fromJson({
+      'overview': 'Legacy brief',
+      'chapters': <Object>[],
+      'insights': <Object>[],
+      'output_language': 'en',
+      'model': 'brief-model',
+      'selected_sections': ['overview'],
+      'generated_at': '2026-08-12T00:00:00.000Z',
+      'source_transcript_updated_at': '2026-08-12T00:00:00.000Z',
+    });
+
+    expect(restored.languageNotes, isEmpty);
+    expect(restored.learningLanguage, isNull);
+    expect(restored.learningLevel, AiLearningLevel.intermediate);
+    expect(
+      restored.selectedSections,
+      isNot(contains(AiBriefSection.languageNotes)),
+    );
   });
 
   test('job persistence is atomic and round-trips edits', () async {

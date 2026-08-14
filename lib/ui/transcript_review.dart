@@ -993,6 +993,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
         job.id,
         sections: result.sections,
         outputLanguage: result.outputLanguage,
+        learningLanguage: result.learningLanguage,
+        learningLevel: result.learningLevel,
       ),
     );
   }
@@ -1462,10 +1464,17 @@ class _ReviewContentTabs extends StatelessWidget {
 }
 
 class _AiBriefDialogResult {
-  const _AiBriefDialogResult(this.sections, this.outputLanguage);
+  const _AiBriefDialogResult(
+    this.sections,
+    this.outputLanguage,
+    this.learningLanguage,
+    this.learningLevel,
+  );
 
   final Set<AiBriefSection> sections;
   final String outputLanguage;
+  final String? learningLanguage;
+  final AiLearningLevel learningLevel;
 }
 
 Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
@@ -1478,6 +1487,13 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
   );
   var outputLanguage =
       job.aiBrief?.outputLanguage ?? controller.defaultAiBriefLanguage;
+  var learningLanguage = job.aiBrief?.learningLanguage;
+  var learningLevel =
+      job.aiBrief?.learningLevel ?? AiLearningLevel.intermediate;
+  if (learningLanguage != null &&
+      !supportedTranslationLanguageCodes.contains(learningLanguage)) {
+    learningLanguage = null;
+  }
   if (!supportedTranslationLanguageCodes.contains(outputLanguage)) {
     outputLanguage = 'en';
   }
@@ -1529,6 +1545,62 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
                     ],
                   ),
                   const SizedBox(height: 16),
+                  if (sections.contains(AiBriefSection.languageNotes)) ...[
+                    DropdownButtonFormField<String>(
+                      key: const Key('ai-brief-learning-language'),
+                      initialValue: learningLanguage ?? '',
+                      decoration: InputDecoration(
+                        labelText: context.strings.t(
+                          'ai_brief_learning_language',
+                        ),
+                        prefixIcon: const Icon(Icons.school_outlined),
+                      ),
+                      items: [
+                        DropdownMenuItem(
+                          value: '',
+                          child: Text(
+                            context.strings.t(
+                              'ai_brief_learning_language_auto',
+                            ),
+                          ),
+                        ),
+                        for (final code in supportedTranslationLanguageCodes)
+                          DropdownMenuItem(
+                            value: code,
+                            child: Text(
+                              context.strings.translationLanguageName(code),
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) => setDialogState(
+                        () => learningLanguage = value?.isEmpty ?? true
+                            ? null
+                            : value,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<AiLearningLevel>(
+                      key: const Key('ai-brief-learning-level'),
+                      initialValue: learningLevel,
+                      decoration: InputDecoration(
+                        labelText: context.strings.t('ai_brief_learning_level'),
+                        prefixIcon: const Icon(Icons.trending_up_rounded),
+                      ),
+                      items: [
+                        for (final level in AiLearningLevel.values)
+                          DropdownMenuItem(
+                            value: level,
+                            child: Text(_learningLevelLabel(context, level)),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setDialogState(() => learningLevel = value);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   DropdownButtonFormField<String>(
                     key: const Key('ai-brief-output-language'),
                     initialValue: outputLanguage,
@@ -1579,6 +1651,8 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
                       _AiBriefDialogResult(
                         Set<AiBriefSection>.of(sections),
                         outputLanguage,
+                        learningLanguage,
+                        learningLevel,
                       ),
                     ),
               icon: const Icon(Icons.auto_awesome_rounded),
@@ -1781,6 +1855,89 @@ class _AiBriefPane extends StatelessWidget {
                     ),
                   ),
                 ],
+              if (brief.languageNotes.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _AiBriefSectionCard(
+                  title: context.strings.t('language_notes'),
+                  icon: Icons.menu_book_outlined,
+                  onCopy: () => _copyBriefText(
+                    context,
+                    brief.languageNotes
+                        .map(
+                          (note) =>
+                              '${_languageNoteKindLabel(context, note.kind)}: '
+                              '${note.term}\n${note.explanation}\n'
+                              '“${note.sourceExcerpt}”',
+                        )
+                        .join('\n\n'),
+                  ),
+                  onRegenerate: state.status.isActive
+                      ? null
+                      : () => _regenerateAiSection(
+                          context,
+                          job,
+                          AiBriefSection.languageNotes,
+                        ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          Chip(
+                            avatar: const Icon(
+                              Icons.language_rounded,
+                              size: 16,
+                            ),
+                            label: Text(
+                              brief.learningLanguage == null
+                                  ? context.strings.t(
+                                      'ai_brief_learning_language_auto',
+                                    )
+                                  : context.strings.translationLanguageName(
+                                      brief.learningLanguage!,
+                                    ),
+                            ),
+                          ),
+                          Chip(
+                            avatar: const Icon(
+                              Icons.trending_up_rounded,
+                              size: 16,
+                            ),
+                            label: Text(
+                              _learningLevelLabel(context, brief.learningLevel),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      for (final kind in AiLanguageNoteKind.values)
+                        if (brief.languageNotes.any(
+                          (item) => item.kind == kind,
+                        )) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(2, 12, 2, 4),
+                            child: Text(
+                              _languageNoteKindLabel(context, kind),
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          for (final note in brief.languageNotes.where(
+                            (item) => item.kind == kind,
+                          ))
+                            _AiLanguageNoteTile(
+                              job: job,
+                              document: document,
+                              note: note,
+                              onEvidence: onEvidence,
+                            ),
+                        ],
+                    ],
+                  ),
+                ),
+              ],
               if (brief.insights.isEmpty)
                 Align(
                   alignment: Alignment.centerLeft,
@@ -2129,6 +2286,99 @@ class _AiInsightTile extends StatelessWidget {
   );
 }
 
+class _AiLanguageNoteTile extends StatelessWidget {
+  const _AiLanguageNoteTile({
+    required this.job,
+    required this.document,
+    required this.note,
+    required this.onEvidence,
+  });
+
+  final TranscriptionJob job;
+  final TranscriptDocument document;
+  final AiLanguageNote note;
+  final Future<void> Function(String) onEvidence;
+
+  @override
+  Widget build(BuildContext context) => Card.outlined(
+    key: ValueKey('ai-language-note-${note.id}'),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  note.term,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              PopupMenuButton<String>(
+                key: ValueKey('ai-language-note-menu-${note.id}'),
+                onSelected: (value) {
+                  if (value == 'edit') {
+                    _editLanguageNote(context, job, note);
+                  }
+                  if (value == 'delete') {
+                    context.read<AppController>().deleteAiLanguageNote(
+                      job.id,
+                      note.id,
+                    );
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Text(context.strings.t('edit_item')),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Text(context.strings.t('delete_item')),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (note.explanation.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(note.explanation),
+          ],
+          if (note.sourceExcerpt.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                child: Text(
+                  '“${note.sourceExcerpt}”',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          _EvidenceChips(
+            document: document,
+            segmentIds: note.evidenceSegmentIds,
+            onEvidence: onEvidence,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _EvidenceChips extends StatelessWidget {
   const _EvidenceChips({
     required this.document,
@@ -2198,6 +2448,8 @@ Future<void> _regenerateAiSection(
     AiBriefSection.overview => job.aiBrief?.edited ?? false,
     AiBriefSection.chapters =>
       job.aiBrief?.chapters.any((item) => item.edited) ?? false,
+    AiBriefSection.languageNotes =>
+      job.aiBrief?.languageNotes.any((item) => item.edited) ?? false,
     _ =>
       job.aiBrief?.insights.any(
             (item) => item.edited && _sectionForInsight(item.type) == section,
@@ -2376,6 +2628,89 @@ Future<void> _editInsight(
   deadline.dispose();
 }
 
+Future<void> _editLanguageNote(
+  BuildContext context,
+  TranscriptionJob job,
+  AiLanguageNote note,
+) async {
+  final term = TextEditingController(text: note.term);
+  final explanation = TextEditingController(text: note.explanation);
+  final sourceExcerpt = TextEditingController(text: note.sourceExcerpt);
+  final save = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(context.strings.t('edit_language_note')),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                key: const Key('ai-language-note-term'),
+                controller: term,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('language_note_term'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('ai-language-note-explanation'),
+                controller: explanation,
+                minLines: 3,
+                maxLines: 8,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('language_note_explanation'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('ai-language-note-excerpt'),
+                controller: sourceExcerpt,
+                minLines: 2,
+                maxLines: 5,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('language_note_source_excerpt'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: Text(context.strings.t('cancel')),
+        ),
+        FilledButton(
+          onPressed:
+              term.text.trim().isEmpty ||
+                  explanation.text.trim().isEmpty ||
+                  sourceExcerpt.text.trim().isEmpty
+              ? null
+              : () => Navigator.pop(context, true),
+          child: Text(context.strings.t('save')),
+        ),
+      ],
+    ),
+  );
+  if (save == true && context.mounted) {
+    await context.read<AppController>().updateAiLanguageNote(
+      job.id,
+      note.id,
+      term: term.text,
+      explanation: explanation.text,
+      sourceExcerpt: sourceExcerpt.text,
+    );
+  }
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    term.dispose();
+    explanation.dispose();
+    sourceExcerpt.dispose();
+  });
+}
+
 Future<void> _addInsight(
   BuildContext context,
   TranscriptionJob job,
@@ -2475,6 +2810,12 @@ AiBriefSection _sectionForInsight(AiInsightType type) => switch (type) {
   AiInsightType.actionItem => AiBriefSection.actionItems,
   AiInsightType.openQuestion => AiBriefSection.openQuestions,
 };
+
+String _learningLevelLabel(BuildContext context, AiLearningLevel level) =>
+    context.strings.t('ai_learning_level_${level.name}');
+
+String _languageNoteKindLabel(BuildContext context, AiLanguageNoteKind kind) =>
+    context.strings.t('ai_language_note_kind_${kind.name}');
 
 enum _TranscriptMoreAction {
   toggleSpeakers,

@@ -1595,6 +1595,8 @@ class AppController extends ChangeNotifier {
     String jobId, {
     required Set<AiBriefSection> sections,
     required String outputLanguage,
+    String? learningLanguage,
+    AiLearningLevel learningLevel = AiLearningLevel.intermediate,
     bool mergeSections = false,
   }) async {
     final service = _aiBriefService;
@@ -1624,6 +1626,8 @@ class AppController extends ChangeNotifier {
         stage: 'analyzing',
         totalChunks: estimated,
         outputLanguage: outputLanguage,
+        learningLanguage: learningLanguage,
+        learningLevel: learningLevel,
         model: provider.model,
         selectedSections: Set<AiBriefSection>.of(sections),
         mergeSections: mergeSections,
@@ -1635,6 +1639,8 @@ class AppController extends ChangeNotifier {
         document: document,
         sections: sections,
         outputLanguage: outputLanguage,
+        learningLanguage: learningLanguage,
+        learningLevel: learningLevel,
         shouldCancel: () => _aiBriefCancelledIds.contains(jobId),
         onProgress: (stage, completed, total) async {
           final latest = (_jobs[jobId] ?? current)!;
@@ -1706,6 +1712,8 @@ class AppController extends ChangeNotifier {
       jobId,
       sections: sections,
       outputLanguage: language,
+      learningLanguage: job.aiGenerationState.learningLanguage,
+      learningLevel: job.aiGenerationState.learningLevel,
       mergeSections: job.aiGenerationState.mergeSections,
     );
   }
@@ -1720,6 +1728,8 @@ class AppController extends ChangeNotifier {
       jobId,
       sections: sections,
       outputLanguage: job!.aiBrief!.outputLanguage,
+      learningLanguage: job.aiBrief!.learningLanguage,
+      learningLevel: job.aiBrief!.learningLevel,
       mergeSections: true,
     );
   }
@@ -1847,6 +1857,58 @@ class AppController extends ChangeNotifier {
     );
   }
 
+  Future<void> updateAiLanguageNote(
+    String jobId,
+    String noteId, {
+    required String term,
+    required String explanation,
+    required String sourceExcerpt,
+  }) async {
+    final job = _jobs[jobId];
+    final brief = job?.aiBrief;
+    final trimmedTerm = term.trim();
+    final trimmedExplanation = explanation.trim();
+    final trimmedSourceExcerpt = sourceExcerpt.trim();
+    if (job == null ||
+        brief == null ||
+        trimmedTerm.isEmpty ||
+        trimmedExplanation.isEmpty ||
+        trimmedSourceExcerpt.isEmpty) {
+      return;
+    }
+    final notes = [
+      for (final note in brief.languageNotes)
+        if (note.id == noteId)
+          note.copyWith(
+            term: trimmedTerm,
+            explanation: trimmedExplanation,
+            sourceExcerpt: trimmedSourceExcerpt,
+            edited: true,
+          )
+        else
+          note,
+    ];
+    await _transition(
+      job,
+      aiBrief: brief.copyWith(languageNotes: notes, edited: true),
+    );
+  }
+
+  Future<void> deleteAiLanguageNote(String jobId, String noteId) async {
+    final job = _jobs[jobId];
+    final brief = job?.aiBrief;
+    if (job == null || brief == null) return;
+    await _transition(
+      job,
+      aiBrief: brief.copyWith(
+        languageNotes: brief.languageNotes
+            .where((item) => item.id != noteId)
+            .toList(),
+        edited: true,
+      ),
+    );
+  }
+
   String renderAiBriefMarkdown(String jobId) {
     final job = _jobs[jobId];
     final brief = job?.aiBrief;
@@ -1894,6 +1956,35 @@ class AppController extends ChangeNotifier {
           );
       }
       buffer.writeln();
+    }
+    if (brief.languageNotes.isNotEmpty) {
+      buffer
+        ..writeln('## Language Notes')
+        ..writeln();
+      for (final kind in AiLanguageNoteKind.values) {
+        final notes = brief.languageNotes
+            .where((item) => item.kind == kind)
+            .toList();
+        if (notes.isEmpty) continue;
+        buffer
+          ..writeln('### ${_aiLanguageNoteHeading(kind)}')
+          ..writeln();
+        for (final note in notes) {
+          buffer
+            ..writeln('**${note.term}**')
+            ..writeln()
+            ..writeln(note.explanation)
+            ..writeln()
+            ..writeln(
+              note.sourceExcerpt
+                  .split('\n')
+                  .map((line) => '> $line')
+                  .join('\n'),
+            )
+            ..writeln(_markdownEvidence(document, note.evidenceSegmentIds))
+            ..writeln();
+        }
+      }
     }
     return buffer.toString().trimRight();
   }
@@ -1947,6 +2038,15 @@ class AppController extends ChangeNotifier {
           ? generated.chapters
           : current.chapters,
       insights: [...retainedInsights, ...generated.insights],
+      languageNotes: sections.contains(AiBriefSection.languageNotes)
+          ? generated.languageNotes
+          : current.languageNotes,
+      learningLanguage: sections.contains(AiBriefSection.languageNotes)
+          ? generated.learningLanguage
+          : current.learningLanguage,
+      learningLevel: sections.contains(AiBriefSection.languageNotes)
+          ? generated.learningLevel
+          : current.learningLevel,
       outputLanguage: generated.outputLanguage,
       model: generated.model,
       selectedSections: {...current.selectedSections, ...sections},
@@ -1995,6 +2095,12 @@ class AppController extends ChangeNotifier {
     AiInsightType.decision => 'Decisions',
     AiInsightType.actionItem => 'Action items',
     AiInsightType.openQuestion => 'Open questions',
+  };
+
+  String _aiLanguageNoteHeading(AiLanguageNoteKind kind) => switch (kind) {
+    AiLanguageNoteKind.vocabulary => 'Vocabulary',
+    AiLanguageNoteKind.expression => 'Useful expressions',
+    AiLanguageNoteKind.grammar => 'Grammar & usage',
   };
 
   Future<String> exportJob(
