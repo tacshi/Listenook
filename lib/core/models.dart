@@ -119,6 +119,7 @@ enum AiBriefSection {
   decisions,
   actionItems,
   openQuestions,
+  languageNotes,
 }
 
 const defaultAiBriefSections = <AiBriefSection>{
@@ -137,6 +138,10 @@ enum AiInsightType {
   actionItem,
   openQuestion,
 }
+
+enum AiLearningLevel { beginner, intermediate, advanced }
+
+enum AiLanguageNoteKind { vocabulary, expression, grammar }
 
 enum AiGenerationStatus {
   idle,
@@ -903,12 +908,73 @@ class AiInsight {
   );
 }
 
+class AiLanguageNote {
+  const AiLanguageNote({
+    required this.id,
+    required this.kind,
+    required this.term,
+    required this.explanation,
+    required this.sourceExcerpt,
+    required this.evidenceSegmentIds,
+    this.edited = false,
+  });
+
+  final String id;
+  final AiLanguageNoteKind kind;
+  final String term;
+  final String explanation;
+  final String sourceExcerpt;
+  final List<String> evidenceSegmentIds;
+  final bool edited;
+
+  AiLanguageNote copyWith({
+    String? term,
+    String? explanation,
+    String? sourceExcerpt,
+    List<String>? evidenceSegmentIds,
+    bool? edited,
+  }) => AiLanguageNote(
+    id: id,
+    kind: kind,
+    term: term ?? this.term,
+    explanation: explanation ?? this.explanation,
+    sourceExcerpt: sourceExcerpt ?? this.sourceExcerpt,
+    evidenceSegmentIds: evidenceSegmentIds ?? this.evidenceSegmentIds,
+    edited: edited ?? this.edited,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'kind': kind.name,
+    'term': term,
+    'explanation': explanation,
+    'source_excerpt': sourceExcerpt,
+    'evidence_segment_ids': evidenceSegmentIds,
+    'edited': edited,
+  };
+
+  factory AiLanguageNote.fromJson(Map<String, dynamic> json) => AiLanguageNote(
+    id: json['id'] as String? ?? '',
+    kind:
+        _enumByName(AiLanguageNoteKind.values, json['kind']) ??
+        AiLanguageNoteKind.vocabulary,
+    term: json['term'] as String? ?? '',
+    explanation: json['explanation'] as String? ?? '',
+    sourceExcerpt: json['source_excerpt'] as String? ?? '',
+    evidenceSegmentIds: _strings(json['evidence_segment_ids']),
+    edited: json['edited'] as bool? ?? false,
+  );
+}
+
 class AiBrief {
   const AiBrief({
     required this.overview,
     this.overviewEvidenceSegmentIds = const [],
     required this.chapters,
     required this.insights,
+    this.languageNotes = const [],
+    this.learningLanguage,
+    this.learningLevel = AiLearningLevel.intermediate,
     required this.outputLanguage,
     required this.model,
     required this.selectedSections,
@@ -921,6 +987,9 @@ class AiBrief {
   final List<String> overviewEvidenceSegmentIds;
   final List<AiChapter> chapters;
   final List<AiInsight> insights;
+  final List<AiLanguageNote> languageNotes;
+  final String? learningLanguage;
+  final AiLearningLevel learningLevel;
   final String outputLanguage;
   final String model;
   final Set<AiBriefSection> selectedSections;
@@ -936,13 +1005,22 @@ class AiBrief {
     List<String>? overviewEvidenceSegmentIds,
     List<AiChapter>? chapters,
     List<AiInsight>? insights,
+    List<AiLanguageNote>? languageNotes,
+    String? learningLanguage,
+    AiLearningLevel? learningLevel,
     bool? edited,
+    bool clearLearningLanguage = false,
   }) => AiBrief(
     overview: overview ?? this.overview,
     overviewEvidenceSegmentIds:
         overviewEvidenceSegmentIds ?? this.overviewEvidenceSegmentIds,
     chapters: chapters ?? this.chapters,
     insights: insights ?? this.insights,
+    languageNotes: languageNotes ?? this.languageNotes,
+    learningLanguage: clearLearningLanguage
+        ? null
+        : learningLanguage ?? this.learningLanguage,
+    learningLevel: learningLevel ?? this.learningLevel,
     outputLanguage: outputLanguage,
     model: model,
     selectedSections: selectedSections,
@@ -956,6 +1034,9 @@ class AiBrief {
     'overview_evidence_segment_ids': overviewEvidenceSegmentIds,
     'chapters': chapters.map((item) => item.toJson()).toList(),
     'insights': insights.map((item) => item.toJson()).toList(),
+    'language_notes': languageNotes.map((item) => item.toJson()).toList(),
+    if (learningLanguage case final value?) 'learning_language': value,
+    'learning_level': learningLevel.name,
     'output_language': outputLanguage,
     'model': model,
     'selected_sections': selectedSections.map((item) => item.name).toList(),
@@ -969,6 +1050,11 @@ class AiBrief {
     overviewEvidenceSegmentIds: _strings(json['overview_evidence_segment_ids']),
     chapters: _mapList(json['chapters'], AiChapter.fromJson),
     insights: _mapList(json['insights'], AiInsight.fromJson),
+    languageNotes: _mapList(json['language_notes'], AiLanguageNote.fromJson),
+    learningLanguage: json['learning_language'] as String?,
+    learningLevel:
+        _enumByName(AiLearningLevel.values, json['learning_level']) ??
+        AiLearningLevel.intermediate,
     outputLanguage: json['output_language'] as String? ?? 'en',
     model: json['model'] as String? ?? '',
     selectedSections: _enumSet(
@@ -990,6 +1076,8 @@ class AiGenerationState {
     this.completedChunks = 0,
     this.totalChunks = 0,
     this.outputLanguage = '',
+    this.learningLanguage,
+    this.learningLevel = AiLearningLevel.intermediate,
     this.model = '',
     this.selectedSections = const {},
     this.mergeSections = false,
@@ -1002,6 +1090,8 @@ class AiGenerationState {
   final int completedChunks;
   final int totalChunks;
   final String outputLanguage;
+  final String? learningLanguage;
+  final AiLearningLevel learningLevel;
   final String model;
   final Set<AiBriefSection> selectedSections;
   final bool mergeSections;
@@ -1016,18 +1106,25 @@ class AiGenerationState {
     int? completedChunks,
     int? totalChunks,
     String? outputLanguage,
+    String? learningLanguage,
+    AiLearningLevel? learningLevel,
     String? model,
     Set<AiBriefSection>? selectedSections,
     bool? mergeSections,
     String? errorCode,
     String? errorMessage,
     bool clearError = false,
+    bool clearLearningLanguage = false,
   }) => AiGenerationState(
     status: status ?? this.status,
     stage: stage ?? this.stage,
     completedChunks: completedChunks ?? this.completedChunks,
     totalChunks: totalChunks ?? this.totalChunks,
     outputLanguage: outputLanguage ?? this.outputLanguage,
+    learningLanguage: clearLearningLanguage
+        ? null
+        : learningLanguage ?? this.learningLanguage,
+    learningLevel: learningLevel ?? this.learningLevel,
     model: model ?? this.model,
     selectedSections: selectedSections ?? this.selectedSections,
     mergeSections: mergeSections ?? this.mergeSections,
@@ -1041,6 +1138,8 @@ class AiGenerationState {
     'completed_chunks': completedChunks,
     'total_chunks': totalChunks,
     'output_language': outputLanguage,
+    if (learningLanguage case final value?) 'learning_language': value,
+    'learning_level': learningLevel.name,
     'model': model,
     'selected_sections': selectedSections.map((item) => item.name).toList(),
     'merge_sections': mergeSections,
@@ -1057,6 +1156,10 @@ class AiGenerationState {
         completedChunks: (json?['completed_chunks'] as num?)?.toInt() ?? 0,
         totalChunks: (json?['total_chunks'] as num?)?.toInt() ?? 0,
         outputLanguage: json?['output_language'] as String? ?? '',
+        learningLanguage: json?['learning_language'] as String?,
+        learningLevel:
+            _enumByName(AiLearningLevel.values, json?['learning_level']) ??
+            AiLearningLevel.intermediate,
         model: json?['model'] as String? ?? '',
         selectedSections: _enumSet(
           AiBriefSection.values,

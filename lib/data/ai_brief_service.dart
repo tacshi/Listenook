@@ -12,6 +12,9 @@ class DefaultAiBriefService implements AiBriefService {
       'products. Use only facts explicitly supported by the supplied '
       'segments. Every chapter and insight must cite one or more exact '
       'segment IDs. Never invent decisions, owners, deadlines, or questions. '
+      'Language-learning explanations may use established linguistic '
+      'knowledge, but every selected term and source excerpt must come from '
+      'the cited transcript segments. '
       'Omit unsupported items. Return JSON only, with no Markdown fences.';
 
   final LlmClient _llm;
@@ -32,6 +35,8 @@ class DefaultAiBriefService implements AiBriefService {
     required TranscriptDocument document,
     required Set<AiBriefSection> sections,
     required String outputLanguage,
+    String? learningLanguage,
+    AiLearningLevel learningLevel = AiLearningLevel.intermediate,
     AiBriefProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
@@ -46,6 +51,10 @@ class DefaultAiBriefService implements AiBriefService {
     final validation = settings.validationError();
     if (validation != null) throw AiBriefException(validation);
     final chunks = _chunks(document);
+    final resolvedLearningLanguage = _resolvedLearningLanguage(
+      document,
+      learningLanguage,
+    );
     final totalRequests = chunks.length + (chunks.length > 1 ? 1 : 0);
     final candidates = <Map<String, dynamic>>[];
     try {
@@ -56,6 +65,8 @@ class DefaultAiBriefService implements AiBriefService {
           document: document,
           sections: sections,
           outputLanguage: outputLanguage,
+          learningLanguage: resolvedLearningLanguage,
+          learningLevel: learningLevel,
           chunkIndex: index,
           chunkCount: chunks.length,
         );
@@ -80,6 +91,8 @@ class DefaultAiBriefService implements AiBriefService {
             candidates,
             sections: sections,
             outputLanguage: outputLanguage,
+            learningLanguage: resolvedLearningLanguage,
+            learningLevel: learningLevel,
           ),
           shouldCancel: shouldCancel,
         );
@@ -91,6 +104,8 @@ class DefaultAiBriefService implements AiBriefService {
         document: document,
         sections: sections,
         outputLanguage: outputLanguage,
+        learningLanguage: learningLanguage,
+        learningLevel: learningLevel,
       );
     } on OperationCancelledException {
       rethrow;
@@ -129,10 +144,18 @@ class DefaultAiBriefService implements AiBriefService {
     required TranscriptDocument document,
     required Set<AiBriefSection> sections,
     required String outputLanguage,
+    required String? learningLanguage,
+    required AiLearningLevel learningLevel,
     required int chunkIndex,
     required int chunkCount,
   }) {
     final requested = sections.map((item) => item.name).join(', ');
+    final learningInstructions = _learningInstructions(
+      sections: sections,
+      learningLanguage: learningLanguage,
+      learningLevel: learningLevel,
+      synthesis: chunkCount == 1,
+    );
     final lines = chunk
         .map((segment) => _renderSegment(document, segment))
         .join('\n');
@@ -140,9 +163,10 @@ class DefaultAiBriefService implements AiBriefService {
 Analyze transcript chunk ${chunkIndex + 1} of $chunkCount.
 Write all user-facing text in language code "$outputLanguage".
 Requested sections: $requested.
+$learningInstructions
 
 Return exactly this JSON shape:
-{"overview":"concise overview or empty string","overview_evidence":["segment-id"],"chapters":[{"title":"...","summary":"...","evidence":["segment-id"]}],"insights":[{"type":"keyIdea|notableMoment|decision|actionItem|openQuestion","text":"...","owner":null,"deadline":null,"evidence":["segment-id"]}]}
+{"overview":"concise overview or empty string","overview_evidence":["segment-id"],"chapters":[{"title":"...","summary":"...","evidence":["segment-id"]}],"insights":[{"type":"keyIdea|notableMoment|decision|actionItem|openQuestion","text":"...","owner":null,"deadline":null,"evidence":["segment-id"]}],"language_notes":[{"kind":"vocabulary|expression|grammar","term":"...","explanation":"...","source_excerpt":"...","evidence":["segment-id"]}]}
 
 For owner and deadline, use null unless the cited transcript states them explicitly. Keep overview_evidence to the smallest useful set of supporting segments.
 
@@ -155,16 +179,25 @@ $lines
     List<Map<String, dynamic>> candidates, {
     required Set<AiBriefSection> sections,
     required String outputLanguage,
+    required String? learningLanguage,
+    required AiLearningLevel learningLevel,
   }) {
     final requested = sections.map((item) => item.name).join(', ');
+    final learningInstructions = _learningInstructions(
+      sections: sections,
+      learningLanguage: learningLanguage,
+      learningLevel: learningLevel,
+      synthesis: true,
+    );
     return '''
 Synthesize the candidate analyses below into one non-repetitive brief.
 Write all user-facing text in language code "$outputLanguage".
 Requested sections: $requested.
 Preserve only supplied evidence segment IDs. Do not introduce facts.
+$learningInstructions
 
 Return exactly this JSON shape:
-{"overview":"concise overview or empty string","overview_evidence":["segment-id"],"chapters":[{"title":"...","summary":"...","evidence":["segment-id"]}],"insights":[{"type":"keyIdea|notableMoment|decision|actionItem|openQuestion","text":"...","owner":null,"deadline":null,"evidence":["segment-id"]}]}
+{"overview":"concise overview or empty string","overview_evidence":["segment-id"],"chapters":[{"title":"...","summary":"...","evidence":["segment-id"]}],"insights":[{"type":"keyIdea|notableMoment|decision|actionItem|openQuestion","text":"...","owner":null,"deadline":null,"evidence":["segment-id"]}],"language_notes":[{"kind":"vocabulary|expression|grammar","term":"...","explanation":"...","source_excerpt":"...","evidence":["segment-id"]}]}
 
 Candidates:
 ${jsonEncode(candidates)}
@@ -186,8 +219,56 @@ ${jsonEncode(candidates)}
     final speaker = speakerName?.trim().isNotEmpty == true
         ? '[speaker=${speakerName!.trim()}]'
         : '';
-    return '[id=${segment.id}][${_clock(segment.startMs)}]$speaker '
+    final language = segment.language?.trim().isNotEmpty == true
+        ? '[language=${segment.language!.trim()}]'
+        : '';
+    return '[id=${segment.id}][${_clock(segment.startMs)}]$speaker$language '
         '${segment.text.trim()}';
+  }
+
+  String _learningInstructions({
+    required Set<AiBriefSection> sections,
+    required String? learningLanguage,
+    required AiLearningLevel learningLevel,
+    required bool synthesis,
+  }) {
+    if (!sections.contains(AiBriefSection.languageNotes)) {
+      return 'Return language_notes as an empty array.';
+    }
+    final language = learningLanguage == null
+        ? 'the dominant natural language in the transcript'
+        : 'language code "$learningLanguage"';
+    final count = synthesis
+        ? 'Select 6–12 high-value notes overall, or fewer when the transcript '
+              'does not support that many.'
+        : 'Select only high-value candidates from this chunk; do not pad the '
+              'result.';
+    return '''
+Language notes are requested for $language at ${learningLevel.name} level.
+$count Balance vocabulary, reusable expressions, and grammar or usage when the evidence supports them.
+Keep term and source_excerpt in the learned language. Write explanation in the requested output language using clear, professional, level-appropriate wording.
+source_excerpt must be a short verbatim substring of a cited transcript segment. Do not assess pronunciation, fluency, or speaker correctness, and do not create quizzes, corrections, or invented examples.
+''';
+  }
+
+  String? _resolvedLearningLanguage(
+    TranscriptDocument document,
+    String? override,
+  ) {
+    final selected = override?.trim();
+    if (selected != null && selected.isNotEmpty) return selected;
+    final weights = <String, int>{};
+    for (final segment in document.segments) {
+      final language = segment.language?.trim();
+      if (language == null || language.isEmpty) continue;
+      weights.update(
+        language,
+        (value) => value + segment.text.trim().length,
+        ifAbsent: () => segment.text.trim().length,
+      );
+    }
+    if (weights.isEmpty) return null;
+    return weights.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
   }
 
   Future<Map<String, dynamic>> _completeJson({
@@ -237,6 +318,8 @@ ${jsonEncode(candidates)}
     required TranscriptDocument document,
     required Set<AiBriefSection> sections,
     required String outputLanguage,
+    required String? learningLanguage,
+    required AiLearningLevel learningLevel,
   }) {
     final validIds = document.segments.map((item) => item.id).toSet();
     final overviewEvidence = _evidence(json['overview_evidence'], validIds);
@@ -290,7 +373,47 @@ ${jsonEncode(candidates)}
         );
       }
     }
-    if (overview.isEmpty && chapters.isEmpty && insights.isEmpty) {
+    final languageNotes = <AiLanguageNote>[];
+    final seenLanguageNotes = <String>{};
+    if (sections.contains(AiBriefSection.languageNotes) &&
+        json['language_notes'] is List) {
+      for (final item in (json['language_notes'] as List).whereType<Map>()) {
+        final kind = _languageNoteKind(item['kind']);
+        if (kind == null) continue;
+        final evidence = _evidence(item['evidence'], validIds);
+        final term = item['term']?.toString().trim() ?? '';
+        final explanation = item['explanation']?.toString().trim() ?? '';
+        final sourceExcerpt = item['source_excerpt']?.toString().trim() ?? '';
+        if (evidence.isEmpty ||
+            term.isEmpty ||
+            explanation.isEmpty ||
+            sourceExcerpt.isEmpty ||
+            !_excerptIsSupported(sourceExcerpt, evidence, document)) {
+          continue;
+        }
+        final deduplicationKey = '${kind.name}:${_normalize(term)}';
+        if (!seenLanguageNotes.add(deduplicationKey)) continue;
+        languageNotes.add(
+          AiLanguageNote(
+            id: _generatedId(
+              'language-${kind.name}',
+              term,
+              languageNotes.length,
+            ),
+            kind: kind,
+            term: term,
+            explanation: explanation,
+            sourceExcerpt: sourceExcerpt,
+            evidenceSegmentIds: evidence,
+          ),
+        );
+        if (languageNotes.length == 12) break;
+      }
+    }
+    if (overview.isEmpty &&
+        chapters.isEmpty &&
+        insights.isEmpty &&
+        languageNotes.isEmpty) {
       throw const AiBriefException('ai_brief_no_supported_content');
     }
     return AiBrief(
@@ -298,6 +421,9 @@ ${jsonEncode(candidates)}
       overviewEvidenceSegmentIds: overviewEvidence,
       chapters: chapters,
       insights: insights,
+      languageNotes: languageNotes,
+      learningLanguage: learningLanguage,
+      learningLevel: learningLevel,
       outputLanguage: outputLanguage,
       model: settings.model.trim(),
       selectedSections: Set<AiBriefSection>.of(sections),
@@ -322,6 +448,23 @@ ${jsonEncode(candidates)}
     'openQuestion' => AiInsightType.openQuestion,
     _ => null,
   };
+
+  AiLanguageNoteKind? _languageNoteKind(dynamic value) =>
+      switch (value?.toString()) {
+        'vocabulary' => AiLanguageNoteKind.vocabulary,
+        'expression' => AiLanguageNoteKind.expression,
+        'grammar' => AiLanguageNoteKind.grammar,
+        _ => null,
+      };
+
+  bool _excerptIsSupported(
+    String excerpt,
+    List<String> evidence,
+    TranscriptDocument document,
+  ) {
+    final byId = {for (final segment in document.segments) segment.id: segment};
+    return evidence.any((id) => byId[id]?.text.contains(excerpt) ?? false);
+  }
 
   bool _sectionAllows(AiInsightType type, Set<AiBriefSection> sections) =>
       switch (type) {

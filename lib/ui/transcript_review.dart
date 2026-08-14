@@ -39,6 +39,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     with WindowListener {
   static const _reviewDividerWidth = 9.0;
   static const _minimumReviewPaneWidth = 280.0;
+  static const _minimumCompanionPaneWidth = 420.0;
   static const _mediaModeTransitionDuration = Duration(milliseconds: 320);
   static const _missingSourceAudioHeight = 112.0;
 
@@ -46,6 +47,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   LatestSeekDispatcher? _seekDispatcher;
   VideoController? _video;
   final _search = TextEditingController();
+  final _aiBriefScroll = ScrollController();
   final _transcriptScroll = ItemScrollController();
   final _transcriptPositions = ItemPositionsListener.create();
   StreamSubscription<Duration>? _positionSubscription;
@@ -87,6 +89,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
   bool _waveformLoading = false;
   _ReviewMediaMode _mediaMode = _ReviewMediaMode.video;
   double? _transcriptPaneWidth;
+  double? _companionLeftPaneFraction;
+  bool _companionLayoutActive = false;
   int _sourceRequest = 0;
 
   ReviewFullscreenController get _fullscreenController =>
@@ -181,6 +185,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _waveformPath = null;
       _waveformLoading = false;
       _mediaMode = _ReviewMediaMode.video;
+      _companionLeftPaneFraction = null;
+      _companionLayoutActive = false;
+      if (_aiBriefScroll.hasClients) _aiBriefScroll.jumpTo(0);
       _openSource();
     }
   }
@@ -205,7 +212,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final repeatedSegment = _repeatingSegment;
     if (_playing &&
         repeatedSegment != null &&
-        shouldRestartRepeatedSentence(repeatedSegment, value.inMilliseconds)) {
+        shouldRestartRepeatedSentence(
+          repeatedSegment,
+          value.inMilliseconds,
+          previousSegment: _previousSegmentFor(repeatedSegment),
+        )) {
       _queueRepeatRestart();
     }
     if (shouldAutoFollowPlaybackSegment(
@@ -270,6 +281,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
     return _document?.segments
         .where((segment) => segment.id == segmentId)
         .firstOrNull;
+  }
+
+  TranscriptSegment? _previousSegmentFor(TranscriptSegment segment) {
+    final segments = _document?.segments;
+    if (segments == null) return null;
+    final index = segments.indexWhere((item) => item.id == segment.id);
+    return index > 0 ? segments[index - 1] : null;
   }
 
   Future<void> _openSource() async {
@@ -350,6 +368,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _fullscreenController.unregisterMediaShutdown(this);
     windowManager.removeListener(this);
     _search.dispose();
+    _aiBriefScroll.dispose();
     unawaited(_shutdownMedia());
     super.dispose();
   }
@@ -423,6 +442,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ? currentTranscriptSegmentIndex(
             document.segments,
             _position.inMilliseconds,
+            pinnedSegmentId: _repeatingSegmentId,
           )
         : null;
     return Card(
@@ -430,6 +450,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       child: Column(
         children: [
           _UnifiedReviewToolbar(
+            role: _ReviewToolbarRole.global,
             job: job,
             viewMode: _viewMode,
             showAiBrief: _showAiBrief,
@@ -467,13 +488,61 @@ class _TranscriptReviewState extends State<TranscriptReview>
                 final canSwitchMediaMode = _supportsMediaModeSwitch(job);
                 final audioMode =
                     canSwitchMediaMode && _mediaMode == _ReviewMediaMode.audio;
-                final transcript = _buildTranscriptPane(
+                final transcriptPane = _buildTranscriptPane(
                   controller: controller,
                   job: job,
                   document: document,
                   query: query,
                   segments: segments,
                   currentIndex: currentIndex,
+                );
+                final aiBriefPane = _buildAiBriefPane(
+                  job: job,
+                  document: document,
+                );
+                final companionAvailable =
+                    constraints.maxWidth >=
+                    (_minimumCompanionPaneWidth * 2 + _reviewDividerWidth);
+                final companionActive = _showAiBrief && companionAvailable;
+                _companionLayoutActive = companionActive;
+
+                if (companionActive) {
+                  if (!hasVideo || audioMode) {
+                    return Column(
+                      key: const Key('audio-ai-brief-companion'),
+                      children: [
+                        KeyedSubtree(
+                          key: const Key('audio-ai-brief-media'),
+                          child: _buildMediaArea(
+                            job,
+                            presentation: _ReviewMediaMode.audio,
+                            fillHeight: false,
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        Expanded(
+                          child: _buildCompanionSplit(
+                            width: constraints.maxWidth,
+                            left: transcriptPane,
+                            right: aiBriefPane,
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+                  return _buildVideoCompanion(
+                    constraints: constraints,
+                    job: job,
+                    transcriptPane: transcriptPane,
+                    aiBriefPane: aiBriefPane,
+                  );
+                }
+
+                final selectedPane = IndexedStack(
+                  key: const Key('review-tabbed-content'),
+                  index: _showAiBrief ? 1 : 0,
+                  sizing: StackFit.expand,
+                  children: [transcriptPane, aiBriefPane],
                 );
                 if (!hasVideo) {
                   return Column(
@@ -485,7 +554,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                         fillHeight: false,
                       ),
                       const Divider(height: 1),
-                      Expanded(child: transcript),
+                      Expanded(child: selectedPane),
                     ],
                   );
                 }
@@ -622,7 +691,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                           rect: transcriptRect,
                           child: SizedBox.expand(
                             key: const Key('video-review-transcript-pane'),
-                            child: transcript,
+                            child: selectedPane,
                           ),
                         ),
                         Positioned(
@@ -685,6 +754,98 @@ class _TranscriptReviewState extends State<TranscriptReview>
         .clamp(_minimumReviewPaneWidth, maximumPaneWidth)
         .toDouble();
     setState(() => _transcriptPaneWidth = nextWidth);
+  }
+
+  Widget _buildCompanionSplit({
+    required double width,
+    required Widget left,
+    required Widget right,
+  }) {
+    final availableWidth = width - _reviewDividerWidth;
+    final leftWidth = _resolvedCompanionLeftWidth(availableWidth);
+    return Row(
+      key: const Key('ai-brief-companion-split'),
+      children: [
+        SizedBox(
+          key: const Key('ai-brief-companion-source-pane'),
+          width: leftWidth,
+          child: left,
+        ),
+        _ReviewSplitDivider(
+          dividerKey: const Key('ai-brief-companion-divider'),
+          onDragUpdate: (delta) => _resizeCompanionPanes(delta, availableWidth),
+        ),
+        Expanded(
+          child: SizedBox.expand(
+            key: const Key('ai-brief-companion-brief-pane'),
+            child: right,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVideoCompanion({
+    required BoxConstraints constraints,
+    required TranscriptionJob job,
+    required Widget transcriptPane,
+    required Widget aiBriefPane,
+  }) {
+    final availableWidth = constraints.maxWidth - _reviewDividerWidth;
+    final leftWidth = _resolvedCompanionLeftWidth(availableWidth);
+    final aspect = _videoAspectRatio.isFinite && _videoAspectRatio > 0
+        ? _videoAspectRatio
+        : 16 / 9;
+    final maximumViewportHeight =
+        (constraints.maxHeight * .52 - VideoTransport.height)
+            .clamp(0.0, double.infinity)
+            .toDouble();
+    final viewportHeight = (leftWidth / aspect)
+        .clamp(0.0, maximumViewportHeight)
+        .toDouble();
+    final mediaHeight = viewportHeight + VideoTransport.height;
+    final sourcePane = Column(
+      key: const Key('video-ai-brief-source-column'),
+      children: [
+        SizedBox(
+          key: const Key('video-ai-brief-media'),
+          height: mediaHeight,
+          child: _buildMediaArea(
+            job,
+            presentation: _ReviewMediaMode.video,
+            fillHeight: true,
+            videoHeight: viewportHeight,
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(child: transcriptPane),
+      ],
+    );
+    return KeyedSubtree(
+      key: const Key('video-ai-brief-companion'),
+      child: _buildCompanionSplit(
+        width: constraints.maxWidth,
+        left: sourcePane,
+        right: aiBriefPane,
+      ),
+    );
+  }
+
+  double _resolvedCompanionLeftWidth(double availableWidth) {
+    final maximumLeftWidth = availableWidth - _minimumCompanionPaneWidth;
+    final preferred = availableWidth * (_companionLeftPaneFraction ?? .5);
+    return preferred
+        .clamp(_minimumCompanionPaneWidth, maximumLeftWidth)
+        .toDouble();
+  }
+
+  void _resizeCompanionPanes(double delta, double availableWidth) {
+    final maximumLeftWidth = availableWidth - _minimumCompanionPaneWidth;
+    final currentWidth = _resolvedCompanionLeftWidth(availableWidth);
+    final nextWidth = (currentWidth + delta)
+        .clamp(_minimumCompanionPaneWidth, maximumLeftWidth)
+        .toDouble();
+    setState(() => _companionLeftPaneFraction = nextWidth / availableWidth);
   }
 
   Widget _buildMediaArea(
@@ -762,6 +923,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
         videoAspectRatio: _videoAspectRatio,
         maxVideoHeight: videoHeight,
         centerInAvailableHeight: fillHeight,
+        repeatingSegment: _repeatingSegment,
         isFullscreenActive: () => fullscreenController.isActive,
         playing: _playing,
         playbackRate: _playbackRate,
@@ -927,19 +1089,72 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ),
       ],
     );
-    return IndexedStack(
-      index: _showAiBrief ? 1 : 0,
+    return Column(
+      key: const Key('transcript-pane'),
       children: [
-        transcript,
-        _AiBriefPane(
+        _UnifiedReviewToolbar(
+          role: _ReviewToolbarRole.transcript,
           job: job,
-          document: document,
-          onGenerate: () => _showAiBriefDialog(job),
-          onEvidence: _openAiEvidence,
+          viewMode: _viewMode,
+          showAiBrief: _showAiBrief,
+          search: _search,
+          searchVisible: _searchVisible,
+          onTabChanged: (_) {},
+          onViewModeChanged: (value) => setState(() => _viewMode = value),
+          onOpenSearch: () => setState(() => _searchVisible = true),
+          onCloseSearch: _closeTranscriptSearch,
+          onSearch: () {
+            setState(() {});
+            if (_search.text.trim().isEmpty) {
+              _queueFocusCurrent(force: true);
+            }
+          },
+          onFocusCurrentSentence: document.segments.isEmpty
+              ? null
+              : _focusCurrentSentence,
+          onGenerateAiBrief: () => _showAiBriefDialog(job),
         ),
+        const Divider(height: 1),
+        Expanded(child: transcript),
       ],
     );
   }
+
+  Widget _buildAiBriefPane({
+    required TranscriptionJob job,
+    required TranscriptDocument document,
+  }) => Column(
+    key: const Key('ai-brief-pane'),
+    children: [
+      _UnifiedReviewToolbar(
+        role: _ReviewToolbarRole.aiBrief,
+        job: job,
+        viewMode: _viewMode,
+        showAiBrief: _showAiBrief,
+        search: _search,
+        searchVisible: _searchVisible,
+        onTabChanged: (_) {},
+        onViewModeChanged: (value) => setState(() => _viewMode = value),
+        onOpenSearch: () => setState(() => _searchVisible = true),
+        onCloseSearch: _closeTranscriptSearch,
+        onSearch: () => setState(() {}),
+        onFocusCurrentSentence: document.segments.isEmpty
+            ? null
+            : _focusCurrentSentence,
+        onGenerateAiBrief: () => _showAiBriefDialog(job),
+      ),
+      const Divider(height: 1),
+      Expanded(
+        child: _AiBriefPane(
+          job: job,
+          document: document,
+          scrollController: _aiBriefScroll,
+          onGenerate: () => _showAiBriefDialog(job),
+          onEvidence: _openAiEvidence,
+        ),
+      ),
+    ],
+  );
 
   Future<void> _showAiBriefDialog(TranscriptionJob job) async {
     final controller = context.read<AppController>();
@@ -980,6 +1195,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
         job.id,
         sections: result.sections,
         outputLanguage: result.outputLanguage,
+        learningLanguage: result.learningLanguage,
+        learningLevel: result.learningLevel,
       ),
     );
   }
@@ -990,8 +1207,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
         .where((item) => item.id == segmentId)
         .firstOrNull;
     if (segment == null) return;
+    final keepCompanionOpen = _showAiBrief && _companionLayoutActive;
     setState(() {
-      _showAiBrief = false;
+      if (!keepCompanionOpen) _showAiBrief = false;
       _searchVisible = false;
       _search.clear();
       _followPlayback = true;
@@ -1166,7 +1384,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _repeatRestartPending = true;
     try {
       await _seek(
-        Duration(milliseconds: segment.startMs),
+        Duration(
+          milliseconds: sentenceRepeatStartMs(
+            segment,
+            previousSegment: _previousSegmentFor(segment),
+          ),
+        ),
         reason: TranscriptSeekReason.repeatRestart,
       );
       if (!mounted || _repeatingSegmentId != segmentId) return;
@@ -1372,8 +1595,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
 }
 
 class _ReviewSplitDivider extends StatelessWidget {
-  const _ReviewSplitDivider({required this.onDragUpdate});
+  const _ReviewSplitDivider({
+    this.dividerKey = const Key('video-transcript-divider'),
+    required this.onDragUpdate,
+  });
 
+  final Key dividerKey;
   final ValueChanged<double> onDragUpdate;
 
   @override
@@ -1382,7 +1609,7 @@ class _ReviewSplitDivider extends StatelessWidget {
     child: MouseRegion(
       cursor: SystemMouseCursors.resizeColumn,
       child: GestureDetector(
-        key: const Key('video-transcript-divider'),
+        key: dividerKey,
         behavior: HitTestBehavior.opaque,
         onHorizontalDragUpdate: (details) => onDragUpdate(details.delta.dx),
         child: SizedBox(
@@ -1444,10 +1671,17 @@ class _ReviewContentTabs extends StatelessWidget {
 }
 
 class _AiBriefDialogResult {
-  const _AiBriefDialogResult(this.sections, this.outputLanguage);
+  const _AiBriefDialogResult(
+    this.sections,
+    this.outputLanguage,
+    this.learningLanguage,
+    this.learningLevel,
+  );
 
   final Set<AiBriefSection> sections;
   final String outputLanguage;
+  final String? learningLanguage;
+  final AiLearningLevel learningLevel;
 }
 
 Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
@@ -1460,6 +1694,13 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
   );
   var outputLanguage =
       job.aiBrief?.outputLanguage ?? controller.defaultAiBriefLanguage;
+  var learningLanguage = job.aiBrief?.learningLanguage;
+  var learningLevel =
+      job.aiBrief?.learningLevel ?? AiLearningLevel.intermediate;
+  if (learningLanguage != null &&
+      !supportedTranslationLanguageCodes.contains(learningLanguage)) {
+    learningLanguage = null;
+  }
   if (!supportedTranslationLanguageCodes.contains(outputLanguage)) {
     outputLanguage = 'en';
   }
@@ -1511,6 +1752,62 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
                     ],
                   ),
                   const SizedBox(height: 16),
+                  if (sections.contains(AiBriefSection.languageNotes)) ...[
+                    DropdownButtonFormField<String>(
+                      key: const Key('ai-brief-learning-language'),
+                      initialValue: learningLanguage ?? '',
+                      decoration: InputDecoration(
+                        labelText: context.strings.t(
+                          'ai_brief_learning_language',
+                        ),
+                        prefixIcon: const Icon(Icons.school_outlined),
+                      ),
+                      items: [
+                        DropdownMenuItem(
+                          value: '',
+                          child: Text(
+                            context.strings.t(
+                              'ai_brief_learning_language_auto',
+                            ),
+                          ),
+                        ),
+                        for (final code in supportedTranslationLanguageCodes)
+                          DropdownMenuItem(
+                            value: code,
+                            child: Text(
+                              context.strings.translationLanguageName(code),
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) => setDialogState(
+                        () => learningLanguage = value?.isEmpty ?? true
+                            ? null
+                            : value,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<AiLearningLevel>(
+                      key: const Key('ai-brief-learning-level'),
+                      initialValue: learningLevel,
+                      decoration: InputDecoration(
+                        labelText: context.strings.t('ai_brief_learning_level'),
+                        prefixIcon: const Icon(Icons.trending_up_rounded),
+                      ),
+                      items: [
+                        for (final level in AiLearningLevel.values)
+                          DropdownMenuItem(
+                            value: level,
+                            child: Text(_learningLevelLabel(context, level)),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setDialogState(() => learningLevel = value);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   DropdownButtonFormField<String>(
                     key: const Key('ai-brief-output-language'),
                     initialValue: outputLanguage,
@@ -1561,6 +1858,8 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
                       _AiBriefDialogResult(
                         Set<AiBriefSection>.of(sections),
                         outputLanguage,
+                        learningLanguage,
+                        learningLevel,
                       ),
                     ),
               icon: const Icon(Icons.auto_awesome_rounded),
@@ -1577,12 +1876,14 @@ class _AiBriefPane extends StatelessWidget {
   const _AiBriefPane({
     required this.job,
     required this.document,
+    required this.scrollController,
     required this.onGenerate,
     required this.onEvidence,
   });
 
   final TranscriptionJob job;
   final TranscriptDocument document;
+  final ScrollController scrollController;
   final VoidCallback onGenerate;
   final Future<void> Function(String segmentId) onEvidence;
 
@@ -1636,6 +1937,7 @@ class _AiBriefPane extends StatelessWidget {
         Expanded(
           child: ListView(
             key: const Key('ai-brief-scroll'),
+            controller: scrollController,
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
             children: [
               Row(
@@ -1763,6 +2065,89 @@ class _AiBriefPane extends StatelessWidget {
                     ),
                   ),
                 ],
+              if (brief.languageNotes.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _AiBriefSectionCard(
+                  title: context.strings.t('language_notes'),
+                  icon: Icons.menu_book_outlined,
+                  onCopy: () => _copyBriefText(
+                    context,
+                    brief.languageNotes
+                        .map(
+                          (note) =>
+                              '${_languageNoteKindLabel(context, note.kind)}: '
+                              '${note.term}\n${note.explanation}\n'
+                              '“${note.sourceExcerpt}”',
+                        )
+                        .join('\n\n'),
+                  ),
+                  onRegenerate: state.status.isActive
+                      ? null
+                      : () => _regenerateAiSection(
+                          context,
+                          job,
+                          AiBriefSection.languageNotes,
+                        ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          Chip(
+                            avatar: const Icon(
+                              Icons.language_rounded,
+                              size: 16,
+                            ),
+                            label: Text(
+                              brief.learningLanguage == null
+                                  ? context.strings.t(
+                                      'ai_brief_learning_language_auto',
+                                    )
+                                  : context.strings.translationLanguageName(
+                                      brief.learningLanguage!,
+                                    ),
+                            ),
+                          ),
+                          Chip(
+                            avatar: const Icon(
+                              Icons.trending_up_rounded,
+                              size: 16,
+                            ),
+                            label: Text(
+                              _learningLevelLabel(context, brief.learningLevel),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      for (final kind in AiLanguageNoteKind.values)
+                        if (brief.languageNotes.any(
+                          (item) => item.kind == kind,
+                        )) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(2, 12, 2, 4),
+                            child: Text(
+                              _languageNoteKindLabel(context, kind),
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          for (final note in brief.languageNotes.where(
+                            (item) => item.kind == kind,
+                          ))
+                            _AiLanguageNoteTile(
+                              job: job,
+                              document: document,
+                              note: note,
+                              onEvidence: onEvidence,
+                            ),
+                        ],
+                    ],
+                  ),
+                ),
+              ],
               if (brief.insights.isEmpty)
                 Align(
                   alignment: Alignment.centerLeft,
@@ -2111,6 +2496,99 @@ class _AiInsightTile extends StatelessWidget {
   );
 }
 
+class _AiLanguageNoteTile extends StatelessWidget {
+  const _AiLanguageNoteTile({
+    required this.job,
+    required this.document,
+    required this.note,
+    required this.onEvidence,
+  });
+
+  final TranscriptionJob job;
+  final TranscriptDocument document;
+  final AiLanguageNote note;
+  final Future<void> Function(String) onEvidence;
+
+  @override
+  Widget build(BuildContext context) => Card.outlined(
+    key: ValueKey('ai-language-note-${note.id}'),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  note.term,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              PopupMenuButton<String>(
+                key: ValueKey('ai-language-note-menu-${note.id}'),
+                onSelected: (value) {
+                  if (value == 'edit') {
+                    _editLanguageNote(context, job, note);
+                  }
+                  if (value == 'delete') {
+                    context.read<AppController>().deleteAiLanguageNote(
+                      job.id,
+                      note.id,
+                    );
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Text(context.strings.t('edit_item')),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Text(context.strings.t('delete_item')),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (note.explanation.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(note.explanation),
+          ],
+          if (note.sourceExcerpt.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                child: Text(
+                  '“${note.sourceExcerpt}”',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          _EvidenceChips(
+            document: document,
+            segmentIds: note.evidenceSegmentIds,
+            onEvidence: onEvidence,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _EvidenceChips extends StatelessWidget {
   const _EvidenceChips({
     required this.document,
@@ -2180,6 +2658,8 @@ Future<void> _regenerateAiSection(
     AiBriefSection.overview => job.aiBrief?.edited ?? false,
     AiBriefSection.chapters =>
       job.aiBrief?.chapters.any((item) => item.edited) ?? false,
+    AiBriefSection.languageNotes =>
+      job.aiBrief?.languageNotes.any((item) => item.edited) ?? false,
     _ =>
       job.aiBrief?.insights.any(
             (item) => item.edited && _sectionForInsight(item.type) == section,
@@ -2358,6 +2838,89 @@ Future<void> _editInsight(
   deadline.dispose();
 }
 
+Future<void> _editLanguageNote(
+  BuildContext context,
+  TranscriptionJob job,
+  AiLanguageNote note,
+) async {
+  final term = TextEditingController(text: note.term);
+  final explanation = TextEditingController(text: note.explanation);
+  final sourceExcerpt = TextEditingController(text: note.sourceExcerpt);
+  final save = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(context.strings.t('edit_language_note')),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                key: const Key('ai-language-note-term'),
+                controller: term,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('language_note_term'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('ai-language-note-explanation'),
+                controller: explanation,
+                minLines: 3,
+                maxLines: 8,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('language_note_explanation'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('ai-language-note-excerpt'),
+                controller: sourceExcerpt,
+                minLines: 2,
+                maxLines: 5,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('language_note_source_excerpt'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: Text(context.strings.t('cancel')),
+        ),
+        FilledButton(
+          onPressed:
+              term.text.trim().isEmpty ||
+                  explanation.text.trim().isEmpty ||
+                  sourceExcerpt.text.trim().isEmpty
+              ? null
+              : () => Navigator.pop(context, true),
+          child: Text(context.strings.t('save')),
+        ),
+      ],
+    ),
+  );
+  if (save == true && context.mounted) {
+    await context.read<AppController>().updateAiLanguageNote(
+      job.id,
+      note.id,
+      term: term.text,
+      explanation: explanation.text,
+      sourceExcerpt: sourceExcerpt.text,
+    );
+  }
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    term.dispose();
+    explanation.dispose();
+    sourceExcerpt.dispose();
+  });
+}
+
 Future<void> _addInsight(
   BuildContext context,
   TranscriptionJob job,
@@ -2458,6 +3021,12 @@ AiBriefSection _sectionForInsight(AiInsightType type) => switch (type) {
   AiInsightType.openQuestion => AiBriefSection.openQuestions,
 };
 
+String _learningLevelLabel(BuildContext context, AiLearningLevel level) =>
+    context.strings.t('ai_learning_level_${level.name}');
+
+String _languageNoteKindLabel(BuildContext context, AiLanguageNoteKind kind) =>
+    context.strings.t('ai_language_note_kind_${kind.name}');
+
 enum _TranscriptMoreAction {
   toggleSpeakers,
   toggleTimestamps,
@@ -2471,8 +3040,11 @@ enum _TranscriptMoreAction {
 
 enum _AiBriefMoreAction { copy, export }
 
+enum _ReviewToolbarRole { global, transcript, aiBrief }
+
 class _UnifiedReviewToolbar extends StatelessWidget {
   const _UnifiedReviewToolbar({
+    required this.role,
     required this.job,
     required this.viewMode,
     required this.showAiBrief,
@@ -2489,7 +3061,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
 
   static const _fullBreakpoint = 900.0;
   static const _mediumBreakpoint = 700.0;
+  static const _paneFullBreakpoint = 700.0;
+  static const _paneMediumBreakpoint = 520.0;
 
+  final _ReviewToolbarRole role;
   final TranscriptionJob job;
   final TranslationViewMode viewMode;
   final bool showAiBrief;
@@ -2511,6 +3086,20 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
+    return switch (role) {
+      _ReviewToolbarRole.global => _buildGlobalHeader(context),
+      _ReviewToolbarRole.transcript => _buildTranscriptPaneHeader(
+        context,
+        controller,
+      ),
+      _ReviewToolbarRole.aiBrief => _buildAiBriefPaneHeader(
+        context,
+        controller,
+      ),
+    };
+  }
+
+  Widget _buildGlobalHeader(BuildContext context) {
     return SizedBox(
       key: const Key('review-header'),
       height: 64,
@@ -2518,67 +3107,97 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            var full = constraints.maxWidth >= _fullBreakpoint;
-            var medium = constraints.maxWidth >= _mediumBreakpoint;
-            var tabWidth = full ? 256.0 : (medium ? 228.0 : 196.0);
-            var sideWidth = (constraints.maxWidth - tabWidth) / 2;
-
-            if (full && sideWidth < _transcriptActionsWidth(full: true)) {
-              full = false;
-              tabWidth = 228;
-              sideWidth = (constraints.maxWidth - tabWidth) / 2;
-            }
-            if (medium &&
-                !full &&
-                sideWidth < _transcriptActionsWidth(full: false)) {
-              medium = false;
-              tabWidth = 196;
-              sideWidth = (constraints.maxWidth - tabWidth) / 2;
-            }
-
-            return searchVisible && !showAiBrief
-                ? _buildSearchRow(context, tabWidth, sideWidth)
-                : Row(
-                    key: const Key('review-toolbar-row'),
-                    children: [
-                      SizedBox(width: sideWidth, child: _filename(context)),
-                      _tabs(tabWidth),
-                      SizedBox(
-                        width: sideWidth,
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: showAiBrief
-                              ? _buildAiBriefActions(
-                                  context,
-                                  controller,
-                                  full: full,
-                                )
-                              : _buildTranscriptActions(
-                                  context,
-                                  controller,
-                                  full: full,
-                                  medium: medium,
-                                ),
-                        ),
-                      ),
-                    ],
-                  );
+            final full = constraints.maxWidth >= _fullBreakpoint;
+            final medium = constraints.maxWidth >= _mediumBreakpoint;
+            final tabWidth = full ? 256.0 : (medium ? 228.0 : 196.0);
+            final sideWidth = (constraints.maxWidth - tabWidth) / 2;
+            return Row(
+              key: const Key('review-toolbar-row'),
+              children: [
+                SizedBox(width: sideWidth, child: _filename(context)),
+                _tabs(tabWidth),
+                SizedBox(width: sideWidth),
+              ],
+            );
           },
         ),
       ),
     );
   }
 
-  double _transcriptActionsWidth({required bool full}) {
-    if (full) {
-      return 200 +
-          (_translationStarted ? 116 : 0) +
-          (job.translationState.status.isActive ? 40 : 0);
-    }
-    return 120 +
-        (_translationStarted ? 112 : 0) +
-        (job.translationState.status.isActive ? 40 : 0);
-  }
+  Widget _buildTranscriptPaneHeader(
+    BuildContext context,
+    AppController controller,
+  ) => SizedBox(
+    key: const Key('transcript-pane-header'),
+    height: 52,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (searchVisible) return _buildPaneSearchRow(context);
+          final full = constraints.maxWidth >= _paneFullBreakpoint;
+          final medium = constraints.maxWidth >= _paneMediumBreakpoint;
+          return Row(
+            key: const Key('transcript-pane-toolbar-row'),
+            children: [
+              Expanded(
+                child: Text(
+                  context.strings.t('transcript'),
+                  key: const Key('transcript-pane-title'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              _buildTranscriptActions(
+                context,
+                controller,
+                full: full,
+                medium: medium,
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+
+  Widget _buildAiBriefPaneHeader(
+    BuildContext context,
+    AppController controller,
+  ) => SizedBox(
+    key: const Key('ai-brief-pane-header'),
+    height: 52,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: LayoutBuilder(
+        builder: (context, constraints) => Row(
+          key: const Key('ai-brief-pane-toolbar-row'),
+          children: [
+            Expanded(
+              child: Text(
+                context.strings.t('ai_brief'),
+                key: const Key('ai-brief-pane-title'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            _buildAiBriefActions(
+              context,
+              controller,
+              full: constraints.maxWidth >= 480,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   Widget _tabs(double width) => _ReviewContentTabs(
     width: width,
@@ -2599,72 +3218,45 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     ),
   );
 
-  Widget _buildSearchRow(
-    BuildContext context,
-    double tabWidth,
-    double sideWidth,
-  ) => Row(
+  Widget _buildPaneSearchRow(BuildContext context) => Row(
     key: const Key('review-toolbar-search-row'),
     children: [
-      SizedBox(width: sideWidth, child: _filename(context)),
-      _tabs(tabWidth),
-      SizedBox(
-        width: sideWidth,
-        child: Align(
-          alignment: Alignment.centerRight,
-          child: SizedBox(
-            width: sideWidth.clamp(0, 480).toDouble(),
-            child: Row(
-              children: [
-                IconButton(
-                  key: const Key('close-transcript-search'),
-                  tooltip: context.strings.t('close_search'),
-                  onPressed: onCloseSearch,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 40,
-                    height: 40,
-                  ),
-                  padding: EdgeInsets.zero,
-                  icon: const Icon(Icons.arrow_back_rounded),
-                ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: CallbackShortcuts(
-                    bindings: {
-                      const SingleActivator(LogicalKeyboardKey.escape):
-                          onCloseSearch,
-                    },
-                    child: TextField(
-                      key: const Key('transcript-search-field'),
-                      autofocus: true,
-                      controller: search,
-                      onChanged: (_) => onSearch(),
-                      decoration: InputDecoration(
-                        isDense: true,
-                        hintText: context.strings.t('search_transcript'),
-                        prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                        prefixIconConstraints: const BoxConstraints(
-                          minWidth: 36,
-                        ),
-                        suffixIconConstraints: const BoxConstraints(
-                          minWidth: 36,
-                        ),
-                        suffixIcon: search.text.isEmpty
-                            ? null
-                            : IconButton(
-                                key: const Key('clear-transcript-search'),
-                                tooltip: context.strings.t('clear_search'),
-                                onPressed: () {
-                                  search.clear();
-                                  onSearch();
-                                },
-                                icon: const Icon(Icons.close_rounded, size: 18),
-                              ),
-                      ),
+      IconButton(
+        key: const Key('close-transcript-search'),
+        tooltip: context.strings.t('close_search'),
+        onPressed: onCloseSearch,
+        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.arrow_back_rounded),
+      ),
+      const SizedBox(width: 4),
+      Expanded(
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): onCloseSearch,
+          },
+          child: TextField(
+            key: const Key('transcript-search-field'),
+            autofocus: true,
+            controller: search,
+            onChanged: (_) => onSearch(),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: context.strings.t('search_transcript'),
+              prefixIcon: const Icon(Icons.search_rounded, size: 20),
+              prefixIconConstraints: const BoxConstraints(minWidth: 36),
+              suffixIconConstraints: const BoxConstraints(minWidth: 36),
+              suffixIcon: search.text.isEmpty
+                  ? null
+                  : IconButton(
+                      key: const Key('clear-transcript-search'),
+                      tooltip: context.strings.t('clear_search'),
+                      onPressed: () {
+                        search.clear();
+                        onSearch();
+                      },
+                      icon: const Icon(Icons.close_rounded, size: 18),
                     ),
-                  ),
-                ),
-              ],
             ),
           ),
         ),
@@ -3683,6 +4275,7 @@ class _MediaPane extends StatelessWidget {
     required this.videoAspectRatio,
     required this.maxVideoHeight,
     required this.centerInAvailableHeight,
+    required this.repeatingSegment,
     required this.isFullscreenActive,
     required this.playing,
     required this.playbackRate,
@@ -3712,6 +4305,7 @@ class _MediaPane extends StatelessWidget {
   final double videoAspectRatio;
   final double? maxVideoHeight;
   final bool centerInAvailableHeight;
+  final TranscriptSegment? repeatingSegment;
   final bool Function() isFullscreenActive;
   final bool playing;
   final double playbackRate;
@@ -3741,11 +4335,13 @@ class _MediaPane extends StatelessWidget {
       document.segments,
       position.inMilliseconds,
       viewMode,
+      pinnedSegmentId: repeatingSegment?.id,
     );
     final fullscreenSubtitleHighlight = fullscreenTranscriptWordRange(
       document,
       position.inMilliseconds,
       viewMode,
+      pinnedSegmentId: repeatingSegment?.id,
     );
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -5416,7 +6012,23 @@ class LatestSeekDispatcher {
   }
 }
 
+const _sentenceRepeatPreRollMs = 350;
+const _sentenceRepeatPreviousCueSafetyMs = 100;
 const _repeatSeekUndershootToleranceMs = 250;
+
+int sentenceRepeatStartMs(
+  TranscriptSegment segment, {
+  TranscriptSegment? previousSegment,
+}) {
+  final requestedStartMs = segment.startMs - _sentenceRepeatPreRollMs;
+  final clampedStartMs = requestedStartMs < 0 ? 0 : requestedStartMs;
+  if (previousSegment == null) return clampedStartMs;
+  final previousEndMs = previousSegment.endMs.clamp(0, segment.startMs).toInt();
+  final safeStartMs = (previousEndMs + _sentenceRepeatPreviousCueSafetyMs)
+      .clamp(0, segment.startMs)
+      .toInt();
+  return clampedStartMs < safeStartMs ? safeStartMs : clampedStartMs;
+}
 
 bool shouldAutoFollowPlaybackSegment({
   required bool playing,
@@ -5444,15 +6056,28 @@ bool shouldFocusTranscriptAfterSeek(TranscriptSeekReason reason) =>
 bool shouldFocusTranscriptOnPlaybackResume({required bool repeating}) =>
     !repeating;
 
-bool shouldRestartRepeatedSentence(TranscriptSegment segment, int positionMs) =>
+bool shouldRestartRepeatedSentence(
+  TranscriptSegment segment,
+  int positionMs, {
+  TranscriptSegment? previousSegment,
+}) =>
     segment.endMs > segment.startMs &&
-    (positionMs < segment.startMs - _repeatSeekUndershootToleranceMs ||
+    (positionMs <
+            sentenceRepeatStartMs(segment, previousSegment: previousSegment) -
+                _repeatSeekUndershootToleranceMs ||
         positionMs >= segment.endMs);
 
 int? currentTranscriptSegmentIndex(
   List<TranscriptSegment> segments,
-  int positionMs,
-) {
+  int positionMs, {
+  String? pinnedSegmentId,
+}) {
+  if (pinnedSegmentId != null) {
+    final pinnedIndex = segments.indexWhere(
+      (segment) => segment.id == pinnedSegmentId,
+    );
+    if (pinnedIndex >= 0) return pinnedIndex;
+  }
   if (segments.isEmpty || positionMs < segments.first.startMs) return null;
   var low = 0;
   var high = segments.length - 1;
@@ -5470,12 +6095,21 @@ int? currentTranscriptSegmentIndex(
 String? fullscreenTranscriptSubtitle(
   List<TranscriptSegment> segments,
   int positionMs,
-  TranslationViewMode viewMode,
-) {
-  final index = currentTranscriptSegmentIndex(segments, positionMs);
+  TranslationViewMode viewMode, {
+  String? pinnedSegmentId,
+}) {
+  final index = currentTranscriptSegmentIndex(
+    segments,
+    positionMs,
+    pinnedSegmentId: pinnedSegmentId,
+  );
   if (index == null) return null;
   final segment = segments[index];
-  if (positionMs < segment.startMs || positionMs >= segment.endMs) return null;
+  final isPinned = segment.id == pinnedSegmentId;
+  if (!isPinned &&
+      (positionMs < segment.startMs || positionMs >= segment.endMs)) {
+    return null;
+  }
 
   final original = segment.text.trim();
   final translated = segment.translatedText?.trim() ?? '';
@@ -5492,9 +6126,14 @@ String? fullscreenTranscriptSubtitle(
 TextRange? fullscreenTranscriptWordRange(
   TranscriptDocument document,
   int positionMs,
-  TranslationViewMode viewMode,
-) {
-  final index = currentTranscriptSegmentIndex(document.segments, positionMs);
+  TranslationViewMode viewMode, {
+  String? pinnedSegmentId,
+}) {
+  final index = currentTranscriptSegmentIndex(
+    document.segments,
+    positionMs,
+    pinnedSegmentId: pinnedSegmentId,
+  );
   if (index == null) return null;
   final segment = document.segments[index];
   if (positionMs < segment.startMs || positionMs >= segment.endMs) return null;
