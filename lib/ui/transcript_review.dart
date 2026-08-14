@@ -205,7 +205,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final repeatedSegment = _repeatingSegment;
     if (_playing &&
         repeatedSegment != null &&
-        shouldRestartRepeatedSentence(repeatedSegment, value.inMilliseconds)) {
+        shouldRestartRepeatedSentence(
+          repeatedSegment,
+          value.inMilliseconds,
+          previousSegment: _previousSegmentFor(repeatedSegment),
+        )) {
       _queueRepeatRestart();
     }
     if (shouldAutoFollowPlaybackSegment(
@@ -270,6 +274,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
     return _document?.segments
         .where((segment) => segment.id == segmentId)
         .firstOrNull;
+  }
+
+  TranscriptSegment? _previousSegmentFor(TranscriptSegment segment) {
+    final segments = _document?.segments;
+    if (segments == null) return null;
+    final index = segments.indexWhere((item) => item.id == segment.id);
+    return index > 0 ? segments[index - 1] : null;
   }
 
   Future<void> _openSource() async {
@@ -423,6 +434,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ? currentTranscriptSegmentIndex(
             document.segments,
             _position.inMilliseconds,
+            pinnedSegmentId: _repeatingSegmentId,
           )
         : null;
     return Card(
@@ -762,6 +774,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
         videoAspectRatio: _videoAspectRatio,
         maxVideoHeight: videoHeight,
         centerInAvailableHeight: fillHeight,
+        repeatingSegment: _repeatingSegment,
         isFullscreenActive: () => fullscreenController.isActive,
         playing: _playing,
         playbackRate: _playbackRate,
@@ -1166,7 +1179,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _repeatRestartPending = true;
     try {
       await _seek(
-        Duration(milliseconds: segment.startMs),
+        Duration(
+          milliseconds: sentenceRepeatStartMs(
+            segment,
+            previousSegment: _previousSegmentFor(segment),
+          ),
+        ),
         reason: TranscriptSeekReason.repeatRestart,
       );
       if (!mounted || _repeatingSegmentId != segmentId) return;
@@ -3683,6 +3701,7 @@ class _MediaPane extends StatelessWidget {
     required this.videoAspectRatio,
     required this.maxVideoHeight,
     required this.centerInAvailableHeight,
+    required this.repeatingSegment,
     required this.isFullscreenActive,
     required this.playing,
     required this.playbackRate,
@@ -3712,6 +3731,7 @@ class _MediaPane extends StatelessWidget {
   final double videoAspectRatio;
   final double? maxVideoHeight;
   final bool centerInAvailableHeight;
+  final TranscriptSegment? repeatingSegment;
   final bool Function() isFullscreenActive;
   final bool playing;
   final double playbackRate;
@@ -3741,11 +3761,13 @@ class _MediaPane extends StatelessWidget {
       document.segments,
       position.inMilliseconds,
       viewMode,
+      pinnedSegmentId: repeatingSegment?.id,
     );
     final fullscreenSubtitleHighlight = fullscreenTranscriptWordRange(
       document,
       position.inMilliseconds,
       viewMode,
+      pinnedSegmentId: repeatingSegment?.id,
     );
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -5416,7 +5438,23 @@ class LatestSeekDispatcher {
   }
 }
 
+const _sentenceRepeatPreRollMs = 350;
+const _sentenceRepeatPreviousCueSafetyMs = 100;
 const _repeatSeekUndershootToleranceMs = 250;
+
+int sentenceRepeatStartMs(
+  TranscriptSegment segment, {
+  TranscriptSegment? previousSegment,
+}) {
+  final requestedStartMs = segment.startMs - _sentenceRepeatPreRollMs;
+  final clampedStartMs = requestedStartMs < 0 ? 0 : requestedStartMs;
+  if (previousSegment == null) return clampedStartMs;
+  final previousEndMs = previousSegment.endMs.clamp(0, segment.startMs).toInt();
+  final safeStartMs = (previousEndMs + _sentenceRepeatPreviousCueSafetyMs)
+      .clamp(0, segment.startMs)
+      .toInt();
+  return clampedStartMs < safeStartMs ? safeStartMs : clampedStartMs;
+}
 
 bool shouldAutoFollowPlaybackSegment({
   required bool playing,
@@ -5444,15 +5482,28 @@ bool shouldFocusTranscriptAfterSeek(TranscriptSeekReason reason) =>
 bool shouldFocusTranscriptOnPlaybackResume({required bool repeating}) =>
     !repeating;
 
-bool shouldRestartRepeatedSentence(TranscriptSegment segment, int positionMs) =>
+bool shouldRestartRepeatedSentence(
+  TranscriptSegment segment,
+  int positionMs, {
+  TranscriptSegment? previousSegment,
+}) =>
     segment.endMs > segment.startMs &&
-    (positionMs < segment.startMs - _repeatSeekUndershootToleranceMs ||
+    (positionMs <
+            sentenceRepeatStartMs(segment, previousSegment: previousSegment) -
+                _repeatSeekUndershootToleranceMs ||
         positionMs >= segment.endMs);
 
 int? currentTranscriptSegmentIndex(
   List<TranscriptSegment> segments,
-  int positionMs,
-) {
+  int positionMs, {
+  String? pinnedSegmentId,
+}) {
+  if (pinnedSegmentId != null) {
+    final pinnedIndex = segments.indexWhere(
+      (segment) => segment.id == pinnedSegmentId,
+    );
+    if (pinnedIndex >= 0) return pinnedIndex;
+  }
   if (segments.isEmpty || positionMs < segments.first.startMs) return null;
   var low = 0;
   var high = segments.length - 1;
@@ -5470,12 +5521,21 @@ int? currentTranscriptSegmentIndex(
 String? fullscreenTranscriptSubtitle(
   List<TranscriptSegment> segments,
   int positionMs,
-  TranslationViewMode viewMode,
-) {
-  final index = currentTranscriptSegmentIndex(segments, positionMs);
+  TranslationViewMode viewMode, {
+  String? pinnedSegmentId,
+}) {
+  final index = currentTranscriptSegmentIndex(
+    segments,
+    positionMs,
+    pinnedSegmentId: pinnedSegmentId,
+  );
   if (index == null) return null;
   final segment = segments[index];
-  if (positionMs < segment.startMs || positionMs >= segment.endMs) return null;
+  final isPinned = segment.id == pinnedSegmentId;
+  if (!isPinned &&
+      (positionMs < segment.startMs || positionMs >= segment.endMs)) {
+    return null;
+  }
 
   final original = segment.text.trim();
   final translated = segment.translatedText?.trim() ?? '';
@@ -5492,9 +5552,14 @@ String? fullscreenTranscriptSubtitle(
 TextRange? fullscreenTranscriptWordRange(
   TranscriptDocument document,
   int positionMs,
-  TranslationViewMode viewMode,
-) {
-  final index = currentTranscriptSegmentIndex(document.segments, positionMs);
+  TranslationViewMode viewMode, {
+  String? pinnedSegmentId,
+}) {
+  final index = currentTranscriptSegmentIndex(
+    document.segments,
+    positionMs,
+    pinnedSegmentId: pinnedSegmentId,
+  );
   if (index == null) return null;
   final segment = document.segments[index];
   if (positionMs < segment.startMs || positionMs >= segment.endMs) return null;

@@ -87,12 +87,30 @@ void main() {
     },
   );
 
-  test('sentence repeat tolerates seek undershoot near its beginning', () {
+  test('sentence repeat includes lead-in and tolerates seek undershoot', () {
     const valid = TranscriptSegment(
       id: 'valid',
       startMs: 1000,
       endMs: 1900,
       text: 'Repeat me',
+    );
+    const nearBeginning = TranscriptSegment(
+      id: 'near-beginning',
+      startMs: 200,
+      endMs: 900,
+      text: 'Clamp me',
+    );
+    const previous = TranscriptSegment(
+      id: 'previous',
+      startMs: 40830,
+      endMs: 42510,
+      text: 'I wanted something difficult.',
+    );
+    const afterPrevious = TranscriptSegment(
+      id: 'after-previous',
+      startMs: 42810,
+      endMs: 44310,
+      text: 'I wanted a challenge.',
     );
     const invalid = TranscriptSegment(
       id: 'invalid',
@@ -101,14 +119,56 @@ void main() {
       text: 'No duration',
     );
 
-    expect(shouldRestartRepeatedSentence(valid, 749), isTrue);
-    expect(shouldRestartRepeatedSentence(valid, 750), isFalse);
+    expect(sentenceRepeatStartMs(valid), 650);
+    expect(sentenceRepeatStartMs(nearBeginning), 0);
+    expect(
+      sentenceRepeatStartMs(afterPrevious, previousSegment: previous),
+      42610,
+      reason: 'The lead-in must not replay the end of "difficult."',
+    );
+    expect(
+      shouldRestartRepeatedSentence(
+        afterPrevious,
+        42609,
+        previousSegment: previous,
+      ),
+      isFalse,
+    );
+    expect(shouldRestartRepeatedSentence(valid, 399), isTrue);
+    expect(shouldRestartRepeatedSentence(valid, 400), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 649), isFalse);
+    expect(shouldRestartRepeatedSentence(valid, 650), isFalse);
     expect(shouldRestartRepeatedSentence(valid, 999), isFalse);
     expect(shouldRestartRepeatedSentence(valid, 1000), isFalse);
     expect(shouldRestartRepeatedSentence(valid, 1899), isFalse);
     expect(shouldRestartRepeatedSentence(valid, 1900), isTrue);
     expect(shouldRestartRepeatedSentence(valid, 2200), isTrue);
+    expect(shouldRestartRepeatedSentence(nearBeginning, 0), isFalse);
+    expect(shouldRestartRepeatedSentence(nearBeginning, 899), isFalse);
+    expect(shouldRestartRepeatedSentence(nearBeginning, 900), isTrue);
     expect(shouldRestartRepeatedSentence(invalid, 500), isFalse);
+  });
+
+  test('sentence repeat avoids prior speech when cues are tightly spaced', () {
+    const previous = TranscriptSegment(
+      id: 'previous',
+      startMs: 56550,
+      endMs: 59550,
+      text:
+          '"Come to class on Monday with the ballet 2 student, Stephanie," she said.',
+    );
+    const target = TranscriptSegment(
+      id: 'target',
+      startMs: 59610,
+      endMs: 61590,
+      text: '"You can give it a shot and we\'ll go from there."',
+    );
+
+    expect(
+      sentenceRepeatStartMs(target, previousSegment: previous),
+      59610,
+      reason: 'A 60 ms cue gap is too short for clean repeat lead-in.',
+    );
   });
 
   test('sentence repeat lets the current pass finish before restarting', () {
@@ -340,6 +400,26 @@ void main() {
       expect(subtitleAt(2200), isNull);
     });
 
+    test('pins the repeated cue throughout its lead-in', () {
+      expect(
+        currentTranscriptSegmentIndex(
+          timedSegments,
+          1200,
+          pinnedSegmentId: 'second',
+        ),
+        1,
+      );
+      expect(
+        fullscreenTranscriptSubtitle(
+          timedSegments,
+          1200,
+          TranslationViewMode.original,
+          pinnedSegmentId: 'second',
+        ),
+        'Second',
+      );
+    });
+
     test('maps review modes and falls back from missing translations', () {
       const translated = TranscriptSegment(
         id: 'translated',
@@ -465,6 +545,37 @@ void main() {
           fragmentedWord,
           500,
           TranslationViewMode.original,
+        ),
+        const TextRange(start: 0, end: 6),
+      );
+    });
+
+    test('does not highlight a word during a repeated cue lead-in', () {
+      final document = TranscriptDocument(
+        tokens: const [
+          TranscriptToken(text: 'First', startMs: 100, endMs: 900),
+          TranscriptToken(text: 'Second', startMs: 1500, endMs: 2100),
+        ],
+        segments: timedSegments,
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      );
+
+      expect(
+        fullscreenTranscriptWordRange(
+          document,
+          1200,
+          TranslationViewMode.original,
+          pinnedSegmentId: 'second',
+        ),
+        isNull,
+      );
+      expect(
+        fullscreenTranscriptWordRange(
+          document,
+          1500,
+          TranslationViewMode.original,
+          pinnedSegmentId: 'second',
         ),
         const TextRange(start: 0, end: 6),
       );
