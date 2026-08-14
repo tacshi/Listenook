@@ -774,14 +774,15 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       final dropdown = tester.getRect(
-        find.byKey(const Key('translation-view-mode')),
+        find.byKey(const Key('translation-view-mode-control')),
       );
       final toolbarRect = tester.getRect(toolbar);
       final focus = tester.getRect(
         find.byKey(const Key('focus-current-sentence')),
       );
       final more = tester.getRect(find.byKey(const Key('review-toolbar-more')));
-      expect(focus.left - dropdown.right, lessThanOrEqualTo(16));
+      expect(dropdown.left, closeTo(toolbarRect.left, 0.1));
+      expect(focus.left - dropdown.right, greaterThan(16));
       expect(more.right, closeTo(toolbarRect.right, 0.1));
       expect(tester.takeException(), isNull);
 
@@ -851,10 +852,12 @@ void main() {
     expect(find.text('Retranslate all with LLM'), findsNothing);
     expect(find.byKey(const Key('translation-more-actions')), findsNothing);
     expect(find.byKey(const Key('translation-toolbar-action')), findsNothing);
+    expect(find.byKey(const Key('toggle-speaker-labels')), findsOneWidget);
+    expect(find.byKey(const Key('toggle-timestamps')), findsOneWidget);
     await tester.tap(find.byKey(const Key('review-toolbar-more')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('more-toggle-speakers')), findsOneWidget);
-    expect(find.byKey(const Key('more-toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('more-toggle-speakers')), findsNothing);
+    expect(find.byKey(const Key('more-toggle-timestamps')), findsNothing);
     expect(find.text('Translate unfinished with LLM'), findsOneWidget);
     expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
     expect(
@@ -923,11 +926,13 @@ void main() {
     expect(find.text('Translate unfinished with LLM'), findsNothing);
     expect(find.text('Retranslate all with LLM'), findsNothing);
     expect(find.byKey(const Key('translation-more-actions')), findsNothing);
-    expect(find.byKey(const Key('review-toolbar-more')), findsOneWidget);
+    expect(find.byKey(const Key('review-toolbar-more')), findsNothing);
     expect(find.byKey(const Key('translation-status-strip')), findsOneWidget);
     expect(find.byKey(const Key('translation-view-mode')), findsOneWidget);
-    expect(find.byKey(const Key('toggle-speaker-labels')), findsNothing);
-    expect(find.byKey(const Key('toggle-timestamps')), findsNothing);
+    expect(find.byKey(const Key('toggle-speaker-labels')), findsOneWidget);
+    expect(find.byKey(const Key('toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('copy-transcript-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('export-transcript-toolbar')), findsOneWidget);
     expect(
       tester
           .widget<IconButton>(
@@ -961,22 +966,7 @@ void main() {
     expect(pendingDecoration.color, isNull);
     expect(pendingDecoration.border, isNull);
 
-    await tester.tap(find.byKey(const Key('review-toolbar-more')));
-    await tester.pump(const Duration(milliseconds: 300));
-    final translatedMode = find.byKey(
-      const Key('translation-mode-translated-menu'),
-    );
-    expect(translatedMode, findsNothing);
-    expect(
-      find.byKey(const Key('translation-mode-original-menu')),
-      findsNothing,
-    );
-    expect(find.byKey(const Key('more-toggle-speakers')), findsOneWidget);
-    expect(find.byKey(const Key('more-toggle-timestamps')), findsOneWidget);
-    expect(find.byKey(const Key('focus-current-menu')), findsNothing);
     expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pump(const Duration(milliseconds: 300));
 
     translation.release.complete();
     await translationFuture;
@@ -1053,12 +1043,20 @@ void main() {
     expect(find.byKey(const Key('translation-status')), findsNothing);
     expect(find.text('Completed'), findsNothing);
     expect(find.byKey(const Key('translation-view-mode')), findsNothing);
+    expect(find.byKey(const Key('toggle-speaker-labels')), findsNothing);
+    expect(find.byKey(const Key('toggle-timestamps')), findsNothing);
+    expect(find.byKey(const Key('copy-transcript-toolbar')), findsNothing);
+    expect(find.byKey(const Key('export-transcript-toolbar')), findsNothing);
     expect(
       tester.getRect(find.byKey(const Key('review-toolbar-more'))).right,
       closeTo(tester.getRect(toolbar).right, 0.1),
     );
     await tester.tap(find.byKey(const Key('review-toolbar-more')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('more-toggle-speakers')), findsOneWidget);
+    expect(find.byKey(const Key('more-toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('copy-transcript-menu')), findsOneWidget);
+    expect(find.byKey(const Key('export-transcript-menu')), findsOneWidget);
     expect(find.text('Retranslate all with LLM'), findsOneWidget);
   });
 
@@ -1460,6 +1458,8 @@ void main() {
     expect(find.byKey(const Key('review-header')), findsOneWidget);
     expect(find.byKey(const Key('toggle-speaker-labels')), findsOneWidget);
     expect(find.byKey(const Key('toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('copy-transcript-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('export-transcript-toolbar')), findsOneWidget);
     expect(find.byKey(const Key('translation-view-mode')), findsOneWidget);
     expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -1468,19 +1468,25 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('toggle-speaker-labels')), findsOneWidget);
     expect(find.byKey(const Key('toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('copy-transcript-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('export-transcript-toolbar')), findsOneWidget);
     expect(find.byKey(const Key('translation-view-mode')), findsOneWidget);
     expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
 
     tester.view.physicalSize = const Size(600, 700);
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('toggle-speaker-labels')), findsNothing);
-    expect(find.byKey(const Key('toggle-timestamps')), findsNothing);
+    expect(find.byKey(const Key('toggle-speaker-labels')), findsOneWidget);
+    expect(find.byKey(const Key('toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('copy-transcript-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('export-transcript-toolbar')), findsOneWidget);
     expect(find.byKey(const Key('translation-view-mode')), findsOneWidget);
     expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
     await tester.tap(find.byKey(const Key('review-toolbar-more')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('more-toggle-speakers')), findsOneWidget);
-    expect(find.byKey(const Key('more-toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('more-toggle-speakers')), findsNothing);
+    expect(find.byKey(const Key('more-toggle-timestamps')), findsNothing);
+    expect(find.byKey(const Key('copy-transcript-menu')), findsNothing);
+    expect(find.byKey(const Key('export-transcript-menu')), findsNothing);
     expect(
       find.byKey(const Key('translation-mode-original-menu')),
       findsNothing,
@@ -1490,6 +1496,10 @@ void main() {
 
     tester.view.physicalSize = const Size(500, 700);
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('toggle-speaker-labels')), findsOneWidget);
+    expect(find.byKey(const Key('toggle-timestamps')), findsOneWidget);
+    expect(find.byKey(const Key('copy-transcript-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('export-transcript-toolbar')), findsOneWidget);
     expect(find.byKey(const Key('translation-view-mode')), findsNothing);
     expect(find.byKey(const Key('focus-current-sentence')), findsOneWidget);
     await tester.tap(find.byKey(const Key('review-toolbar-more')));
@@ -5060,6 +5070,56 @@ void main() {
     expect(find.byKey(const Key('video-ai-brief-companion')), findsNothing);
     expect(find.byKey(const Key('ai-brief-scroll')), findsOneWidget);
     expect(find.byKey(const Key('transcript-scroll')), findsOneWidget);
+  });
+
+  testWidgets('wide AI Brief transcript pane keeps display toggles visible', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1000, 700));
+    final document = _simpleDocument();
+    final controller = await _controllerForDocument(
+      document,
+      metadata: _videoMetadata,
+      sourcePath: '/missing/test.mp4',
+      aiBrief: _overviewBrief(document, overview: 'Video overview'),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('zh', 'CN'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(_reviewTab('AI 简报'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('video-ai-brief-companion')), findsOneWidget);
+    expect(find.byKey(const Key('transcript-pane-title')), findsNothing);
+    expect(find.text('转写'), findsOneWidget);
+    expect(find.byKey(const Key('toggle-speaker-labels')), findsOneWidget);
+    expect(find.byKey(const Key('toggle-timestamps')), findsOneWidget);
+    expect(find.byTooltip('显示说话人'), findsOneWidget);
+    expect(find.byTooltip('显示时间戳'), findsOneWidget);
+    expect(find.byKey(const Key('copy-transcript-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('export-transcript-toolbar')), findsOneWidget);
+    expect(find.byTooltip('复制'), findsOneWidget);
+    expect(find.byTooltip('导出'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('copy-transcript-menu')), findsNothing);
+    expect(find.byKey(const Key('export-transcript-menu')), findsNothing);
   });
 
   testWidgets('companion divider resets to 1:1 when the task changes', (

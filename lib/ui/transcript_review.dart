@@ -3065,6 +3065,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   static const _mediumBreakpoint = 700.0;
   static const _paneFullBreakpoint = 700.0;
   static const _paneMediumBreakpoint = 520.0;
+  static const _paneDirectActionsBreakpoint = 400.0;
 
   final _ReviewToolbarRole role;
   final TranscriptionJob job;
@@ -3140,25 +3141,23 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           if (searchVisible) return _buildPaneSearchRow(context);
           final full = constraints.maxWidth >= _paneFullBreakpoint;
           final medium = constraints.maxWidth >= _paneMediumBreakpoint;
+          final showDirectActions =
+              constraints.maxWidth >= _paneDirectActionsBreakpoint;
           return Row(
             key: const Key('transcript-pane-toolbar-row'),
             children: [
-              Expanded(
-                child: Text(
-                  context.strings.t('transcript'),
-                  key: const Key('transcript-pane-title'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              if (_translationStarted && medium)
+                _TranslationViewDropdown(
+                  value: viewMode,
+                  compact: !full,
+                  onChanged: onViewModeChanged,
                 ),
-              ),
+              const Spacer(),
               _buildTranscriptActions(
                 context,
                 controller,
-                full: full,
                 medium: medium,
+                showDirectActions: showDirectActions,
               ),
             ],
           );
@@ -3269,8 +3268,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   Widget _buildTranscriptActions(
     BuildContext context,
     AppController controller, {
-    required bool full,
     required bool medium,
+    required bool showDirectActions,
   }) {
     final settings = controller.settings;
     return Row(
@@ -3284,7 +3283,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.search_rounded),
         ),
-        if (full) ...[
+        if (showDirectActions) ...[
           IconButton(
             key: const Key('toggle-speaker-labels'),
             tooltip: context.strings.t('speaker_labels'),
@@ -3314,22 +3313,43 @@ class _UnifiedReviewToolbar extends StatelessWidget {
             selectedIcon: const Icon(Icons.schedule_rounded),
           ),
         ],
-        if (_translationStarted && medium) ...[
-          const SizedBox(width: 4),
-          _TranslationViewDropdown(
-            value: viewMode,
-            compact: !full,
-            onChanged: onViewModeChanged,
-          ),
-        ],
         _focusButton(context),
         if (job.translationState.status.isActive)
           _TranslationActionIconButton(job: job, controller: controller),
+        if (showDirectActions) ...[
+          IconButton(
+            key: const Key('copy-transcript-toolbar'),
+            tooltip: context.strings.t('copy'),
+            onPressed: () => _runTranscriptMoreAction(
+              context,
+              controller,
+              settings,
+              _TranscriptMoreAction.copy,
+            ),
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.copy_all_outlined),
+          ),
+          IconButton(
+            key: const Key('export-transcript-toolbar'),
+            tooltip: context.strings.t('export'),
+            onPressed: () => _runTranscriptMoreAction(
+              context,
+              controller,
+              settings,
+              _TranscriptMoreAction.export,
+            ),
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.ios_share_rounded),
+          ),
+        ],
         _transcriptMoreMenu(
           context,
           controller,
-          includeViewToggles: !full,
+          includeViewToggles: !showDirectActions,
           includeViewMode: !medium,
+          includeDocumentActions: !showDirectActions,
         ),
       ],
     );
@@ -3349,6 +3369,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     AppController controller, {
     required bool includeViewToggles,
     required bool includeViewMode,
+    required bool includeDocumentActions,
   }) {
     final settings = controller.settings;
     final translationAction = _translationToolbarAction(
@@ -3360,8 +3381,15 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     final translateIcon = _translationStarted
         ? _translationToolbarActionIcon(translationAction)
         : Icons.translate_rounded;
-    final entries = <PopupMenuEntry<_TranscriptMoreAction>>[
-      if (includeViewToggles) ...[
+    final entries = <PopupMenuEntry<_TranscriptMoreAction>>[];
+    void addSection(List<PopupMenuEntry<_TranscriptMoreAction>> section) {
+      if (section.isEmpty) return;
+      if (entries.isNotEmpty) entries.add(const PopupMenuDivider());
+      entries.addAll(section);
+    }
+
+    if (includeViewToggles) {
+      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
         CheckedPopupMenuItem(
           key: const Key('more-toggle-speakers'),
           value: _TranscriptMoreAction.toggleSpeakers,
@@ -3374,9 +3402,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           checked: settings.showTimestamps,
           child: Text(context.strings.t('timestamps')),
         ),
-      ],
-      if (includeViewMode && _translationStarted) ...[
-        if (includeViewToggles) const PopupMenuDivider(),
+      ]);
+    }
+    if (includeViewMode && _translationStarted) {
+      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
         CheckedPopupMenuItem(
           key: const Key('translation-mode-original-menu'),
           value: _TranscriptMoreAction.original,
@@ -3395,9 +3424,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           checked: viewMode == TranslationViewMode.bilingual,
           child: Text(context.strings.t('bilingual')),
         ),
-      ],
-      if (job.translationState.status.isActive == false) ...[
-        const PopupMenuDivider(),
+      ]);
+    }
+    if (job.translationState.status.isActive == false) {
+      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
         _menuItem(
           key: const Key('translate-transcript'),
           value: _TranscriptMoreAction.translate,
@@ -3405,19 +3435,25 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           label: translateLabel,
           enabled: controller.translationConfigured,
         ),
-      ],
-      const PopupMenuDivider(),
-      _menuItem(
-        value: _TranscriptMoreAction.copy,
-        icon: Icons.copy_all_outlined,
-        label: context.strings.t('copy'),
-      ),
-      _menuItem(
-        value: _TranscriptMoreAction.export,
-        icon: Icons.ios_share_rounded,
-        label: context.strings.t('export'),
-      ),
-    ];
+      ]);
+    }
+    if (includeDocumentActions) {
+      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
+        _menuItem(
+          key: const Key('copy-transcript-menu'),
+          value: _TranscriptMoreAction.copy,
+          icon: Icons.copy_all_outlined,
+          label: context.strings.t('copy'),
+        ),
+        _menuItem(
+          key: const Key('export-transcript-menu'),
+          value: _TranscriptMoreAction.export,
+          icon: Icons.ios_share_rounded,
+          label: context.strings.t('export'),
+        ),
+      ]);
+    }
+    if (entries.isEmpty) return const SizedBox.shrink();
     return SizedBox.square(
       dimension: 40,
       child: PopupMenuButton<_TranscriptMoreAction>(
@@ -3617,6 +3653,7 @@ class _TranslationViewDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
+    key: const Key('translation-view-mode-control'),
     width: compact ? 108 : 112,
     height: 40,
     padding: const EdgeInsets.only(left: 12, right: 8),
