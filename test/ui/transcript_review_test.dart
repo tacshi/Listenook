@@ -5038,8 +5038,20 @@ void main() {
       lessThanOrEqualTo(tester.getRect(transcript).top),
     );
     expect(
-      tester.getSize(media).height,
-      lessThanOrEqualTo(tester.getSize(companion).height * .52 + .1),
+      tester.getSize(media).height - VideoTransport.height,
+      closeTo(tester.getSize(media).width / (16 / 9), .1),
+    );
+
+    final initialMediaHeight = tester.getSize(media).height;
+    await tester.drag(
+      find.byKey(const Key('ai-brief-companion-divider')),
+      const Offset(100, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getSize(media).height, greaterThan(initialMediaHeight));
+    expect(
+      tester.getSize(media).height - VideoTransport.height,
+      closeTo(tester.getSize(media).width / (16 / 9), .1),
     );
 
     await tester.tap(find.byKey(const Key('video-audio-mode-toggle')));

@@ -796,13 +796,15 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final aspect = _videoAspectRatio.isFinite && _videoAspectRatio > 0
         ? _videoAspectRatio
         : 16 / 9;
-    final maximumViewportHeight =
-        (constraints.maxHeight * .52 - VideoTransport.height)
+    final availableViewportHeight =
+        (constraints.maxHeight - VideoTransport.height - 1)
             .clamp(0.0, double.infinity)
             .toDouble();
-    final viewportHeight = (leftWidth / aspect)
-        .clamp(0.0, maximumViewportHeight)
-        .toDouble();
+    final viewportHeight = videoViewportHeight(
+      width: leftWidth,
+      aspectRatio: aspect,
+      availableHeight: availableViewportHeight,
+    );
     final mediaHeight = viewportHeight + VideoTransport.height;
     final sourcePane = Column(
       key: const Key('video-ai-brief-source-column'),
