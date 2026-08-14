@@ -3192,12 +3192,15 @@ void main() {
 
     expect(find.byKey(const Key('workspace-page-title')), findsNothing);
     expect(find.byKey(const Key('workspace-empty-title')), findsOneWidget);
-    expect(find.byKey(const Key('workspace-go-to-inbox')), findsOneWidget);
+    expect(find.byKey(const Key('workspace-go-to-inbox')), findsNothing);
     expect(find.byKey(const Key('workspace-go-to-library')), findsOneWidget);
     expect(find.byType(TranscriptReview), findsNothing);
     expect(find.byKey(const Key('file-queue-panel')), findsNothing);
     expect(find.byKey(const Key('empty-add-files')), findsNothing);
     expect(find.byKey(const Key('export-inbox-completed')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('workspace-go-to-library')));
+    expect(controller.destination, AppDestination.library);
   });
 
   testWidgets('inbox keeps completed batches visible until explicitly opened', (
