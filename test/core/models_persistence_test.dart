@@ -132,7 +132,79 @@ void main() {
 
     expect(restored.sourceOrigin, JobSourceOrigin.monitoredFolder);
     expect(restored.sourceFingerprint?.sameVersion(fingerprint), isTrue);
-    expect(restored.toJson()['manifest_version'], 6);
+    expect(restored.toJson()['manifest_version'], 7);
+  });
+
+  test('version 7 manifests round-trip podcast provenance', () {
+    final now = DateTime.utc(2026, 8, 15, 9);
+    final provenance = PodcastEpisodeProvenance(
+      feedUrl: 'https://feeds.example/show',
+      episodeId: 'https://feeds.example/show\nguid-1',
+      enclosureUrl: 'https://cdn.example/ep.mp3',
+      showTitle: 'All Ears English',
+      episodeTitle: 'AEE 2231',
+      guid: 'guid-1',
+      publishedAt: now,
+      language: 'en',
+      description: 'A show notes paragraph for later.',
+      transcriptTiming: PodcastTranscriptTiming.cue,
+      transcripts: const [
+        PodcastTranscriptReference(
+          url: 'https://cdn.example/ep.vtt',
+          type: 'text/vtt',
+        ),
+      ],
+    );
+    final restored = TranscriptionJob.fromJson(
+      TranscriptionJob(
+        id: 'podcast',
+        batchId: 'batch',
+        sourcePath: '/Inbox/Podcasts/ep.mp3',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.downloading,
+        sourceOrigin: JobSourceOrigin.podcast,
+        displayTitle: provenance.displayName,
+        podcastProvenance: provenance,
+        transcriptAcquisitionMode: TranscriptAcquisitionMode.soniox,
+      ).toJson(),
+    );
+
+    expect(restored.sourceOrigin, JobSourceOrigin.podcast);
+    expect(restored.status, JobStatus.downloading);
+    expect(restored.podcastProvenance?.episodeTitle, 'AEE 2231');
+    expect(
+      restored.podcastProvenance?.description,
+      'A show notes paragraph for later.',
+    );
+    expect(
+      restored.podcastProvenance?.transcriptTiming,
+      PodcastTranscriptTiming.cue,
+    );
+    expect(
+      restored.transcriptAcquisitionMode,
+      TranscriptAcquisitionMode.soniox,
+    );
+    expect(restored.toJson()['manifest_version'], 7);
+  });
+
+  test('legacy publisherWordTimed jobs load as publisher captions', () {
+    final restored = TranscriptionJob.fromJson({
+      'id': 'legacy-captions',
+      'batch_id': 'batch',
+      'source_path': '/cache/ep.mp3',
+      'created_at': '2026-08-01T00:00:00.000Z',
+      'updated_at': '2026-08-01T00:00:00.000Z',
+      'status': 'ready',
+      'source_origin': 'podcast',
+      'transcript_acquisition_mode': 'publisherWordTimed',
+    });
+
+    expect(
+      restored.transcriptAcquisitionMode,
+      TranscriptAcquisitionMode.publisherCaptions,
+    );
+    expect(restored.transcriptAcquisitionMode.usesPublisherTranscript, isTrue);
   });
 
   test('Inbox monitor configuration and ledger persist atomically', () async {
@@ -208,7 +280,7 @@ void main() {
       final json = job.toJson();
       final restored = TranscriptionJob.fromJson(json);
 
-      expect(json['manifest_version'], 6);
+      expect(json['manifest_version'], 7);
       expect(restored.sourcePath, '/recordings/original.wav');
       expect(restored.fileName, 'original.wav');
       expect(restored.displayName, 'Weekly sync');
@@ -274,7 +346,7 @@ void main() {
     final json = job.toJson();
     final restored = TranscriptionJob.fromJson(json);
 
-    expect(json['manifest_version'], 6);
+    expect(json['manifest_version'], 7);
     expect(job.toJsonString(), isNot(contains('api_key')));
     expect(restored.document!.segments.single.translatedText, '你好');
     expect(restored.translationState.status, TranslationStatus.completed);

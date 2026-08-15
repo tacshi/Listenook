@@ -8,14 +8,18 @@ import 'package:uuid/uuid.dart';
 
 import '../core/contracts.dart';
 import '../core/models.dart';
+import '../core/podcast_models.dart';
 import '../core/transcript_parser.dart';
 import '../data/openai_translation_service.dart';
 import '../data/inbox_folder_monitor.dart';
+import '../data/podcast/download_location.dart';
+import '../data/podcast/podcast_urls.dart';
+import '../data/podcast/publisher_transcript.dart';
 import '../data/process_media_service.dart';
 import '../data/soniox_api_client.dart';
 import '../data/transcript_exporter.dart';
 
-enum AppDestination { inbox, workspace, library, settings }
+enum AppDestination { inbox, podcast, workspace, library, settings }
 
 class AppController extends ChangeNotifier {
   static const _maxConcurrentJobs = 4;
@@ -34,7 +38,12 @@ class AppController extends ChangeNotifier {
     AiBriefService? aiBriefService,
     InboxMonitorRepository? inboxMonitorRepository,
     InboxFolderMonitor? inboxFolderMonitor,
+    PodcastGateway? podcastGateway,
+    String? podcastManagedRoot,
     TranscriptParser parser = const TranscriptParser(),
+    PublisherTranscriptParser publisherTranscriptParser =
+        const PublisherTranscriptParser(),
+    PodcastDownloadLocator downloadLocator = const PodcastDownloadLocator(),
     Uuid uuid = const Uuid(),
   }) : _credentials = credentialStore,
        _settingsRepository = settingsRepository,
@@ -49,7 +58,11 @@ class AppController extends ChangeNotifier {
        _aiBriefService = aiBriefService,
        _inboxMonitorRepository = inboxMonitorRepository,
        _inboxFolderMonitor = inboxFolderMonitor,
+       _podcastGateway = podcastGateway,
+       _podcastManagedRoot = podcastManagedRoot,
        _parser = parser,
+       _publisherTranscriptParser = publisherTranscriptParser,
+       _downloadLocator = downloadLocator,
        _uuid = uuid;
 
   final CredentialStore _credentials;
@@ -65,8 +78,14 @@ class AppController extends ChangeNotifier {
   final AiBriefService? _aiBriefService;
   final InboxMonitorRepository? _inboxMonitorRepository;
   final InboxFolderMonitor? _inboxFolderMonitor;
+  final PodcastGateway? _podcastGateway;
+  final String? _podcastManagedRoot;
   final TranscriptParser _parser;
+  final PublisherTranscriptParser _publisherTranscriptParser;
+  final PodcastDownloadLocator _downloadLocator;
   final Uuid _uuid;
+  final Set<String> _downloadCancelledIds = {};
+  int _activePodcastDownloads = 0;
   final Map<String, TranscriptionJob> _jobs = {};
   final Map<String, Duration> _playbackPositions = {};
   final List<String> _inboxIds = [];
@@ -166,6 +185,8 @@ class AppController extends ChangeNotifier {
       .map((id) => _jobs[id])
       .whereType<TranscriptionJob>()
       .toList(growable: false);
+
+  TranscriptionJob? jobById(String id) => _jobs[id];
 
   TranscriptionJob? get activeWorkspaceJob =>
       _activeWorkspaceJobId == null ? null : _jobs[_activeWorkspaceJobId];
@@ -309,6 +330,16 @@ class AppController extends ChangeNotifier {
       _translationCredentials?.readApiKey,
     );
     _batchId = _uuid.v4();
+    for (final job in List<TranscriptionJob>.of(loaded)) {
+      if (job.status != JobStatus.downloading) continue;
+      final failed = await _fail(
+        job,
+        'download_interrupted',
+        'The podcast download was interrupted.',
+      );
+      final index = loaded.indexWhere((item) => item.id == job.id);
+      if (index >= 0) loaded[index] = failed;
+    }
     final interrupted = loaded.where((job) => job.status.isActive).toList()
       ..sort((a, b) {
         final order = a.queueIndex.compareTo(b.queueIndex);
@@ -539,6 +570,19 @@ class AppController extends ChangeNotifier {
     if (!_monitorCandidatesInFlight.add(fingerprint.identity)) return;
     try {
       for (final job in _jobs.values) {
+        if (_sourceResolver.identityFor(job.sourcePath) ==
+            fingerprint.identity) {
+          await _recordMonitoredFile(
+            job,
+            job.document != null ||
+                    job.status == JobStatus.completed ||
+                    job.status == JobStatus.empty
+                ? MonitoredFileDisposition.completed
+                : MonitoredFileDisposition.queued,
+            fingerprint: fingerprint,
+          );
+          return;
+        }
         final known = job.sourceFingerprint;
         if (known == null || !known.sameVersion(fingerprint)) continue;
         await _recordMonitoredFile(
@@ -793,6 +837,251 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  TranscriptionJob? jobForEpisode(String episodeId) {
+    for (final job in _jobs.values) {
+      if (job.id == episodeId ||
+          job.podcastProvenance?.episodeId == episodeId) {
+        return job;
+      }
+    }
+    return null;
+  }
+
+  List<TranscriptionJob> get podcastJobs {
+    final jobs = [
+      for (final job in _jobs.values)
+        if (job.status != JobStatus.cancelled && _isPodcastLibraryJob(job)) job,
+    ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return jobs;
+  }
+
+  bool _isPodcastLibraryJob(TranscriptionJob job) {
+    if (job.sourceOrigin == JobSourceOrigin.podcast) return true;
+    return _isManagedPodcastPath(job.sourcePath);
+  }
+
+  bool _isManagedPodcastPath(String path) {
+    final root = _podcastManagedRoot;
+    if (root == null || root.isEmpty) return false;
+    final value = path.trim();
+    if (value.isEmpty) return false;
+    final podcastsRoot = p.normalize(p.join(p.absolute(root), 'podcasts'));
+    final file = p.normalize(p.absolute(value));
+    return file == podcastsRoot || p.isWithin(podcastsRoot, file);
+  }
+
+  String? localMediaPathForEpisode(String episodeId) {
+    final job = jobForEpisode(episodeId);
+    if (job == null || job.status == JobStatus.downloading) return null;
+    final path = job.sourcePath.trim();
+    if (path.isEmpty) return null;
+    return File(path).existsSync() ? path : null;
+  }
+
+  Future<void> setTranscriptAcquisitionMode(
+    String id,
+    TranscriptAcquisitionMode mode,
+  ) async {
+    final job = _jobs[id];
+    if (job == null) return;
+    if (!job.status.canTranscribe &&
+        job.status != JobStatus.failed &&
+        job.status != JobStatus.cancelled) {
+      return;
+    }
+    await _transition(job, transcriptAcquisitionMode: mode);
+  }
+
+  Future<TranscriptionJob?> enqueuePodcastEpisode(
+    PodcastEpisode episode, {
+    PodcastFeed? feed,
+  }) async {
+    final gateway = _podcastGateway;
+    if (gateway == null) {
+      throw const PodcastException('podcast_unavailable');
+    }
+    final existing = jobForEpisode(episode.id);
+    if (existing != null) return existing;
+    if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
+    final now = DateTime.now().toUtc();
+    final jobId = _uuid.v4();
+    final location = _downloadLocator.resolve(
+      jobId: jobId,
+      episode: episode,
+      managedRoot: _podcastManagedRoot ?? Directory.systemTemp.path,
+    );
+    final provenance = PodcastEpisodeProvenance(
+      feedUrl: episode.feedUrl,
+      episodeId: episode.id,
+      enclosureUrl: episode.enclosureUrl,
+      showTitle: feed?.title ?? episode.title,
+      episodeTitle: episode.title,
+      guid: episode.guid,
+      author: feed?.author,
+      artworkUrl: episode.artworkUrl ?? feed?.artworkUrl,
+      showUrl: feed?.showUrl,
+      publishedAt: episode.publishedAt,
+      language: _languageCode(feed?.language),
+      description: episode.description,
+      episodeUrl: episode.episodeUrl,
+      transcripts: episode.transcripts,
+      transcriptTiming: episode.transcriptTiming,
+    );
+    final hints = [
+      ..._sessionOptions.languageHints,
+      if (_languageCode(feed?.language) case final language?) language,
+    ];
+    final job = TranscriptionJob(
+      id: jobId,
+      batchId: _batchId,
+      sourcePath: location.filePath,
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.downloading,
+      queueIndex: _inboxIds.length,
+      options: _sessionOptions.copyWith(languageHints: hints.toSet().toList()),
+      translationOptions: TranslationOptions.fromSettings(
+        _settings.translationSettings,
+      ),
+      sourceOrigin: JobSourceOrigin.podcast,
+      displayTitle: provenance.displayName,
+      podcastProvenance: provenance,
+      transcriptAcquisitionMode: episode.transcripts.isNotEmpty
+          ? TranscriptAcquisitionMode.publisherCaptions
+          : TranscriptAcquisitionMode.soniox,
+    );
+    _jobs[job.id] = job;
+    _inboxIds.add(job.id);
+    await _jobsRepository.save(job);
+    notifyListeners();
+    unawaited(_downloadPodcastJob(job, location));
+    return job;
+  }
+
+  String? _languageCode(String? raw) {
+    final value = raw?.trim().toLowerCase();
+    if (value == null || value.isEmpty) return null;
+    if (value.startsWith('en')) return 'en';
+    return value.split(RegExp(r'[-_]')).first;
+  }
+
+  Future<void> _downloadPodcastJob(
+    TranscriptionJob job,
+    PodcastDownloadLocation location,
+  ) async {
+    final gateway = _podcastGateway;
+    if (gateway == null) return;
+    while (_activePodcastDownloads >= 2) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (_downloadCancelledIds.contains(job.id) ||
+          !_jobs.containsKey(job.id)) {
+        return;
+      }
+    }
+    _activePodcastDownloads++;
+    try {
+      if (await File(location.filePath).exists()) {
+        await _finishPodcastDownload(job, location.filePath);
+        return;
+      }
+      await gateway.downloadEpisode(
+        enclosureUrl: job.podcastProvenance?.enclosureUrl ?? '',
+        destinationPath: location.filePath,
+        onProgress: (fraction, detail) =>
+            unawaited(_progress(job.id, 'downloading', fraction, detail)),
+        shouldCancel: () => _downloadCancelledIds.contains(job.id),
+      );
+      if (_downloadCancelledIds.contains(job.id)) {
+        throw const OperationCancelledException();
+      }
+      await _finishPodcastDownload(job, location.filePath);
+    } on OperationCancelledException {
+      final current = _jobs[job.id];
+      if (current != null) {
+        await _transition(
+          current,
+          status: JobStatus.cancelled,
+          progress: const JobProgress(stage: 'cancelled'),
+          errorCode: 'cancelled',
+          errorMessage: 'Cancelled by the user.',
+        );
+      }
+    } on PodcastException catch (error) {
+      final current = _jobs[job.id];
+      if (current != null) {
+        await _fail(current, error.code, error.message ?? error.code);
+      }
+    } on Object catch (error) {
+      final current = _jobs[job.id];
+      if (current != null) {
+        await _fail(current, 'podcast_download_failed', _safeError(error));
+      }
+    } finally {
+      _activePodcastDownloads--;
+      _downloadCancelledIds.remove(job.id);
+    }
+  }
+
+  Future<void> _finishPodcastDownload(TranscriptionJob job, String path) async {
+    final metadata = await _media.inspect(path);
+    final fingerprint = await fingerprintMonitoredFile(path);
+    final classified = await _classifyPublisherTranscript(_jobs[job.id] ?? job);
+    var updated = await _transition(
+      _jobs[job.id] ?? job,
+      sourcePath: path,
+      status: JobStatus.ready,
+      metadata: metadata,
+      sourceFingerprint: fingerprint,
+      podcastProvenance: classified.$1,
+      transcriptAcquisitionMode: classified.$2,
+      progress: const JobProgress(stage: 'ready', fraction: 1),
+      clearError: true,
+    );
+    if (fingerprint != null && _pathIsInMonitoredFolder(path)) {
+      await _recordMonitoredFile(
+        updated,
+        MonitoredFileDisposition.queued,
+        fingerprint: fingerprint,
+      );
+    }
+  }
+
+  Future<(PodcastEpisodeProvenance?, TranscriptAcquisitionMode)>
+  _classifyPublisherTranscript(TranscriptionJob job) async {
+    final provenance = job.podcastProvenance;
+    final gateway = _podcastGateway;
+    if (provenance == null || provenance.transcripts.isEmpty) {
+      return (provenance, TranscriptAcquisitionMode.soniox);
+    }
+    if (gateway == null) {
+      return (provenance, TranscriptAcquisitionMode.publisherCaptions);
+    }
+    for (final reference in provenance.transcripts) {
+      try {
+        final body = await gateway.fetchTranscript(reference);
+        final parsed = _publisherTranscriptParser.parse(
+          body: body,
+          mimeType: reference.type,
+          url: reference.url,
+        );
+        final updated = provenance.copyWith(transcriptTiming: parsed.timing);
+        return (updated, TranscriptAcquisitionMode.publisherCaptions);
+      } on Object {
+        continue;
+      }
+    }
+    return (provenance, TranscriptAcquisitionMode.publisherCaptions);
+  }
+
+  bool get canStartReady =>
+      !_processing &&
+      inboxJobs.any((job) => job.status.canTranscribe && _canStart(job));
+
+  bool _canStart(TranscriptionJob job) {
+    if (job.transcriptAcquisitionMode.usesPublisherTranscript) return true;
+    return _keyConfigured;
+  }
+
   Future<void> enqueueSources(Iterable<String> paths) async {
     if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
     final existing = <String>{
@@ -828,7 +1117,9 @@ class AppController extends ChangeNotifier {
       translationOptions: TranslationOptions.fromSettings(
         _settings.translationSettings,
       ),
-      sourceOrigin: sourceOrigin,
+      sourceOrigin: _isManagedPodcastPath(source.path)
+          ? JobSourceOrigin.podcast
+          : sourceOrigin,
       sourceFingerprint: fingerprint,
     );
     _jobs[job.id] = job;
@@ -878,9 +1169,9 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> startReady() async {
-    if (_processing || !_keyConfigured) return;
+    if (_processing) return;
     final queue = inboxJobs
-        .where((job) => job.status.canTranscribe)
+        .where((job) => job.status.canTranscribe && _canStart(job))
         .map((job) => job.id)
         .toList();
     if (queue.isEmpty) return;
@@ -911,6 +1202,10 @@ class AppController extends ChangeNotifier {
     TranscriptionJob job = initialJob;
     String? temporary;
     try {
+      if (job.transcriptAcquisitionMode.usesPublisherTranscript) {
+        await _importPublisherTranscript(job);
+        return;
+      }
       if (!await File(job.sourcePath).exists()) {
         throw const MediaException(
           'missing_source',
@@ -998,6 +1293,7 @@ class AppController extends ChangeNotifier {
         status: status,
         document: document,
         translationState: sonioxTranslationState,
+        transcriptSource: TranscriptSource.soniox,
         progress: const JobProgress(stage: 'complete', fraction: 1),
         clearError: true,
       );
@@ -1049,6 +1345,72 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<void> _importPublisherTranscript(TranscriptionJob job) async {
+    final gateway = _podcastGateway;
+    final provenance = job.podcastProvenance;
+    if (gateway == null ||
+        provenance == null ||
+        provenance.transcripts.isEmpty) {
+      await _fail(
+        job,
+        'podcast_transcript_missing',
+        'The publisher transcript is no longer available.',
+      );
+      return;
+    }
+    try {
+      PublisherTranscript? parsed;
+      for (final reference in provenance.transcripts) {
+        try {
+          final body = await gateway.fetchTranscript(reference);
+          parsed = _publisherTranscriptParser.parse(
+            body: body,
+            mimeType: reference.type,
+            url: reference.url,
+          );
+          break;
+        } on Object {
+          continue;
+        }
+      }
+      if (parsed == null) {
+        await _fail(
+          _jobs[job.id] ?? job,
+          'podcast_transcript_failed',
+          'The publisher captions could not be imported.',
+        );
+        return;
+      }
+      await _transition(
+        _jobs[job.id] ?? job,
+        status: parsed.document.segments.isEmpty
+            ? JobStatus.empty
+            : JobStatus.completed,
+        document: TranscriptDocument(
+          tokens: const [],
+          segments: parsed.document.segments,
+          speakers: parsed.document.speakers,
+          updatedAt: parsed.document.updatedAt,
+        ),
+        transcriptSource: TranscriptSource.publisher,
+        progress: const JobProgress(stage: 'complete', fraction: 1),
+        clearError: true,
+      );
+    } on PodcastException catch (error) {
+      await _fail(
+        _jobs[job.id] ?? job,
+        error.code,
+        error.message ?? error.code,
+      );
+    } on Object catch (error) {
+      await _fail(
+        _jobs[job.id] ?? job,
+        'podcast_transcript_failed',
+        _safeError(error),
+      );
+    }
+  }
+
   Future<void> _poll(String id, String transcriptionId) async {
     var failures = 0;
     while (true) {
@@ -1094,6 +1456,10 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> cancelJob(String id) async {
+    if (_jobs[id]?.status == JobStatus.downloading) {
+      _downloadCancelledIds.add(id);
+      return;
+    }
     if (_jobs[id]?.translationState.status.isActive ?? false) {
       _translationCancelledIds.add(id);
       return;
@@ -1151,6 +1517,40 @@ class AppController extends ChangeNotifier {
   Future<void> retry(String id) async {
     final job = _jobs[id];
     if (job == null || !job.status.canRetry) return;
+    if (job.sourceOrigin == JobSourceOrigin.podcast &&
+        (job.errorCode == 'download_interrupted' ||
+            job.errorCode == 'podcast_download_failed' ||
+            !await File(job.sourcePath).exists())) {
+      final location = _downloadLocator.resolve(
+        jobId: job.id,
+        episode: PodcastEpisode(
+          id: job.podcastProvenance?.episodeId ?? job.id,
+          feedUrl: job.podcastProvenance?.feedUrl ?? '',
+          title: job.podcastProvenance?.episodeTitle ?? job.displayName,
+          enclosureUrl: job.podcastProvenance?.enclosureUrl ?? '',
+          mediaExtension:
+              extensionForEnclosure(
+                url: job.podcastProvenance?.enclosureUrl ?? job.sourcePath,
+              ) ??
+              'mp3',
+        ),
+        managedRoot: _podcastManagedRoot ?? Directory.systemTemp.path,
+      );
+      if (job.errorCode == 'podcast_download_failed') {
+        final invalid = File(location.filePath);
+        if (await invalid.exists()) await invalid.delete();
+      }
+      await _transition(
+        job,
+        sourcePath: location.filePath,
+        status: JobStatus.downloading,
+        progress: const JobProgress(stage: 'downloading', fraction: 0),
+        clearError: true,
+      );
+      if (!_inboxIds.contains(id)) _inboxIds.add(id);
+      unawaited(_downloadPodcastJob(_jobs[id] ?? job, location));
+      return;
+    }
     if (!await File(job.sourcePath).exists()) {
       await _fail(
         job,
@@ -1173,7 +1573,7 @@ class AppController extends ChangeNotifier {
     );
     if (!_inboxIds.contains(id)) _inboxIds.add(id);
     notifyListeners();
-    if (_keyConfigured && !_processing) {
+    if (_canStart(updated) && !_processing) {
       _processing = true;
       notifyListeners();
       await _runJob(updated.id);
@@ -1223,6 +1623,7 @@ class AppController extends ChangeNotifier {
       if (_pathIsInMonitoredFolder(job.sourcePath)) {
         await _recordMonitoredFile(job, MonitoredFileDisposition.dismissed);
       }
+      await _deleteManagedPodcastAudio(job);
       _jobs.remove(id);
       _playbackPositions.remove(id);
       await _media.deleteGeneratedMedia(id);
@@ -1245,6 +1646,7 @@ class AppController extends ChangeNotifier {
           MonitoredFileDisposition.dismissed,
         );
       }
+      if (discarded != null) await _deleteManagedPodcastAudio(discarded);
       _jobs.remove(id);
       _playbackPositions.remove(id);
       await _media.deleteGeneratedMedia(id);
@@ -1265,6 +1667,7 @@ class AppController extends ChangeNotifier {
     _playbackPositions.remove(id);
     _inboxIds.remove(id);
     if (_activeWorkspaceJobId == id) _activeWorkspaceJobId = null;
+    await _deleteManagedPodcastAudio(job);
     await _media.deleteGeneratedMedia(id);
     await _jobsRepository.delete(id);
     notifyListeners();
@@ -1277,6 +1680,8 @@ class AppController extends ChangeNotifier {
         .toList(growable: false);
     if (deletable.isEmpty) return;
     for (final id in deletable) {
+      final job = _jobs[id];
+      if (job != null) await _deleteManagedPodcastAudio(job);
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
       _jobs.remove(id);
@@ -2455,6 +2860,24 @@ class AppController extends ChangeNotifier {
     return _exporter.exportToDirectory(job, directory, options);
   }
 
+  Future<String> exportPodcastMedia(String id, String destinationPath) async {
+    final job = _jobs[id];
+    if (job == null || job.sourceOrigin != JobSourceOrigin.podcast) {
+      throw StateError('Podcast job not found.');
+    }
+    final source = File(job.sourcePath);
+    if (!await source.exists()) {
+      throw const FileSystemException('Podcast media is missing.');
+    }
+    final destination = File(destinationPath);
+    if (p.equals(p.absolute(source.path), p.absolute(destination.path))) {
+      return destination.path;
+    }
+    await destination.parent.create(recursive: true);
+    await source.copy(destination.path);
+    return destination.path;
+  }
+
   String renderJob(String id, ExportOptions options) {
     final job = _jobs[id];
     if (job?.document == null) return '';
@@ -2585,6 +3008,33 @@ class AppController extends ChangeNotifier {
     progress: const JobProgress(stage: 'failed'),
   );
 
+  Future<void> _deleteManagedPodcastAudio(TranscriptionJob job) async {
+    if (job.sourceOrigin != JobSourceOrigin.podcast) return;
+    if (_pathIsInMonitoredFolder(job.sourcePath)) return;
+    final root = _podcastManagedRoot;
+    if (root == null || root.isEmpty) return;
+    final file = File(job.sourcePath);
+    final normalizedRoot = p.normalize(p.absolute(root));
+    final normalizedFile = p.normalize(p.absolute(job.sourcePath));
+    if (normalizedFile != normalizedRoot &&
+        !p.isWithin(normalizedRoot, normalizedFile)) {
+      return;
+    }
+    try {
+      if (await file.exists()) await file.delete();
+      final part = File('${job.sourcePath}.part');
+      if (await part.exists()) await part.delete();
+      final parent = file.parent;
+      if (await parent.exists() &&
+          await parent.list().isEmpty &&
+          p.basename(parent.path) == job.id) {
+        await parent.delete();
+      }
+    } on Object {
+      // Cleanup is best-effort; the job record is already going away.
+    }
+  }
+
   String _safeError(Object error) {
     final value = error.toString();
     return value
@@ -2616,6 +3066,10 @@ class AppController extends ChangeNotifier {
     String? displayTitle,
     String? groupId,
     Set<String>? tagIds,
+    SourceFingerprint? sourceFingerprint,
+    PodcastEpisodeProvenance? podcastProvenance,
+    TranscriptAcquisitionMode? transcriptAcquisitionMode,
+    TranscriptSource? transcriptSource,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
@@ -2643,6 +3097,10 @@ class AppController extends ChangeNotifier {
       displayTitle: displayTitle,
       groupId: groupId,
       tagIds: tagIds,
+      sourceFingerprint: sourceFingerprint,
+      podcastProvenance: podcastProvenance,
+      transcriptAcquisitionMode: transcriptAcquisitionMode,
+      transcriptSource: transcriptSource,
       clearError: clearError,
       clearRemoteFileId: clearRemoteFileId,
       clearRemoteTranscriptionId: clearRemoteTranscriptionId,

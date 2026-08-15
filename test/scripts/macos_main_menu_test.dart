@@ -31,7 +31,7 @@ void main() {
     expect(delegate, contains('SMAppService.mainApp'));
     expect(delegate, contains('SMLoginItemSetEnabled'));
     expect(delegate, contains('applicationShouldHandleReopen'));
-    expect(delegate, contains('invokeNavigation("showInbox"'));
+    expect(delegate, contains('invokeNavigation("showWindow"'));
     expect(project, contains('Embed Login Items'));
     expect(project, contains('app.meowstt.desktop.Launcher'));
   }, skip: !Platform.isMacOS);

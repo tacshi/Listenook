@@ -83,7 +83,7 @@ class AppDelegate: FlutterAppDelegate {
     _ sender: NSApplication,
     hasVisibleWindows flag: Bool
   ) -> Bool {
-    invokeNavigation("showInbox", sender: sender)
+    invokeNavigation("showWindow", sender: sender)
     return true
   }
 

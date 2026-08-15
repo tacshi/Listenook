@@ -14,10 +14,16 @@ The package name is `meow_stt`. Its permanent desktop identity is
 
 - Recursive folder and multi-file drag/drop with hidden-file filtering and
   canonical-path deduplication.
+- An optional Podcast tab that searches public Apple Podcasts results, opens
+  RSS feeds, previews episodes, and follows shows locally. Deep-listen
+  downloads an episode into Inbox for confirmation. Word-level publisher
+  transcripts can be imported; cue-level captions stay informational and
+  transcription still uses Soniox.
 - An optional monitored Inbox folder that recursively discovers stable matching
   media for review without uploading or transcribing it. A durable fingerprint
   ledger prevents unchanged files from being rediscovered after restart or
-  history deletion; changed versions become eligible again.
+  history deletion; changed versions become eligible again. Podcast downloads
+  land in that folder’s `Podcasts/` directory when monitoring is configured.
 - A macOS menu-bar/Windows tray companion that keeps monitoring and active work
   running after the configured app window closes, with pause, restore, Settings,
   notification, and explicit Quit actions. Optional launch at login starts in

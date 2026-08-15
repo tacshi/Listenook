@@ -160,6 +160,25 @@ class _InboxMonitorSetupDialogState extends State<InboxMonitorSetupDialog> {
               context.strings.t('inbox_monitor_recursive_hint'),
               style: Theme.of(context).textTheme.bodySmall,
             ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.podcasts_outlined,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    context.strings.t('inbox_monitor_podcast_downloads_hint'),
+                    key: const Key('inbox-monitor-podcast-downloads-hint'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 18),
             _ExtensionGroup(
               title: context.strings.t('inbox_monitor_audio_types'),

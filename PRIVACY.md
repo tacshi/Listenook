@@ -3,6 +3,17 @@
 MeowSTT has no developer-operated backend, telemetry, cloud sync, advertising,
 or analytics.
 
+Podcast discovery is optional and local-first. Search queries are sent to
+Apple’s public iTunes Search API. Feed documents, episode media, and publisher
+transcripts are fetched directly from the public URLs those feeds publish.
+Followed shows, feed snapshots, and search cache live only on this computer.
+Preview streams remote audio and does not persist it. Deep-listen downloads
+are written either to `Podcasts/` inside a configured Inbox folder or to an
+application-managed cache. Inbox-folder copies are user files and are not
+deleted with the job; managed copies are removed when the job is deleted.
+Nothing is uploaded to Soniox until you press **Transcribe**, except a
+word-level publisher transcript that can complete without uploading media.
+
 Inbox folder monitoring is optional and entirely local. When configured,
 MeowSTT recursively reads directory metadata for supported audio and video
 files and stores the selected folder, selected extensions, pause/login

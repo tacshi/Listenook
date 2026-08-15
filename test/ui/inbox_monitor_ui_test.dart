@@ -68,6 +68,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byKey(const Key('inbox-monitor-setup-dialog')), findsOneWidget);
     expect(
+      find.byKey(const Key('inbox-monitor-podcast-downloads-hint')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('stored in the app cache'), findsOneWidget);
+    expect(
       find.byKey(const Key('inbox-monitor-launch-at-login')),
       findsNothing,
     );

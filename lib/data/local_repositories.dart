@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../core/contracts.dart';
 import '../core/models.dart';
+import '../core/podcast_models.dart';
 
 class AppPaths {
   AppPaths._(this.root);
@@ -21,6 +22,9 @@ class AppPaths {
   File get settings => File(p.join(root.path, 'settings.json'));
   File get libraryCatalog => File(p.join(root.path, 'library_catalog.json'));
   File get inboxMonitor => File(p.join(root.path, 'inbox_monitor.json'));
+  File get podcastCatalog => File(p.join(root.path, 'podcast_catalog.json'));
+  File get podcastPlayback => File(p.join(root.path, 'podcast_playback.json'));
+  Directory get podcasts => Directory(p.join(root.path, 'podcasts'));
 
   static Future<AppPaths> create() async {
     final support = await getApplicationSupportDirectory();
@@ -28,6 +32,7 @@ class AppPaths {
     await paths.root.create(recursive: true);
     await paths.jobs.create(recursive: true);
     await paths.temporary.create(recursive: true);
+    await paths.podcasts.create(recursive: true);
     return paths;
   }
 }
@@ -258,6 +263,67 @@ class JsonInboxMonitorRepository implements InboxMonitorRepository {
   @override
   Future<void> save(InboxMonitorStorage storage) =>
       _atomicFileWriter.write(paths.inboxMonitor, jsonEncode(storage.toJson()));
+}
+
+class JsonPodcastRepository implements PodcastRepository {
+  JsonPodcastRepository(this.paths);
+
+  final AppPaths paths;
+
+  @override
+  Future<PodcastLibraryState> load() async {
+    if (!await paths.podcastCatalog.exists()) {
+      return const PodcastLibraryState();
+    }
+    try {
+      final data = jsonDecode(await paths.podcastCatalog.readAsString());
+      return PodcastLibraryState.fromJson(
+        (data as Map).cast<String, dynamic>(),
+      );
+    } on Object {
+      return const PodcastLibraryState();
+    }
+  }
+
+  @override
+  Future<void> save(PodcastLibraryState state) =>
+      _atomicFileWriter.write(paths.podcastCatalog, jsonEncode(state.toJson()));
+
+  @override
+  Future<Map<String, PodcastListenProgress>> loadPlaybackProgress() async {
+    if (!await paths.podcastPlayback.exists()) return const {};
+    try {
+      final data = jsonDecode(await paths.podcastPlayback.readAsString());
+      if (data is! Map) return const {};
+      final entries = data['entries'];
+      if (entries is! List) return const {};
+      return {
+        for (final item in entries)
+          if (item is Map)
+            if (item['episode_id'] is String &&
+                (item['episode_id'] as String).isNotEmpty)
+              item['episode_id'] as String: PodcastListenProgress.fromJson(
+                item.cast<String, dynamic>(),
+              ),
+      };
+    } on Object {
+      return const {};
+    }
+  }
+
+  @override
+  Future<void> savePlaybackProgress(
+    Map<String, PodcastListenProgress> progress,
+  ) {
+    final entries = [
+      for (final entry in progress.entries)
+        {'episode_id': entry.key, ...entry.value.toJson()},
+    ];
+    return _atomicFileWriter.write(
+      paths.podcastPlayback,
+      jsonEncode({'version': 1, 'entries': entries}),
+    );
+  }
 }
 
 final _atomicFileWriter = _AtomicFileWriter();

@@ -1,4 +1,5 @@
 import 'models.dart';
+import 'podcast_models.dart';
 
 typedef ProgressCallback = void Function(double? fraction, String? detail);
 typedef CancelCheck = bool Function();
@@ -123,6 +124,34 @@ abstract interface class LibraryCatalogRepository {
 abstract interface class InboxMonitorRepository {
   Future<InboxMonitorStorage> load();
   Future<void> save(InboxMonitorStorage storage);
+}
+
+abstract interface class PodcastRepository {
+  Future<PodcastLibraryState> load();
+  Future<void> save(PodcastLibraryState state);
+  Future<Map<String, PodcastListenProgress>> loadPlaybackProgress();
+  Future<void> savePlaybackProgress(
+    Map<String, PodcastListenProgress> progress,
+  );
+}
+
+abstract interface class PodcastGateway {
+  Future<List<PodcastShowSummary>> searchShows(String query, {String country});
+  Future<List<PodcastShowSummary>> lookupShows(Iterable<String> collectionIds);
+  Future<List<PodcastShowSummary>> topShows({
+    String country,
+    int? genreId,
+    int limit,
+    bool resolveFeeds,
+  });
+  Future<PodcastFeed> fetchFeed(String feedUrl);
+  Future<void> downloadEpisode({
+    required String enclosureUrl,
+    required String destinationPath,
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  });
+  Future<String> fetchTranscript(PodcastTranscriptReference reference);
 }
 
 typedef MonitoredFileCallback =
