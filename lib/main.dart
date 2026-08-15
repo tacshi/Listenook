@@ -13,11 +13,13 @@ import 'data/local_repositories.dart';
 import 'data/local_media_source_resolver.dart';
 import 'data/openai_llm_client.dart';
 import 'data/openai_translation_service.dart';
+import 'data/podcast/http_podcast_gateway.dart';
 import 'data/process_media_service.dart';
 import 'data/soniox_api_client.dart';
 import 'data/transcript_exporter.dart';
 import 'data/update_service.dart';
 import 'state/app_controller.dart';
+import 'state/podcast_controller.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -60,6 +62,13 @@ Future<void> main(List<String> arguments) async {
   final llmCredentials = SecureLlmCredentialStore();
   final llmClient = OpenAiCompatibleLlmClient(llmCredentials);
   final media = ProcessMediaService(paths);
+  final podcastGateway = HttpPodcastGateway();
+  final podcastRepository = JsonPodcastRepository(paths);
+  final podcastController = PodcastController(
+    gateway: podcastGateway,
+    repository: podcastRepository,
+  );
+  await podcastController.initialize();
   final controller = AppController(
     credentialStore: credentials,
     settingsRepository: settingsRepository,
@@ -74,6 +83,8 @@ Future<void> main(List<String> arguments) async {
     aiBriefService: DefaultAiBriefService(llmClient),
     inboxMonitorRepository: JsonInboxMonitorRepository(paths),
     inboxFolderMonitor: LocalInboxFolderMonitor(),
+    podcastGateway: podcastGateway,
+    podcastManagedRoot: paths.root.path,
   );
   runningController = controller;
   await controller.initialize();
@@ -96,6 +107,7 @@ Future<void> main(List<String> arguments) async {
       controller: controller,
       updates: updates,
       desktopRuntime: desktopRuntime,
+      podcastController: podcastController,
     ),
   );
 }

@@ -112,6 +112,88 @@ void main() {
     );
   });
 
+  testWidgets('library sidebar tags never share a color', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final catalog = _Catalog()
+      ..value = const LibraryCatalog(
+        tags: [
+          LibraryTag(id: 'tag-meeting', name: 'meeting'),
+          LibraryTag(id: 'tag-podcast', name: 'podcast'),
+          LibraryTag(id: 'tag-shadowing', name: 'shadowing'),
+        ],
+      );
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'a',
+          batchId: 'batch',
+          sourcePath: '/a.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          tagIds: const {'tag-meeting'},
+        ),
+        TranscriptionJob(
+          id: 'b',
+          batchId: 'batch',
+          sourcePath: '/b.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          tagIds: const {'tag-podcast'},
+        ),
+        TranscriptionJob(
+          id: 'c',
+          batchId: 'batch',
+          sourcePath: '/c.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          tagIds: const {'tag-shadowing'},
+        ),
+      ]),
+      libraryCatalogRepository: catalog,
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    Color colorOf(String tagId) => tester
+        .widget<Icon>(
+          find.descendant(
+            of: find.byKey(ValueKey('library-tag-$tagId')),
+            matching: find.byIcon(Icons.sell_outlined),
+          ),
+        )
+        .color!;
+
+    final colors = {
+      colorOf('tag-meeting'),
+      colorOf('tag-podcast'),
+      colorOf('tag-shadowing'),
+    };
+    expect(colors, hasLength(3));
+  });
+
   testWidgets('Library visuals status selection has no retained focus fill', (
     tester,
   ) async {

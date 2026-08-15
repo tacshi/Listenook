@@ -370,14 +370,19 @@ class _SettingsPageState extends State<SettingsPage> {
             keys: [commandKey, '1'],
           ),
           _ShortcutDefinition(
+            id: 'podcast',
+            description: context.strings.t('podcast'),
+            keys: [commandKey, '2'],
+          ),
+          _ShortcutDefinition(
             id: 'workspace',
             description: context.strings.t('workspace'),
-            keys: [commandKey, '2'],
+            keys: [commandKey, '3'],
           ),
           _ShortcutDefinition(
             id: 'library',
             description: context.strings.t('library'),
-            keys: [commandKey, '3'],
+            keys: [commandKey, '4'],
           ),
           _ShortcutDefinition(
             id: 'settings',

@@ -634,7 +634,10 @@ class _LibraryOrganizerSidebar extends StatelessWidget {
             selected: scope == 'tag' && scopeId == tag.id,
             leading: Icon(
               Icons.sell_outlined,
-              color: _libraryTagColors(context, tag.name).foreground,
+              color: _libraryTagColors(
+                context,
+                _libraryTagColorIndex(controller.libraryTags, tag.id),
+              ).foreground,
             ),
             title: Text(tag.name, overflow: TextOverflow.ellipsis),
             trailing: Text(
@@ -857,7 +860,10 @@ class _HistoryCard extends StatelessWidget {
                           key: ValueKey('library-item-tag-${job.id}-${tag.id}'),
                           icon: Icons.sell_outlined,
                           label: tag.name,
-                          colorSeed: tag.name,
+                          colorIndex: _libraryTagColorIndex(
+                            controller.libraryTags,
+                            tag.id,
+                          ),
                         ),
                     ],
                   ),
@@ -955,18 +961,18 @@ class _LibraryOrganizerPill extends StatelessWidget {
     super.key,
     required this.icon,
     required this.label,
-    this.colorSeed,
+    this.colorIndex,
   });
 
   final IconData icon;
   final String label;
-  final String? colorSeed;
+  final int? colorIndex;
 
   @override
   Widget build(BuildContext context) {
-    final colors = colorSeed == null
+    final colors = colorIndex == null
         ? null
-        : _libraryTagColors(context, colorSeed!);
+        : _libraryTagColors(context, colorIndex!);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -1008,41 +1014,58 @@ class _LibraryTagColors {
 const _lightLibraryTagColors = [
   Color(0xFF6A1B9A),
   Color(0xFF1565C0),
-  Color(0xFF00695C),
+  Color(0xFF00838F),
   Color(0xFF2E7D32),
-  Color(0xFF8D5B00),
+  Color(0xFFF9A825),
   Color(0xFFC62828),
   Color(0xFFAD1457),
   Color(0xFF4527A0),
-  Color(0xFF006064),
+  Color(0xFFEF6C00),
   Color(0xFF4E342E),
-  Color(0xFF455A64),
-  Color(0xFF9C3D10),
+  Color(0xFF37474F),
+  Color(0xFF0277BD),
 ];
 
 const _darkLibraryTagColors = [
   Color(0xFFCE93D8),
   Color(0xFF90CAF9),
-  Color(0xFF80CBC4),
+  Color(0xFF4DD0E1),
   Color(0xFFA5D6A7),
   Color(0xFFFFD54F),
   Color(0xFFEF9A9A),
   Color(0xFFF48FB1),
   Color(0xFFB39DDB),
-  Color(0xFF80DEEA),
+  Color(0xFFFFB74D),
   Color(0xFFBCAAA4),
   Color(0xFFB0BEC5),
-  Color(0xFFFFAB91),
+  Color(0xFF4FC3F7),
 ];
 
-_LibraryTagColors _libraryTagColors(BuildContext context, String name) {
-  var hash = 0;
-  for (final rune in name.trim().toLowerCase().runes) {
-    hash = ((hash * 31) + rune) & 0x7fffffff;
-  }
+int _libraryTagColorIndex(List<LibraryTag> tags, String tagId) {
+  final index = tags.indexWhere((tag) => tag.id == tagId);
+  return index < 0 ? 0 : index;
+}
+
+Color _libraryTagForeground(Brightness brightness, int index) {
+  final palette = brightness == Brightness.dark
+      ? _darkLibraryTagColors
+      : _lightLibraryTagColors;
+  if (index >= 0 && index < palette.length) return palette[index];
+  final hue = ((index < 0 ? 0 : index) * 137.508) % 360;
+  return HSLColor.fromAHSL(
+    1,
+    hue,
+    brightness == Brightness.dark ? 0.42 : 0.58,
+    brightness == Brightness.dark ? 0.76 : 0.36,
+  ).toColor();
+}
+
+_LibraryTagColors _libraryTagColors(BuildContext context, int index) {
   final isDark = Theme.of(context).brightness == Brightness.dark;
-  final palette = isDark ? _darkLibraryTagColors : _lightLibraryTagColors;
-  final foreground = palette[hash % palette.length];
+  final foreground = _libraryTagForeground(
+    isDark ? Brightness.dark : Brightness.light,
+    index,
+  );
   return _LibraryTagColors(
     foreground: foreground,
     background: foreground.withValues(alpha: isDark ? 0.20 : 0.10),
@@ -1256,7 +1279,10 @@ class _ManageTagsDialogState extends State<_ManageTagsDialog> {
                 for (final name in _newTagNames)
                   Builder(
                     builder: (context) {
-                      final colors = _libraryTagColors(context, name);
+                      final colors = _libraryTagColors(
+                        context,
+                        widget.tags.length + _newTagNames.indexOf(name),
+                      );
                       return InputChip(
                         key: ValueKey('new-library-tag-$name'),
                         avatar: Icon(
@@ -1293,11 +1319,14 @@ class _ManageTagsDialogState extends State<_ManageTagsDialog> {
                       title: Text(tag.name),
                       activeColor: _libraryTagColors(
                         context,
-                        tag.name,
+                        _libraryTagColorIndex(widget.tags, tag.id),
                       ).foreground,
                       secondary: Icon(
                         Icons.sell_outlined,
-                        color: _libraryTagColors(context, tag.name).foreground,
+                        color: _libraryTagColors(
+                          context,
+                          _libraryTagColorIndex(widget.tags, tag.id),
+                        ).foreground,
                       ),
                       onChanged: (_) => setState(() {
                         _values[tag.id] = _values[tag.id] == true

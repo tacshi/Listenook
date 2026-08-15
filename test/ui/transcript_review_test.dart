@@ -6,13 +6,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/core/podcast_models.dart';
+import 'package:meow_stt/data/podcast/http_podcast_gateway.dart';
 import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
 import 'package:meow_stt/l10n/strings.dart';
 import 'package:meow_stt/state/app_controller.dart';
+import 'package:meow_stt/state/podcast_controller.dart';
+import 'package:meow_stt/state/podcast_player.dart';
 import 'package:meow_stt/ui/app_shell.dart';
 import 'package:meow_stt/ui/inbox_page.dart';
 import 'package:meow_stt/ui/library_page.dart';
@@ -23,6 +29,40 @@ import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
+  testWidgets(
+    'podcast arrow shortcuts seek backward and forward five seconds',
+    (tester) async {
+      final player = _ShortcutPodcastPlayer();
+      addTearDown(player.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PodcastPlaybackShortcuts(
+            player: player,
+            child: const Focus(
+              autofocus: true,
+              child: SizedBox(key: Key('shortcut-target')),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+
+      expect(player.offsets, const [
+        Duration(seconds: -5),
+        Duration(seconds: 5),
+      ]);
+
+      player.active = false;
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(player.offsets, hasLength(2));
+    },
+  );
+
   test('wide video viewport derives its height from the available width', () {
     expect(
       videoViewportHeight(
@@ -781,7 +821,9 @@ void main() {
         find.byKey(const Key('focus-current-sentence')),
       );
       final more = tester.getRect(find.byKey(const Key('review-toolbar-more')));
-      expect(dropdown.left, closeTo(toolbarRect.left, 0.1));
+      final filename = tester.getRect(find.byKey(const Key('review-filename')));
+      expect(filename.left, closeTo(toolbarRect.left, 0.1));
+      expect(dropdown.left, greaterThan(filename.left));
       expect(focus.left - dropdown.right, greaterThan(16));
       expect(more.right, closeTo(toolbarRect.right, 0.1));
       expect(tester.takeException(), isNull);
@@ -1135,7 +1177,7 @@ void main() {
     final paneHeaderRect = tester.getRect(
       find.byKey(const Key('transcript-pane-header')),
     );
-    expect(find.byKey(const Key('review-filename')), findsOneWidget);
+    expect(find.byKey(const Key('review-filename')), findsNothing);
     expect(tester.getRect(search).left, greaterThan(paneHeaderRect.left));
     expect(
       tester.getRect(search).right,
@@ -1865,10 +1907,32 @@ void main() {
     await tester.pumpAndSettle();
 
     final filenameFinder = find.byKey(const Key('review-filename'));
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('transcript-pane-header')),
+        matching: filenameFinder,
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('review-header')),
+        matching: filenameFinder,
+      ),
+      findsNothing,
+    );
     final filename = tester.widget<Text>(filenameFinder);
     expect(filename.data, fileName);
     expect(filename.maxLines, 1);
     expect(filename.overflow, TextOverflow.ellipsis);
+    expect(
+      tester
+          .widget<Tooltip>(
+            find.ancestor(of: filenameFinder, matching: find.byType(Tooltip)),
+          )
+          .message,
+      fileName,
+    );
     expect(
       (tester.renderObject(filenameFinder) as RenderParagraph)
           .didExceedMaxLines,
@@ -2439,9 +2503,7 @@ void main() {
     expect(_backgroundTexts(tester), isEmpty);
   });
 
-  testWidgets('current sentences use a soft fill without adding a border', (
-    tester,
-  ) async {
+  testWidgets('current sentences keep a bar without a fill', (tester) async {
     for (final brightness in Brightness.values) {
       final theme = ThemeData(
         brightness: brightness,
@@ -2487,7 +2549,7 @@ void main() {
       );
       final decoration = card.decoration as BoxDecoration;
       expect(decoration.border, isNull);
-      expect(decoration.color, isNotNull);
+      expect(decoration.color, isNull);
       expect(_backgroundTexts(tester), ['Themed']);
     }
   });
@@ -3017,8 +3079,9 @@ void main() {
       tooltipMessages,
       containsAll([
         'Inbox (⌘1)',
-        'Workspace (⌘2)',
-        'Library (⌘3)',
+        'Podcast (⌘2)',
+        'Workspace (⌘3)',
+        'Library (⌘4)',
         'Settings (⌘,)',
       ]),
     );
@@ -3028,7 +3091,7 @@ void main() {
     );
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-    await tester.sendKeyEvent(LogicalKeyboardKey.digit3);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit4);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.library);
@@ -3075,6 +3138,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.inbox);
 
+    controller.setDestination(AppDestination.library);
+    await tester.pumpAndSettle();
+    await messenger.handlePlatformMessage(
+      'app.meowstt.desktop/navigation',
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('showWindow'),
+      ),
+      null,
+    );
+    await tester.pumpAndSettle();
+    expect(controller.destination, AppDestination.library);
+
     await tester.tap(settingsNavigation);
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.settings);
@@ -3111,7 +3186,7 @@ void main() {
       tester.getCenter(find.byIcon(Icons.space_dashboard_outlined)),
     );
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Workspace (⌘2)'), findsOneWidget);
+    expect(find.text('Workspace (⌘3)'), findsOneWidget);
     await mouse.moveTo(tester.getCenter(sidebarToggle));
     await tester.pump(const Duration(seconds: 1));
     expect(find.text('Hide sidebar (⌘B)'), findsOneWidget);
@@ -3240,6 +3315,16 @@ void main() {
       );
       await controller.setDesktopTrayIconVisible(false);
       final reviewController = ReviewFullscreenController();
+      final podcastRepository = _PlaybackFlushRepository(events);
+      final podcastPlayer = PodcastPlayer(repository: podcastRepository);
+      final podcastController = PodcastController(
+        gateway: MemoryPodcastGateway(),
+        repository: podcastRepository,
+        player: podcastPlayer,
+      );
+      addTearDown(podcastPlayer.dispose);
+      addTearDown(podcastController.dispose);
+      await podcastController.initialize();
       final mediaReleased = Completer<void>();
       final mediaOwner = Object();
       reviewController.registerMediaShutdown(mediaOwner, () async {
@@ -3249,8 +3334,11 @@ void main() {
       });
 
       await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: controller,
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: controller),
+            ChangeNotifierProvider.value(value: podcastController),
+          ],
           child: MaterialApp(
             locale: const Locale('en'),
             supportedLocales: AppStrings.supportedLocales,
@@ -3270,92 +3358,107 @@ void main() {
 
       mediaReleased.complete();
       await close;
-      expect(events, ['media-start', 'media-done', 'prevent:false', 'close']);
+      expect(events, [
+        'media-start',
+        'media-done',
+        'podcast-save',
+        'prevent:false',
+        'close',
+      ]);
 
       await appShellState.onWindowClose();
-      expect(events, ['media-start', 'media-done', 'prevent:false', 'close']);
+      expect(events, [
+        'media-start',
+        'media-done',
+        'podcast-save',
+        'prevent:false',
+        'close',
+      ]);
     },
   );
 
-  testWidgets('menu bar item and close-to-menu-bar work without an Inbox folder', (
-    tester,
-  ) async {
-    const windowChannel = MethodChannel('window_manager');
-    const trayChannel = MethodChannel('tray_manager');
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    final events = <String>[];
-    messenger.setMockMethodCallHandler(windowChannel, (call) async {
-      if (call.method == 'isFullScreen') return false;
-      if (call.method == 'isVisible') return true;
-      if (call.method == 'setPreventClose') {
-        final arguments = call.arguments as Map<Object?, Object?>;
-        events.add('prevent:${arguments['isPreventClose']}');
-      }
-      if (call.method == 'setSkipTaskbar') events.add('skip-taskbar');
-      if (call.method == 'hide') events.add('hide');
-      if (call.method == 'close') events.add('close');
-      return null;
-    });
-    messenger.setMockMethodCallHandler(trayChannel, (call) async {
-      events.add('tray:${call.method}');
-      return null;
-    });
-    addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
-    addTearDown(() => messenger.setMockMethodCallHandler(trayChannel, null));
-    final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([]),
-      mediaService: _Media(),
-      sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
-      exporter: const DefaultTranscriptExporter(),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    await controller.updateSettings(
-      controller.settings.copyWith(onboardingComplete: true),
-    );
-    await controller.setDesktopTrayIconVisible(false);
-    expect(controller.inboxMonitorConfigured, isFalse);
-    expect(controller.inboxMonitorConfig.showTrayIcon, isFalse);
+  testWidgets(
+    'menu bar item and close-to-menu-bar work without an Inbox folder',
+    (tester) async {
+      const windowChannel = MethodChannel('window_manager');
+      const trayChannel = MethodChannel('tray_manager');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final events = <String>[];
+      messenger.setMockMethodCallHandler(windowChannel, (call) async {
+        if (call.method == 'isFullScreen') return false;
+        if (call.method == 'isVisible') return true;
+        if (call.method == 'setPreventClose') {
+          final arguments = call.arguments as Map<Object?, Object?>;
+          events.add('prevent:${arguments['isPreventClose']}');
+        }
+        if (call.method == 'setSkipTaskbar') events.add('skip-taskbar');
+        if (call.method == 'hide') events.add('hide');
+        if (call.method == 'close') events.add('close');
+        return null;
+      });
+      messenger.setMockMethodCallHandler(trayChannel, (call) async {
+        events.add('tray:${call.method}');
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(windowChannel, null),
+      );
+      addTearDown(() => messenger.setMockMethodCallHandler(trayChannel, null));
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: _Settings(),
+        jobRepository: _Jobs([]),
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.updateSettings(
+        controller.settings.copyWith(onboardingComplete: true),
+      );
+      await controller.setDesktopTrayIconVisible(false);
+      expect(controller.inboxMonitorConfigured, isFalse);
+      expect(controller.inboxMonitorConfig.showTrayIcon, isFalse);
 
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: const MaterialApp(
-          locale: Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [AppStrings.delegate],
-          home: AppShell(),
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: AppShell(),
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(events, isNot(contains('tray:setIcon')));
+      );
+      await tester.pumpAndSettle();
+      expect(events, isNot(contains('tray:setIcon')));
 
-    await controller.setDesktopTrayIconVisible(true);
-    await tester.pump(const Duration(milliseconds: 200));
-    await tester.pumpAndSettle();
-    expect(events, contains('tray:setIcon'));
-    events.clear();
+      await controller.setDesktopTrayIconVisible(true);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(events, contains('tray:setIcon'));
+      events.clear();
 
-    final dynamic appShellState = tester.state(find.byType(AppShell));
-    await appShellState.onWindowClose();
+      final dynamic appShellState = tester.state(find.byType(AppShell));
+      await appShellState.onWindowClose();
 
-    expect(events, containsAllInOrder(['skip-taskbar', 'hide']));
-    expect(events, isNot(contains('close')));
-    expect(events, isNot(contains('prevent:false')));
+      expect(events, containsAllInOrder(['skip-taskbar', 'hide']));
+      expect(events, isNot(contains('close')));
+      expect(events, isNot(contains('prevent:false')));
 
-    events.clear();
-    await controller.setDesktopTrayIconVisible(false);
-    await tester.pump();
-    await appShellState.onWindowClose();
+      events.clear();
+      await controller.setDesktopTrayIconVisible(false);
+      await tester.pump();
+      await appShellState.onWindowClose();
 
-    expect(events, containsAllInOrder(['prevent:false', 'close']));
-    expect(events, isNot(contains('hide')));
-  });
+      expect(events, containsAllInOrder(['prevent:false', 'close']));
+      expect(events, isNot(contains('hide')));
+    },
+  );
 
   testWidgets('playback position is restored after switching app tabs', (
     tester,
@@ -3546,6 +3649,50 @@ void main() {
 
     await tester.tap(find.byKey(const Key('workspace-go-to-library')));
     expect(controller.destination, AppDestination.library);
+  });
+
+  testWidgets('workspace shows podcast provenance and episode link', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      sourceOrigin: JobSourceOrigin.podcast,
+      podcastProvenance: const PodcastEpisodeProvenance(
+        feedUrl: 'https://feeds.example/show',
+        episodeId: 'https://feeds.example/show\nguid-1',
+        enclosureUrl: 'https://cdn.example/one.mp3',
+        showTitle: 'Study English',
+        episodeTitle: 'Episode One',
+        episodeUrl: 'https://example.com/episodes/one',
+      ),
+      transcriptAcquisitionMode: TranscriptAcquisitionMode.publisherCaptions,
+      transcriptSource: TranscriptSource.publisher,
+    );
+    addTearDown(controller.dispose);
+    controller.openInWorkspace('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: WorkspacePage()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('podcast-workspace-provenance')),
+      findsOneWidget,
+    );
+    expect(find.text('Official captions · sentence-level'), findsOneWidget);
+    expect(
+      find.byKey(const Key('podcast-workspace-open-episode')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('inbox keeps completed batches visible until explicitly opened', (
@@ -3777,11 +3924,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 160));
     await tester.pumpAndSettle();
     expect(media.waveformRequests, 1);
-    expect(
-      find.byKey(const ValueKey('video-audio-mode-audio')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const Key('audio-review-layout')), findsOneWidget);
+    expect(find.byKey(const Key('audio-review-companion')), findsOneWidget);
+    expect(find.byKey(const Key('audio-review-media')), findsOneWidget);
     expect(find.byKey(const Key('video-review-split')), findsNothing);
     expect(find.byKey(const Key('video-audio-mode-switcher')), findsNothing);
     expect(find.byIcon(Icons.videocam_rounded), findsOneWidget);
@@ -3859,10 +4003,7 @@ void main() {
     const toggleKey = Key('video-audio-mode-toggle');
     await tester.tap(find.byKey(toggleKey));
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('video-audio-mode-audio')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const Key('audio-review-companion')), findsOneWidget);
 
     controller.openInWorkspace('second');
     await tester.pumpAndSettle();
@@ -4770,7 +4911,7 @@ void main() {
     );
     final decoration = currentCard.decoration as BoxDecoration;
     expect(decoration.border, isNull);
-    expect(decoration.color, isNotNull);
+    expect(decoration.color, isNull);
   });
 
   testWidgets('focus keeps an already visible current sentence in place', (
@@ -5490,7 +5631,7 @@ void main() {
     final sourcePane = find.byKey(const Key('ai-brief-companion-source-pane'));
     final briefPane = find.byKey(const Key('ai-brief-companion-brief-pane'));
     final divider = find.byKey(const Key('ai-brief-companion-divider'));
-    expect(find.byKey(const Key('audio-ai-brief-companion')), findsOneWidget);
+    expect(find.byKey(const Key('audio-review-companion')), findsOneWidget);
     expect(find.byKey(const Key('video-ai-brief-companion')), findsNothing);
     expect(find.byKey(const Key('transcript-pane-header')), findsOneWidget);
     expect(find.byKey(const Key('ai-brief-pane-header')), findsOneWidget);
@@ -5501,7 +5642,7 @@ void main() {
       closeTo(tester.getSize(briefPane).width, 1),
     );
     expect(
-      tester.getRect(find.byKey(const Key('audio-ai-brief-media'))).bottom,
+      tester.getRect(find.byKey(const Key('audio-review-media'))).bottom,
       lessThanOrEqualTo(tester.getRect(sourcePane).top),
     );
 
@@ -5556,7 +5697,7 @@ void main() {
     final sourcePane = find.byKey(const Key('ai-brief-companion-source-pane'));
     final briefPane = find.byKey(const Key('ai-brief-companion-brief-pane'));
     expect(companion, findsOneWidget);
-    expect(find.byKey(const Key('audio-ai-brief-companion')), findsNothing);
+    expect(find.byKey(const Key('audio-review-companion')), findsNothing);
     expect(
       tester.getSize(sourcePane).width,
       closeTo(tester.getSize(briefPane).width, 1),
@@ -5584,10 +5725,110 @@ void main() {
 
     await tester.tap(find.byKey(const Key('video-audio-mode-toggle')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('audio-ai-brief-companion')), findsOneWidget);
+    expect(find.byKey(const Key('audio-review-companion')), findsOneWidget);
     expect(find.byKey(const Key('video-ai-brief-companion')), findsNothing);
     expect(find.byKey(const Key('ai-brief-scroll')), findsOneWidget);
     expect(find.byKey(const Key('transcript-scroll')), findsOneWidget);
+  });
+
+  testWidgets('scrolling the AI Brief transcript keeps the video mounted', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-review-video-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/clip.mp4');
+    await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+    debugTranscriptReviewPlayerFactory = () =>
+        Player(platformPlayer: _ReviewFakePlatformPlayer());
+    addTearDown(() => debugTranscriptReviewPlayerFactory = null);
+    final originalDebugPrint = debugPrint;
+    debugPrint = (message, {wrapWidth}) {};
+    final now = DateTime.now().toUtc();
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: [
+        for (var i = 0; i < 40; i++)
+          TranscriptSegment(
+            id: 's$i',
+            startMs: i * 1000,
+            endMs: i * 1000 + 900,
+            text: 'Sentence $i for scrolling the companion transcript.',
+          ),
+      ],
+      speakers: const [],
+      updatedAt: now,
+    );
+    final controller = await _controllerForDocument(
+      document,
+      metadata: _videoMetadata,
+      sourcePath: source.path,
+      aiBrief: _overviewBrief(document, overview: 'Video overview'),
+    );
+    addTearDown(controller.dispose);
+
+    try {
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: TranscriptReview(jobId: 'job')),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+      await tester.tap(_reviewTab('AI Brief'));
+      await tester.pump();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+
+      final media = find.byKey(const Key('video-ai-brief-media'));
+      final video = find.descendant(of: media, matching: find.byType(Video));
+      expect(find.byKey(const Key('video-ai-brief-companion')), findsOneWidget);
+      expect(media, findsOneWidget);
+      expect(find.byKey(const Key('video-viewport')), findsOneWidget);
+      expect(video, findsOneWidget);
+      final videoElement = tester.element(video);
+      expect(
+        find.descendant(
+          of: media,
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsNothing,
+      );
+
+      await tester.drag(
+        find.byKey(const Key('transcript-scroll')),
+        const Offset(0, -240),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.byKey(const Key('video-ai-brief-companion')), findsOneWidget);
+      expect(find.byType(Video), findsOneWidget);
+      expect(tester.element(video), same(videoElement));
+      expect(
+        find.descendant(
+          of: media,
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    } finally {
+      debugPrint = originalDebugPrint;
+    }
   });
 
   testWidgets('wide AI Brief transcript pane keeps display toggles visible', (
@@ -5719,7 +5960,11 @@ void main() {
 
     selectedJob.value = 'second';
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('ai-brief-companion-split')), findsNothing);
+    expect(find.byKey(const Key('ai-brief-companion-split')), findsOneWidget);
+    expect(
+      find.byKey(const Key('ai-brief-companion-brief-pane')),
+      findsNothing,
+    );
     await tester.tap(_reviewTab('AI Brief'));
     await tester.pumpAndSettle();
     expect(
@@ -5728,6 +5973,48 @@ void main() {
     );
     expect(find.text('second overview'), findsOneWidget);
   });
+}
+
+class _ShortcutPodcastPlayer extends PodcastPlayer {
+  final offsets = <Duration>[];
+  bool active = true;
+
+  @override
+  bool get hasSession => active;
+
+  @override
+  Future<void> skip(Duration delta) async => offsets.add(delta);
+}
+
+class _PlaybackFlushRepository implements PodcastRepository {
+  _PlaybackFlushRepository(this.events);
+
+  final List<String> events;
+  Map<String, PodcastListenProgress> progress = {
+    'episode': PodcastListenProgress(
+      positionMs: 185000,
+      durationMs: 1920000,
+      updatedAt: DateTime.utc(2026),
+    ),
+  };
+
+  @override
+  Future<PodcastLibraryState> load() async => const PodcastLibraryState();
+
+  @override
+  Future<void> save(PodcastLibraryState state) async {}
+
+  @override
+  Future<Map<String, PodcastListenProgress>> loadPlaybackProgress() async =>
+      Map.of(progress);
+
+  @override
+  Future<void> savePlaybackProgress(
+    Map<String, PodcastListenProgress> progress,
+  ) async {
+    events.add('podcast-save');
+    this.progress = Map.of(progress);
+  }
 }
 
 Iterable<TextSpan> _descendantSpans(TextSpan root) sync* {
@@ -5890,6 +6177,11 @@ Future<AppController> _controllerForDocument(
   AiBriefService? aiBriefService,
   AiBrief? aiBrief,
   AiGenerationState aiGenerationState = const AiGenerationState(),
+  JobSourceOrigin sourceOrigin = JobSourceOrigin.manual,
+  PodcastEpisodeProvenance? podcastProvenance,
+  TranscriptAcquisitionMode transcriptAcquisitionMode =
+      TranscriptAcquisitionMode.soniox,
+  TranscriptSource? transcriptSource,
 }) async {
   final now = DateTime.now().toUtc();
   final controller = AppController(
@@ -5908,6 +6200,10 @@ Future<AppController> _controllerForDocument(
         translationState: translationState,
         aiBrief: aiBrief,
         aiGenerationState: aiGenerationState,
+        sourceOrigin: sourceOrigin,
+        podcastProvenance: podcastProvenance,
+        transcriptAcquisitionMode: transcriptAcquisitionMode,
+        transcriptSource: transcriptSource,
       ),
     ]),
     mediaService: mediaService ?? _Media(),
@@ -6053,6 +6349,31 @@ Future<AppController> _pumpSpeakerStrip(WidgetTester tester) async {
     ),
   );
   return controller;
+}
+
+class _ReviewFakePlatformPlayer extends PlatformPlayer {
+  _ReviewFakePlatformPlayer()
+    : super(configuration: const PlayerConfiguration()) {
+    completer.complete();
+  }
+
+  @override
+  Future<int> get handle async => 0;
+
+  @override
+  Future<void> open(Playable playable, {bool play = true}) async {}
+
+  @override
+  Future<void> play() async {}
+
+  @override
+  Future<void> pause() async {}
+
+  @override
+  Future<void> playOrPause() async {}
+
+  @override
+  Future<void> seek(Duration duration) async {}
 }
 
 class _Credentials implements CredentialStore {

@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 6;
+const int manifestVersion = 7;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 const Set<String> supportedMonitoredMediaExtensions = {
@@ -17,6 +17,7 @@ enum JobStatus {
   pending,
   probing,
   ready,
+  downloading,
   converting,
   uploading,
   queuedRemote,
@@ -33,6 +34,7 @@ enum JobStatus {
 extension JobStatusX on JobStatus {
   bool get isActive => switch (this) {
     JobStatus.probing ||
+    JobStatus.downloading ||
     JobStatus.converting ||
     JobStatus.uploading ||
     JobStatus.queuedRemote ||
@@ -185,7 +187,160 @@ enum AppLocaleMode { system, english, simplifiedChinese }
 
 enum CleanupState { none, pending, complete }
 
-enum JobSourceOrigin { manual, monitoredFolder }
+enum JobSourceOrigin { manual, monitoredFolder, podcast }
+
+enum TranscriptAcquisitionMode { soniox, publisherCaptions }
+
+extension TranscriptAcquisitionModeX on TranscriptAcquisitionMode {
+  bool get usesPublisherTranscript =>
+      this == TranscriptAcquisitionMode.publisherCaptions;
+}
+
+enum TranscriptSource { soniox, publisher }
+
+enum PodcastTranscriptTiming { none, cue, word }
+
+class PodcastTranscriptReference {
+  const PodcastTranscriptReference({
+    required this.url,
+    this.type,
+    this.language,
+    this.rel,
+  });
+
+  final String url;
+  final String? type;
+  final String? language;
+  final String? rel;
+
+  Map<String, dynamic> toJson() => {
+    'url': url,
+    if (type case final value?) 'type': value,
+    if (language case final value?) 'language': value,
+    if (rel case final value?) 'rel': value,
+  };
+
+  factory PodcastTranscriptReference.fromJson(Map<String, dynamic> json) =>
+      PodcastTranscriptReference(
+        url: json['url'] as String? ?? '',
+        type: json['type'] as String?,
+        language: json['language'] as String?,
+        rel: json['rel'] as String?,
+      );
+}
+
+class PodcastEpisodeProvenance {
+  const PodcastEpisodeProvenance({
+    required this.feedUrl,
+    required this.episodeId,
+    required this.enclosureUrl,
+    required this.showTitle,
+    required this.episodeTitle,
+    this.guid,
+    this.author,
+    this.artworkUrl,
+    this.showUrl,
+    this.publishedAt,
+    this.language,
+    this.description,
+    this.episodeUrl,
+    this.transcripts = const [],
+    this.transcriptTiming = PodcastTranscriptTiming.none,
+  });
+
+  final String feedUrl;
+  final String episodeId;
+  final String enclosureUrl;
+  final String showTitle;
+  final String episodeTitle;
+  final String? guid;
+  final String? author;
+  final String? artworkUrl;
+  final String? showUrl;
+  final DateTime? publishedAt;
+  final String? language;
+  final String? description;
+  final String? episodeUrl;
+  final List<PodcastTranscriptReference> transcripts;
+  final PodcastTranscriptTiming transcriptTiming;
+
+  String get displayName {
+    final show = showTitle.trim();
+    final episode = episodeTitle.trim();
+    if (show.isEmpty) return episode;
+    if (episode.isEmpty) return show;
+    return '$show · $episode';
+  }
+
+  Map<String, dynamic> toJson() => {
+    'feed_url': feedUrl,
+    'episode_id': episodeId,
+    'enclosure_url': enclosureUrl,
+    'show_title': showTitle,
+    'episode_title': episodeTitle,
+    if (guid case final value?) 'guid': value,
+    if (author case final value?) 'author': value,
+    if (artworkUrl case final value?) 'artwork_url': value,
+    if (showUrl case final value?) 'show_url': value,
+    if (publishedAt case final value?)
+      'published_at': value.toUtc().toIso8601String(),
+    if (language case final value?) 'language': value,
+    if (description case final value?) 'description': value,
+    if (episodeUrl case final value?) 'episode_url': value,
+    if (transcripts.isNotEmpty)
+      'transcripts': transcripts.map((item) => item.toJson()).toList(),
+    'transcript_timing': transcriptTiming.name,
+  };
+
+  factory PodcastEpisodeProvenance.fromJson(Map<String, dynamic> json) =>
+      PodcastEpisodeProvenance(
+        feedUrl: json['feed_url'] as String? ?? '',
+        episodeId: json['episode_id'] as String? ?? '',
+        enclosureUrl: json['enclosure_url'] as String? ?? '',
+        showTitle: json['show_title'] as String? ?? '',
+        episodeTitle: json['episode_title'] as String? ?? '',
+        guid: json['guid'] as String?,
+        author: json['author'] as String?,
+        artworkUrl: json['artwork_url'] as String?,
+        showUrl: json['show_url'] as String?,
+        publishedAt: _date(json['published_at']),
+        language: json['language'] as String?,
+        description: json['description'] as String?,
+        episodeUrl: json['episode_url'] as String?,
+        transcripts: _mapList(
+          json['transcripts'],
+          PodcastTranscriptReference.fromJson,
+        ),
+        transcriptTiming:
+            _enumByName(
+              PodcastTranscriptTiming.values,
+              json['transcript_timing'],
+            ) ??
+            PodcastTranscriptTiming.none,
+      );
+
+  PodcastEpisodeProvenance copyWith({
+    PodcastTranscriptTiming? transcriptTiming,
+    String? description,
+    String? episodeUrl,
+  }) => PodcastEpisodeProvenance(
+    feedUrl: feedUrl,
+    episodeId: episodeId,
+    enclosureUrl: enclosureUrl,
+    showTitle: showTitle,
+    episodeTitle: episodeTitle,
+    guid: guid,
+    author: author,
+    artworkUrl: artworkUrl,
+    showUrl: showUrl,
+    publishedAt: publishedAt,
+    language: language,
+    description: description ?? this.description,
+    episodeUrl: episodeUrl ?? this.episodeUrl,
+    transcripts: transcripts,
+    transcriptTiming: transcriptTiming ?? this.transcriptTiming,
+  );
+}
 
 enum InboxMonitorStatus {
   unconfigured,
@@ -1721,6 +1876,9 @@ class TranscriptionJob {
     this.tagIds = const {},
     this.sourceOrigin = JobSourceOrigin.manual,
     this.sourceFingerprint,
+    this.podcastProvenance,
+    this.transcriptAcquisitionMode = TranscriptAcquisitionMode.soniox,
+    this.transcriptSource,
   });
 
   final String id;
@@ -1748,6 +1906,9 @@ class TranscriptionJob {
   final Set<String> tagIds;
   final JobSourceOrigin sourceOrigin;
   final SourceFingerprint? sourceFingerprint;
+  final PodcastEpisodeProvenance? podcastProvenance;
+  final TranscriptAcquisitionMode transcriptAcquisitionMode;
+  final TranscriptSource? transcriptSource;
 
   bool get isBusy =>
       status.isActive ||
@@ -1782,6 +1943,9 @@ class TranscriptionJob {
     Set<String>? tagIds,
     JobSourceOrigin? sourceOrigin,
     SourceFingerprint? sourceFingerprint,
+    PodcastEpisodeProvenance? podcastProvenance,
+    TranscriptAcquisitionMode? transcriptAcquisitionMode,
+    TranscriptSource? transcriptSource,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
@@ -1816,6 +1980,10 @@ class TranscriptionJob {
     tagIds: tagIds ?? this.tagIds,
     sourceOrigin: sourceOrigin ?? this.sourceOrigin,
     sourceFingerprint: sourceFingerprint ?? this.sourceFingerprint,
+    podcastProvenance: podcastProvenance ?? this.podcastProvenance,
+    transcriptAcquisitionMode:
+        transcriptAcquisitionMode ?? this.transcriptAcquisitionMode,
+    transcriptSource: transcriptSource ?? this.transcriptSource,
   );
 
   Map<String, dynamic> toJson() => {
@@ -1847,6 +2015,10 @@ class TranscriptionJob {
     'source_origin': sourceOrigin.name,
     if (sourceFingerprint case final value?)
       'source_fingerprint': value.toJson(),
+    if (podcastProvenance case final value?)
+      'podcast_provenance': value.toJson(),
+    'transcript_acquisition_mode': transcriptAcquisitionMode.name,
+    if (transcriptSource case final value?) 'transcript_source': value.name,
   };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -1916,6 +2088,18 @@ class TranscriptionJob {
               (json['source_fingerprint'] as Map).cast<String, dynamic>(),
             )
           : null,
+      podcastProvenance: json['podcast_provenance'] is Map
+          ? PodcastEpisodeProvenance.fromJson(
+              (json['podcast_provenance'] as Map).cast<String, dynamic>(),
+            )
+          : null,
+      transcriptAcquisitionMode: _transcriptAcquisitionModeFromJson(
+        json['transcript_acquisition_mode'],
+      ),
+      transcriptSource: _enumByName(
+        TranscriptSource.values,
+        json['transcript_source'],
+      ),
     );
   }
 }
@@ -1972,6 +2156,14 @@ T? _enumByName<T extends Enum>(List<T> values, dynamic name) {
     if (value.name == name) return value;
   }
   return null;
+}
+
+TranscriptAcquisitionMode _transcriptAcquisitionModeFromJson(dynamic name) {
+  if (name == 'publisherWordTimed') {
+    return TranscriptAcquisitionMode.publisherCaptions;
+  }
+  return _enumByName(TranscriptAcquisitionMode.values, name) ??
+      TranscriptAcquisitionMode.soniox;
 }
 
 extension _FirstOrNull<T> on Iterable<T> {

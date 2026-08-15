@@ -7,6 +7,7 @@ import 'data/desktop_runtime.dart';
 import 'data/update_service.dart';
 import 'l10n/strings.dart';
 import 'state/app_controller.dart';
+import 'state/podcast_controller.dart';
 import 'theme.dart';
 import 'ui/app_shell.dart';
 
@@ -16,10 +17,12 @@ class MeowSttApp extends StatelessWidget {
     required this.controller,
     required this.updates,
     required this.desktopRuntime,
+    this.podcastController,
   });
   final AppController controller;
   final UpdateService updates;
   final DesktopRuntime desktopRuntime;
+  final PodcastController? podcastController;
 
   @override
   Widget build(BuildContext context) => MultiProvider(
@@ -27,6 +30,8 @@ class MeowSttApp extends StatelessWidget {
       ChangeNotifierProvider.value(value: controller),
       ChangeNotifierProvider.value(value: updates),
       Provider.value(value: desktopRuntime),
+      if (podcastController != null)
+        ChangeNotifierProvider.value(value: podcastController!),
     ],
     child: Consumer<AppController>(
       builder: (context, state, _) => MaterialApp(

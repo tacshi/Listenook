@@ -253,12 +253,7 @@ class _InboxActions extends StatelessWidget {
         ),
         FilledButton.icon(
           key: const Key('header-transcribe'),
-          onPressed:
-              controller.readyCount > 0 &&
-                  controller.keyConfigured &&
-                  !controller.processing
-              ? controller.startReady
-              : null,
+          onPressed: controller.canStartReady ? controller.startReady : null,
           icon: controller.processing
               ? const SizedBox.square(
                   dimension: 18,
@@ -493,20 +488,17 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          _ReviewLine(
-            icon: controller.keyConfigured
-                ? Icons.key_rounded
-                : Icons.key_off_rounded,
-            title: context.strings.t('soniox_key'),
-            value: controller.keyConfigured
-                ? context.strings.t('key_configured')
-                : context.strings.t('key_missing'),
-            action: controller.keyConfigured
-                ? null
-                : () => controller.setDestination(AppDestination.settings),
-          ),
-          const Divider(height: 20),
+          if (!controller.keyConfigured) ...[
+            const SizedBox(height: 12),
+            _ReviewLine(
+              icon: Icons.key_off_rounded,
+              title: context.strings.t('soniox_key'),
+              value: context.strings.t('key_missing'),
+              action: () => controller.setDestination(AppDestination.settings),
+            ),
+            const Divider(height: 20),
+          ] else
+            const SizedBox(height: 12),
           _LanguageHintsPicker(
             selectedCodes: controller.sessionOptions.languageHints,
             onChanged: (languageHints) => controller.updateSessionOptions(
@@ -928,6 +920,18 @@ class _JobTile extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                       ),
+                      if (job.sourceOrigin == JobSourceOrigin.podcast) ...[
+                        const SizedBox(width: 6),
+                        Tooltip(
+                          message: context.strings.t('podcast_source'),
+                          child: Icon(
+                            Icons.podcasts_rounded,
+                            key: ValueKey('podcast-source-${job.id}'),
+                            size: 16,
+                            color: color.primary,
+                          ),
+                        ),
+                      ],
                       if (job.sourceOrigin ==
                           JobSourceOrigin.monitoredFolder) ...[
                         const SizedBox(width: 6),
@@ -954,6 +958,37 @@ class _JobTile extends StatelessWidget {
                           : color.onSurfaceVariant,
                     ),
                   ),
+                  if (_canOfferPublisherCaptions(job)) ...[
+                    const SizedBox(height: 2),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        key: ValueKey('podcast-caption-mode-${job.id}'),
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        onPressed: () => context
+                            .read<AppController>()
+                            .setTranscriptAcquisitionMode(
+                              job.id,
+                              job.transcriptAcquisitionMode ==
+                                      TranscriptAcquisitionMode
+                                          .publisherCaptions
+                                  ? TranscriptAcquisitionMode.soniox
+                                  : TranscriptAcquisitionMode.publisherCaptions,
+                            ),
+                        child: Text(
+                          job.transcriptAcquisitionMode ==
+                                  TranscriptAcquisitionMode.publisherCaptions
+                              ? context.strings.t('podcast_use_soniox')
+                              : context.strings.t('podcast_use_captions'),
+                        ),
+                      ),
+                    ),
+                  ],
                   if (job.status.isActive) ...[
                     const SizedBox(height: 5),
                     LinearProgressIndicator(
@@ -1009,8 +1044,36 @@ class _JobTile extends StatelessWidget {
     final duration = job.metadata == null
         ? ''
         : formatClock(job.metadata!.durationMs);
-    return '${context.strings.t('job_${job.status.name}')} $duration'.trim();
+    final transcript = switch (job.transcriptAcquisitionMode) {
+      TranscriptAcquisitionMode.publisherCaptions => context.strings.t(
+        'podcast_captions_selected',
+      ),
+      TranscriptAcquisitionMode.soniox
+          when job.podcastProvenance?.transcriptTiming !=
+                  PodcastTranscriptTiming.none &&
+              job.podcastProvenance?.transcriptTiming != null =>
+        context.strings.t('podcast_has_captions'),
+      _ => '',
+    };
+    return [
+      context.strings.t('job_${job.status.name}'),
+      duration,
+      transcript,
+    ].where((part) => part.trim().isNotEmpty).join(' · ');
   }
+}
+
+bool _canOfferPublisherCaptions(TranscriptionJob job) {
+  if (job.sourceOrigin != JobSourceOrigin.podcast) return false;
+  if (!job.status.canTranscribe &&
+      job.status != JobStatus.failed &&
+      job.status != JobStatus.cancelled) {
+    return false;
+  }
+  final provenance = job.podcastProvenance;
+  if (provenance == null) return false;
+  return provenance.transcripts.isNotEmpty ||
+      provenance.transcriptTiming != PodcastTranscriptTiming.none;
 }
 
 class _StatusIcon extends StatelessWidget {
@@ -1055,7 +1118,8 @@ class _JobMenu extends StatelessWidget {
           value: _JobAction.cancel,
           child: Text(context.strings.t('cancel')),
         ),
-      if (job.status == JobStatus.missingSource)
+      if (job.status == JobStatus.missingSource &&
+          job.sourceOrigin != JobSourceOrigin.podcast)
         PopupMenuItem(
           value: _JobAction.relink,
           child: Text(context.strings.t('relink')),

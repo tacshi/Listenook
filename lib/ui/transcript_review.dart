@@ -35,6 +35,13 @@ class TranscriptReview extends StatefulWidget {
 
 enum _ReviewMediaMode { video, audio }
 
+@visibleForTesting
+Player Function()? debugTranscriptReviewPlayerFactory;
+
+class _ReviewPlaybackTick extends ChangeNotifier {
+  void tick() => notifyListeners();
+}
+
 class _TranscriptReviewState extends State<TranscriptReview>
     with WindowListener {
   static const _reviewDividerWidth = 9.0;
@@ -92,6 +99,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
   double? _companionLeftPaneFraction;
   bool _companionLayoutActive = false;
   int _sourceRequest = 0;
+  late final VideoControlsBuilder _videoControls;
+  final _playbackTick = _ReviewPlaybackTick();
 
   ReviewFullscreenController get _fullscreenController =>
       widget.fullscreenController ?? _localFullscreenController;
@@ -100,12 +109,20 @@ class _TranscriptReviewState extends State<TranscriptReview>
   void initState() {
     super.initState();
     _appController = context.read<AppController>();
+    _videoControls = _buildVideoControls;
     _position = _appController.playbackPositionFor(widget.jobId);
+    _viewMode = _defaultViewMode(_appController.jobById(widget.jobId));
     _localFullscreenController = ReviewFullscreenController();
     _fullscreenController.registerMediaShutdown(this, _shutdownMedia);
     HardwareKeyboard.instance.addHandler(_handleRepeatShortcut);
     windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
+  }
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    if (mounted) _playbackTick.tick();
   }
 
   @override
@@ -125,10 +142,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   void _ensurePlayer() {
     if (_player != null) return;
-    final player = Player();
+    _openedPath = '';
+    final player = debugTranscriptReviewPlayerFactory?.call() ?? Player();
     _player = player;
     _seekDispatcher = LatestSeekDispatcher(player.seek);
     _video = VideoController(player);
+    _video!.platform.future.ignore();
     _positionSubscription = player.stream.position.listen(_handlePosition);
     _durationSubscription = player.stream.duration.listen((value) {
       if (mounted) setState(() => _duration = value);
@@ -176,7 +195,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _showAiBrief = false;
       _editingSegmentId = null;
       _editingTranslationSegmentId = null;
-      _viewMode = TranslationViewMode.original;
+      _viewMode = _defaultViewMode(_appController.jobById(widget.jobId));
       _lastScrolledSegmentId = null;
       _mappedDocument = null;
       _tokensBySegment = const {};
@@ -265,6 +284,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _queueRepeatRestart(resumeAfterSeek: true);
   }
 
+  TranslationViewMode _defaultViewMode(TranscriptionJob? job) {
+    if (job?.sourceOrigin == JobSourceOrigin.podcast &&
+        (job?.document?.segments.any((item) => item.hasTranslation) ?? false)) {
+      return TranslationViewMode.bilingual;
+    }
+    return TranslationViewMode.original;
+  }
+
   TranscriptDocument? get _document => context
       .read<AppController>()
       .allJobs
@@ -295,14 +322,17 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final job = _appController.allJobs
         .where((item) => item.id == widget.jobId)
         .firstOrNull;
-    if (job == null || job.sourcePath == _openedPath) return;
+    if (job == null) return;
+    if (job.sourcePath == _openedPath && _player != null && _video != null) {
+      return;
+    }
     final request = ++_sourceRequest;
-    _openedPath = job.sourcePath;
     if (await File(job.sourcePath).exists()) {
       if (!mounted || request != _sourceRequest || widget.jobId != job.id) {
         return;
       }
       _ensurePlayer();
+      _openedPath = job.sourcePath;
       if (!(job.metadata?.hasVideo ?? false) ||
           _mediaMode == _ReviewMediaMode.audio) {
         unawaited(_loadWaveform(job));
@@ -371,6 +401,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _aiBriefScroll.dispose();
     unawaited(_shutdownMedia());
     super.dispose();
+    _playbackTick.dispose();
   }
 
   Future<void> _shutdownMedia() => _mediaShutdown ??= _disposeMediaResources();
@@ -382,6 +413,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final seekDispatcher = _seekDispatcher;
     _seekDispatcher = null;
     _video = null;
+    _openedPath = '';
 
     final subscriptions = <StreamSubscription<dynamic>?>[
       _positionSubscription,
@@ -504,32 +536,36 @@ class _TranscriptReviewState extends State<TranscriptReview>
                     constraints.maxWidth >=
                     (_minimumCompanionPaneWidth * 2 + _reviewDividerWidth);
                 final companionActive = _showAiBrief && companionAvailable;
-                _companionLayoutActive = companionActive;
+                final audioCompanion =
+                    companionAvailable && (!hasVideo || audioMode);
+                _companionLayoutActive = companionActive || audioCompanion;
+
+                if (audioCompanion) {
+                  return Column(
+                    key: const Key('audio-review-companion'),
+                    children: [
+                      KeyedSubtree(
+                        key: const Key('audio-review-media'),
+                        child: _buildMediaArea(
+                          job,
+                          presentation: _ReviewMediaMode.audio,
+                          fillHeight: false,
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: _buildCompanionSplit(
+                          width: constraints.maxWidth,
+                          left: transcriptPane,
+                          right: aiBriefPane,
+                          showRight: _showAiBrief,
+                        ),
+                      ),
+                    ],
+                  );
+                }
 
                 if (companionActive) {
-                  if (!hasVideo || audioMode) {
-                    return Column(
-                      key: const Key('audio-ai-brief-companion'),
-                      children: [
-                        KeyedSubtree(
-                          key: const Key('audio-ai-brief-media'),
-                          child: _buildMediaArea(
-                            job,
-                            presentation: _ReviewMediaMode.audio,
-                            fillHeight: false,
-                          ),
-                        ),
-                        const Divider(height: 1),
-                        Expanded(
-                          child: _buildCompanionSplit(
-                            width: constraints.maxWidth,
-                            left: transcriptPane,
-                            right: aiBriefPane,
-                          ),
-                        ),
-                      ],
-                    );
-                  }
                   return _buildVideoCompanion(
                     constraints: constraints,
                     job: job,
@@ -760,9 +796,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
     required double width,
     required Widget left,
     required Widget right,
+    bool showRight = true,
   }) {
     final availableWidth = width - _reviewDividerWidth;
-    final leftWidth = _resolvedCompanionLeftWidth(availableWidth);
+    final leftWidth = showRight
+        ? _resolvedCompanionLeftWidth(availableWidth)
+        : width;
     return Row(
       key: const Key('ai-brief-companion-split'),
       children: [
@@ -771,16 +810,19 @@ class _TranscriptReviewState extends State<TranscriptReview>
           width: leftWidth,
           child: left,
         ),
-        _ReviewSplitDivider(
-          dividerKey: const Key('ai-brief-companion-divider'),
-          onDragUpdate: (delta) => _resizeCompanionPanes(delta, availableWidth),
-        ),
-        Expanded(
-          child: SizedBox.expand(
-            key: const Key('ai-brief-companion-brief-pane'),
-            child: right,
+        if (showRight) ...[
+          _ReviewSplitDivider(
+            dividerKey: const Key('ai-brief-companion-divider'),
+            onDragUpdate: (delta) =>
+                _resizeCompanionPanes(delta, availableWidth),
           ),
-        ),
+          Expanded(
+            child: SizedBox.expand(
+              key: const Key('ai-brief-companion-brief-pane'),
+              child: right,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -856,7 +898,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
     required bool fillHeight,
     double? videoHeight,
   }) {
-    final fullscreenController = _fullscreenController;
     final hasVideo = job.metadata?.hasVideo ?? false;
     final canSwitchMediaMode = _supportsMediaModeSwitch(job);
     final audioMode =
@@ -890,6 +931,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
       return missingSource;
     }
     if (_player == null || _video == null) {
+      if (_mediaShutdown == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_openSource());
+        });
+      }
       return SizedBox(
         height: fillHeight ? null : 64,
         child: const Center(
@@ -918,15 +964,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (hasVideo) {
       final video = _MediaPane(
         job: job,
-        document: job.document!,
-        viewMode: _viewMode,
         video: _video!,
         videoKey: _videoKey,
         videoAspectRatio: _videoAspectRatio,
         maxVideoHeight: videoHeight,
         centerInAvailableHeight: fillHeight,
-        repeatingSegment: _repeatingSegment,
-        isFullscreenActive: () => fullscreenController.isActive,
         playing: _playing,
         playbackRate: _playbackRate,
         position: _position,
@@ -934,19 +976,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
         onPlayPause: _player!.playOrPause,
         onSeek: _seek,
         onFullscreen: _toggleFullscreen,
-        onExitFullscreen: fullscreenController.exit,
-        onSeekBackward: () => _seekRelative(-const Duration(seconds: 5)),
-        onSeekForward: () => _seekRelative(const Duration(seconds: 5)),
         onPlaybackRateChanged: _setPlaybackRate,
-        onDecreaseSpeed: () => _changePlaybackRate(-.25),
-        onIncreaseSpeed: () => _changePlaybackRate(.25),
-        onRepeatHoldStart: _beginHoldingCurrentSentence,
-        onRepeatHoldEnd: _endSentenceRepeatHold,
         onEnterNativeFullscreen: _enterNativeFullscreen,
         onExitNativeFullscreen: _exitNativeFullscreen,
         onSwitchToAudioMode: canSwitchMediaMode
             ? () => _toggleMediaMode(job)
             : null,
+        controls: _videoControls,
       );
       pane = video;
     } else {
@@ -1187,6 +1223,52 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _queueFocusCurrent(force: true);
   }
 
+  Widget _buildVideoControls(VideoState _) {
+    return _ReviewFullscreenControlsHost(
+      playback: _playbackTick,
+      isActive: () => _fullscreenController.isActive,
+      overlay: _fullscreenOverlay,
+    );
+  }
+
+  Widget _fullscreenOverlay() {
+    final document = _document;
+    if (document == null) return const SizedBox.shrink();
+    final job = _appController.jobById(widget.jobId);
+    final mediaDuration = _duration.inMilliseconds > 0
+        ? _duration
+        : Duration(milliseconds: job?.metadata?.durationMs ?? 0);
+    return VideoFullscreenKeyboardRegion(
+      subtitle: fullscreenTranscriptSubtitle(
+        document.segments,
+        _position.inMilliseconds,
+        _viewMode,
+        pinnedSegmentId: _repeatingSegment?.id,
+      ),
+      subtitleHighlight: fullscreenTranscriptWordRange(
+        document,
+        _position.inMilliseconds,
+        _viewMode,
+        pinnedSegmentId: _repeatingSegment?.id,
+      ),
+      playing: _playing,
+      position: _position,
+      duration: mediaDuration,
+      onExit: () => unawaited(_fullscreenController.exit()),
+      onPlayPause: () =>
+          unawaited(_player?.playOrPause() ?? Future<void>.value()),
+      onSeek: (value) => unawaited(_seek(value)),
+      onSeekBackward: () =>
+          unawaited(_seekRelative(-const Duration(seconds: 5))),
+      onSeekForward: () => unawaited(_seekRelative(const Duration(seconds: 5))),
+      onDecreaseSpeed: () => unawaited(_changePlaybackRate(-.25)),
+      onIncreaseSpeed: () => unawaited(_changePlaybackRate(.25)),
+      onRepeatHoldStart: _beginHoldingCurrentSentence,
+      onRepeatHoldEnd: _endSentenceRepeatHold,
+      child: const SizedBox.expand(),
+    );
+  }
+
   Future<void> _toggleFullscreen() async {
     final videoState = _videoKey.currentState;
     if (videoState != null && !_fullscreenController.isActive) {
@@ -1198,6 +1280,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final navigator = _rootNavigator;
     if (navigator != null && navigator.mounted) {
       _fullscreenController.markEntered(navigator);
+      _playbackTick.tick();
     }
     await defaultEnterNativeFullscreen();
   }
@@ -1205,6 +1288,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   Future<void> _exitNativeFullscreen() async {
     _endSentenceRepeatHold();
     _fullscreenController.markExited();
+    _playbackTick.tick();
     await defaultExitNativeFullscreen();
   }
 
@@ -1659,11 +1743,19 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
 ) async {
   final controller = context.read<AppController>();
   var sections = Set<AiBriefSection>.of(
-    job.aiBrief?.selectedSections ?? defaultAiBriefSections,
+    job.aiBrief?.selectedSections ??
+        (job.sourceOrigin == JobSourceOrigin.podcast
+            ? {AiBriefSection.languageNotes}
+            : defaultAiBriefSections),
   );
   var outputLanguage =
-      job.aiBrief?.outputLanguage ?? controller.defaultAiBriefLanguage;
-  var learningLanguage = job.aiBrief?.learningLanguage;
+      job.aiBrief?.outputLanguage ??
+      (job.sourceOrigin == JobSourceOrigin.podcast
+          ? 'zh-Hans'
+          : controller.defaultAiBriefLanguage);
+  var learningLanguage =
+      job.aiBrief?.learningLanguage ??
+      (job.sourceOrigin == JobSourceOrigin.podcast ? 'en' : null);
   var learningLevel =
       job.aiBrief?.learningLevel ?? AiLearningLevel.intermediate;
   if (learningLanguage != null &&
@@ -3167,7 +3259,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
             return Row(
               key: const Key('review-toolbar-row'),
               children: [
-                SizedBox(width: sideWidth, child: _filename(context)),
+                SizedBox(width: sideWidth),
                 _tabs(tabWidth),
                 SizedBox(width: sideWidth),
               ],
@@ -3196,13 +3288,13 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           return Row(
             key: const Key('transcript-pane-toolbar-row'),
             children: [
+              Expanded(child: _filename(context)),
               if (_translationStarted && medium)
                 _TranslationViewDropdown(
                   value: viewMode,
                   compact: !full,
                   onChanged: onViewModeChanged,
                 ),
-              const Spacer(),
               _buildTranscriptActions(
                 context,
                 controller,
@@ -3250,16 +3342,20 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     onChanged: onTabChanged,
   );
 
-  Widget _filename(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(right: 12),
-    child: Text(
-      job.displayName,
-      key: const Key('review-filename'),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: Theme.of(
-        context,
-      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+  Widget _filename(BuildContext context) => Tooltip(
+    message: job.displayName,
+    waitDuration: const Duration(milliseconds: 400),
+    child: Padding(
+      padding: const EdgeInsets.only(right: 12),
+      child: Text(
+        job.displayName,
+        key: const Key('review-filename'),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+      ),
     ),
   );
 
@@ -4204,9 +4300,7 @@ class _TranscriptSegmentSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final backgroundColor = isCurrent
-        ? colors.primaryContainer.withValues(alpha: .28)
-        : isEditing
+    final backgroundColor = isEditing
         ? colors.surfaceContainerLow
         : hovered
         ? colors.surfaceContainerLow
@@ -4702,15 +4796,11 @@ class _MediaModeButton extends StatelessWidget {
 class _MediaPane extends StatelessWidget {
   const _MediaPane({
     required this.job,
-    required this.document,
-    required this.viewMode,
     required this.video,
     required this.videoKey,
     required this.videoAspectRatio,
     required this.maxVideoHeight,
     required this.centerInAvailableHeight,
-    required this.repeatingSegment,
-    required this.isFullscreenActive,
     required this.playing,
     required this.playbackRate,
     required this.position,
@@ -4718,29 +4808,19 @@ class _MediaPane extends StatelessWidget {
     required this.onPlayPause,
     required this.onSeek,
     required this.onFullscreen,
-    required this.onExitFullscreen,
-    required this.onSeekBackward,
-    required this.onSeekForward,
     required this.onPlaybackRateChanged,
-    required this.onDecreaseSpeed,
-    required this.onIncreaseSpeed,
-    required this.onRepeatHoldStart,
-    required this.onRepeatHoldEnd,
     required this.onEnterNativeFullscreen,
     required this.onExitNativeFullscreen,
     required this.onSwitchToAudioMode,
+    required this.controls,
   });
 
   final TranscriptionJob job;
-  final TranscriptDocument document;
-  final TranslationViewMode viewMode;
   final VideoController video;
   final GlobalKey<VideoState> videoKey;
   final double videoAspectRatio;
   final double? maxVideoHeight;
   final bool centerInAvailableHeight;
-  final TranscriptSegment? repeatingSegment;
-  final bool Function() isFullscreenActive;
   final bool playing;
   final double playbackRate;
   final Duration position;
@@ -4748,35 +4828,17 @@ class _MediaPane extends StatelessWidget {
   final Future<void> Function() onPlayPause;
   final TranscriptSeekCallback onSeek;
   final Future<void> Function() onFullscreen;
-  final Future<void> Function() onExitFullscreen;
-  final Future<void> Function() onSeekBackward;
-  final Future<void> Function() onSeekForward;
   final Future<void> Function(double) onPlaybackRateChanged;
-  final Future<void> Function() onDecreaseSpeed;
-  final Future<void> Function() onIncreaseSpeed;
-  final VoidCallback onRepeatHoldStart;
-  final VoidCallback onRepeatHoldEnd;
   final Future<void> Function() onEnterNativeFullscreen;
   final Future<void> Function() onExitNativeFullscreen;
   final VoidCallback? onSwitchToAudioMode;
+  final VideoControlsBuilder controls;
 
   @override
   Widget build(BuildContext context) {
     final mediaDuration = duration.inMilliseconds > 0
         ? duration
         : Duration(milliseconds: job.metadata?.durationMs ?? 0);
-    final fullscreenSubtitle = fullscreenTranscriptSubtitle(
-      document.segments,
-      position.inMilliseconds,
-      viewMode,
-      pinnedSegmentId: repeatingSegment?.id,
-    );
-    final fullscreenSubtitleHighlight = fullscreenTranscriptWordRange(
-      document,
-      position.inMilliseconds,
-      viewMode,
-      pinnedSegmentId: repeatingSegment?.id,
-    );
     return LayoutBuilder(
       builder: (context, constraints) {
         const transportHeight = VideoTransport.height;
@@ -4814,25 +4876,7 @@ class _MediaPane extends StatelessWidget {
                 controller: video,
                 aspectRatio: aspect,
                 fit: BoxFit.contain,
-                controls: (_) => isFullscreenActive()
-                    ? VideoFullscreenKeyboardRegion(
-                        subtitle: fullscreenSubtitle,
-                        subtitleHighlight: fullscreenSubtitleHighlight,
-                        playing: playing,
-                        position: position,
-                        duration: mediaDuration,
-                        onExit: () => unawaited(onExitFullscreen()),
-                        onPlayPause: () => unawaited(onPlayPause()),
-                        onSeek: (value) => unawaited(onSeek(value)),
-                        onSeekBackward: () => unawaited(onSeekBackward()),
-                        onSeekForward: () => unawaited(onSeekForward()),
-                        onDecreaseSpeed: () => unawaited(onDecreaseSpeed()),
-                        onIncreaseSpeed: () => unawaited(onIncreaseSpeed()),
-                        onRepeatHoldStart: onRepeatHoldStart,
-                        onRepeatHoldEnd: onRepeatHoldEnd,
-                        child: const SizedBox.expand(),
-                      )
-                    : const SizedBox.shrink(),
+                controls: controls,
                 onEnterFullscreen: onEnterNativeFullscreen,
                 onExitFullscreen: onExitNativeFullscreen,
               ),
@@ -4995,6 +5039,29 @@ String formatPlaybackRate(double rate) {
       ? fixed.substring(0, fixed.length - 1)
       : fixed;
   return '$value×';
+}
+
+class _ReviewFullscreenControlsHost extends StatelessWidget {
+  const _ReviewFullscreenControlsHost({
+    required this.playback,
+    required this.isActive,
+    required this.overlay,
+  });
+
+  final Listenable playback;
+  final bool Function() isActive;
+  final Widget Function() overlay;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: playback,
+      builder: (context, _) {
+        if (!isActive()) return const SizedBox.shrink();
+        return overlay();
+      },
+    );
+  }
 }
 
 class VideoFullscreenKeyboardRegion extends StatefulWidget {
@@ -6120,6 +6187,7 @@ class PlaybackHighlightedText extends StatelessWidget {
     required this.segmentEndMs,
     this.enabled = true,
     this.style,
+    this.textAlign = TextAlign.start,
   });
 
   final String text;
@@ -6129,6 +6197,7 @@ class PlaybackHighlightedText extends StatelessWidget {
   final int segmentEndMs;
   final bool enabled;
   final TextStyle? style;
+  final TextAlign textAlign;
 
   @override
   Widget build(BuildContext context) {
@@ -6162,7 +6231,10 @@ class PlaybackHighlightedText extends StatelessWidget {
         spans.add(TextSpan(text: text.substring(currentRange.end)));
       }
     }
-    return Text.rich(TextSpan(style: style, children: spans));
+    return Text.rich(
+      TextSpan(style: style, children: spans),
+      textAlign: textAlign,
+    );
   }
 }
 
