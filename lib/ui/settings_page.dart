@@ -702,30 +702,7 @@ class _TranslationSettingsSectionState
             ),
           ),
           const SizedBox(height: 10),
-          if (_candidate.requiresApiKey)
-            TextField(
-              key: const Key('translation-key-field'),
-              controller: _apiKey,
-              obscureText: true,
-              enableSuggestions: false,
-              autocorrect: false,
-              onChanged: (_) => _invalidateTest(clearModel: false),
-              decoration: InputDecoration(
-                hintText: _canUseStoredKey
-                    ? context.strings.t('key_hint')
-                    : context.strings.t('translation_key_hint'),
-              ),
-            )
-          else
-            Row(
-              children: [
-                const Icon(Icons.computer_rounded, size: 20),
-                const SizedBox(width: 8),
-                Text(context.strings.t('translation_local_no_key')),
-              ],
-            ),
-          const SizedBox(height: 10),
-          _modelField(context),
+          _credentialsAndModelFields(context),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -835,6 +812,60 @@ class _TranslationSettingsSectionState
       if (provider.name == name) return provider;
     }
     return null;
+  }
+
+  Widget _credentialsAndModelFields(BuildContext context) {
+    final model = _modelField(context);
+    if (!_candidate.requiresApiKey) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.computer_rounded, size: 20),
+              const SizedBox(width: 8),
+              Text(context.strings.t('translation_local_no_key')),
+            ],
+          ),
+          const SizedBox(height: 10),
+          model,
+        ],
+      );
+    }
+
+    final keyField = TextField(
+      key: const Key('translation-key-field'),
+      controller: _apiKey,
+      obscureText: true,
+      enableSuggestions: false,
+      autocorrect: false,
+      onChanged: (_) => _invalidateTest(clearModel: false),
+      decoration: InputDecoration(
+        hintText: _canUseStoredKey
+            ? context.strings.t('key_hint')
+            : context.strings.t('translation_key_hint'),
+      ),
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 680) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [keyField, const SizedBox(height: 10), model],
+          );
+        }
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: keyField),
+              const SizedBox(width: 10),
+              Expanded(child: model),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Widget _modelField(BuildContext context) {

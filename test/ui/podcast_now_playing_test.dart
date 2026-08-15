@@ -611,6 +611,106 @@ void main() {
     );
   });
 
+  testWidgets('episode detail actions share one visual centerline', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final directory = Directory.systemTemp.createTempSync(
+      'meow-podcast-detail-actions-',
+    );
+    addTearDown(() {
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
+    });
+    const episode = PodcastEpisode(
+      id: 'https://feeds.example/show\nguid-actions',
+      feedUrl: 'https://feeds.example/show',
+      title: 'Episode actions',
+      enclosureUrl: 'https://cdn.example/actions.mp3',
+      mediaExtension: 'mp3',
+      description: 'Episode details',
+    );
+    const feed = PodcastFeed(
+      feedUrl: 'https://feeds.example/show',
+      title: 'The Daily',
+      episodes: [episode],
+    );
+    final gateway = MemoryPodcastGateway(
+      feeds: {feed.feedUrl: feed},
+      enclosures: {
+        episode.enclosureUrl: [1, 2, 3],
+      },
+    );
+    final podcast = PodcastController(
+      gateway: gateway,
+      repository: _MemoryPodcastRepo(),
+    );
+    addTearDown(podcast.dispose);
+    await podcast.initialize();
+    await podcast.openFeed(feed.feedUrl);
+
+    final now = DateTime.now().toUtc();
+    final sourcePath = '${directory.path}/episode.mp3';
+    File(sourcePath).writeAsBytesSync(const [1, 2, 3]);
+    final job = TranscriptionJob(
+      id: 'detail-actions-job',
+      batchId: 'detail-actions-batch',
+      sourcePath: sourcePath,
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.ready,
+      sourceOrigin: JobSourceOrigin.podcast,
+      podcastProvenance: const PodcastEpisodeProvenance(
+        feedUrl: 'https://feeds.example/show',
+        episodeId: 'https://feeds.example/show\nguid-actions',
+        enclosureUrl: 'https://cdn.example/actions.mp3',
+        showTitle: 'The Daily',
+        episodeTitle: 'Episode actions',
+      ),
+    );
+    final app = AppController(
+      credentialStore: _EmptyCredentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([job]),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+      podcastGateway: gateway,
+      podcastManagedRoot: directory.path,
+    );
+    addTearDown(app.dispose);
+    await app.initialize();
+    podcast.openEpisode(episode);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: podcast),
+          ChangeNotifierProvider.value(value: app),
+        ],
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: PodcastPage()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final download = find.byKey(ValueKey('episode-download-${episode.id}'));
+    final export = find.byKey(
+      ValueKey('episode-detail-export-media-${episode.id}'),
+    );
+    expect(download, findsOneWidget);
+    expect(export, findsOneWidget);
+    expect(
+      tester.getCenter(download).dy,
+      closeTo(tester.getCenter(export).dy, 1),
+    );
+  });
+
   testWidgets(
     'caption pane does not spin when a completed job has no cues yet',
     (tester) async {
@@ -806,6 +906,10 @@ void main() {
     );
     await tester.pump();
 
+    final pagePadding = tester.widget<Padding>(
+      find.byKey(const Key('podcast-page-padding')),
+    );
+    expect((pagePadding.padding as EdgeInsets).bottom, 0);
     expect(find.byKey(const Key('podcast-root-tabs')), findsOneWidget);
     expect(find.text('Downloads'), findsOneWidget);
 
@@ -850,6 +954,11 @@ void main() {
     await tester.pumpAndSettle();
 
     final search = find.byKey(const Key('podcast-search-field'));
+    final feed = find.byKey(const Key('podcast-feed-field'));
+    expect(
+      tester.getSize(search).width,
+      closeTo(tester.getSize(feed).width, 1),
+    );
     expect(find.byKey(const Key('podcast-search-clear')), findsNothing);
 
     await tester.enterText(search, 'joe');

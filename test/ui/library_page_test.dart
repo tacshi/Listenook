@@ -71,20 +71,24 @@ void main() {
       ),
     );
 
-    final organizedCard = find.ancestor(
-      of: find.text('organized.wav'),
-      matching: find.byType(Card),
+    final organizedItem = find.byKey(
+      const ValueKey('library-history-item-organized'),
     );
-    final plainCard = find.ancestor(
-      of: find.text('plain.wav'),
-      matching: find.byType(Card),
+    final plainItem = find.byKey(const ValueKey('library-history-item-plain'));
+    expect(
+      find.ancestor(
+        of: find.text('organized.wav'),
+        matching: find.byType(Card),
+      ),
+      findsNothing,
     );
+    expect(find.byType(Divider), findsOneWidget);
     expect(find.text('English'), findsWidgets);
     expect(find.text('Practice'), findsWidgets);
     expect(find.text('Review'), findsWidgets);
     expect(
-      tester.getSize(organizedCard).height,
-      lessThanOrEqualTo(tester.getSize(plainCard).height + 8),
+      tester.getSize(organizedItem).height,
+      lessThanOrEqualTo(tester.getSize(plainItem).height + 8),
     );
 
     Color tagPillColor(String tagId) => tester
@@ -194,7 +198,7 @@ void main() {
     expect(colors, hasLength(3));
   });
 
-  testWidgets('Library visuals status selection has no retained focus fill', (
+  testWidgets('Library toolbar keeps search status and selection aligned', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 800));
@@ -223,6 +227,61 @@ void main() {
         ),
       ),
     );
+
+    final toolbar = find.byKey(const Key('library-toolbar'));
+    final search = find.byKey(const Key('library-search'));
+    final status = find.byKey(const Key('library-status-filter'));
+    final selection = find.byKey(const Key('toggle-library-selection'));
+    expect(search, findsOneWidget);
+    expect(find.byKey(const Key('toggle-library-search')), findsNothing);
+    expect(
+      tester.widget<TextField>(search).decoration?.prefixIcon,
+      isA<Icon>(),
+    );
+    for (final label in [
+      'Any time',
+      'Last 7 days',
+      'Under 30 min',
+      '30 min+',
+    ]) {
+      expect(find.text(label), findsNothing);
+    }
+    expect(
+      find.descendant(of: toolbar, matching: find.text('All statuses')),
+      findsOneWidget,
+    );
+    expect(find.descendant(of: toolbar, matching: selection), findsOneWidget);
+    final toolbarCenter = tester.getCenter(toolbar).dy;
+    expect(tester.getCenter(search).dy, closeTo(toolbarCenter, 1));
+    expect(tester.getCenter(status).dy, closeTo(toolbarCenter, 1));
+    expect(tester.getCenter(selection).dy, closeTo(toolbarCenter, 1));
+
+    await tester.tap(selection);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('library-selection-bar')), findsOneWidget);
+    for (final key in [
+      'bulk-tag-library-items',
+      'bulk-move-library-items',
+      'bulk-export-library-items',
+      'bulk-remove-library-items',
+    ]) {
+      final button = tester.widget<IconButton>(find.byKey(Key(key)));
+      expect(button.style?.side, isNull);
+    }
+    expect(
+      tester.getTopLeft(find.byKey(const Key('library-selection-bar'))).dy,
+      greaterThan(tester.getBottomLeft(toolbar).dy),
+    );
+    await tester.tap(selection);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(search, 'meeting');
+    await tester.pump();
+    expect(find.byKey(const Key('clear-library-search')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('clear-library-search')));
+    await tester.pump();
+    expect(search, findsOneWidget);
+    expect(tester.widget<TextField>(search).controller?.text, isEmpty);
 
     final dropdown = find.byType(DropdownButton<String>);
     await tester.tap(dropdown);
@@ -305,7 +364,7 @@ void main() {
     expect(find.text('completed.wav'), findsNothing);
   });
 
-  testWidgets('Continue restores a ready job without starting transcription', (
+  testWidgets('Add to Inbox queues a ready job without transcribing', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 800));
@@ -354,11 +413,20 @@ void main() {
       ),
     );
 
-    final continueButton = find.byKey(const Key('continue-ready-job-ready'));
-    expect(continueButton, findsOneWidget);
-    expect(tester.widget<OutlinedButton>(continueButton).onPressed, isNotNull);
+    final addToInboxButton = find.byKey(
+      const Key('add-to-inbox-ready-job-ready'),
+    );
+    expect(addToInboxButton, findsOneWidget);
+    expect(tester.widget<IconButton>(addToInboxButton).onPressed, isNotNull);
+    expect(tester.getSize(addToInboxButton).width, lessThanOrEqualTo(48));
+    expect(find.text('Add to Inbox'), findsNothing);
+    expect(find.byIcon(Icons.input_rounded), findsOneWidget);
+    expect(
+      find.byTooltip('Adds this file to the Inbox transcription queue.'),
+      findsOneWidget,
+    );
 
-    await tester.tap(continueButton);
+    await tester.tap(addToInboxButton);
     await tester.pumpAndSettle();
 
     expect(controller.destination, AppDestination.inbox);
@@ -1559,88 +1627,6 @@ void main() {
     );
     await tester.pump();
     expect(find.text('meeting.wav'), findsOneWidget);
-  });
-
-  testWidgets('Clear All confirms and removes inactive history', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1200, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
-      TranscriptionJob(
-        id: 'history',
-        batchId: 'batch',
-        sourcePath: '/missing/history.wav',
-        createdAt: now,
-        updatedAt: now,
-        status: JobStatus.completed,
-        document: TranscriptDocument(
-          tokens: const [],
-          segments: const [
-            TranscriptSegment(
-              id: 'segment',
-              startMs: 0,
-              endMs: 1000,
-              text: 'Transcript',
-            ),
-          ],
-          speakers: const [],
-          updatedAt: now,
-        ),
-      ),
-    ]);
-    final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: jobs,
-      mediaService: _Media(),
-      sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
-      exporter: const DefaultTranscriptExporter(),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: const MaterialApp(
-          locale: Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [AppStrings.delegate],
-          home: Scaffold(body: LibraryPage()),
-        ),
-      ),
-    );
-
-    expect(find.byKey(const Key('library-page-title')), findsNothing);
-    expect(find.byKey(const Key('library-search')), findsOneWidget);
-    expect(find.text('history.wav'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('clear-all-history')));
-    await tester.pumpAndSettle();
-    expect(
-      find.textContaining('permanently removes 1 inactive'),
-      findsOneWidget,
-    );
-
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(find.text('history.wav'), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('clear-all-history')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('confirm-clear-all-history')));
-    await tester.pumpAndSettle();
-
-    expect(find.text('history.wav'), findsNothing);
-    expect(jobs.saved, isEmpty);
-    expect(
-      tester
-          .widget<OutlinedButton>(find.byKey(const Key('clear-all-history')))
-          .onPressed,
-      isNull,
-    );
   });
 }
 

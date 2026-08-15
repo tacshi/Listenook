@@ -59,7 +59,8 @@ class _PodcastPageState extends State<PodcastPage> {
     final strings = context.strings;
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+        key: const Key('podcast-page-padding'),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -142,7 +143,6 @@ class _PodcastPageState extends State<PodcastPage> {
         Row(
           children: [
             Expanded(
-              flex: 3,
               child: TextField(
                 key: const Key('podcast-search-field'),
                 controller: _search,
@@ -176,7 +176,6 @@ class _PodcastPageState extends State<PodcastPage> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              flex: 2,
               child: TextField(
                 key: const Key('podcast-feed-field'),
                 controller: _feedUrl,
@@ -1025,6 +1024,14 @@ class _PodcastPageState extends State<PodcastPage> {
                                             tooltip: context.strings.t(
                                               'podcast_export_media',
                                             ),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            style: IconButton.styleFrom(
+                                              minimumSize: const Size(36, 36),
+                                              tapTargetSize:
+                                                  MaterialTapTargetSize
+                                                      .shrinkWrap,
+                                            ),
                                             onPressed: () => unawaited(
                                               exportDownloadedPodcastMedia(
                                                 context,
@@ -1033,6 +1040,7 @@ class _PodcastPageState extends State<PodcastPage> {
                                             ),
                                             icon: const Icon(
                                               Icons.ios_share_rounded,
+                                              size: 20,
                                             ),
                                           ),
                                       ],

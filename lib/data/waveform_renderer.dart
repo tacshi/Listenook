@@ -12,16 +12,19 @@ Future<void> renderPcmWaveform(
   if (width <= 0 || height <= 0) {
     throw const FormatException('Waveform dimensions must be positive.');
   }
-  final peaks = await readPcm16MonoPeaks(inputPath, width);
+  final envelope = await readPcm16MonoEnvelope(inputPath, width);
   final rowBytes = width * 4 + 1;
   final pixels = Uint8List(rowBytes * height);
   final center = height ~/ 2;
   for (var x = 0; x < width; x++) {
-    final normalized = math.sqrt(peaks[x] / 32768.0);
-    final halfHeight = (normalized * (height / 2)).round();
-    if (halfHeight == 0) continue;
-    final top = math.max(0, center - halfHeight);
-    final bottom = math.min(height - 1, center + halfHeight);
+    final positive = math.sqrt(envelope.maxima[x] / 32767.0);
+    final negative = math.sqrt(-envelope.minima[x] / 32768.0);
+    final top = math.max(0, center - (positive * center).round());
+    final bottom = math.min(
+      height - 1,
+      center + (negative * (height - 1 - center)).round(),
+    );
+    if (top == center && bottom == center) continue;
     for (var y = top; y <= bottom; y++) {
       final offset = y * rowBytes + 1 + x * 4;
       pixels[offset] = 255;
@@ -49,6 +52,25 @@ Future<void> renderPcmWaveform(
 }
 
 Future<Uint16List> readPcm16MonoPeaks(String path, int width) async {
+  final envelope = await readPcm16MonoEnvelope(path, width);
+  final peaks = Uint16List(width);
+  for (var index = 0; index < width; index++) {
+    final negative = envelope.minima[index] == -32768
+        ? 32768
+        : envelope.minima[index].abs();
+    peaks[index] = math.max(negative, envelope.maxima[index]);
+  }
+  return peaks;
+}
+
+class Pcm16MonoEnvelope {
+  const Pcm16MonoEnvelope({required this.minima, required this.maxima});
+
+  final Int16List minima;
+  final Int16List maxima;
+}
+
+Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
   if (width <= 0) throw const FormatException('Peak count must be positive.');
   final file = File(path);
   final input = await file.open(mode: FileMode.read);
@@ -105,7 +127,8 @@ Future<Uint16List> readPcm16MonoPeaks(String path, int width) async {
     }
 
     final sampleCount = dataLength ~/ 2;
-    final peaks = Uint16List(width);
+    final minima = Int16List(width);
+    final maxima = Int16List(width);
     await input.setPosition(dataOffset);
     var sampleIndex = 0;
     var remaining = sampleCount * 2;
@@ -118,9 +141,9 @@ Future<Uint16List> readPcm16MonoPeaks(String path, int width) async {
       );
       for (var offset = 0; offset < evenLength; offset += 2) {
         final signed = data.getInt16(offset, Endian.little);
-        final amplitude = signed == -32768 ? 32768 : signed.abs();
         final bucket = math.min(width - 1, sampleIndex * width ~/ sampleCount);
-        if (amplitude > peaks[bucket]) peaks[bucket] = amplitude;
+        if (signed < minima[bucket]) minima[bucket] = signed;
+        if (signed > maxima[bucket]) maxima[bucket] = signed;
         sampleIndex++;
       }
       remaining -= evenLength;
@@ -128,7 +151,7 @@ Future<Uint16List> readPcm16MonoPeaks(String path, int width) async {
     if (sampleIndex != sampleCount) {
       throw const FormatException('WAVE audio data is truncated.');
     }
-    return peaks;
+    return Pcm16MonoEnvelope(minima: minima, maxima: maxima);
   } finally {
     await input.close();
   }

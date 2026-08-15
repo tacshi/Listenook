@@ -1582,7 +1582,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  void continueInInbox(String id) {
+  void addToInbox(String id) {
     final job = _jobs[id];
     if (job == null || job.status != JobStatus.ready) return;
     if (!_inboxIds.contains(id)) _inboxIds.add(id);

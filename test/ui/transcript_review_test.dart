@@ -2912,48 +2912,6 @@ void main() {
     expect(saved, ['Saved by keyboard']);
   });
 
-  testWidgets('library filter chips are ordered and mutually exclusive', (
-    tester,
-  ) async {
-    final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([]),
-      mediaService: _Media(),
-      sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
-      exporter: const DefaultTranscriptExporter(),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: const MaterialApp(
-          locale: Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [AppStrings.delegate],
-          home: Scaffold(body: LibraryPage()),
-        ),
-      ),
-    );
-
-    final chips = tester
-        .widgetList<ChoiceChip>(find.byType(ChoiceChip))
-        .toList();
-    expect((chips[0].label as Text).data, 'All');
-    expect((chips[1].label as Text).data, 'Last 7 days');
-    expect(chips.map((chip) => chip.selected), [true, false, false, false]);
-
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Last 7 days'));
-    await tester.pump();
-
-    final updated = tester
-        .widgetList<ChoiceChip>(find.byType(ChoiceChip))
-        .toList();
-    expect(updated.map((chip) => chip.selected), [false, true, false, false]);
-  });
-
   testWidgets('app sidebar toggle hides and restores navigation', (
     tester,
   ) async {
@@ -3640,6 +3598,10 @@ void main() {
 
     expect(find.byKey(const Key('workspace-page-title')), findsNothing);
     expect(find.byKey(const Key('workspace-empty-title')), findsOneWidget);
+    expect(
+      find.text('Open a completed transcript from Library.'),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('workspace-go-to-inbox')), findsNothing);
     expect(find.byKey(const Key('workspace-go-to-library')), findsOneWidget);
     expect(find.byType(TranscriptReview), findsNothing);
@@ -4495,7 +4457,7 @@ void main() {
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.continueInInbox('ready');
+    controller.addToInbox('ready');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -4595,7 +4557,7 @@ void main() {
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.continueInInbox('ready');
+    controller.addToInbox('ready');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -4646,7 +4608,7 @@ void main() {
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    controller.continueInInbox('job');
+    controller.addToInbox('job');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(

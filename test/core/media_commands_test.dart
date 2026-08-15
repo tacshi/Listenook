@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as image;
 import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/data/local_repositories.dart';
 import 'package:meow_stt/data/process_media_service.dart';
@@ -62,6 +63,67 @@ void main() {
     expect(bytes.length, greaterThan(50));
   });
 
+  test('PCM waveform keeps quiet detail visible beside loud peaks', () async {
+    final root = await Directory.systemTemp.createTemp('meow-waveform-range-');
+    addTearDown(() => root.delete(recursive: true));
+    final wav = File('${root.path}/input.wav');
+    final png = File('${root.path}/output.png');
+    await wav.writeAsBytes(_pcmWave(<int>[0, 32767, 8192, 2048, 512]));
+
+    await renderPcmWaveform(wav.path, png.path, width: 5, height: 32);
+    final rendered = image.decodePng(await png.readAsBytes());
+    expect(rendered, isNotNull);
+    final background = rendered!.getPixel(0, 0);
+    final backgroundRgba = (
+      background.r,
+      background.g,
+      background.b,
+      background.a,
+    );
+
+    int paintedRows(int x) =>
+        List<int>.generate(rendered.height, (y) => y).where((y) {
+          final pixel = rendered.getPixel(x, y);
+          return (pixel.r, pixel.g, pixel.b, pixel.a) != backgroundRgba;
+        }).length;
+
+    expect(paintedRows(1), greaterThanOrEqualTo(15));
+    expect(paintedRows(2), greaterThanOrEqualTo(7));
+    expect(paintedRows(3), greaterThanOrEqualTo(4));
+    expect(paintedRows(4), greaterThanOrEqualTo(2));
+  });
+
+  test('PCM waveform preserves the signed peak envelope', () async {
+    final root = await Directory.systemTemp.createTemp('meow-waveform-sign-');
+    addTearDown(() => root.delete(recursive: true));
+    final wav = File('${root.path}/input.wav');
+    final png = File('${root.path}/output.png');
+    await wav.writeAsBytes(_pcmWave(<int>[30000, -1000, 1000, -30000]));
+
+    await renderPcmWaveform(wav.path, png.path, width: 2, height: 32);
+    final rendered = image.decodePng(await png.readAsBytes())!;
+    final background = rendered.getPixel(0, 0);
+    final backgroundRgba = (
+      background.r,
+      background.g,
+      background.b,
+      background.a,
+    );
+
+    List<int> paintedRows(int x) =>
+        List<int>.generate(rendered.height, (y) => y).where((y) {
+          final pixel = rendered.getPixel(x, y);
+          return (pixel.r, pixel.g, pixel.b, pixel.a) != backgroundRgba;
+        }).toList();
+
+    final positiveHeavy = paintedRows(0);
+    final negativeHeavy = paintedRows(1);
+    expect(positiveHeavy.first, lessThanOrEqualTo(2));
+    expect(positiveHeavy.last, lessThanOrEqualTo(20));
+    expect(negativeHeavy.first, greaterThanOrEqualTo(13));
+    expect(negativeHeavy.last, greaterThanOrEqualTo(29));
+  });
+
   test(
     'PCM waveform renderer accepts libmpv extensible WAVE headers',
     () async {
@@ -82,6 +144,7 @@ void main() {
     final macAudio = File('${paths.temporary.path}/job.m4a');
     final extraction = File('${paths.temporary.path}/job-extract.wav');
     final waveformPcm = File('${paths.temporary.path}/job-waveform.wav');
+    final currentWaveform = File('${paths.temporary.path}/job-waveform-v2.png');
     final waveform = File('${paths.temporary.path}/job-waveform.png');
     final unrelated = File('${paths.temporary.path}/other.flac');
     for (final file in [
@@ -89,6 +152,7 @@ void main() {
       macAudio,
       extraction,
       waveformPcm,
+      currentWaveform,
       waveform,
       unrelated,
     ]) {
@@ -101,6 +165,7 @@ void main() {
     expect(await macAudio.exists(), isFalse);
     expect(await extraction.exists(), isFalse);
     expect(await waveformPcm.exists(), isFalse);
+    expect(await currentWaveform.exists(), isFalse);
     expect(await waveform.exists(), isFalse);
     expect(await unrelated.exists(), isTrue);
 

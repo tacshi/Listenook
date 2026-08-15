@@ -499,6 +499,12 @@ void main() {
       );
       await tester.ensureVisible(baseUrl);
 
+      final keyBounds = tester.getRect(key);
+      final modelBounds = tester.getRect(model);
+      expect(keyBounds.top, closeTo(modelBounds.top, 1));
+      expect(keyBounds.bottom, closeTo(modelBounds.bottom, 1));
+      expect(keyBounds.right, lessThan(modelBounds.left));
+
       final emptyTranslationKey = tester.widget<TextField>(key);
       expect(emptyTranslationKey.decoration?.labelText, isNull);
       expect(
