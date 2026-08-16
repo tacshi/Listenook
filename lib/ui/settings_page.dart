@@ -14,6 +14,7 @@ import 'inbox_monitor_setup_dialog.dart';
 typedef ExternalUrlLauncher = Future<bool> Function(Uri url);
 
 final _sonioxConsoleUrl = Uri.parse('https://console.soniox.com');
+final _mossConsoleUrl = Uri.parse('https://platform.mosi.cn/app/api-keys');
 
 Future<bool> _launchExternalUrl(Uri url) =>
     launchUrl(url, mode: LaunchMode.externalApplication);
@@ -29,14 +30,20 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final _key = TextEditingController();
+  final _mossKey = TextEditingController();
   bool _savingKey = false;
   bool _testingKey = false;
+  bool _savingMossKey = false;
+  bool _testingMossKey = false;
+  TranscriptionProvider? _selectedTranscriptionProvider;
 
   bool get _hasCandidateKey => _key.text.trim().isNotEmpty;
+  bool get _hasCandidateMossKey => _mossKey.text.trim().isNotEmpty;
 
   @override
   void dispose() {
     _key.dispose();
+    _mossKey.dispose();
     super.dispose();
   }
 
@@ -75,8 +82,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     text: context.strings.t('settings_general'),
                   ),
                   Tab(
-                    icon: const Icon(Icons.transcribe_rounded),
-                    text: context.strings.t('settings_transcription'),
+                    icon: const Icon(Icons.hub_outlined),
+                    text: context.strings.t('settings_providers'),
                   ),
                   Tab(
                     icon: const Icon(Icons.palette_outlined),
@@ -98,7 +105,7 @@ class _SettingsPageState extends State<SettingsPage> {
               child: TabBarView(
                 children: [
                   _generalTab(context, controller),
-                  _transcriptionTab(context, controller, settings),
+                  _providersTab(context, controller, settings),
                   _appearanceTab(context, controller, settings),
                   _shortcutsTab(context),
                   _aboutTab(context),
@@ -116,156 +123,318 @@ class _SettingsPageState extends State<SettingsPage> {
     children: children,
   );
 
-  Widget _transcriptionTab(
+  Widget _providersTab(
     BuildContext context,
     AppController controller,
     AppSettings settings,
-  ) => _tabList([
-    _Section(
-      title: context.strings.t('soniox_key'),
-      icon: Icons.key_rounded,
-      titleAction: TextButton.icon(
-        key: const Key('create-soniox-key-link'),
-        onPressed: _openSonioxConsole,
-        style: TextButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          minimumSize: Size.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          visualDensity: VisualDensity.compact,
-        ),
-        icon: const Icon(Icons.open_in_new_rounded, size: 18),
-        label: Text(context.strings.t('create_soniox_key')),
-      ),
-      trailing: controller.keyConfigured
-          ? Tooltip(
-              key: const Key('soniox-key-status'),
-              message: context.strings.t('key_configured'),
-              child: const Icon(
-                Icons.verified_user_outlined,
-                color: Colors.green,
+  ) {
+    final selectedProvider =
+        _selectedTranscriptionProvider ?? settings.defaultTranscriptionProvider;
+    return _tabList([
+      _Section(
+        title: context.strings.t('default_transcription_provider'),
+        icon: Icons.hub_outlined,
+        child: DropdownButtonFormField<TranscriptionProvider>(
+          key: const Key('default-transcription-provider'),
+          initialValue: settings.defaultTranscriptionProvider,
+          decoration: InputDecoration(
+            labelText: context.strings.t('transcription_provider'),
+          ),
+          items: [
+            for (final provider in TranscriptionProvider.values)
+              DropdownMenuItem(
+                value: provider,
+                child: Text(
+                  context.strings.transcriptionProviderName(provider),
+                ),
               ),
-            )
-          : null,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            key: const Key('soniox-key-field'),
-            controller: _key,
-            obscureText: true,
-            enableSuggestions: false,
-            autocorrect: false,
-            onChanged: (_) => setState(() {}),
-            decoration: InputDecoration(
-              hintText: context.strings.t('key_hint'),
+          ],
+          onChanged: (provider) {
+            if (provider != null) {
+              setState(() => _selectedTranscriptionProvider = provider);
+              controller.updateDefaultTranscriptionProvider(provider);
+            }
+          },
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: SegmentedButton<TranscriptionProvider>(
+            key: const Key('transcription-provider-tabs'),
+            showSelectedIcon: false,
+            segments: [
+              for (final provider in TranscriptionProvider.values)
+                ButtonSegment(
+                  value: provider,
+                  label: Text(
+                    context.strings.transcriptionProviderName(provider),
+                  ),
+                ),
+            ],
+            selected: {selectedProvider},
+            onSelectionChanged: (providers) => setState(
+              () => _selectedTranscriptionProvider = providers.first,
             ),
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+        ),
+      ),
+      if (selectedProvider == TranscriptionProvider.soniox)
+        _Section(
+          title: context.strings.t('soniox_key'),
+          icon: Icons.key_rounded,
+          titleAction: TextButton.icon(
+            key: const Key('create-soniox-key-link'),
+            onPressed: _openSonioxConsole,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            icon: const Icon(Icons.open_in_new_rounded, size: 18),
+            label: Text(context.strings.t('create_soniox_key')),
+          ),
+          trailing: controller.keyConfigured
+              ? Tooltip(
+                  key: const Key('soniox-key-status'),
+                  message: context.strings.t('key_configured'),
+                  child: const Icon(
+                    Icons.verified_user_outlined,
+                    color: Colors.green,
+                  ),
+                )
+              : null,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              OutlinedButton.icon(
-                onPressed: () async {
-                  final data = await Clipboard.getData(Clipboard.kTextPlain);
-                  if (data?.text != null && mounted) {
-                    setState(() => _key.text = data!.text!);
+              TextField(
+                key: const Key('soniox-key-field'),
+                controller: _key,
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: context.strings.t('key_hint'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final data = await Clipboard.getData(
+                        Clipboard.kTextPlain,
+                      );
+                      if (data?.text != null && mounted) {
+                        setState(() => _key.text = data!.text!);
+                      }
+                    },
+                    icon: const Icon(Icons.content_paste_rounded),
+                    label: Text(context.strings.t('paste')),
+                  ),
+                  FilledButton.icon(
+                    key: const Key('save-soniox-key'),
+                    onPressed: _hasCandidateKey && !_savingKey
+                        ? () => _saveKey(controller)
+                        : null,
+                    icon: _savingKey
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.lock_rounded),
+                    label: Text(context.strings.t('save')),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('test-soniox-key'),
+                    onPressed:
+                        (controller.keyConfigured || _hasCandidateKey) &&
+                            !_testingKey
+                        ? () => _testKey(controller)
+                        : null,
+                    icon: _testingKey
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.network_check_rounded),
+                    label: Text(context.strings.t('test')),
+                  ),
+                  if (controller.keyConfigured)
+                    TextButton.icon(
+                      onPressed: controller.removeApiKey,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: Text(context.strings.t('remove')),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                key: const Key('soniox-translation-switch'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(context.strings.t('soniox_translation')),
+                subtitle: Text(
+                  context.strings.t('soniox_translation_description'),
+                ),
+                value: settings.sonioxTranslation.enabled,
+                onChanged: (value) async {
+                  final error = await controller.updateSonioxTranslation(
+                    settings.sonioxTranslation.copyWith(enabled: value),
+                  );
+                  if (error != null && context.mounted) {
+                    _showMessage(context.strings.error(error));
                   }
                 },
-                icon: const Icon(Icons.content_paste_rounded),
-                label: Text(context.strings.t('paste')),
               ),
-              FilledButton.icon(
-                key: const Key('save-soniox-key'),
-                onPressed: _hasCandidateKey && !_savingKey
-                    ? () => _saveKey(controller)
-                    : null,
-                icon: _savingKey
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.lock_rounded),
-                label: Text(context.strings.t('save')),
-              ),
-              OutlinedButton.icon(
-                key: const Key('test-soniox-key'),
-                onPressed:
-                    (controller.keyConfigured || _hasCandidateKey) &&
-                        !_testingKey
-                    ? () => _testKey(controller)
-                    : null,
-                icon: _testingKey
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.network_check_rounded),
-                label: Text(context.strings.t('test')),
-              ),
-              if (controller.keyConfigured)
-                TextButton.icon(
-                  onPressed: controller.removeApiKey,
-                  icon: const Icon(Icons.delete_outline_rounded),
-                  label: Text(context.strings.t('remove')),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                key: const Key('soniox-translation-target'),
+                initialValue: settings.sonioxTranslation.targetLanguage,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('soniox_translation_target'),
+                  prefixIcon: const Icon(Icons.language_rounded),
                 ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SwitchListTile(
-            key: const Key('soniox-translation-switch'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(context.strings.t('soniox_translation')),
-            subtitle: Text(context.strings.t('soniox_translation_description')),
-            value: settings.sonioxTranslation.enabled,
-            onChanged: (value) async {
-              final error = await controller.updateSonioxTranslation(
-                settings.sonioxTranslation.copyWith(enabled: value),
-              );
-              if (error != null && context.mounted) {
-                _showMessage(context.strings.error(error));
-              }
-            },
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            key: const Key('soniox-translation-target'),
-            initialValue: settings.sonioxTranslation.targetLanguage,
-            isExpanded: true,
-            decoration: InputDecoration(
-              labelText: context.strings.t('soniox_translation_target'),
-              prefixIcon: const Icon(Icons.language_rounded),
-            ),
-            items: [
-              for (final code in supportedSonioxTranslationLanguageCodes)
-                DropdownMenuItem(
-                  value: code,
-                  child: Text(context.strings.translationLanguageName(code)),
-                ),
-            ],
-            onChanged: settings.sonioxTranslation.enabled
-                ? (value) async {
-                    if (value == null) return;
-                    final error = await controller.updateSonioxTranslation(
-                      settings.sonioxTranslation.copyWith(
-                        targetLanguage: value,
+                items: [
+                  for (final code in supportedSonioxTranslationLanguageCodes)
+                    DropdownMenuItem(
+                      value: code,
+                      child: Text(
+                        context.strings.translationLanguageName(code),
                       ),
-                    );
-                    if (error != null && context.mounted) {
-                      _showMessage(context.strings.error(error));
-                    }
-                  }
-                : null,
+                    ),
+                ],
+                onChanged: settings.sonioxTranslation.enabled
+                    ? (value) async {
+                        if (value == null) return;
+                        final error = await controller.updateSonioxTranslation(
+                          settings.sonioxTranslation.copyWith(
+                            targetLanguage: value,
+                          ),
+                        );
+                        if (error != null && context.mounted) {
+                          _showMessage(context.strings.error(error));
+                        }
+                      }
+                    : null,
+              ),
+            ],
           ),
-        ],
+        ),
+      if (selectedProvider == TranscriptionProvider.mossPro)
+        _Section(
+          title: context.strings.t('moss_key'),
+          icon: Icons.key_rounded,
+          titleAction: TextButton.icon(
+            key: const Key('create-moss-key-link'),
+            onPressed: _openMossConsole,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            icon: const Icon(Icons.open_in_new_rounded, size: 18),
+            label: Text(context.strings.t('create_moss_key')),
+          ),
+          trailing: controller.mossKeyConfigured
+              ? Tooltip(
+                  key: const Key('moss-key-status'),
+                  message: context.strings.t('key_configured'),
+                  child: const Icon(
+                    Icons.verified_user_outlined,
+                    color: Colors.green,
+                  ),
+                )
+              : null,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                key: const Key('moss-key-field'),
+                controller: _mossKey,
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: context.strings.t('key_hint'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final data = await Clipboard.getData(
+                        Clipboard.kTextPlain,
+                      );
+                      if (data?.text != null && mounted) {
+                        setState(() => _mossKey.text = data!.text!);
+                      }
+                    },
+                    icon: const Icon(Icons.content_paste_rounded),
+                    label: Text(context.strings.t('paste')),
+                  ),
+                  FilledButton.icon(
+                    key: const Key('save-moss-key'),
+                    onPressed: _hasCandidateMossKey && !_savingMossKey
+                        ? () => _saveMossKey(controller)
+                        : null,
+                    icon: _savingMossKey
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.lock_rounded),
+                    label: Text(context.strings.t('save')),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('test-moss-key'),
+                    onPressed:
+                        (controller.mossKeyConfigured ||
+                                _hasCandidateMossKey) &&
+                            !_testingMossKey
+                        ? () => _testMossKey(controller)
+                        : null,
+                    icon: _testingMossKey
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.network_check_rounded),
+                    label: Text(context.strings.t('test')),
+                  ),
+                  if (controller.mossKeyConfigured)
+                    TextButton.icon(
+                      onPressed: controller.removeMossApiKey,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: Text(context.strings.t('remove')),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                context.strings.t('moss_pro_description'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      _TranslationSettingsSection(
+        controller: controller,
+        settings: settings.translationSettings,
       ),
-    ),
-    _TranslationSettingsSection(
-      controller: controller,
-      settings: settings.translationSettings,
-    ),
-  ]);
+    ]);
+  }
 
   Widget _appearanceTab(
     BuildContext context,
@@ -526,6 +695,19 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _openMossConsole() async {
+    try {
+      final opened = await widget.launchExternalUrl(_mossConsoleUrl);
+      if (!opened && mounted) {
+        _showMessage(context.strings.t('moss_console_open_failed'));
+      }
+    } on Object {
+      if (mounted) {
+        _showMessage(context.strings.t('moss_console_open_failed'));
+      }
+    }
+  }
+
   Future<void> _testKey(AppController controller) async {
     if (_testingKey) return;
     setState(() => _testingKey = true);
@@ -540,6 +722,39 @@ class _SettingsPageState extends State<SettingsPage> {
         _showMessage(context.strings.error(errorCode));
       }
       setState(() => _testingKey = false);
+    }
+  }
+
+  Future<void> _saveMossKey(AppController controller) async {
+    final candidate = _mossKey.text.trim();
+    if (candidate.isEmpty || _savingMossKey) return;
+    setState(() => _savingMossKey = true);
+    try {
+      await controller.saveMossApiKey(candidate);
+      if (!mounted) return;
+      _mossKey.clear();
+      _showMessage(context.strings.t('moss_key_saved'));
+    } on Object {
+      if (mounted) _showMessage(context.strings.t('key_save_failed'));
+    } finally {
+      if (mounted) setState(() => _savingMossKey = false);
+    }
+  }
+
+  Future<void> _testMossKey(AppController controller) async {
+    if (_testingMossKey) return;
+    setState(() => _testingMossKey = true);
+    final candidate = _mossKey.text.trim();
+    final errorCode = await controller.testMossApiKey(
+      candidate.isEmpty ? null : candidate,
+    );
+    if (mounted) {
+      if (errorCode == null) {
+        _showMessage(context.strings.t('moss_key_valid'));
+      } else {
+        _showMessage(context.strings.error(errorCode));
+      }
+      setState(() => _testingMossKey = false);
     }
   }
 

@@ -224,7 +224,7 @@ class MediaDiagnostics {
   final String? error;
 }
 
-abstract interface class SonioxClient {
+abstract interface class TranscriptionClient {
   Future<void> validateKey({String? apiKey});
   Future<String> uploadFile(
     String path, {
@@ -235,25 +235,42 @@ abstract interface class SonioxClient {
     String fileId,
     TranscriptionOptions options,
   );
-  Future<SonioxTranscriptionState> getTranscription(String id);
+  Future<RemoteTranscriptionState> getTranscription(String id);
   Future<Map<String, dynamic>> getTranscript(String id);
   Future<void> deleteTranscription(String id);
   Future<void> deleteFile(String id);
 }
 
-class SonioxTranscriptionState {
-  const SonioxTranscriptionState({
+abstract interface class SonioxClient implements TranscriptionClient {
+  @override
+  Future<SonioxTranscriptionState> getTranscription(String id);
+}
+
+class RemoteTranscriptionState {
+  const RemoteTranscriptionState({
     required this.status,
     this.errorType,
     this.errorMessage,
+    this.retryAfter,
   });
 
   final String status;
   final String? errorType;
   final String? errorMessage;
+  final Duration? retryAfter;
 
-  bool get isComplete => status == 'completed';
-  bool get isFailed => status == 'error' || status == 'failed';
+  bool get isComplete => status == 'completed' || status == 'SUCCESS';
+  bool get isFailed =>
+      status == 'error' || status == 'failed' || status == 'FAILED';
+}
+
+class SonioxTranscriptionState extends RemoteTranscriptionState {
+  const SonioxTranscriptionState({
+    required super.status,
+    super.errorType,
+    super.errorMessage,
+    super.retryAfter,
+  });
 }
 
 abstract interface class TranscriptExporter {

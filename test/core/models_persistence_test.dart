@@ -107,7 +107,56 @@ void main() {
     expect(job.tagIds, isEmpty);
     expect(job.sourceOrigin, JobSourceOrigin.manual);
     expect(job.sourceFingerprint, isNull);
+    expect(job.transcriptionProvider, TranscriptionProvider.soniox);
   });
+
+  test(
+    'transcription provider defaults to Soniox and round-trips MOSS Pro',
+    () {
+      final defaults = AppSettings.fromJson(const {});
+      expect(
+        defaults.defaultTranscriptionProvider,
+        TranscriptionProvider.soniox,
+      );
+
+      final settings = AppSettings.fromJson(const {
+        'default_transcription_provider': 'mossPro',
+      });
+      expect(
+        settings.defaultTranscriptionProvider,
+        TranscriptionProvider.mossPro,
+      );
+      expect(settings.toJson()['default_transcription_provider'], 'mossPro');
+
+      final now = DateTime.utc(2026, 8, 16);
+      final restored = TranscriptionJob.fromJson(
+        TranscriptionJob(
+          id: 'moss-job',
+          batchId: 'batch',
+          sourcePath: '/meeting.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+          transcriptionProvider: TranscriptionProvider.mossPro,
+        ).toJson(),
+      );
+      expect(restored.transcriptionProvider, TranscriptionProvider.mossPro);
+      expect(
+        restored.transcriptAcquisitionMode,
+        TranscriptAcquisitionMode.mossPro,
+      );
+
+      final inferred = TranscriptionJob.fromJson(
+        {...restored.toJson(), 'transcript_acquisition_mode': 'mossPro'}
+          ..remove('transcription_provider'),
+      );
+      expect(inferred.transcriptionProvider, TranscriptionProvider.mossPro);
+      expect(
+        inferred.transcriptAcquisitionMode,
+        TranscriptAcquisitionMode.mossPro,
+      );
+    },
+  );
 
   test('version 6 manifests round-trip monitored source provenance', () {
     final now = DateTime.utc(2026, 8, 14, 8, 30);
@@ -132,7 +181,7 @@ void main() {
 
     expect(restored.sourceOrigin, JobSourceOrigin.monitoredFolder);
     expect(restored.sourceFingerprint?.sameVersion(fingerprint), isTrue);
-    expect(restored.toJson()['manifest_version'], 7);
+    expect(restored.toJson()['manifest_version'], manifestVersion);
   });
 
   test('version 7 manifests round-trip podcast provenance', () {
@@ -185,7 +234,7 @@ void main() {
       restored.transcriptAcquisitionMode,
       TranscriptAcquisitionMode.soniox,
     );
-    expect(restored.toJson()['manifest_version'], 7);
+    expect(restored.toJson()['manifest_version'], manifestVersion);
   });
 
   test('legacy publisherWordTimed jobs load as publisher captions', () {
@@ -280,7 +329,7 @@ void main() {
       final json = job.toJson();
       final restored = TranscriptionJob.fromJson(json);
 
-      expect(json['manifest_version'], 7);
+      expect(json['manifest_version'], manifestVersion);
       expect(restored.sourcePath, '/recordings/original.wav');
       expect(restored.fileName, 'original.wav');
       expect(restored.displayName, 'Weekly sync');
@@ -346,7 +395,7 @@ void main() {
     final json = job.toJson();
     final restored = TranscriptionJob.fromJson(json);
 
-    expect(json['manifest_version'], 7);
+    expect(json['manifest_version'], manifestVersion);
     expect(job.toJsonString(), isNot(contains('api_key')));
     expect(restored.document!.segments.single.translatedText, '你好');
     expect(restored.translationState.status, TranslationStatus.completed);

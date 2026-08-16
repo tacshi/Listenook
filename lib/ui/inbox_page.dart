@@ -465,6 +465,10 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
     final settings = controller.settings;
+    final provider = controller.sessionTranscriptionProvider;
+    final providerConfigured = controller.isTranscriptionProviderConfigured(
+      provider,
+    );
     return Card(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -488,37 +492,70 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
               ),
             ],
           ),
-          if (!controller.keyConfigured) ...[
+          const SizedBox(height: 12),
+          DropdownButtonFormField<TranscriptionProvider>(
+            key: const Key('session-transcription-provider'),
+            initialValue: provider,
+            decoration: InputDecoration(
+              labelText: context.strings.t('transcription_provider'),
+              prefixIcon: const Icon(Icons.hub_outlined),
+            ),
+            items: [
+              for (final item in TranscriptionProvider.values)
+                DropdownMenuItem(
+                  value: item,
+                  child: Text(context.strings.transcriptionProviderName(item)),
+                ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                controller.updateSessionTranscriptionProvider(value);
+              }
+            },
+          ),
+          if (!providerConfigured) ...[
             const SizedBox(height: 12),
             _ReviewLine(
               icon: Icons.key_off_rounded,
-              title: context.strings.t('soniox_key'),
-              value: context.strings.t('key_missing'),
+              title: provider == TranscriptionProvider.soniox
+                  ? context.strings.t('soniox_key')
+                  : context.strings.t('moss_key'),
+              value: context.strings.t('provider_key_missing'),
               action: () => controller.setDestination(AppDestination.settings),
             ),
             const Divider(height: 20),
           ] else
             const SizedBox(height: 12),
-          _LanguageHintsPicker(
-            selectedCodes: controller.sessionOptions.languageHints,
-            onChanged: (languageHints) => controller.updateSessionOptions(
-              controller.sessionOptions.copyWith(languageHints: languageHints),
+          if (provider == TranscriptionProvider.soniox) ...[
+            _LanguageHintsPicker(
+              selectedCodes: controller.sessionOptions.languageHints,
+              onChanged: (languageHints) => controller.updateSessionOptions(
+                controller.sessionOptions.copyWith(
+                  languageHints: languageHints,
+                ),
+              ),
             ),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            key: const Key('session-context-terms-field'),
-            controller: _terms,
-            decoration: InputDecoration(
-              labelText: context.strings.t('context_terms'),
-              hintText: context.strings.t('context_terms_hint'),
-              prefixIcon: const Icon(Icons.spellcheck_rounded),
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('session-context-terms-field'),
+              controller: _terms,
+              decoration: InputDecoration(
+                labelText: context.strings.t('context_terms'),
+                hintText: context.strings.t('context_terms_hint'),
+                prefixIcon: const Icon(Icons.spellcheck_rounded),
+              ),
+              onSubmitted: (_) => _saveSessionOptions(controller),
+              onTapOutside: (_) => _saveSessionOptions(controller),
             ),
-            onSubmitted: (_) => _saveSessionOptions(controller),
-            onTapOutside: (_) => _saveSessionOptions(controller),
-          ),
+          ] else
+            _ReviewLine(
+              icon: Icons.auto_awesome_outlined,
+              title: context.strings.t('moss_pro'),
+              value: context.strings.t('moss_options_automatic'),
+            ),
           const Divider(height: 20),
-          if (settings.sonioxTranslation.enabled)
+          if (provider == TranscriptionProvider.soniox &&
+              settings.sonioxTranslation.enabled)
             KeyedSubtree(
               key: const Key('soniox-translation-summary'),
               child: _ReviewLine(
@@ -977,13 +1014,23 @@ class _JobTile extends StatelessWidget {
                               job.transcriptAcquisitionMode ==
                                       TranscriptAcquisitionMode
                                           .publisherCaptions
-                                  ? TranscriptAcquisitionMode.soniox
+                                  ? (job.transcriptionProvider ==
+                                            TranscriptionProvider.mossPro
+                                        ? TranscriptAcquisitionMode.mossPro
+                                        : TranscriptAcquisitionMode.soniox)
                                   : TranscriptAcquisitionMode.publisherCaptions,
                             ),
                         child: Text(
                           job.transcriptAcquisitionMode ==
                                   TranscriptAcquisitionMode.publisherCaptions
-                              ? context.strings.t('podcast_use_soniox')
+                              ? context.strings
+                                    .t('podcast_use_provider')
+                                    .replaceFirst(
+                                      '{provider}',
+                                      context.strings.transcriptionProviderName(
+                                        job.transcriptionProvider,
+                                      ),
+                                    )
                               : context.strings.t('podcast_use_captions'),
                         ),
                       ),

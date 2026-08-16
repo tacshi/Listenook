@@ -11,6 +11,7 @@ import '../core/models.dart';
 import '../core/podcast_models.dart';
 import '../core/transcript_parser.dart';
 import '../data/openai_translation_service.dart';
+import '../data/moss_api_client.dart';
 import '../data/inbox_folder_monitor.dart';
 import '../data/podcast/download_location.dart';
 import '../data/podcast/podcast_urls.dart';
@@ -32,6 +33,8 @@ class AppController extends ChangeNotifier {
     required MediaService mediaService,
     required MediaSourceResolver sourceResolver,
     required SonioxClient sonioxClient,
+    CredentialStore? mossCredentialStore,
+    TranscriptionClient? mossClient,
     required TranscriptExporter exporter,
     TranslationCredentialStore? translationCredentialStore,
     TranslationService? translationService,
@@ -51,6 +54,8 @@ class AppController extends ChangeNotifier {
        _libraryCatalogRepository = libraryCatalogRepository,
        _media = mediaService,
        _soniox = sonioxClient,
+       _mossCredentials = mossCredentialStore,
+       _moss = mossClient,
        _exporter = exporter,
        _sourceResolver = sourceResolver,
        _translationCredentials = translationCredentialStore,
@@ -71,6 +76,8 @@ class AppController extends ChangeNotifier {
   final LibraryCatalogRepository? _libraryCatalogRepository;
   final MediaService _media;
   final SonioxClient _soniox;
+  final CredentialStore? _mossCredentials;
+  final TranscriptionClient? _moss;
   final TranscriptExporter _exporter;
   final MediaSourceResolver _sourceResolver;
   final TranslationCredentialStore? _translationCredentials;
@@ -97,6 +104,7 @@ class AppController extends ChangeNotifier {
   bool _processing = false;
   bool _initializing = true;
   bool _keyConfigured = false;
+  bool _mossKeyConfigured = false;
   bool _translationKeyConfigured = false;
   bool _monitorShutDown = false;
   AppDestination _destination = AppDestination.inbox;
@@ -104,6 +112,8 @@ class AppController extends ChangeNotifier {
   AppSettings _settings = const AppSettings();
   LibraryCatalog _libraryCatalog = const LibraryCatalog();
   TranscriptionOptions _sessionOptions = const TranscriptionOptions();
+  TranscriptionProvider _sessionTranscriptionProvider =
+      TranscriptionProvider.soniox;
   InboxMonitorStorage _inboxMonitorStorage = const InboxMonitorStorage();
   InboxMonitorStatus _inboxMonitorStatus = InboxMonitorStatus.unconfigured;
   String? _inboxMonitorError;
@@ -156,10 +166,18 @@ class AppController extends ChangeNotifier {
   }
 
   TranscriptionOptions get sessionOptions => _sessionOptions;
+  TranscriptionProvider get sessionTranscriptionProvider =>
+      _sessionTranscriptionProvider;
   bool get initializing => _initializing;
   bool get processing => _processing;
   bool get hasActiveWork => _jobs.values.any((job) => job.isBusy);
   bool get keyConfigured => _keyConfigured;
+  bool get mossKeyConfigured => _mossKeyConfigured;
+  bool isTranscriptionProviderConfigured(TranscriptionProvider provider) =>
+      switch (provider) {
+        TranscriptionProvider.soniox => _keyConfigured,
+        TranscriptionProvider.mossPro => _mossKeyConfigured,
+      };
   bool get translationKeyConfigured => _translationKeyConfigured;
   bool get translationConfigured => _settings.translationSettings.isConfigured(
     hasApiKey: _translationKeyConfigured,
@@ -227,6 +245,7 @@ class AppController extends ChangeNotifier {
     _libraryCatalog =
         await _libraryCatalogRepository?.load() ?? const LibraryCatalog();
     _settings = await _settingsRepository.load();
+    _sessionTranscriptionProvider = _settings.defaultTranscriptionProvider;
     _inboxMonitorStorage =
         await _inboxMonitorRepository?.load() ?? const InboxMonitorStorage();
     var settingsChanged = false;
@@ -244,15 +263,6 @@ class AppController extends ChangeNotifier {
       _settings = _settings.copyWith(
         sonioxTranslation: _settings.sonioxTranslation.copyWith(
           targetLanguage: _initialSonioxTargetLanguage(),
-        ),
-      );
-      settingsChanged = true;
-    }
-    if (_settings.sonioxTranslation.enabled &&
-        _settings.translationSettings.autoTranslate) {
-      _settings = _settings.copyWith(
-        translationSettings: _settings.translationSettings.copyWith(
-          autoTranslate: false,
         ),
       );
       settingsChanged = true;
@@ -325,6 +335,10 @@ class AppController extends ChangeNotifier {
       _credentials,
       _credentials.readApiKey,
     );
+    _mossKeyConfigured = await _credentialIsAvailable(
+      _mossCredentials,
+      _mossCredentials?.readApiKey,
+    );
     _translationKeyConfigured = await _credentialIsAvailable(
       _translationCredentials,
       _translationCredentials?.readApiKey,
@@ -348,6 +362,7 @@ class AppController extends ChangeNotifier {
     if (interrupted.isNotEmpty) {
       _batchId = interrupted.first.batchId;
       _sessionOptions = interrupted.first.options;
+      _sessionTranscriptionProvider = interrupted.first.transcriptionProvider;
       _inboxIds.addAll(interrupted.map((job) => job.id));
     }
     await _seedMonitorLedgerFromJobs(loaded);
@@ -889,7 +904,16 @@ class AppController extends ChangeNotifier {
         job.status != JobStatus.cancelled) {
       return;
     }
-    await _transition(job, transcriptAcquisitionMode: mode);
+    await _transition(
+      job,
+      transcriptAcquisitionMode: mode,
+      transcriptionProvider: switch (mode) {
+        TranscriptAcquisitionMode.mossPro => TranscriptionProvider.mossPro,
+        TranscriptAcquisitionMode.soniox => TranscriptionProvider.soniox,
+        TranscriptAcquisitionMode.publisherCaptions =>
+          job.transcriptionProvider,
+      },
+    );
   }
 
   Future<TranscriptionJob?> enqueuePodcastEpisode(
@@ -946,9 +970,10 @@ class AppController extends ChangeNotifier {
       sourceOrigin: JobSourceOrigin.podcast,
       displayTitle: provenance.displayName,
       podcastProvenance: provenance,
+      transcriptionProvider: _sessionTranscriptionProvider,
       transcriptAcquisitionMode: episode.transcripts.isNotEmpty
           ? TranscriptAcquisitionMode.publisherCaptions
-          : TranscriptAcquisitionMode.soniox,
+          : _providerAcquisitionMode(_sessionTranscriptionProvider),
     );
     _jobs[job.id] = job;
     _inboxIds.add(job.id);
@@ -1051,7 +1076,7 @@ class AppController extends ChangeNotifier {
     final provenance = job.podcastProvenance;
     final gateway = _podcastGateway;
     if (provenance == null || provenance.transcripts.isEmpty) {
-      return (provenance, TranscriptAcquisitionMode.soniox);
+      return (provenance, _providerAcquisitionMode(job.transcriptionProvider));
     }
     if (gateway == null) {
       return (provenance, TranscriptAcquisitionMode.publisherCaptions);
@@ -1079,7 +1104,7 @@ class AppController extends ChangeNotifier {
 
   bool _canStart(TranscriptionJob job) {
     if (job.transcriptAcquisitionMode.usesPublisherTranscript) return true;
-    return _keyConfigured;
+    return isTranscriptionProviderConfigured(job.transcriptionProvider);
   }
 
   Future<void> enqueueSources(Iterable<String> paths) async {
@@ -1121,6 +1146,10 @@ class AppController extends ChangeNotifier {
           ? JobSourceOrigin.podcast
           : sourceOrigin,
       sourceFingerprint: fingerprint,
+      transcriptionProvider: _sessionTranscriptionProvider,
+      transcriptAcquisitionMode: _providerAcquisitionMode(
+        _sessionTranscriptionProvider,
+      ),
     );
     _jobs[job.id] = job;
     _inboxIds.add(job.id);
@@ -1206,6 +1235,9 @@ class AppController extends ChangeNotifier {
         await _importPublisherTranscript(job);
         return;
       }
+      final transcriptionClient = _transcriptionClient(
+        job.transcriptionProvider,
+      );
       if (!await File(job.sourcePath).exists()) {
         throw const MediaException(
           'missing_source',
@@ -1240,7 +1272,7 @@ class AppController extends ChangeNotifier {
           status: JobStatus.uploading,
           progress: const JobProgress(stage: 'uploading', fraction: 0),
         );
-        fileId = await _soniox.uploadFile(
+        fileId = await transcriptionClient.uploadFile(
           uploadPath,
           onProgress: (fraction, detail) =>
               unawaited(_progress(id, 'uploading', fraction, detail)),
@@ -1255,7 +1287,7 @@ class AppController extends ChangeNotifier {
       _checkCancelled(id);
       var transcriptionId = job.remoteTranscriptionId;
       if (transcriptionId == null) {
-        transcriptionId = await _soniox.createTranscription(
+        transcriptionId = await transcriptionClient.createTranscription(
           fileId,
           job.options,
         );
@@ -1267,25 +1299,35 @@ class AppController extends ChangeNotifier {
           progress: const JobProgress(stage: 'queued_remote'),
         );
       }
-      await _poll(id, transcriptionId);
+      await _poll(
+        id,
+        transcriptionId,
+        job.transcriptionProvider,
+        transcriptionClient,
+      );
       _checkCancelled(id);
       job = await _transition(
         _jobs[id] ?? job,
         status: JobStatus.fetching,
         progress: const JobProgress(stage: 'fetching'),
       );
-      final payload = await _soniox.getTranscript(transcriptionId);
+      final payload = await transcriptionClient.getTranscript(transcriptionId);
       final sonioxTranslation = job.options.sonioxTranslation;
-      final document = _parser.parse(
-        payload,
-        sonioxTranslationTargetLanguage: sonioxTranslation.enabled
-            ? sonioxTranslation.targetLanguage
-            : null,
-      );
+      final usesSoniox =
+          job.transcriptionProvider == TranscriptionProvider.soniox;
+      final usesEmbeddedTranslation = usesSoniox && sonioxTranslation.enabled;
+      final document = usesSoniox
+          ? _parser.parse(
+              payload,
+              sonioxTranslationTargetLanguage: usesEmbeddedTranslation
+                  ? sonioxTranslation.targetLanguage
+                  : null,
+            )
+          : const MossTranscriptParser().parse(payload);
       final status = document.segments.isEmpty
           ? JobStatus.empty
           : JobStatus.completed;
-      final sonioxTranslationState = sonioxTranslation.enabled
+      final sonioxTranslationState = usesEmbeddedTranslation
           ? _sonioxTranslationState(document, sonioxTranslation.targetLanguage)
           : null;
       job = await _transition(
@@ -1293,14 +1335,16 @@ class AppController extends ChangeNotifier {
         status: status,
         document: document,
         translationState: sonioxTranslationState,
-        transcriptSource: TranscriptSource.soniox,
+        transcriptSource: usesSoniox
+            ? TranscriptSource.soniox
+            : TranscriptSource.mossPro,
         progress: const JobProgress(stage: 'complete', fraction: 1),
         clearError: true,
       );
       await _cleanup(job);
       job = _jobs[id] ?? job;
       if (status == JobStatus.completed &&
-          !job.options.sonioxTranslation.enabled &&
+          !usesEmbeddedTranslation &&
           job.translationOptions.enabled &&
           job.translationOptions.targetLanguage.isNotEmpty) {
         await _runTranslation(
@@ -1334,6 +1378,9 @@ class AppController extends ChangeNotifier {
       );
       await _cleanup(_jobs[id] ?? job);
     } on SonioxException catch (error) {
+      await _fail(_jobs[id] ?? job, error.code, error.message);
+      await _cleanup(_jobs[id] ?? job);
+    } on MossException catch (error) {
       await _fail(_jobs[id] ?? job, error.code, error.message);
       await _cleanup(_jobs[id] ?? job);
     } on Object catch (error) {
@@ -1411,15 +1458,49 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> _poll(String id, String transcriptionId) async {
+  TranscriptAcquisitionMode _providerAcquisitionMode(
+    TranscriptionProvider provider,
+  ) => switch (provider) {
+    TranscriptionProvider.soniox => TranscriptAcquisitionMode.soniox,
+    TranscriptionProvider.mossPro => TranscriptAcquisitionMode.mossPro,
+  };
+
+  TranscriptionClient _transcriptionClient(TranscriptionProvider provider) =>
+      switch (provider) {
+        TranscriptionProvider.soniox => _soniox,
+        TranscriptionProvider.mossPro =>
+          _moss ??
+              (throw const MossException(
+                code: 'moss_unavailable',
+                message: 'MOSS Pro transcription is unavailable.',
+              )),
+      };
+
+  Future<void> _poll(
+    String id,
+    String transcriptionId,
+    TranscriptionProvider provider,
+    TranscriptionClient client,
+  ) async {
     var failures = 0;
     while (true) {
       _checkCancelled(id);
       try {
-        final state = await _soniox.getTranscription(transcriptionId);
+        final state = await client.getTranscription(transcriptionId);
         failures = 0;
         if (state.isComplete) return;
         if (state.isFailed) {
+          if (provider == TranscriptionProvider.mossPro) {
+            throw MossException(
+              code: canonicalMossErrorCode(
+                state.errorType,
+                fallback: 'moss_transcription_failed',
+              ),
+              message:
+                  state.errorMessage ?? 'MOSS could not transcribe this file.',
+              errorType: state.errorType,
+            );
+          }
           throw SonioxException(
             code: canonicalSonioxErrorCode(
               state.errorType,
@@ -1438,8 +1519,14 @@ class AppController extends ChangeNotifier {
           status: status,
           progress: JobProgress(stage: status.name),
         );
-        await Future<void>.delayed(const Duration(seconds: 2));
+        await Future<void>.delayed(
+          state.retryAfter ?? const Duration(seconds: 2),
+        );
       } on SonioxException catch (error) {
+        if (!error.retryable || failures >= 7) rethrow;
+        failures++;
+        await Future<void>.delayed(Duration(seconds: min(30, 1 << failures)));
+      } on MossException catch (error) {
         if (!error.retryable || failures >= 7) rethrow;
         failures++;
         await Future<void>.delayed(Duration(seconds: min(30, 1 << failures)));
@@ -1657,6 +1744,7 @@ class AppController extends ChangeNotifier {
     _sessionOptions = TranscriptionOptions(
       sonioxTranslation: _settings.sonioxTranslation,
     );
+    _sessionTranscriptionProvider = _settings.defaultTranscriptionProvider;
     notifyListeners();
   }
 
@@ -1776,6 +1864,37 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> updateSessionTranscriptionProvider(
+    TranscriptionProvider provider,
+  ) async {
+    _sessionTranscriptionProvider = provider;
+    for (final job in inboxJobs.where(
+      (job) =>
+          job.status == JobStatus.pending ||
+          job.status == JobStatus.probing ||
+          job.status.canTranscribe,
+    )) {
+      if (job.transcriptAcquisitionMode.usesPublisherTranscript) continue;
+      await _transition(
+        job,
+        transcriptionProvider: provider,
+        transcriptAcquisitionMode: _providerAcquisitionMode(provider),
+      );
+    }
+    notifyListeners();
+  }
+
+  Future<void> updateDefaultTranscriptionProvider(
+    TranscriptionProvider provider,
+  ) async {
+    _settings = _settings.copyWith(defaultTranscriptionProvider: provider);
+    if (_inboxIds.isEmpty && !_processing) {
+      _sessionTranscriptionProvider = provider;
+    }
+    await _settingsRepository.save(_settings);
+    notifyListeners();
+  }
+
   Future<void> saveApiKey(String value) async {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return;
@@ -1795,6 +1914,33 @@ class AppController extends ChangeNotifier {
       await _soniox.validateKey(apiKey: candidate);
       return null;
     } on SonioxException catch (error) {
+      return error.code;
+    } on Object {
+      return 'unexpected';
+    }
+  }
+
+  Future<void> saveMossApiKey(String value) async {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty || _mossCredentials == null) return;
+    await _mossCredentials.writeApiKey(trimmed);
+    _mossKeyConfigured = true;
+    notifyListeners();
+  }
+
+  Future<void> removeMossApiKey() async {
+    await _mossCredentials?.deleteApiKey();
+    _mossKeyConfigured = false;
+    notifyListeners();
+  }
+
+  Future<String?> testMossApiKey([String? candidate]) async {
+    final client = _moss;
+    if (client == null) return 'moss_unavailable';
+    try {
+      await client.validateKey(apiKey: candidate);
+      return null;
+    } on MossException catch (error) {
       return error.code;
     } on Object {
       return 'unexpected';
@@ -1898,21 +2044,9 @@ class AppController extends ChangeNotifier {
         !settings.isConfigured(hasApiKey: _translationKeyConfigured)) {
       return settings.validationError() ?? 'translation_missing_credentials';
     }
-    final sonioxTranslation = settings.autoTranslate
-        ? _settings.sonioxTranslation.copyWith(enabled: false)
-        : _settings.sonioxTranslation;
-    _settings = _settings.copyWith(
-      translationSettings: settings,
-      sonioxTranslation: sonioxTranslation,
-    );
-    if (settings.autoTranslate) {
-      _sessionOptions = _sessionOptions.copyWith(
-        sonioxTranslation: sonioxTranslation,
-      );
-    }
+    _settings = _settings.copyWith(translationSettings: settings);
     await _settingsRepository.save(_settings);
     await _updateQueuedTranslationOptions();
-    if (settings.autoTranslate) await _updateQueuedSonioxTranslationOptions();
     notifyListeners();
     return null;
   }
@@ -1924,17 +2058,10 @@ class AppController extends ChangeNotifier {
     final options = value.copyWith(targetLanguage: targetLanguage);
     final validation = options.validationError();
     if (validation != null) return validation;
-    final translationSettings = options.enabled
-        ? _settings.translationSettings.copyWith(autoTranslate: false)
-        : _settings.translationSettings;
-    _settings = _settings.copyWith(
-      sonioxTranslation: options,
-      translationSettings: translationSettings,
-    );
+    _settings = _settings.copyWith(sonioxTranslation: options);
     _sessionOptions = _sessionOptions.copyWith(sonioxTranslation: options);
     await _settingsRepository.save(_settings);
     await _updateQueuedSonioxTranslationOptions();
-    if (options.enabled) await _updateQueuedTranslationOptions();
     notifyListeners();
     return null;
   }
@@ -2930,7 +3057,8 @@ class AppController extends ChangeNotifier {
     if (interrupted.isEmpty) return;
     final resumable = <String>[];
     for (final job in interrupted) {
-      if (job.remoteTranscriptionId != null) {
+      if (job.remoteTranscriptionId != null &&
+          isTranscriptionProviderConfigured(job.transcriptionProvider)) {
         resumable.add(job.id);
       } else {
         await _transition(
@@ -2941,7 +3069,7 @@ class AppController extends ChangeNotifier {
         );
       }
     }
-    if (resumable.isEmpty || !_keyConfigured) return;
+    if (resumable.isEmpty) return;
     _processing = true;
     notifyListeners();
     await _runWorkerPool(resumable);
@@ -2950,27 +3078,30 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _retryPendingCleanup(List<TranscriptionJob> jobs) async {
-    if (!_keyConfigured) return;
     for (final job in jobs.where(
       (item) => item.cleanupState == CleanupState.pending,
     )) {
-      if (!job.status.isActive) await _cleanup(job);
+      if (!job.status.isActive &&
+          isTranscriptionProviderConfigured(job.transcriptionProvider)) {
+        await _cleanup(job);
+      }
     }
   }
 
   Future<void> _cleanup(TranscriptionJob job) async {
     if (job.cleanupState == CleanupState.complete) return;
+    final client = _transcriptionClient(job.transcriptionProvider);
     var success = true;
     if (job.remoteTranscriptionId case final id?) {
       try {
-        await _soniox.deleteTranscription(id);
+        await client.deleteTranscription(id);
       } on Object {
         success = false;
       }
     }
     if (job.remoteFileId case final id?) {
       try {
-        await _soniox.deleteFile(id);
+        await client.deleteFile(id);
       } on Object {
         success = false;
       }
@@ -3069,6 +3200,7 @@ class AppController extends ChangeNotifier {
     SourceFingerprint? sourceFingerprint,
     PodcastEpisodeProvenance? podcastProvenance,
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
+    TranscriptionProvider? transcriptionProvider,
     TranscriptSource? transcriptSource,
     bool clearError = false,
     bool clearRemoteFileId = false,
@@ -3100,6 +3232,7 @@ class AppController extends ChangeNotifier {
       sourceFingerprint: sourceFingerprint,
       podcastProvenance: podcastProvenance,
       transcriptAcquisitionMode: transcriptAcquisitionMode,
+      transcriptionProvider: transcriptionProvider,
       transcriptSource: transcriptSource,
       clearError: clearError,
       clearRemoteFileId: clearRemoteFileId,

@@ -65,11 +65,16 @@ class _PodcastProvenanceBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final provenance = job.podcastProvenance!;
-    final sourceKey =
-        job.transcriptSource == TranscriptSource.publisher ||
-            job.transcriptAcquisitionMode.usesPublisherTranscript
-        ? 'podcast_source_publisher_captions'
-        : 'podcast_source_soniox_words';
+    final sourceKey = switch (job.transcriptSource) {
+      TranscriptSource.publisher => 'podcast_source_publisher_captions',
+      TranscriptSource.mossPro => 'podcast_source_moss_pro',
+      TranscriptSource.soniox => 'podcast_source_soniox_words',
+      null when job.transcriptAcquisitionMode.usesPublisherTranscript =>
+        'podcast_source_publisher_captions',
+      null when job.transcriptionProvider == TranscriptionProvider.mossPro =>
+        'podcast_source_moss_pro',
+      null => 'podcast_source_soniox_words',
+    };
     final rawLink =
         provenance.episodeUrl ?? provenance.showUrl ?? provenance.feedUrl;
     final link = Uri.tryParse(rawLink);

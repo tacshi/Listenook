@@ -65,7 +65,12 @@ void main() {
   });
 
   testWidgets('stored API keys have no reveal controls', (tester) async {
+    tester.view.physicalSize = const Size(1200, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final credentials = _Credentials()..value = 'soniox-secret';
+    final mossCredentials = _Credentials()..value = 'moss-secret';
     final translationCredentials = _TranslationCredentials()
       ..value = 'translation-secret';
     final controller = AppController(
@@ -75,6 +80,8 @@ void main() {
       mediaService: _Media(),
       sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _Soniox(),
+      mossCredentialStore: mossCredentials,
+      mossClient: _Soniox(),
       exporter: const DefaultTranscriptExporter(),
       translationCredentialStore: translationCredentials,
     );
@@ -92,7 +99,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Transcription'));
+    await tester.tap(find.text('Providers'));
     await tester.pumpAndSettle();
 
     final sonioxKeyField = tester.widget<TextField>(
@@ -103,6 +110,22 @@ void main() {
     expect(sonioxKeyField.decoration?.hintText, '••••••••••••••••');
     expect(sonioxKeyField.decoration?.hintText, isNot(contains('soniox_')));
     expect(sonioxKeyField.decoration?.suffixIcon, isNull);
+    expect(find.byKey(const Key('moss-key-field')), findsNothing);
+
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('transcription-provider-tabs')),
+        matching: find.text('MOSS Pro'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('soniox-key-field')), findsNothing);
+    final mossKeyFinder = find.byKey(const Key('moss-key-field'));
+    final mossKeyField = tester.widget<TextField>(mossKeyFinder);
+    expect(mossKeyField.obscureText, isTrue);
+    expect(mossKeyField.controller?.text, isEmpty);
+    expect(mossKeyField.decoration?.hintText, '••••••••••••••••');
+    expect(mossKeyField.decoration?.suffixIcon, isNull);
 
     final translationKeyFinder = find.byKey(const Key('translation-key-field'));
     await tester.ensureVisible(translationKeyFinder);
@@ -114,6 +137,110 @@ void main() {
     expect(translationKeyField.decoration?.hintText, '••••••••••••••••');
     expect(translationKeyField.decoration?.suffixIcon, isNull);
   });
+
+  testWidgets(
+    'provider tabs follow the default, stay independent, and retain drafts',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 1800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final settings = _Settings()
+        ..value = const AppSettings(
+          defaultTranscriptionProvider: TranscriptionProvider.mossPro,
+        );
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: settings,
+        jobRepository: _Jobs(),
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: _Soniox(),
+        mossCredentialStore: _Credentials(),
+        mossClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: SettingsPage()),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Providers'));
+      await tester.pumpAndSettle();
+
+      final providerTabs = find.byKey(const Key('transcription-provider-tabs'));
+      expect(find.byKey(const Key('moss-key-field')), findsOneWidget);
+      expect(find.byKey(const Key('soniox-key-field')), findsNothing);
+      expect(find.text('Soniox built-in translation'), findsNothing);
+      expect(
+        find.textContaining('MOSS-Transcribe-Diarize-Pro'),
+        findsOneWidget,
+      );
+      await tester.enterText(
+        find.byKey(const Key('moss-key-field')),
+        'moss-draft',
+      );
+
+      await tester.tap(
+        find.descendant(of: providerTabs, matching: find.text('Soniox')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        controller.settings.defaultTranscriptionProvider,
+        TranscriptionProvider.mossPro,
+      );
+      expect(find.byKey(const Key('moss-key-field')), findsNothing);
+      expect(find.byKey(const Key('soniox-key-field')), findsOneWidget);
+      expect(find.text('Soniox built-in translation'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('soniox-key-field')),
+        'soniox-draft',
+      );
+
+      await tester.tap(
+        find.descendant(of: providerTabs, matching: find.text('MOSS Pro')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('moss-key-field')))
+            .controller
+            ?.text,
+        'moss-draft',
+      );
+
+      await tester.tap(find.byKey(const Key('default-transcription-provider')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Soniox').last);
+      await tester.pumpAndSettle();
+      expect(
+        settings.value.defaultTranscriptionProvider,
+        TranscriptionProvider.soniox,
+      );
+      expect(find.byKey(const Key('moss-key-field')), findsNothing);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('soniox-key-field')))
+            .controller
+            ?.text,
+        'soniox-draft',
+      );
+
+      final translationKey = find.byKey(const Key('translation-key-field'));
+      await tester.ensureVisible(translationKey);
+      await tester.pumpAndSettle();
+      expect(find.text('AI provider'), findsOneWidget);
+    },
+  );
 
   testWidgets('an unsaved Soniox key can be tested and then saved', (
     tester,
@@ -168,12 +295,12 @@ void main() {
       Theme.of(tester.element(pageTitle)).textTheme.titleLarge?.fontSize,
     );
     expect(find.text('General'), findsOneWidget);
-    expect(find.text('Transcription'), findsOneWidget);
+    expect(find.text('Providers'), findsOneWidget);
     expect(find.text('Appearance'), findsWidgets);
     expect(find.text('Shortcuts'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
     expect(find.byIcon(Icons.tune_rounded), findsOneWidget);
-    expect(find.byIcon(Icons.transcribe_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.hub_outlined), findsOneWidget);
     expect(find.byIcon(Icons.keyboard_outlined), findsOneWidget);
     expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
     expect(find.text('Batch options'), findsNothing);
@@ -238,7 +365,7 @@ void main() {
     expect(controller.inboxMonitorConfig.launchAtLogin, isTrue);
     expect(find.text('Privacy').hitTestable(), findsNothing);
 
-    await tester.tap(find.text('Transcription'));
+    await tester.tap(find.text('Providers'));
     await tester.pumpAndSettle();
 
     final createKeyLink = find.byKey(const Key('create-soniox-key-link'));
@@ -429,6 +556,7 @@ void main() {
     );
 
     expect(find.text('通用'), findsOneWidget);
+    expect(find.text('提供商'), findsOneWidget);
     await tester.tap(find.text('快捷键'));
     await tester.pumpAndSettle();
     expect(find.text('应用').hitTestable(), findsOneWidget);
@@ -488,7 +616,7 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.text('Transcription'));
+      await tester.tap(find.text('Providers'));
       await tester.pumpAndSettle();
 
       final baseUrl = find.byKey(const Key('translation-base-url-field'));

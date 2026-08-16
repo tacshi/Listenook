@@ -98,6 +98,92 @@ void main() {
   });
 
   test(
+    'MOSS Pro default routes new jobs and persists its transcript source',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-moss-route-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/meeting.wav');
+      await file.writeAsBytes([1, 2, 3]);
+      final soniox = _Soniox();
+      final moss = _Moss();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: soniox,
+        moss: moss,
+        mossCredentials: _Credentials(),
+        settings: _Settings(
+          const AppSettings(
+            defaultTranscriptionProvider: TranscriptionProvider.mossPro,
+          ),
+        ),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      await controller.enqueueSources([file.path]);
+      await _waitFor(() => controller.readyCount == 1);
+
+      expect(
+        controller.sessionTranscriptionProvider,
+        TranscriptionProvider.mossPro,
+      );
+      expect(
+        controller.inboxJobs.single.transcriptionProvider,
+        TranscriptionProvider.mossPro,
+      );
+      await controller.startReady();
+
+      final job = controller.inboxJobs.single;
+      expect(job.status, JobStatus.completed);
+      expect(job.transcriptSource, TranscriptSource.mossPro);
+      expect(job.document?.segments.single.speaker, 'S01');
+      expect(moss.uploadCalls, 1);
+      expect(moss.deletedFiles, ['moss-file-1']);
+      expect(moss.deletedTranscriptions, isEmpty);
+      expect(soniox.uploadCalls, 0);
+    },
+  );
+
+  test(
+    'batch provider switch updates unstarted jobs without changing default',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-moss-switch-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/meeting.wav');
+      await file.writeAsBytes([1]);
+      final settings = _Settings();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        moss: _Moss(),
+        mossCredentials: _Credentials(),
+        settings: settings,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.enqueueSources([file.path]);
+      await _waitFor(() => controller.readyCount == 1);
+
+      await controller.updateSessionTranscriptionProvider(
+        TranscriptionProvider.mossPro,
+      );
+
+      expect(
+        controller.inboxJobs.single.transcriptionProvider,
+        TranscriptionProvider.mossPro,
+      );
+      expect(
+        settings.value.defaultTranscriptionProvider,
+        TranscriptionProvider.soniox,
+      );
+    },
+  );
+
+  test(
     'worker pool matches smaller queues and caps larger queues at four',
     () async {
       for (final itemCount in [3, 6]) {
@@ -196,6 +282,59 @@ void main() {
       expect(soniox.deletedTranscriptions, contains('owned-tx'));
     },
   );
+
+  test('restart resumes a MOSS task with its recorded provider', () async {
+    final file = await File(
+      '${Directory.systemTemp.path}/meow-moss-recovery.wav',
+    ).create();
+    addTearDown(() async {
+      if (await file.exists()) await file.delete();
+    });
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'moss-recover',
+        batchId: 'batch',
+        sourcePath: file.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.processing,
+        metadata: const MediaMetadata(
+          sizeBytes: 1,
+          durationMs: 1000,
+          hasAudio: true,
+          hasVideo: false,
+          formatName: 'wav',
+        ),
+        remoteFileId: 'moss-file-owned',
+        remoteTranscriptionId: 'moss-task-owned',
+        cleanupState: CleanupState.pending,
+        transcriptionProvider: TranscriptionProvider.mossPro,
+      ),
+    ]);
+    final soniox = _Soniox();
+    final moss = _Moss();
+    final controller = _controller(
+      jobs: jobs,
+      soniox: soniox,
+      moss: moss,
+      mossCredentials: _Credentials(),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.initialize();
+    await _waitFor(
+      () => jobs.saved['moss-recover']?.status == JobStatus.completed,
+    );
+
+    expect(moss.uploadCalls, 0);
+    expect(moss.deletedFiles, contains('moss-file-owned'));
+    expect(soniox.deletedFiles, isEmpty);
+    expect(
+      jobs.saved['moss-recover']?.transcriptSource,
+      TranscriptSource.mossPro,
+    );
+  });
 
   test('adding a ready library job only restores it to the inbox', () async {
     final directory = await Directory.systemTemp.createTemp(
@@ -699,7 +838,7 @@ void main() {
       await controller.startReady();
 
       final result = controller.inboxJobs.single;
-      expect(settings.value.translationSettings.autoTranslate, isFalse);
+      expect(settings.value.translationSettings.autoTranslate, isTrue);
       expect(soniox.createdOptions?.sonioxTranslation.enabled, isTrue);
       expect(result.document!.segments.single.translatedText, 'Hola.');
       expect(result.translationState.status, TranslationStatus.completed);
@@ -709,7 +848,53 @@ void main() {
     },
   );
 
-  test('automatic Soniox and LLM translation settings are exclusive', () async {
+  test(
+    'MOSS Pro uses configured LLM translation after transcription',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('meow-moss-llm-');
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/translated.wav');
+      await file.writeAsBytes([1]);
+      final llm = _SuccessfulTranslation();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        moss: _Moss(),
+        mossCredentials: _Credentials(),
+        settings: _Settings(
+          const AppSettings(
+            defaultTranscriptionProvider: TranscriptionProvider.mossPro,
+            sonioxTranslation: SonioxTranslationOptions(
+              enabled: true,
+              targetLanguage: 'es',
+            ),
+            translationSettings: TranslationSettings(
+              provider: TranslationProviderTemplate.openAi,
+              baseUrl: 'https://api.openai.com/v1',
+              model: 'translation-model',
+              targetLanguage: 'es',
+              autoTranslate: true,
+            ),
+          ),
+        ),
+        translationCredentials: _TranslationCredentials(),
+        translationService: llm,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.enqueueSources([file.path]);
+      await _waitFor(() => controller.readyCount == 1);
+
+      await controller.startReady();
+
+      final job = controller.inboxJobs.single;
+      expect(llm.calls, 1);
+      expect(job.document?.segments.single.translatedText, '补充翻译。');
+      expect(job.translationState.origin, TranslationOrigin.llm);
+    },
+  );
+
+  test('Soniox and LLM automatic translation settings can coexist', () async {
     final directory = await Directory.systemTemp.createTemp('meow-modes-');
     addTearDown(() => directory.delete(recursive: true));
     final file = File('${directory.path}/queued.wav');
@@ -744,23 +929,23 @@ void main() {
 
     expect(sonioxError, isNull);
     expect(controller.settings.sonioxTranslation.enabled, isTrue);
-    expect(controller.settings.translationSettings.autoTranslate, isFalse);
+    expect(controller.settings.translationSettings.autoTranslate, isTrue);
     expect(
       controller.inboxJobs.single.options.sonioxTranslation.enabled,
       isTrue,
     );
-    expect(controller.inboxJobs.single.translationOptions.enabled, isFalse);
+    expect(controller.inboxJobs.single.translationOptions.enabled, isTrue);
 
     final llmError = await controller.updateTranslationDefaults(
       controller.settings.translationSettings.copyWith(autoTranslate: true),
     );
 
     expect(llmError, isNull);
-    expect(controller.settings.sonioxTranslation.enabled, isFalse);
+    expect(controller.settings.sonioxTranslation.enabled, isTrue);
     expect(controller.settings.translationSettings.autoTranslate, isTrue);
     expect(
       controller.inboxJobs.single.options.sonioxTranslation.enabled,
-      isFalse,
+      isTrue,
     );
     expect(controller.inboxJobs.single.translationOptions.enabled, isTrue);
   });
@@ -1508,6 +1693,8 @@ AppController _controller({
   TranscriptExporter? exporter,
   InboxMonitorRepository? inboxMonitorRepository,
   InboxFolderMonitor? inboxMonitor,
+  TranscriptionClient? moss,
+  CredentialStore? mossCredentials,
 }) => AppController(
   credentialStore: credentials ?? _Credentials(),
   settingsRepository: settings ?? _Settings(),
@@ -1515,6 +1702,8 @@ AppController _controller({
   mediaService: media ?? _Media(),
   sourceResolver: const LocalMediaSourceResolver(),
   sonioxClient: soniox,
+  mossClient: moss,
+  mossCredentialStore: mossCredentials,
   exporter: exporter ?? const DefaultTranscriptExporter(),
   translationCredentialStore: translationCredentials,
   translationService: translationService,
@@ -1953,6 +2142,57 @@ class _Soniox implements SonioxClient {
     currentUploads--;
     onProgress?.call(1, null);
     return 'file-$call';
+  }
+
+  @override
+  Future<void> validateKey({String? apiKey}) async {}
+}
+
+class _Moss implements TranscriptionClient {
+  int uploadCalls = 0;
+  final deletedFiles = <String>[];
+  final deletedTranscriptions = <String>[];
+
+  @override
+  Future<String> createTranscription(
+    String fileId,
+    TranscriptionOptions options,
+  ) async => 'moss-task-1';
+
+  @override
+  Future<void> deleteFile(String id) async => deletedFiles.add(id);
+
+  @override
+  Future<void> deleteTranscription(String id) async {}
+
+  @override
+  Future<Map<String, dynamic>> getTranscript(String id) async => {
+    'duration': 1,
+    'text': 'MOSS result',
+    'segments': [
+      {
+        'id': 'moss-segment',
+        'start': 0,
+        'end': 1,
+        'text': 'MOSS result',
+        'speaker': 'S01',
+      },
+    ],
+  };
+
+  @override
+  Future<RemoteTranscriptionState> getTranscription(String id) async =>
+      const RemoteTranscriptionState(status: 'SUCCESS');
+
+  @override
+  Future<String> uploadFile(
+    String path, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    uploadCalls++;
+    onProgress?.call(1, null);
+    return 'moss-file-$uploadCalls';
   }
 
   @override

@@ -11,7 +11,7 @@ Preview streams remote audio and does not persist it. Deep-listen downloads
 are written either to `Podcasts/` inside a configured Inbox folder or to an
 application-managed cache. Inbox-folder copies are user files and are not
 deleted with the job; managed copies are removed when the job is deleted.
-Nothing is uploaded to Soniox until you press **Transcribe**, except a
+Nothing is uploaded to a transcription provider until you press **Transcribe**, except a
 word-level publisher transcript that can complete without uploading media.
 
 Inbox folder monitoring is optional and entirely local. When configured,
@@ -32,16 +32,18 @@ notification for newly discovered files. Notification permission can be
 denied without disabling monitoring; the tray waiting count remains available.
 
 When you explicitly start transcription, MeowSTT uploads the selected media
-directly to Soniox using your API key. It creates one Soniox file and one Soniox
-transcription resource per job. After transcript retrieval—or after cancellation
-or a terminal error—it attempts to delete exactly those resources. Failed
-cleanup remains marked locally and is retried later. The app never lists or
-deletes unrelated resources in your Soniox account.
+directly to the Soniox or MOSI service recorded on that job, using the matching
+API key. Soniox jobs create a file and transcription resource; MeowSTT attempts
+to delete both after retrieval, cancellation, or terminal failure. MOSS jobs
+create a file and asynchronous task; MeowSTT deletes the uploaded file, while
+the task record follows MOSI's retention policy because its public API has no
+task-delete operation. Failed supported cleanup is marked locally and retried.
+The app never lists or deletes unrelated account resources.
 
 Translation is optional. When Soniox built-in translation is enabled, the
 selected target language is included in the original Soniox transcription
 request and Soniox returns the transcript and translation together. No second
-service receives the media for that mode.
+service receives the media for that mode. This option is ignored for MOSS jobs.
 
 LLM translation uses the single OpenAI-compatible endpoint that you configure.
 When you manually translate or enable automatic LLM translation, MeowSTT sends
@@ -57,12 +59,12 @@ audio and video are never sent to that endpoint. Generated overviews, chapters,
 insights, edits, and transcript evidence references are stored locally and can
 be removed with the history entry.
 
-Both API keys are stored by the operating system's secure credential service
+All transcription and AI-provider API keys are stored by the operating system's secure credential service
 and are never written to settings or job manifests. Local Application Support
 data contains source paths, media metadata, queue/recovery state, raw transcript
 tokens, editable original and translated segments, speaker mappings,
 translation progress, AI Brief drafts and generation state, and export defaults.
-Original media is not copied into the library. Temporary extracted FLAC audio
+Original media is not copied into the library. Temporary extracted audio
 is deleted after upload.
 
 Deleting a history entry removes its local manifest and edits only. It does not

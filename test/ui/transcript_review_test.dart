@@ -21,7 +21,6 @@ import 'package:meow_stt/state/podcast_controller.dart';
 import 'package:meow_stt/state/podcast_player.dart';
 import 'package:meow_stt/ui/app_shell.dart';
 import 'package:meow_stt/ui/inbox_page.dart';
-import 'package:meow_stt/ui/library_page.dart';
 import 'package:meow_stt/ui/review_fullscreen_controller.dart';
 import 'package:meow_stt/ui/transcript_review.dart';
 import 'package:meow_stt/ui/workspace_page.dart';
@@ -3062,7 +3061,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.settings);
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
-    await tester.tap(find.text('Transcription'));
+    await tester.tap(find.text('Providers'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('soniox-key-field')));
     await tester.pump();
@@ -4580,6 +4579,77 @@ void main() {
     expect(find.text('AI provider'), findsNothing);
     expect(find.byKey(const Key('translation-target-language')), findsNothing);
     expect(find.byKey(const Key('auto-translate-switch')), findsNothing);
+  });
+
+  testWidgets('MOSS batch hides Soniox-only language and context options', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      mossCredentialStore: _Credentials(),
+      settingsRepository: _Settings(
+        const AppSettings(
+          defaultTranscriptionProvider: TranscriptionProvider.mossPro,
+          sonioxTranslation: SonioxTranslationOptions(
+            enabled: true,
+            targetLanguage: 'zh',
+          ),
+        ),
+      ),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'moss-ready',
+          batchId: 'batch',
+          sourcePath: '/moss.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+          transcriptionProvider: TranscriptionProvider.mossPro,
+        ),
+      ]),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      mossClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.addToInbox('moss-ready');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(
+            body: InboxPage(onAddFiles: _noop, onImportFolder: _noop),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.byKey(const Key('session-transcription-provider')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('session-language-hints-picker')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('session-context-terms-field')), findsNothing);
+    expect(
+      find.text(
+        'Multilingual diarized transcription; language and context are automatic',
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('soniox-translation-summary')), findsNothing);
   });
 
   testWidgets('inbox keeps two panes at Windows initial content width', (

@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 7;
+const int manifestVersion = 8;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 const Set<String> supportedMonitoredMediaExtensions = {
@@ -189,14 +189,16 @@ enum CleanupState { none, pending, complete }
 
 enum JobSourceOrigin { manual, monitoredFolder, podcast }
 
-enum TranscriptAcquisitionMode { soniox, publisherCaptions }
+enum TranscriptionProvider { soniox, mossPro }
+
+enum TranscriptAcquisitionMode { soniox, mossPro, publisherCaptions }
 
 extension TranscriptAcquisitionModeX on TranscriptAcquisitionMode {
   bool get usesPublisherTranscript =>
       this == TranscriptAcquisitionMode.publisherCaptions;
 }
 
-enum TranscriptSource { soniox, publisher }
+enum TranscriptSource { soniox, mossPro, publisher }
 
 enum PodcastTranscriptTiming { none, cue, word }
 
@@ -1507,6 +1509,7 @@ class AppSettings {
         const TranslationPreferences(),
     TranslationSettings? translationSettings,
     this.sonioxTranslation = const SonioxTranslationOptions(),
+    this.defaultTranscriptionProvider = TranscriptionProvider.soniox,
   }) : _llmProviderSettings = llmProviderSettings,
        _translationPreferences = translationPreferences,
        _legacyTranslationSettings = translationSettings;
@@ -1521,6 +1524,7 @@ class AppSettings {
   final TranslationPreferences _translationPreferences;
   final TranslationSettings? _legacyTranslationSettings;
   final SonioxTranslationOptions sonioxTranslation;
+  final TranscriptionProvider defaultTranscriptionProvider;
 
   LlmProviderSettings get llmProviderSettings =>
       _legacyTranslationSettings?.providerSettings ?? _llmProviderSettings;
@@ -1544,6 +1548,7 @@ class AppSettings {
     TranslationPreferences? translationPreferences,
     TranslationSettings? translationSettings,
     SonioxTranslationOptions? sonioxTranslation,
+    TranscriptionProvider? defaultTranscriptionProvider,
   }) => AppSettings(
     themeMode: themeMode ?? this.themeMode,
     localeMode: localeMode ?? this.localeMode,
@@ -1560,6 +1565,8 @@ class AppSettings {
         translationPreferences ??
         this.translationPreferences,
     sonioxTranslation: sonioxTranslation ?? this.sonioxTranslation,
+    defaultTranscriptionProvider:
+        defaultTranscriptionProvider ?? this.defaultTranscriptionProvider,
   );
 
   Map<String, dynamic> toJson() => {
@@ -1573,6 +1580,7 @@ class AppSettings {
     'llm_provider_settings': llmProviderSettings.toJson(),
     'translation_preferences': translationPreferences.toJson(),
     'soniox_translation': sonioxTranslation.toJson(),
+    'default_transcription_provider': defaultTranscriptionProvider.name,
   };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
@@ -1607,6 +1615,12 @@ class AppSettings {
       sonioxTranslation: SonioxTranslationOptions.fromJson(
         (json['soniox_translation'] as Map?)?.cast<String, dynamic>(),
       ),
+      defaultTranscriptionProvider:
+          _enumByName(
+            TranscriptionProvider.values,
+            json['default_transcription_provider'],
+          ) ??
+          TranscriptionProvider.soniox,
     );
   }
 }
@@ -1877,9 +1891,14 @@ class TranscriptionJob {
     this.sourceOrigin = JobSourceOrigin.manual,
     this.sourceFingerprint,
     this.podcastProvenance,
-    this.transcriptAcquisitionMode = TranscriptAcquisitionMode.soniox,
+    this.transcriptionProvider = TranscriptionProvider.soniox,
+    TranscriptAcquisitionMode? transcriptAcquisitionMode,
     this.transcriptSource,
-  });
+  }) : transcriptAcquisitionMode =
+           transcriptAcquisitionMode ??
+           (transcriptionProvider == TranscriptionProvider.mossPro
+               ? TranscriptAcquisitionMode.mossPro
+               : TranscriptAcquisitionMode.soniox);
 
   final String id;
   final String batchId;
@@ -1908,6 +1927,7 @@ class TranscriptionJob {
   final SourceFingerprint? sourceFingerprint;
   final PodcastEpisodeProvenance? podcastProvenance;
   final TranscriptAcquisitionMode transcriptAcquisitionMode;
+  final TranscriptionProvider transcriptionProvider;
   final TranscriptSource? transcriptSource;
 
   bool get isBusy =>
@@ -1945,6 +1965,7 @@ class TranscriptionJob {
     SourceFingerprint? sourceFingerprint,
     PodcastEpisodeProvenance? podcastProvenance,
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
+    TranscriptionProvider? transcriptionProvider,
     TranscriptSource? transcriptSource,
     bool clearError = false,
     bool clearRemoteFileId = false,
@@ -1983,6 +2004,7 @@ class TranscriptionJob {
     podcastProvenance: podcastProvenance ?? this.podcastProvenance,
     transcriptAcquisitionMode:
         transcriptAcquisitionMode ?? this.transcriptAcquisitionMode,
+    transcriptionProvider: transcriptionProvider ?? this.transcriptionProvider,
     transcriptSource: transcriptSource ?? this.transcriptSource,
   );
 
@@ -2018,6 +2040,7 @@ class TranscriptionJob {
     if (podcastProvenance case final value?)
       'podcast_provenance': value.toJson(),
     'transcript_acquisition_mode': transcriptAcquisitionMode.name,
+    'transcription_provider': transcriptionProvider.name,
     if (transcriptSource case final value?) 'transcript_source': value.name,
   };
 
@@ -2096,6 +2119,10 @@ class TranscriptionJob {
       transcriptAcquisitionMode: _transcriptAcquisitionModeFromJson(
         json['transcript_acquisition_mode'],
       ),
+      transcriptionProvider: _transcriptionProviderFromJson(
+        json['transcription_provider'],
+        json['transcript_acquisition_mode'],
+      ),
       transcriptSource: _enumByName(
         TranscriptSource.values,
         json['transcript_source'],
@@ -2165,6 +2192,15 @@ TranscriptAcquisitionMode _transcriptAcquisitionModeFromJson(dynamic name) {
   return _enumByName(TranscriptAcquisitionMode.values, name) ??
       TranscriptAcquisitionMode.soniox;
 }
+
+TranscriptionProvider _transcriptionProviderFromJson(
+  dynamic provider,
+  dynamic acquisitionMode,
+) =>
+    _enumByName(TranscriptionProvider.values, provider) ??
+    (acquisitionMode == 'mossPro'
+        ? TranscriptionProvider.mossPro
+        : TranscriptionProvider.soniox);
 
 extension _FirstOrNull<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;

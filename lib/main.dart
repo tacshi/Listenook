@@ -11,6 +11,7 @@ import 'data/desktop_runtime.dart';
 import 'data/inbox_folder_monitor.dart';
 import 'data/local_repositories.dart';
 import 'data/local_media_source_resolver.dart';
+import 'data/moss_api_client.dart';
 import 'data/openai_llm_client.dart';
 import 'data/openai_translation_service.dart';
 import 'data/podcast/http_podcast_gateway.dart';
@@ -59,6 +60,10 @@ Future<void> main(List<String> arguments) async {
   final paths = await AppPaths.create();
   final settingsRepository = JsonSettingsRepository(paths);
   final credentials = SecureCredentialStore();
+  final mossCredentials = SecureCredentialStore(
+    storageKey: 'app.meowstt.desktop.moss_api_key',
+    environmentVariable: 'MOSS_API_KEY',
+  );
   final llmCredentials = SecureLlmCredentialStore();
   final llmClient = OpenAiCompatibleLlmClient(llmCredentials);
   final media = ProcessMediaService(paths);
@@ -77,6 +82,8 @@ Future<void> main(List<String> arguments) async {
     mediaService: media,
     sourceResolver: const LocalMediaSourceResolver(),
     sonioxClient: SonioxApiClient(credentials),
+    mossCredentialStore: mossCredentials,
+    mossClient: MossApiClient(mossCredentials),
     exporter: const DefaultTranscriptExporter(),
     translationCredentialStore: llmCredentials,
     translationService: OpenAiCompatibleTranslationService(llmCredentials),
