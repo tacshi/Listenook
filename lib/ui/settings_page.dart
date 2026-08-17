@@ -515,6 +515,11 @@ class _SettingsPageState extends State<SettingsPage> {
         icon: Icons.repeat_one_rounded,
         shortcuts: [
           _ShortcutDefinition(
+            id: 'play-pause',
+            description: context.strings.t('shortcut_play_pause'),
+            keys: [context.strings.t('shortcut_key_space')],
+          ),
+          _ShortcutDefinition(
             id: 'hold-repeat',
             description: context.strings.t('shortcut_hold_repeat'),
             keys: const ['R'],
@@ -525,11 +530,6 @@ class _SettingsPageState extends State<SettingsPage> {
         title: context.strings.t('shortcut_section_fullscreen_playback'),
         icon: Icons.fullscreen_rounded,
         shortcuts: [
-          _ShortcutDefinition(
-            id: 'play-pause',
-            description: context.strings.t('shortcut_play_pause'),
-            keys: [context.strings.t('shortcut_key_space')],
-          ),
           _ShortcutDefinition(
             id: 'seek-backward',
             description: context.strings.t('shortcut_seek_backward'),
@@ -567,6 +567,9 @@ class _SettingsPageState extends State<SettingsPage> {
   ) {
     final config = controller.inboxMonitorConfig;
     final macOS = Platform.isMacOS;
+    final rowLabelStyle = Theme.of(
+      context,
+    ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600);
     return _tabList([
       Card(
         child: Padding(
@@ -575,7 +578,12 @@ class _SettingsPageState extends State<SettingsPage> {
             children: [
               Row(
                 children: [
-                  Expanded(child: Text(context.strings.t('theme'))),
+                  Expanded(
+                    child: Text(
+                      context.strings.t('theme'),
+                      style: rowLabelStyle,
+                    ),
+                  ),
                   DropdownButton<AppThemeMode>(
                     value: settings.themeMode,
                     items: [
@@ -600,7 +608,12 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               Row(
                 children: [
-                  Expanded(child: Text(context.strings.t('locale'))),
+                  Expanded(
+                    child: Text(
+                      context.strings.t('locale'),
+                      style: rowLabelStyle,
+                    ),
+                  ),
                   DropdownButton<AppLocaleMode>(
                     value: settings.localeMode,
                     items: [

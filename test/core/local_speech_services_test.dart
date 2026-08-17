@@ -448,11 +448,118 @@ void main() {
 
     expect(result.status, ForcedAlignmentStatus.completed);
     expect(result.tokens.map((token) => token.text), ['日', '本', '語']);
-    expect(result.tokens[1].startMs, result.tokens[1].endMs);
+    expect(result.tokens.map((token) => token.startMs), [100, 160, 200]);
+    expect(result.tokens.every((token) => token.endMs > token.startMs), isTrue);
   });
 
   test(
-    'alignment preserves an isolated point clamped to a segment boundary',
+    'alignment advances late word transitions across uncertain gaps',
+    () async {
+      final document = TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'opening',
+            startMs: 110,
+            endMs: 3590,
+            text: 'This BBC podcast is supported by ads outside the UK.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.utc(2026, 8, 17),
+      );
+      final worker = _Worker({
+        'tokens': [
+          {
+            'segment_id': 'opening',
+            'text': 'This',
+            'start_ms': 110,
+            'end_ms': 720,
+          },
+          {
+            'segment_id': 'opening',
+            'text': 'BBC',
+            'start_ms': 960,
+            'end_ms': 1040,
+          },
+          {
+            'segment_id': 'opening',
+            'text': 'podcast',
+            'start_ms': 1040,
+            'end_ms': 1440,
+          },
+          {
+            'segment_id': 'opening',
+            'text': 'is',
+            'start_ms': 1600,
+            'end_ms': 2160,
+          },
+          {
+            'segment_id': 'opening',
+            'text': 'supported',
+            'start_ms': 2160,
+            'end_ms': 2320,
+          },
+          {
+            'segment_id': 'opening',
+            'text': 'by',
+            'start_ms': 2320,
+            'end_ms': 2720,
+          },
+          {
+            'segment_id': 'opening',
+            'text': 'ads',
+            'start_ms': 2720,
+            'end_ms': 2880,
+          },
+          {
+            'segment_id': 'opening',
+            'text': 'outside',
+            'start_ms': 3200,
+            'end_ms': 3280,
+          },
+          {
+            'segment_id': 'opening',
+            'text': 'the',
+            'start_ms': 3280,
+            'end_ms': 3435,
+          },
+          {
+            'segment_id': 'opening',
+            'text': 'UK',
+            'start_ms': 3435,
+            'end_ms': 3590,
+          },
+        ],
+      });
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          sourcePath: '/opening.wav',
+          document: document,
+          languageHints: const ['en'],
+        ),
+      );
+
+      expect(result.status, ForcedAlignmentStatus.completed);
+      expect(result.tokens[1].startMs, 840);
+      expect(result.tokens[3].startMs, 1520);
+      expect(result.tokens[7].startMs, 3040);
+      expect(
+        result.tokens.every((token) => token.endMs > token.startMs),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'alignment gives a visible span to a point clamped at a segment boundary',
     () async {
       final document = TranscriptDocument(
         tokens: const [],
@@ -486,9 +593,9 @@ void main() {
 
       expect(result.status, ForcedAlignmentStatus.completed);
       expect(result.tokens.first.startMs, 100);
-      expect(result.tokens.first.endMs, 100);
+      expect(result.tokens.first.endMs, 140);
       expect(
-        result.tokens.skip(1).every((token) => token.endMs > token.startMs),
+        result.tokens.every((token) => token.endMs > token.startMs),
         isTrue,
       );
     },

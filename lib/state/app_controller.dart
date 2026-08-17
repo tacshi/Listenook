@@ -1356,6 +1356,8 @@ class AppController extends ChangeNotifier {
     required JobSourceOrigin sourceOrigin,
     SourceFingerprint? fingerprint,
     bool allowLocalAutoStart = true,
+    PodcastEpisodeProvenance? podcastProvenance,
+    String? displayTitle,
   }) async {
     if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
     final now = DateTime.now().toUtc();
@@ -1375,6 +1377,8 @@ class AppController extends ChangeNotifier {
           ? JobSourceOrigin.podcast
           : sourceOrigin,
       sourceFingerprint: fingerprint,
+      podcastProvenance: podcastProvenance,
+      displayTitle: displayTitle,
       transcriptionProvider: _sessionTranscriptionProvider,
       transcriptAcquisitionMode: _providerAcquisitionMode(
         _sessionTranscriptionProvider,
@@ -1387,6 +1391,23 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     unawaited(_prepare(job.id));
     return job;
+  }
+
+  Future<TranscriptionJob?> enqueueAgain(String id) async {
+    final original = _jobs[id];
+    if (original == null) return null;
+    final sources = await _sourceResolver.resolve([original.sourcePath]);
+    if (sources.isEmpty) return null;
+    final queued = await _enqueueResolvedSource(
+      sources.first,
+      sourceOrigin: JobSourceOrigin.manual,
+      fingerprint: await fingerprintMonitoredFile(sources.first.path),
+      allowLocalAutoStart: false,
+      podcastProvenance: original.podcastProvenance,
+      displayTitle: original.displayTitle,
+    );
+    setDestination(AppDestination.inbox);
+    return queued;
   }
 
   Future<void> _prepare(String id) async {

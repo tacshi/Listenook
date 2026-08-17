@@ -412,8 +412,14 @@ void main() {
     final startupTitle = tester.widget<Text>(
       find.text('Launch MeowSTT at login'),
     );
+    final themeTitle = tester.widget<Text>(find.text('Theme'));
+    final languageTitle = tester.widget<Text>(find.text('Language'));
     final settingsTheme = Theme.of(tester.element(startupSetting)).textTheme;
     expect(startupTitle.style?.fontSize, settingsTheme.bodyMedium?.fontSize);
+    expect(themeTitle.style?.fontSize, startupTitle.style?.fontSize);
+    expect(themeTitle.style?.fontWeight, startupTitle.style?.fontWeight);
+    expect(languageTitle.style?.fontSize, startupTitle.style?.fontSize);
+    expect(languageTitle.style?.fontWeight, startupTitle.style?.fontWeight);
     final menuBarCard = find.ancestor(
       of: find.text('Show menu bar icon'),
       matching: find.byType(Card),
@@ -552,7 +558,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Application').hitTestable(), findsOneWidget);
     expect(find.text('Navigation').hitTestable(), findsOneWidget);
-    expect(find.text('Review playback').hitTestable(), findsOneWidget);
+    expect(find.text('Playback').hitTestable(), findsOneWidget);
     expect(find.text('Fullscreen playback').hitTestable(), findsOneWidget);
     expect(find.text('Hold to repeat the current sentence'), findsOneWidget);
     for (final id in [
@@ -631,7 +637,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('应用').hitTestable(), findsOneWidget);
     expect(find.text('导航').hitTestable(), findsOneWidget);
-    expect(find.text('校对播放').hitTestable(), findsOneWidget);
+    expect(find.text('播放').hitTestable(), findsOneWidget);
     expect(find.text('全屏播放').hitTestable(), findsOneWidget);
     expect(find.text('按住以重复当前句'), findsOneWidget);
     expect(

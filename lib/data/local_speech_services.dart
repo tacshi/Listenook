@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import '../core/aligned_token_timing.dart';
 import '../core/contracts.dart';
 import '../core/local_speech.dart';
 import '../core/models.dart';
@@ -376,7 +377,6 @@ class ProcessForcedAlignmentService implements ForcedAlignmentService {
   static const _coreMlPromptSafetyTokens = 48;
   static const _coreMlStructuralTokens = 15;
   static const _coreMlAudioTokensPerSecond = 13;
-  static const _minimumRecoveredTokenDurationMs = 40;
 
   final LocalModelManager _models;
   final LocalPcmPreparer _pcm;
@@ -624,7 +624,7 @@ class ProcessForcedAlignmentService implements ForcedAlignmentService {
           var repairCount = owned.length - repairStart;
           var availableMs = segment.endMs - intervalStart;
           while (repairStart > 0 &&
-              availableMs < repairCount * _minimumRecoveredTokenDurationMs) {
+              availableMs < repairCount * minimumAlignedTokenDurationMs) {
             repairStart--;
             intervalStart = repairStart == 0
                 ? segment.startMs
@@ -641,15 +641,19 @@ class ProcessForcedAlignmentService implements ForcedAlignmentService {
             );
           }
         }
-        if (owned.length > 1 &&
-            owned.every(
+        final stabilized = stabilizeAlignedTokenTransitions(
+          tokens: owned,
+          segment: segment,
+        );
+        if (stabilized.length > 1 &&
+            stabilized.every(
               (token) =>
-                  token.startMs == owned.first.startMs &&
-                  token.endMs == owned.first.endMs,
+                  token.startMs == stabilized.first.startMs &&
+                  token.endMs == stabilized.first.endMs,
             )) {
           continue;
         }
-        tokens.addAll(owned);
+        tokens.addAll(stabilized);
       }
     }
 

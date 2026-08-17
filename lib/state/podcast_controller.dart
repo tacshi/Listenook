@@ -105,7 +105,15 @@ class PodcastController extends ChangeNotifier {
     PodcastFeed feed, {
     TranscriptDocument? document,
     String? localPath,
-  }) => _player.play(episode, feed, document: document, localPath: localPath);
+  }) => _player.play(
+    episode,
+    feed,
+    document: document,
+    localPath: localPath,
+    feedDurationMs:
+        cachedEpisode(episode.id, feedUrl: episode.feedUrl)?.durationMs ??
+        episode.durationMs,
+  );
 
   void _handlePlaybackChange() => notifyListeners();
 

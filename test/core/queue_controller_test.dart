@@ -471,6 +471,65 @@ void main() {
     expect(soniox.uploadCalls, 0);
   });
 
+  test(
+    'adding a completed job back to Inbox creates a configurable copy',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-retranscribe-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/completed.wav');
+      await source.writeAsBytes(const [1]);
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'completed',
+          batchId: 'old-batch',
+          sourcePath: source.path,
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          metadata: const MediaMetadata(
+            sizeBytes: 1,
+            durationMs: 1000,
+            hasAudio: true,
+            hasVideo: false,
+            formatName: 'wav',
+          ),
+          document: _document(now),
+        ),
+      ]);
+      final controller = _controller(jobs: jobs, soniox: _Soniox());
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.updateSessionOptions(
+        const TranscriptionOptions(languageHints: ['zh']),
+      );
+
+      final queued = await controller.enqueueAgain('completed');
+      await _waitFor(
+        () => controller.inboxJobs.single.status == JobStatus.ready,
+      );
+
+      final original = controller.jobById('completed')!;
+      final copy = controller.inboxJobs.single;
+      expect(queued?.id, copy.id);
+      expect(copy.id, isNot(original.id));
+      expect(copy.document, isNull);
+      expect(copy.options.languageHints, ['zh']);
+      expect(original.status, JobStatus.completed);
+      expect(original.document, isNotNull);
+      expect(controller.destination, AppDestination.inbox);
+      expect(controller.processing, isFalse);
+
+      await controller.updateSessionOptions(
+        const TranscriptionOptions(languageHints: ['en']),
+      );
+      expect(controller.inboxJobs.single.options.languageHints, ['en']);
+      expect(original.options.languageHints, isEmpty);
+    },
+  );
+
   test('adding a ready library job defers missing-source validation', () async {
     final now = DateTime.now().toUtc();
     final jobs = _Jobs([

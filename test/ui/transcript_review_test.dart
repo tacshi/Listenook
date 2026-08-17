@@ -30,39 +30,111 @@ import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
-  testWidgets(
-    'podcast arrow shortcuts seek backward and forward five seconds',
-    (tester) async {
-      final player = _ShortcutPodcastPlayer();
-      addTearDown(player.dispose);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: PodcastPlaybackShortcuts(
+  testWidgets('podcast shortcuts toggle playback and seek five seconds', (
+    tester,
+  ) async {
+    final player = _ShortcutPodcastPlayer();
+    addTearDown(player.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PodcastPlaybackShortcuts(
             player: player,
-            child: const Focus(
-              autofocus: true,
-              child: SizedBox(key: Key('shortcut-target')),
+            child: const Column(
+              children: [
+                Focus(
+                  autofocus: true,
+                  child: SizedBox(key: Key('shortcut-target'), height: 40),
+                ),
+                TextField(key: Key('podcast-shortcut-editable')),
+              ],
             ),
           ),
         ),
-      );
-      await tester.pump();
+      ),
+    );
+    await tester.pump();
 
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-      await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
 
-      expect(player.offsets, const [
-        Duration(seconds: -5),
-        Duration(seconds: 5),
-      ]);
+    expect(player.offsets, const [Duration(seconds: -5), Duration(seconds: 5)]);
+    expect(player.toggleCalls, 1);
 
-      player.active = false;
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
-      await tester.pump();
-      expect(player.offsets, hasLength(2));
-    },
-  );
+    await tester.tap(find.byKey(const Key('podcast-shortcut-editable')));
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    expect(player.toggleCalls, 1);
+
+    player.active = false;
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(player.offsets, hasLength(2));
+  });
+
+  testWidgets('space toggles workspace video unless text is editable', (
+    tester,
+  ) async {
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-video-space-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/space.mp4');
+    await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+    late _ReviewFakePlatformPlayer platform;
+    debugTranscriptReviewPlayerFactory = () =>
+        Player(platformPlayer: platform = _ReviewFakePlatformPlayer());
+    debugTranscriptReviewSourceExists = (_) async => true;
+    final originalDebugPrint = debugPrint;
+    debugPrint = (message, {wrapWidth}) {};
+    addTearDown(() {
+      debugTranscriptReviewPlayerFactory = null;
+      debugTranscriptReviewSourceExists = null;
+      debugPrint = originalDebugPrint;
+    });
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      metadata: _videoMetadata,
+      sourcePath: source.path,
+    );
+    addTearDown(controller.dispose);
+    controller.openInWorkspace('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(
+            body: Column(
+              children: [
+                Expanded(child: TranscriptReview(jobId: 'job')),
+                TextField(key: Key('shortcut-editable')),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    expect(platform.playOrPauseCalls, 1);
+
+    await tester.tap(find.byKey(const Key('shortcut-editable')));
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    expect(platform.playOrPauseCalls, 1);
+    debugPrint = originalDebugPrint;
+  });
 
   test('wide video viewport derives its height from the available width', () {
     expect(
@@ -3959,9 +4031,7 @@ void main() {
     expect(controller.destination, AppDestination.library);
   });
 
-  testWidgets('workspace shows podcast provenance and episode link', (
-    tester,
-  ) async {
+  testWidgets('workspace omits the podcast provenance banner', (tester) async {
     final controller = await _controllerForDocument(
       _simpleDocument(),
       sourceOrigin: JobSourceOrigin.podcast,
@@ -3992,15 +4062,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(
-      find.byKey(const Key('podcast-workspace-provenance')),
-      findsOneWidget,
-    );
-    expect(find.text('Official captions · sentence-level'), findsOneWidget);
+    expect(find.byKey(const Key('podcast-workspace-provenance')), findsNothing);
     expect(
       find.byKey(const Key('podcast-workspace-open-episode')),
-      findsOneWidget,
+      findsNothing,
     );
+    expect(find.byType(TranscriptReview), findsOneWidget);
   });
 
   testWidgets('legacy MOSS transcripts expose manual local alignment', (
@@ -4080,10 +4147,17 @@ void main() {
     await tester.pumpAndSettle();
 
     final retryAlignment = find.byKey(const Key('rerun-forced-alignment'));
+    final addBackToInbox = find.byKey(const Key('add-back-to-inbox'));
     final translateWithLlm = find.byKey(const Key('translate-transcript'));
+    expect(addBackToInbox, findsOneWidget);
+    expect(find.text('Add back to Inbox'), findsOneWidget);
     expect(retryAlignment, findsOneWidget);
     expect(find.text('Retry local alignment'), findsOneWidget);
     expect(translateWithLlm, findsOneWidget);
+    expect(
+      tester.getTopLeft(addBackToInbox).dy,
+      lessThan(tester.getTopLeft(retryAlignment).dy),
+    );
     expect(
       tester.getTopLeft(retryAlignment).dy,
       lessThan(tester.getTopLeft(translateWithLlm).dy),
@@ -6753,12 +6827,16 @@ void main() {
 class _ShortcutPodcastPlayer extends PodcastPlayer {
   final offsets = <Duration>[];
   bool active = true;
+  int toggleCalls = 0;
 
   @override
   bool get hasSession => active;
 
   @override
   Future<void> skip(Duration delta) async => offsets.add(delta);
+
+  @override
+  Future<void> toggle() async => toggleCalls++;
 }
 
 class _PlaybackFlushRepository implements PodcastRepository {
@@ -7169,6 +7247,7 @@ class _ReviewFakePlatformPlayer extends PlatformPlayer {
   }
 
   int openCalls = 0;
+  int playOrPauseCalls = 0;
 
   @override
   Future<void> play() async {}
@@ -7177,7 +7256,7 @@ class _ReviewFakePlatformPlayer extends PlatformPlayer {
   Future<void> pause() async {}
 
   @override
-  Future<void> playOrPause() async {}
+  Future<void> playOrPause() async => playOrPauseCalls++;
 
   @override
   Future<void> seek(Duration duration) async {}
