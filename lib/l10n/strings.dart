@@ -626,7 +626,7 @@ class AppStrings {
     'error_local_stt_model_missing':
         'Install the local MOSS model in Settings.',
     'error_local_stt_duration_exceeded':
-        'MOSS Local supports audio up to 90 minutes. Choose MOSS Pro or Soniox for this file.',
+        'This job was blocked by an older MOSS Local duration limit. Retry it to continue.',
     'error_local_worker_missing':
         'The signed local speech worker is missing from this app.',
     'error_moss_truncated_output':
@@ -1245,8 +1245,7 @@ class AppStrings {
     'error_local_stt_unsupported':
         'MOSS Local 需要运行 macOS 15 或更高版本的 Apple Silicon Mac。',
     'error_local_stt_model_missing': '请先在“设置”中安装本地 MOSS 模型。',
-    'error_local_stt_duration_exceeded':
-        'MOSS Local 最长支持 90 分钟音频，请为此文件改用 MOSS Pro 或 Soniox。',
+    'error_local_stt_duration_exceeded': '此任务曾受旧版 MOSS Local 时长限制，请重试以继续。',
     'error_local_worker_missing': '应用中缺少已签名的本地语音工作进程。',
     'error_moss_truncated_output': 'MOSS Local 返回了不完整的标签化转写。',
     'error_alignment_partial': '部分片段无法生成可靠的词级时间。',

@@ -162,32 +162,52 @@ Future<bool> _hasTranscript(File outputFile) async {
 }
 
 Future<Duration> _wavDuration(File file) async {
-  final bytes = await file.readAsBytes();
-  if (bytes.length < 44 || ascii.decode(bytes.sublist(0, 4)) != 'RIFF') {
-    throw FormatException('${file.path} is not a RIFF WAV file.');
-  }
-
-  var byteRate = 0;
-  var dataBytes = 0;
-  var offset = 12;
-  final data = ByteData.sublistView(bytes);
-  while (offset + 8 <= bytes.length) {
-    final chunkName = ascii.decode(bytes.sublist(offset, offset + 4));
-    final chunkSize = data.getUint32(offset + 4, Endian.little);
-    final chunkDataOffset = offset + 8;
-    if (chunkName == 'fmt ' && chunkSize >= 12) {
-      byteRate = data.getUint32(chunkDataOffset + 8, Endian.little);
-    } else if (chunkName == 'data') {
-      dataBytes = chunkSize;
-      break;
+  final handle = await file.open();
+  try {
+    final length = await handle.length();
+    final header = await handle.read(12);
+    if (header.length != 12 ||
+        ascii.decode(header.sublist(0, 4)) != 'RIFF' ||
+        ascii.decode(header.sublist(8, 12)) != 'WAVE') {
+      throw FormatException('${file.path} is not a RIFF WAV file.');
     }
-    offset = chunkDataOffset + chunkSize + (chunkSize.isOdd ? 1 : 0);
-  }
 
-  if (byteRate <= 0 || dataBytes <= 0) {
-    throw FormatException('${file.path} has no usable WAV data chunk.');
+    var byteRate = 0;
+    var dataBytes = 0;
+    var offset = 12;
+    while (offset + 8 <= length) {
+      await handle.setPosition(offset);
+      final chunkHeader = await handle.read(8);
+      if (chunkHeader.length != 8) break;
+      final chunkName = ascii.decode(chunkHeader.sublist(0, 4));
+      final chunkSize = ByteData.sublistView(
+        chunkHeader,
+      ).getUint32(4, Endian.little);
+      final chunkDataOffset = offset + 8;
+      final chunkEnd = chunkDataOffset + chunkSize;
+      if (chunkEnd > length) {
+        throw FormatException('${file.path} has a truncated WAV chunk.');
+      }
+      if (chunkName == 'fmt ' && chunkSize >= 12) {
+        final format = await handle.read(12);
+        if (format.length != 12) {
+          throw FormatException('${file.path} has a truncated format chunk.');
+        }
+        byteRate = ByteData.sublistView(format).getUint32(8, Endian.little);
+      } else if (chunkName == 'data') {
+        dataBytes = chunkSize;
+        break;
+      }
+      offset = chunkEnd + (chunkSize.isOdd ? 1 : 0);
+    }
+
+    if (byteRate <= 0 || dataBytes <= 0) {
+      throw FormatException('${file.path} has no usable WAV data chunk.');
+    }
+    return Duration(microseconds: (dataBytes * 1000000 / byteRate).round());
+  } finally {
+    await handle.close();
   }
-  return Duration(microseconds: (dataBytes * 1000000 / byteRate).round());
 }
 
 class _Options {

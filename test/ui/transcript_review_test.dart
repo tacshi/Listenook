@@ -5154,9 +5154,7 @@ void main() {
     expect(find.byKey(const Key('soniox-translation-summary')), findsNothing);
   });
 
-  testWidgets('MOSS Local explains why audio over 90 minutes cannot start', (
-    tester,
-  ) async {
+  testWidgets('MOSS Local can start a 137-minute recording', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1000, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final now = DateTime.now().toUtc();
@@ -5178,7 +5176,7 @@ void main() {
           transcriptionProvider: TranscriptionProvider.mossLocal,
           metadata: const MediaMetadata(
             sizeBytes: 1,
-            durationMs: 91 * 60 * 1000,
+            durationMs: 137 * 60 * 1000,
             hasAudio: true,
             hasVideo: false,
             formatName: 'wav',
@@ -5209,12 +5207,9 @@ void main() {
       ),
     );
 
-    expect(controller.canStartReady, isFalse);
-    expect(
-      find.byKey(const Key('local-moss-duration-warning')),
-      findsOneWidget,
-    );
-    expect(find.textContaining('up to 90 minutes'), findsOneWidget);
+    expect(controller.canStartReady, isTrue);
+    expect(find.byKey(const Key('local-moss-duration-warning')), findsNothing);
+    expect(find.textContaining('up to 90 minutes'), findsNothing);
   });
 
   test('local model inference uses indeterminate progress', () {

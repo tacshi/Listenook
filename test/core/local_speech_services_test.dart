@@ -45,6 +45,23 @@ void main() {
     expect(document.segments.last.text, 'Next');
   });
 
+  test('structured MOSS output drops control-only malformed segments', () {
+    final document = const MossTaggedTranscriptParser().parseStructured(
+      [
+        {
+          'start_ms': 39 * 60 * 1000,
+          'end_ms': 39 * 60 * 1000 + 30000,
+          'text': '[2.12][S01][2.62][18.28][S02][18.78]',
+        },
+      ],
+      durationMs: 60 * 60 * 1000,
+      plainText: '[2.12][S01][2.62][18.28][S02][18.78]',
+    );
+
+    expect(document.segments, isEmpty);
+    expect(document.speakers, isEmpty);
+  });
+
   test(
     'Qwen unitizer drops punctuation and keeps script-appropriate units',
     () {
@@ -119,6 +136,68 @@ void main() {
       expect(worker.request, isNot(contains('model_path')));
     },
   );
+
+  test(
+    'local MOSS accepts the inclusive 300-minute application limit',
+    () async {
+      final worker = _Worker({
+        'text': 'Long local recording',
+        'segments': [
+          {
+            'start_ms': maxMediaDurationMs - 1000,
+            'end_ms': maxMediaDurationMs,
+            'speaker': 'S01',
+            'text': 'Long local recording',
+          },
+        ],
+      });
+      final service = ProcessLocalSttService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final document = await service.transcribe(
+        const LocalSttRequest(
+          sourcePath: '/five-hour-video.mp4',
+          durationMs: maxMediaDurationMs,
+          options: TranscriptionOptions(),
+        ),
+      );
+
+      expect(document.segments.single.endMs, maxMediaDurationMs);
+      expect(worker.command, SpeechWorkerCommand.transcribeMoss);
+    },
+  );
+
+  test('local MOSS rejects media above the application limit', () async {
+    final worker = _Worker(const {});
+    final service = ProcessLocalSttService(
+      models: _Models(ready: true),
+      pcm: _Pcm(),
+      worker: worker,
+      platformSupported: true,
+    );
+
+    await expectLater(
+      service.transcribe(
+        const LocalSttRequest(
+          sourcePath: '/too-long.wav',
+          durationMs: maxMediaDurationMs + 1,
+          options: TranscriptionOptions(),
+        ),
+      ),
+      throwsA(
+        isA<LocalSpeechException>().having(
+          (error) => error.code,
+          'code',
+          'duration_limit',
+        ),
+      ),
+    );
+    expect(worker.command, isNull);
+  });
 
   test('local MOSS refuses to start without its verified model', () async {
     final worker = _Worker(const {});

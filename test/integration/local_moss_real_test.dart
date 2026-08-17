@@ -61,7 +61,7 @@ void main() {
       expect(output['segments'], isA<List>());
       final document = const MossTaggedTranscriptParser().parseStructured(
         output['segments'] as List,
-        durationMs: 90 * 60 * 1000,
+        durationMs: maxMediaDurationMs,
         plainText: output['text'] as String?,
       );
       expect(document.segments, isNotEmpty);
@@ -96,7 +96,7 @@ void main() {
         : 'Set MEOWSTT_TEST_MOSS_PCM, '
               'MEOWSTT_TEST_MOSS_COREML_DIRECTORY, and '
               'MEOWSTT_TEST_SPEECH_WORKER.',
-    timeout: const Timeout(Duration(minutes: 5)),
+    timeout: const Timeout(Duration(minutes: 30)),
   );
 }
 

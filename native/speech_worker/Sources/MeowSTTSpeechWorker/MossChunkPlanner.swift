@@ -4,20 +4,21 @@ import Foundation
 /// Every extra chunk pads and encodes another full 30-second Whisper window,
 /// so a short accidental tail has a disproportionate cost.
 func quietChunkBoundaries(
-    samples: [Float],
+    sampleCount: Int,
     sampleRate: Int,
-    maximumSeconds: Double
-) -> [Int] {
-    guard !samples.isEmpty, sampleRate > 0 else { return [0] }
+    maximumSeconds: Double,
+    chooseQuietPoint: (Int, Int) throws -> Int
+) rethrows -> [Int] {
+    guard sampleCount > 0, sampleRate > 0 else { return [0] }
     let maximum = max(1, Int(maximumSeconds * Double(sampleRate)))
-    guard samples.count > maximum else { return [0, samples.count] }
+    guard sampleCount > maximum else { return [0, sampleCount] }
 
     let chunkCount = Int(
-        ceil(Double(samples.count) / Double(maximum))
+        ceil(Double(sampleCount) / Double(maximum))
     )
     let search = max(1, Int(2 * Double(sampleRate)))
     let preferredMinimum = max(1, Int(8 * Double(sampleRate)))
-    let feasibleMinimum = max(1, samples.count / chunkCount)
+    let feasibleMinimum = max(1, sampleCount / chunkCount)
     let minimum = min(maximum, preferredMinimum, feasibleMinimum)
 
     var boundaries = [0]
@@ -26,27 +27,22 @@ func quietChunkBoundaries(
         let chunksAfterBoundary = chunkCount - boundaryIndex
         let chunksIncludingCurrent = chunksAfterBoundary + 1
         let balancedLength = Int(
-            (Double(samples.count - start) / Double(chunksIncludingCurrent))
+            (Double(sampleCount - start) / Double(chunksIncludingCurrent))
                 .rounded()
         )
         let desired = start + min(maximum, balancedLength)
 
         // These capacity constraints guarantee that the remaining samples fit
         // in exactly the already-selected minimum number of chunks.
-        let capacityLower = samples.count - chunksAfterBoundary * maximum
-        let capacityUpper = samples.count - chunksAfterBoundary * minimum
+        let capacityLower = sampleCount - chunksAfterBoundary * maximum
+        let capacityUpper = sampleCount - chunksAfterBoundary * minimum
         let lower = max(start + minimum, capacityLower, desired - search)
         let upper = min(start + maximum, capacityUpper, desired + search)
-        let boundary = quietestPoint(
-            samples: samples,
-            lower: lower,
-            upper: max(lower, upper),
-            sampleRate: sampleRate
-        )
+        let boundary = try chooseQuietPoint(lower, max(lower, upper))
         boundaries.append(boundary)
         start = boundary
     }
-    boundaries.append(samples.count)
+    boundaries.append(sampleCount)
     return boundaries
 }
 

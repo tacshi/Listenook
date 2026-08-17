@@ -107,6 +107,39 @@ void main() {
   });
 
   test(
+    'five-hour MOSS Local imports remain eligible for auto-transcription',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.dispose);
+      final localStt = _CountingLocalStt();
+      final controller = await fixture.controller(
+        settings: const AppSettings(
+          defaultTranscriptionProvider: TranscriptionProvider.mossLocal,
+          autoTranscribeLocal: true,
+        ),
+        localStt: localStt,
+        alignment: _Alignment(),
+        media: _FixedMetadataMedia(
+          const MediaMetadata(
+            sizeBytes: 576000044,
+            durationMs: maxMediaDurationMs,
+            hasAudio: true,
+            hasVideo: true,
+            formatName: 'mp4',
+          ),
+        ),
+      );
+
+      await controller.enqueueSources([fixture.audio.path]);
+      await _waitFor(
+        () => controller.inboxJobs.single.status == JobStatus.completed,
+      );
+
+      expect(localStt.calls, 1);
+    },
+  );
+
+  test(
     'dropped MOSS Local files remain manual when automation is enabled',
     () async {
       final fixture = await _Fixture.create();
@@ -606,6 +639,52 @@ void main() {
     },
   );
 
+  test('restart removes persisted control-only MOSS segments', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.dispose);
+    final now = DateTime.now().toUtc();
+    await LocalJobRepository(fixture.paths).save(
+      TranscriptionJob(
+        id: 'malformed-local-output',
+        batchId: 'batch',
+        sourcePath: fixture.audio.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        metadata: _metadata,
+        transcriptionProvider: TranscriptionProvider.mossLocal,
+        transcriptSource: TranscriptSource.mossLocal,
+        document: TranscriptDocument(
+          tokens: const [],
+          segments: const [
+            TranscriptSegment(
+              id: 'moss-0',
+              startMs: 39 * 60 * 1000,
+              endMs: 39 * 60 * 1000 + 30000,
+              text: '[2.12][S01][2.62][18.28][S02][18.78]',
+              speaker: 'S01',
+            ),
+          ],
+          speakers: const [SpeakerProfile(id: 'S01', name: 'Speaker 1')],
+          updatedAt: now,
+        ),
+      ),
+    );
+
+    final controller = await fixture.controller(
+      settings: const AppSettings(),
+      localStt: _LocalStt(),
+      alignment: _Alignment(),
+    );
+
+    final recovered = controller.jobById('malformed-local-output')!;
+    expect(recovered.status, JobStatus.empty);
+    expect(recovered.document!.segments, isEmpty);
+    expect(recovered.document!.speakers, isEmpty);
+    final persisted = await LocalJobRepository(fixture.paths).loadAll();
+    expect(persisted.single.document!.segments, isEmpty);
+  });
+
   test('restart does not merge completed aligned MOSS segments', () async {
     final fixture = await _Fixture.create();
     addTearDown(fixture.dispose);
@@ -922,6 +1001,15 @@ class _Media implements MediaService {
 
   @override
   Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
+}
+
+class _FixedMetadataMedia extends _Media {
+  _FixedMetadataMedia(this.metadata);
+
+  final MediaMetadata metadata;
+
+  @override
+  Future<MediaMetadata> inspect(String sourcePath) async => metadata;
 }
 
 class _BlockingMedia extends _Media {
