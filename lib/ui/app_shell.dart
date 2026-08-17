@@ -228,7 +228,7 @@ class _AppShellState extends State<AppShell>
             tray.MenuItem.separator(),
             tray.MenuItem(
               key: 'open-inbox',
-              label: strings.t('tray_open_inbox'),
+              label: strings.t('tray_open_main_window'),
             ),
             if (configured)
               tray.MenuItem(
