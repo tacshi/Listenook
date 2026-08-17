@@ -310,13 +310,24 @@ class AppController extends ChangeNotifier {
     final loaded = <TranscriptionJob>[];
     for (final original in stored) {
       final document = original.document;
-      final normalized =
-          document == null || original.forcedAlignment.hasWordTiming
-          ? null
-          : _parser.normalizeSegments(document);
+      var normalized = document;
+      if (normalized != null && _isMossJob(original)) {
+        normalized = _parser.removeMossControlOnlySegments(normalized);
+      }
+      if (normalized != null && !original.forcedAlignment.hasWordTiming) {
+        normalized = _parser.normalizeSegments(normalized);
+      }
       var job = normalized == null || identical(normalized, document)
           ? original
           : original.copyWith(document: normalized);
+      if (!identical(job, original) &&
+          job.status == JobStatus.completed &&
+          job.document?.segments.isEmpty == true) {
+        job = job.copyWith(
+          status: JobStatus.empty,
+          progress: const JobProgress(stage: 'complete', fraction: 1),
+        );
+      }
       if (!identical(job, original) &&
           job.translationState.status != TranslationStatus.idle) {
         final progress = _translationProgress(
@@ -1317,10 +1328,6 @@ class AppController extends ChangeNotifier {
 
   bool _canStart(TranscriptionJob job) {
     if (job.transcriptAcquisitionMode.usesPublisherTranscript) return true;
-    if (job.transcriptionProvider == TranscriptionProvider.mossLocal &&
-        (job.metadata?.durationMs ?? 0) > 90 * 60 * 1000) {
-      return false;
-    }
     return isTranscriptionProviderConfigured(job.transcriptionProvider);
   }
 
@@ -1597,9 +1604,6 @@ class AppController extends ChangeNotifier {
     }
     _checkCancelled(job.id);
     final metadata = job.metadata ?? await _media.inspect(job.sourcePath);
-    if (metadata.durationMs > 90 * 60 * 1000) {
-      throw const LocalSpeechException('local_stt_duration_exceeded');
-    }
     job = await _transition(
       job,
       status: JobStatus.converting,

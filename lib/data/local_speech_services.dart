@@ -3,6 +3,7 @@ import 'dart:math';
 import '../core/contracts.dart';
 import '../core/local_speech.dart';
 import '../core/models.dart';
+import '../core/transcript_parser.dart';
 
 class MossTaggedTranscriptParser {
   const MossTaggedTranscriptParser();
@@ -103,7 +104,12 @@ class MossTaggedTranscriptParser {
       final text = raw['text']?.toString().trim() ?? '';
       final rawStart = (raw['start_ms'] as num?)?.toInt();
       final rawEnd = (raw['end_ms'] as num?)?.toInt();
-      if (text.isEmpty || rawStart == null || rawEnd == null) continue;
+      if (text.isEmpty ||
+          isMossControlOnlyTranscriptText(text) ||
+          rawStart == null ||
+          rawEnd == null) {
+        continue;
+      }
       final startMs = rawStart.clamp(0, max(0, durationMs)).toInt();
       final endMs = rawEnd.clamp(startMs, max(startMs, durationMs)).toInt();
       if (endMs <= startMs) continue;
@@ -124,13 +130,16 @@ class MossTaggedTranscriptParser {
         ),
       );
     }
-    if (segments.isEmpty && (plainText?.trim().isNotEmpty ?? false)) {
+    final fallback = plainText?.trim() ?? '';
+    if (segments.isEmpty &&
+        fallback.isNotEmpty &&
+        !isMossControlOnlyTranscriptText(fallback)) {
       segments.add(
         TranscriptSegment(
           id: 'moss-0',
           startMs: 0,
           endMs: max(0, durationMs),
-          text: plainText!.trim(),
+          text: fallback,
         ),
       );
     }
@@ -285,8 +294,8 @@ class ProcessLocalSttService implements LocalSttService {
     CancelCheck? shouldCancel,
   }) async {
     if (!isSupported) throw const LocalSpeechException('local_stt_unsupported');
-    if (request.durationMs > 90 * 60 * 1000) {
-      throw const LocalSpeechException('local_stt_duration_exceeded');
+    if (request.durationMs > maxMediaDurationMs) {
+      throw const LocalSpeechException('duration_limit');
     }
     final model = LocalSpeechModels.mossDiarizeCoreMlInt8;
     final modelStatus = await _models.status(model.id, verifyIntegrity: true);

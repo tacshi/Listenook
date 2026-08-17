@@ -71,7 +71,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   StreamSubscription<double>? _rateSubscription;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
   Future<void>? _mediaShutdown;
-  final _videoKey = GlobalKey<VideoState>();
+  GlobalKey<VideoState> _videoKey = GlobalKey<VideoState>();
   late final AppController _appController;
   late final ReviewFullscreenController _localFullscreenController;
   NavigatorState? _rootNavigator;
@@ -120,7 +120,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _position = _appController.playbackPositionFor(widget.jobId);
     _viewMode = _defaultViewMode(_appController.jobById(widget.jobId));
     _localFullscreenController = ReviewFullscreenController();
-    _fullscreenController.registerMediaShutdown(this, _shutdownMedia);
+    _fullscreenController.registerMediaShutdown(
+      this,
+      _shutdownMedia,
+      resume: _resumeMedia,
+    );
     HardwareKeyboard.instance.addHandler(_handleRepeatShortcut);
     windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
@@ -417,6 +421,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   Future<void> _shutdownMedia() => _mediaShutdown ??= _disposeMediaResources();
+
+  Future<void> _resumeMedia() async {
+    if (!mounted || _mediaShutdown == null) return;
+    _mediaShutdown = null;
+    _videoKey = GlobalKey<VideoState>();
+    _openedPath = '';
+    await _openSource();
+  }
 
   Future<void> _disposeMediaResources() async {
     _sourceRequest++;

@@ -11,11 +11,6 @@ private struct WorkerFailure: Error {
     let exitCode: Int32
 }
 
-private struct PCM16Wave {
-    let samples: [Float]
-    let sampleRate: Int
-}
-
 private struct TranscriptSegmentJSON: Sendable {
     let startMs: Int
     let endMs: Int
@@ -137,7 +132,7 @@ private enum WorkerMain {
 private func transcribeMoss(_ request: [String: Any]) async throws -> [String: Any] {
     let modelDirectory = try requiredString(request, "model_directory")
     let audioPath = try requiredString(request, "audio_path")
-    let wave = try readPCM16Wave(path: audioPath)
+    let wave = try openPCM16Wave(path: audioPath)
     guard wave.sampleRate == MossTranscribeModel.inputSampleRate else {
         throw WorkerFailure(
             code: "local_audio_format",
@@ -181,12 +176,19 @@ private func transcribeMoss(_ request: [String: Any]) async throws -> [String: A
         640,
         max(64, (request["max_new_tokens_per_chunk"] as? NSNumber)?.intValue ?? 640)
     )
-    let boundaries = quietChunkBoundaries(
-        samples: wave.samples,
+    let boundaries = try quietChunkBoundaries(
+        sampleCount: wave.sampleCount,
         sampleRate: wave.sampleRate,
-        maximumSeconds: chunkSeconds
+        maximumSeconds: chunkSeconds,
+        chooseQuietPoint: { lower, upper in
+            try quietestPoint(
+                wave: wave,
+                lower: lower,
+                upper: upper
+            )
+        }
     )
-    let totalSamples = max(1, wave.samples.count)
+    let totalSamples = max(1, wave.sampleCount)
     let chunkCount = boundaries.count - 1
     let requestedParallelism = min(
         2,
@@ -220,12 +222,14 @@ private func transcribeMoss(_ request: [String: Any]) async throws -> [String: A
             let start = boundaries[index]
             let end = boundaries[index + 1]
             group.addTask {
+                let samples = try readSamples(wave, range: start..<end)
                 let output = try transcribeMossChunk(
                     model: assignedModel,
-                    samples: wave.samples,
+                    samples: samples,
                     sampleRate: wave.sampleRate,
-                    start: start,
-                    end: end,
+                    absoluteSampleOffset: start,
+                    start: 0,
+                    end: samples.count,
                     maxNewTokens: maxNewTokens,
                     instruction: instruction,
                     retryDepth: 0
@@ -269,6 +273,7 @@ private func transcribeMossChunk(
     model: MossTranscribeModel,
     samples: [Float],
     sampleRate: Int,
+    absoluteSampleOffset: Int,
     start: Int,
     end: Int,
     maxNewTokens: Int,
@@ -278,7 +283,9 @@ private func transcribeMossChunk(
     guard end > start else {
         return MossChunkOutput(segments: [], warnings: [])
     }
-    let chunk = Array(samples[start..<end])
+    let chunk = start == 0 && end == samples.count
+        ? samples
+        : Array(samples[start..<end])
     let result: MossTranscription
     do {
         result = try model.transcribeDetailed(
@@ -312,6 +319,7 @@ private func transcribeMossChunk(
             model: model,
             samples: samples,
             sampleRate: sampleRate,
+            absoluteSampleOffset: absoluteSampleOffset,
             start: start,
             end: boundary,
             maxNewTokens: maxNewTokens,
@@ -322,6 +330,7 @@ private func transcribeMossChunk(
             model: model,
             samples: samples,
             sampleRate: sampleRate,
+            absoluteSampleOffset: absoluteSampleOffset,
             start: boundary,
             end: end,
             maxNewTokens: maxNewTokens,
@@ -336,10 +345,18 @@ private func transcribeMossChunk(
     var warnings: [String] = []
     if !generationComplete { warnings.append("moss_generation_limited") }
 
-    let offsetMs = Int((Double(start) * 1000 / Double(sampleRate)).rounded())
-    let chunkEndMs = Int((Double(end) * 1000 / Double(sampleRate)).rounded())
+    let offsetMs = Int(
+        (Double(absoluteSampleOffset + start) * 1000 / Double(sampleRate)).rounded()
+    )
+    let chunkEndMs = Int(
+        (Double(absoluteSampleOffset + end) * 1000 / Double(sampleRate)).rounded()
+    )
     if result.segments.isEmpty {
         let plain = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isMossControlOnlyText(plain) {
+            warnings.append("moss_malformed_output")
+            return MossChunkOutput(segments: [], warnings: warnings)
+        }
         if !plain.isEmpty {
             return MossChunkOutput(
                 segments: [TranscriptSegmentJSON(
@@ -360,7 +377,15 @@ private func transcribeMossChunk(
         let absoluteStart = min(chunkEndMs, offsetMs + localStart)
         let absoluteEnd = min(chunkEndMs, max(absoluteStart, offsetMs + localEnd))
         let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, absoluteEnd > absoluteStart else { continue }
+        guard !text.isEmpty,
+              !isMossControlOnlyText(text),
+              absoluteEnd > absoluteStart
+        else {
+            if isMossControlOnlyText(text) {
+                warnings.append("moss_malformed_output")
+            }
+            continue
+        }
         segments.append(
             TranscriptSegmentJSON(
                 startMs: absoluteStart,
@@ -377,7 +402,7 @@ private func transcribeMossChunk(
 private func alignQwen3(_ request: [String: Any]) throws -> [String: Any] {
     let modelDirectory = try requiredString(request, "model_directory")
     let audioPath = try requiredString(request, "audio_path")
-    let wave = try readPCM16Wave(path: audioPath)
+    let wave = try openPCM16Wave(path: audioPath)
     guard wave.sampleRate == 16_000 else {
         throw WorkerFailure(
             code: "local_audio_format",
@@ -407,7 +432,9 @@ private func alignQwen3(_ request: [String: Any]) throws -> [String: Any] {
     }
     let hints = request["language_hints"] as? [String] ?? []
     let paddingMs = (request["window_padding_ms"] as? NSNumber)?.intValue ?? 250
-    let audioDurationMs = wave.samples.count / 16
+    let audioDurationMs = Int(
+        Double(wave.sampleCount) * 1000 / Double(wave.sampleRate)
+    )
 
     func attemptAlignment(
         startMs: Int,
@@ -421,8 +448,8 @@ private func alignQwen3(_ request: [String: Any]) throws -> [String: Any] {
             return WindowAlignmentAttempt(
                 tokens: [], owners: [], failureReason: "invalid-window")
         }
-        let firstSample = min(wave.samples.count, max(0, startMs * 16))
-        let lastSample = min(wave.samples.count, max(firstSample, endMs * 16))
+        let firstSample = min(wave.sampleCount, max(0, startMs * 16))
+        let lastSample = min(wave.sampleCount, max(firstSample, endMs * 16))
         guard lastSample > firstSample else {
             return WindowAlignmentAttempt(
                 tokens: [], owners: [], failureReason: "empty-audio")
@@ -445,8 +472,12 @@ private func alignQwen3(_ request: [String: Any]) throws -> [String: Any] {
         }
         do {
             let joined = words.joined(separator: " ")
+            let samples = try readSamples(
+                wave,
+                range: firstSample..<lastSample
+            )
             let aligned = try aligner.align(
-                audio: Array(wave.samples[firstSample..<lastSample]),
+                audio: samples,
                 text: joined,
                 sampleRate: wave.sampleRate,
                 language: resolvedLanguage(hints: hints, text: joined)
@@ -708,74 +739,60 @@ private func quietMidpoint(
     )
 }
 
-private func readPCM16Wave(path: String) throws -> PCM16Wave {
-    let data: Data
+private func openPCM16Wave(path: String) throws -> PCM16WaveFile {
     do {
-        data = try Data(contentsOf: URL(fileURLWithPath: path), options: [.mappedIfSafe])
-    } catch {
+        return try PCM16WaveFile(path: path)
+    } catch PCM16WaveFileError.missing {
         throw WorkerFailure(
             code: "local_audio_missing",
             message: "Could not open prepared local audio.",
             exitCode: 5
         )
-    }
-    guard data.count >= 12,
-          ascii(data, 0, 4) == "RIFF",
-          ascii(data, 8, 4) == "WAVE"
-    else {
+    } catch {
         throw WorkerFailure(
             code: "local_audio_format",
-            message: "Expected a RIFF WAVE file.",
+            message: "Expected 16 kHz mono signed 16-bit PCM WAVE audio.",
             exitCode: 5
         )
     }
-    var format: UInt16?
-    var channels: UInt16?
-    var sampleRate: UInt32?
-    var bits: UInt16?
-    var pcmRange: Range<Int>?
-    var offset = 12
-    while offset + 8 <= data.count {
-        let name = ascii(data, offset, 4)
-        let size = Int(readUInt32(data, offset + 4))
-        let start = offset + 8
-        let end = min(data.count, start + size)
-        if name == "fmt ", end - start >= 16 {
-            format = readUInt16(data, start)
-            channels = readUInt16(data, start + 2)
-            sampleRate = readUInt32(data, start + 4)
-            bits = readUInt16(data, start + 14)
-            if format == 0xfffe, end - start >= 40 {
-                format = readUInt32(data, start + 24) == 1 ? 1 : format
-            }
-        } else if name == "data" {
-            pcmRange = start..<end
-        }
-        offset = start + size + (size & 1)
-    }
-    guard format == 1,
-          channels == 1,
-          let sampleRate,
-          sampleRate == 16_000,
-          bits == 16,
-          let pcmRange,
-          pcmRange.count.isMultiple(of: 2)
-    else {
+}
+
+private func readSamples(
+    _ wave: PCM16WaveFile,
+    range: Range<Int>
+) throws -> [Float] {
+    do {
+        return try wave.readSamples(range)
+    } catch PCM16WaveFileError.missing {
+        throw WorkerFailure(
+            code: "local_audio_missing",
+            message: "Could not open prepared local audio.",
+            exitCode: 5
+        )
+    } catch {
         throw WorkerFailure(
             code: "local_audio_format",
-            message: "Expected 16 kHz mono signed 16-bit PCM.",
+            message: "Could not read prepared local audio.",
             exitCode: 5
         )
     }
-    var samples = [Float]()
-    samples.reserveCapacity(pcmRange.count / 2)
-    var index = pcmRange.lowerBound
-    while index < pcmRange.upperBound {
-        let raw = Int16(bitPattern: readUInt16(data, index))
-        samples.append(Float(raw) / 32768)
-        index += 2
-    }
-    return PCM16Wave(samples: samples, sampleRate: Int(sampleRate))
+}
+
+private func quietestPoint(
+    wave: PCM16WaveFile,
+    lower: Int,
+    upper: Int
+) throws -> Int {
+    let analysis = max(1, Int(0.2 * Double(wave.sampleRate)))
+    let windowStart = max(0, lower - analysis / 2)
+    let windowEnd = min(wave.sampleCount, upper + analysis)
+    let samples = try readSamples(wave, range: windowStart..<windowEnd)
+    return windowStart + quietestPoint(
+        samples: samples,
+        lower: lower - windowStart,
+        upper: upper - windowStart,
+        sampleRate: wave.sampleRate
+    )
 }
 
 private func readJSON(path: String) throws -> [String: Any] {
@@ -842,20 +859,4 @@ private func safeMessage(_ raw: String) -> String {
         options: .regularExpression
     ).trimmingCharacters(in: .whitespacesAndNewlines)
     return String(compact.prefix(500))
-}
-
-private func ascii(_ data: Data, _ offset: Int, _ count: Int) -> String {
-    guard offset >= 0, offset + count <= data.count else { return "" }
-    return String(decoding: data[offset..<(offset + count)], as: UTF8.self)
-}
-
-private func readUInt16(_ data: Data, _ offset: Int) -> UInt16 {
-    UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
-}
-
-private func readUInt32(_ data: Data, _ offset: Int) -> UInt32 {
-    UInt32(data[offset])
-        | (UInt32(data[offset + 1]) << 8)
-        | (UInt32(data[offset + 2]) << 16)
-        | (UInt32(data[offset + 3]) << 24)
 }

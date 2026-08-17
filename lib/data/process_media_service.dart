@@ -150,7 +150,7 @@ class ProcessMediaService implements MediaService {
       if (durationMs > maxMediaDurationMs) {
         throw const MediaException(
           'duration_limit',
-          'Soniox supports files up to 300 minutes.',
+          'Files can be up to 300 minutes long.',
         );
       }
       var formatName = extension.substring(1);

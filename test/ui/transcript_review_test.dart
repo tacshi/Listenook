@@ -3734,6 +3734,127 @@ void main() {
     debugPrint = originalDebugPrint;
   });
 
+  testWidgets(
+    'restored workspace keeps video ready when switching translation',
+    (tester) async {
+      _setTestWindow(tester, const Size(1055, 820));
+      const windowChannel = MethodChannel('window_manager');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(windowChannel, (call) async {
+        if (call.method == 'isFullScreen') return false;
+        if (call.method == 'isVisible') return true;
+        if (call.method == 'isMinimized') return false;
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(windowChannel, null),
+      );
+      final directory = (await tester.runAsync(
+        () => Directory.systemTemp.createTemp('meow-translated-video-'),
+      ))!;
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/translated.mp4');
+      await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+      final platforms = <_ReviewFakePlatformPlayer>[];
+      debugTranscriptReviewPlayerFactory = () {
+        final platform = _ReviewFakePlatformPlayer();
+        platforms.add(platform);
+        return Player(platformPlayer: platform);
+      };
+      debugTranscriptReviewSourceExists = (_) async => true;
+      final originalDebugPrint = debugPrint;
+      debugPrint = (message, {wrapWidth}) {};
+      addTearDown(() {
+        debugTranscriptReviewPlayerFactory = null;
+        debugTranscriptReviewSourceExists = null;
+        debugPrint = originalDebugPrint;
+      });
+      final controller = await _controllerForDocument(
+        TranscriptDocument(
+          tokens: const [],
+          segments: const [
+            TranscriptSegment(
+              id: 'translated-video-segment',
+              startMs: 0,
+              endMs: 1000,
+              text: 'Original video sentence.',
+              translatedText: 'Translated video sentence.',
+            ),
+          ],
+          speakers: const [],
+          updatedAt: DateTime.utc(2026, 8, 17),
+        ),
+        metadata: _videoMetadata,
+        sourcePath: source.path,
+        settings: const AppSettings(onboardingComplete: true),
+      );
+      addTearDown(controller.dispose);
+      controller.openInWorkspace('job');
+      final reviewController = ReviewFullscreenController();
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: MaterialApp(
+            locale: const Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: const [AppStrings.delegate],
+            home: AppShell(reviewController: reviewController),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      final initialVideoState = tester.state(find.byType(Video));
+      expect(platforms, hasLength(1));
+      expect(platforms.single.openCalls, 1);
+
+      final dynamic appShellState = tester.state(find.byType(AppShell));
+      await tester.runAsync(
+        () => appShellState.onWindowClose() as Future<void>,
+      );
+      final restoreFuture = messenger.handlePlatformMessage(
+        'app.meowstt.desktop/navigation',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('showWindow'),
+        ),
+        null,
+      );
+      await tester.pump();
+      await tester.pump();
+      await restoreFuture;
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byKey(const Key('translation-view-mode')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('review-toolbar-more')));
+      await tester.pump(const Duration(milliseconds: 300));
+      final translatedMenu = find.byKey(
+        const Key('translation-mode-translated-menu'),
+      );
+      final translatedItem = tester.widget<PopupMenuItem>(translatedMenu);
+      Navigator.of(tester.element(translatedMenu)).pop(translatedItem.value);
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Translated video sentence.'), findsOneWidget);
+      expect(find.text('Original video sentence.'), findsNothing);
+      expect(tester.state(find.byType(Video)), isNot(same(initialVideoState)));
+      expect(platforms, hasLength(2));
+      expect(platforms.last.openCalls, 1);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('video-viewport')),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsNothing,
+      );
+      debugPrint = originalDebugPrint;
+    },
+  );
+
   testWidgets('macOS toolbar aligns sidebar toggle with traffic lights', (
     tester,
   ) async {
@@ -5154,9 +5275,7 @@ void main() {
     expect(find.byKey(const Key('soniox-translation-summary')), findsNothing);
   });
 
-  testWidgets('MOSS Local explains why audio over 90 minutes cannot start', (
-    tester,
-  ) async {
+  testWidgets('MOSS Local can start a 137-minute recording', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1000, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final now = DateTime.now().toUtc();
@@ -5178,7 +5297,7 @@ void main() {
           transcriptionProvider: TranscriptionProvider.mossLocal,
           metadata: const MediaMetadata(
             sizeBytes: 1,
-            durationMs: 91 * 60 * 1000,
+            durationMs: 137 * 60 * 1000,
             hasAudio: true,
             hasVideo: false,
             formatName: 'wav',
@@ -5209,12 +5328,9 @@ void main() {
       ),
     );
 
-    expect(controller.canStartReady, isFalse);
-    expect(
-      find.byKey(const Key('local-moss-duration-warning')),
-      findsOneWidget,
-    );
-    expect(find.textContaining('up to 90 minutes'), findsOneWidget);
+    expect(controller.canStartReady, isTrue);
+    expect(find.byKey(const Key('local-moss-duration-warning')), findsNothing);
+    expect(find.textContaining('up to 90 minutes'), findsNothing);
   });
 
   test('local model inference uses indeterminate progress', () {

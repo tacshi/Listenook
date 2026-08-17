@@ -1,5 +1,16 @@
 import 'models.dart';
 
+final _mossSpeakerControlTag = RegExp(r'\[S\d+\]', caseSensitive: false);
+final _mossStructuralControlTag = RegExp(
+  r'\[(?:S\d+|\d+(?:\.\d+)?)\]',
+  caseSensitive: false,
+);
+
+bool isMossControlOnlyTranscriptText(String text) {
+  if (!_mossSpeakerControlTag.hasMatch(text)) return false;
+  return text.replaceAll(_mossStructuralControlTag, '').trim().isEmpty;
+}
+
 class TranscriptParser {
   const TranscriptParser();
 
@@ -171,6 +182,42 @@ class TranscriptParser {
         })
         .toList(growable: false);
     return document.copyWith(segments: normalized, tokens: tokens);
+  }
+
+  TranscriptDocument removeMossControlOnlySegments(
+    TranscriptDocument document,
+  ) {
+    final removedIds = document.segments
+        .where(
+          (segment) => isMossControlOnlyTranscriptText(segment.text.trim()),
+        )
+        .map((segment) => segment.id)
+        .toSet();
+    if (removedIds.isEmpty) return document;
+
+    final segments = document.segments
+        .where((segment) => !removedIds.contains(segment.id))
+        .toList(growable: false);
+    final tokens = document.tokens
+        .where(
+          (token) =>
+              token.segmentId == null || !removedIds.contains(token.segmentId),
+        )
+        .toList(growable: false);
+    final retainedSpeakerIds = <String>{
+      for (final segment in segments)
+        if (segment.speaker case final speaker?) speaker,
+      for (final token in tokens)
+        if (token.speaker case final speaker?) speaker,
+    };
+    final speakers = document.speakers
+        .where((speaker) => retainedSpeakerIds.contains(speaker.id))
+        .toList(growable: false);
+    return document.copyWith(
+      tokens: tokens,
+      segments: segments,
+      speakers: speakers,
+    );
   }
 
   List<TranscriptSegment> _segments(List<TranscriptToken> tokens) {

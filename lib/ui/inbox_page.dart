@@ -492,14 +492,6 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
     final providerConfigured = controller.isTranscriptionProviderConfigured(
       provider,
     );
-    final localDurationExceeded =
-        provider == TranscriptionProvider.mossLocal &&
-        controller.inboxJobs.any(
-          (job) =>
-              !job.transcriptAcquisitionMode.usesPublisherTranscript &&
-              job.status.canTranscribe &&
-              (job.metadata?.durationMs ?? 0) > 90 * 60 * 1000,
-        );
     return Card(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -563,17 +555,6 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
             const Divider(height: 20),
           ] else
             const SizedBox(height: 12),
-          if (localDurationExceeded) ...[
-            KeyedSubtree(
-              key: const Key('local-moss-duration-warning'),
-              child: _ReviewLine(
-                icon: Icons.warning_amber_rounded,
-                title: context.strings.t('local_moss_model'),
-                value: context.strings.error('local_stt_duration_exceeded'),
-              ),
-            ),
-            const Divider(height: 20),
-          ],
           if (provider != TranscriptionProvider.mossPro) ...[
             _LanguageHintsPicker(
               selectedCodes: controller.sessionOptions.languageHints,

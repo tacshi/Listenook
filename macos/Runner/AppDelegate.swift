@@ -1,11 +1,85 @@
 import AVFoundation
 import Cocoa
+import Darwin
 import FlutterMacOS
 import ServiceManagement
 
 @main
 class AppDelegate: FlutterAppDelegate {
   private let navigationChannelName = "app.meowstt.desktop/navigation"
+  private let instanceActivationNotification = Notification.Name(
+    "app.meowstt.desktop.activate-existing-instance"
+  )
+  private var instanceLockDescriptor: Int32 = -1
+  private var ownsInstanceLock = false
+
+  override func applicationWillFinishLaunching(_ notification: Notification) {
+    DistributedNotificationCenter.default().addObserver(
+      self,
+      selector: #selector(activatePrimaryInstance(_:)),
+      name: instanceActivationNotification,
+      object: nil,
+      suspensionBehavior: .deliverImmediately
+    )
+    guard claimInstanceLock() else {
+      notifyPrimaryInstance()
+      NSApp.terminate(nil)
+      return
+    }
+    super.applicationWillFinishLaunching(notification)
+  }
+
+  deinit {
+    DistributedNotificationCenter.default().removeObserver(self)
+    if instanceLockDescriptor >= 0 {
+      Darwin.lockf(instanceLockDescriptor, F_ULOCK, 0)
+      Darwin.close(instanceLockDescriptor)
+    }
+  }
+
+  private func claimInstanceLock() -> Bool {
+    let lockURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "app.meowstt.desktop.instance.lock",
+      isDirectory: false
+    )
+    let descriptor = Darwin.open(
+      lockURL.path,
+      O_CREAT | O_RDWR,
+      S_IRUSR | S_IWUSR
+    )
+    guard descriptor >= 0 else {
+      // A temporary-directory failure should not make the app unusable.
+      ownsInstanceLock = true
+      return true
+    }
+    if Darwin.lockf(descriptor, F_TLOCK, 0) == 0 {
+      instanceLockDescriptor = descriptor
+      ownsInstanceLock = true
+      return true
+    }
+    Darwin.close(descriptor)
+    return false
+  }
+
+  private func notifyPrimaryInstance() {
+    DistributedNotificationCenter.default().postNotificationName(
+      instanceActivationNotification,
+      object: nil,
+      userInfo: nil,
+      deliverImmediately: true
+    )
+    let currentPID = ProcessInfo.processInfo.processIdentifier
+    if let existing = NSRunningApplication.runningApplications(
+      withBundleIdentifier: Bundle.main.bundleIdentifier ?? "app.meowstt.desktop"
+    ).first(where: { $0.processIdentifier != currentPID }) {
+      existing.activate(options: [.activateAllWindows])
+    }
+  }
+
+  @objc private func activatePrimaryInstance(_ notification: Notification) {
+    guard ownsInstanceLock else { return }
+    invokeNavigation("showWindow", sender: nil)
+  }
 
   @IBAction func showSettings(_ sender: Any?) {
     invokeNavigation("showSettings", sender: sender)

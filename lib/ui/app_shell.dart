@@ -382,6 +382,9 @@ class _AppShellState extends State<AppShell>
       await windowManager.show();
       await windowManager.focus();
       _windowHidden = false;
+      if (_controller.destination == AppDestination.workspace) {
+        await _fullscreenController.resumeMedia();
+      }
     } on Object {
       // The window channel is unavailable in widget tests.
     }

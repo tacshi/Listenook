@@ -2,14 +2,38 @@ import XCTest
 @testable import MeowSTTSpeechWorker
 
 final class MossChunkPlannerTests: XCTestCase {
+    func testDetectsControlOnlyMossDecoderOutput() {
+        XCTAssertTrue(
+            isMossControlOnlyText(
+                "[2.12][S01][2.62][18.28][S02][18.78]"
+            )
+        )
+        XCTAssertTrue(
+            isMossControlOnlyText(
+                "[2.34][S01][2.84] [3.44][S01][3.94]"
+            )
+        )
+        XCTAssertFalse(isMossControlOnlyText("[2.12][S01]Hello[2.62]"))
+        XCTAssertFalse(isMossControlOnlyText("The speaker said [2.12]."))
+        XCTAssertFalse(isMossControlOnlyText("[music]"))
+    }
+
     func testSixtySecondsUsesTwoFullCapacityChunks() {
         let sampleRate = 100
         let samples = [Float](repeating: 0, count: sampleRate * 60)
 
         let boundaries = quietChunkBoundaries(
-            samples: samples,
+            sampleCount: samples.count,
             sampleRate: sampleRate,
-            maximumSeconds: 30
+            maximumSeconds: 30,
+            chooseQuietPoint: { lower, upper in
+                quietestPoint(
+                    samples: samples,
+                    lower: lower,
+                    upper: upper,
+                    sampleRate: sampleRate
+                )
+            }
         )
 
         XCTAssertEqual(boundaries, [0, sampleRate * 30, sampleRate * 60])
@@ -24,9 +48,17 @@ final class MossChunkPlannerTests: XCTestCase {
         )
 
         let boundaries = quietChunkBoundaries(
-            samples: samples,
+            sampleCount: samples.count,
             sampleRate: sampleRate,
-            maximumSeconds: 30
+            maximumSeconds: 30,
+            chooseQuietPoint: { lower, upper in
+                quietestPoint(
+                    samples: samples,
+                    lower: lower,
+                    upper: upper,
+                    sampleRate: sampleRate
+                )
+            }
         )
         let lengths = zip(boundaries, boundaries.dropFirst()).map { $1 - $0 }
 
@@ -44,12 +76,42 @@ final class MossChunkPlannerTests: XCTestCase {
         }
 
         let boundaries = quietChunkBoundaries(
-            samples: samples,
+            sampleCount: samples.count,
             sampleRate: sampleRate,
-            maximumSeconds: 30
+            maximumSeconds: 30,
+            chooseQuietPoint: { lower, upper in
+                quietestPoint(
+                    samples: samples,
+                    lower: lower,
+                    upper: upper,
+                    sampleRate: sampleRate
+                )
+            }
         )
 
         XCTAssertEqual(boundaries.count, 3)
         XCTAssertLessThanOrEqual(abs(boundaries[1] - quietPoint), sampleRate / 10)
+    }
+
+    func testFiveHoursPlansSixHundredChunksWithoutAnAudioArray() {
+        let sampleRate = 16_000
+        let sampleCount = sampleRate * 60 * 60 * 5
+        var inspectedRanges: [(Int, Int)] = []
+
+        let boundaries = quietChunkBoundaries(
+            sampleCount: sampleCount,
+            sampleRate: sampleRate,
+            maximumSeconds: 30,
+            chooseQuietPoint: { lower, upper in
+                inspectedRanges.append((lower, upper))
+                return lower + (upper - lower) / 2
+            }
+        )
+        let lengths = zip(boundaries, boundaries.dropFirst()).map { $1 - $0 }
+
+        XCTAssertEqual(lengths.count, 600)
+        XCTAssertEqual(inspectedRanges.count, 599)
+        XCTAssertTrue(lengths.allSatisfy { $0 <= sampleRate * 30 })
+        XCTAssertEqual(boundaries.last, sampleCount)
     }
 }
