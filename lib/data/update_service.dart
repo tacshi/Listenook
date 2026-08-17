@@ -253,7 +253,7 @@ class UpdateService extends ChangeNotifier {
       await sink.close();
       sink = null;
       if (await target.exists()) await target.delete();
-      return partial.rename(target.path);
+      return await partial.rename(target.path);
     } on Object catch (error) {
       await sink?.close();
       if (await partial.exists()) await partial.delete();

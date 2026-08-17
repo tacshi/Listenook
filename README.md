@@ -1,11 +1,12 @@
 # MeowSTT
 
-MeowSTT is a batch-first Soniox transcription app for macOS and Windows. Drop
+MeowSTT is a batch-first BYOK transcription app for macOS and Windows. Drop
 audio, video, or folders; review the queue before spending API credit; then edit
 speaker-aware transcripts beside synchronized playback and export TXT,
 Markdown, SRT, or WebVTT. Transcripts can optionally be translated during
-Soniox transcription or afterward through one user-configured OpenAI-compatible
-text endpoint.
+Soniox transcription or afterward through one user-configured
+OpenAI-compatible text endpoint. Remote transcription can use Soniox or MOSS
+Pro per batch.
 
 The package name is `meow_stt`. Its permanent desktop identity is
 `app.meowstt.desktop`.
@@ -18,7 +19,7 @@ The package name is `meow_stt`. Its permanent desktop identity is
   RSS feeds, previews episodes, and follows shows locally. Deep-listen
   downloads an episode into Inbox for confirmation. Word-level publisher
   transcripts can be imported; cue-level captions stay informational and
-  transcription still uses Soniox.
+  transcription still uses the selected remote transcription provider.
 - An optional monitored Inbox folder that recursively discovers stable matching
   media for review without uploading or transcribing it. A durable fingerprint
   ledger prevents unchanged files from being rediscovered after restart or
@@ -29,7 +30,7 @@ The package name is `meow_stt`. Its permanent desktop identity is
   notification, and explicit Quit actions. Optional launch at login starts in
   the background and is off by default.
 - libmpv validation for readability, audio streams, supported media, and the
-  Soniox 300-minute limit. Inputs are limited to MP3, WAV, M4A, OGG, MP4, MKV,
+  300-minute application limit. Inputs are limited to MP3, WAV, M4A, OGG, MP4, MKV,
   and AVI.
 - A persisted queue that automatically runs one worker per queued job, capped
   at four, with explicit start, determinate local progress, cancel/retry,
@@ -37,6 +38,13 @@ The package name is `meow_stt`. Its permanent desktop identity is
 - Streaming Soniox multipart upload with `stt-async-v5`, automatic language
   identification, always-on diarization, language hints, context terms, stable
   error mapping, and transient polling backoff.
+- Streaming MOSS asset upload with `moss-transcribe-diarize`, asynchronous task
+  recovery, speaker-labelled segments, server-directed polling, 512 MB upload
+  validation, owned-file cleanup, and compact 16 kHz mono AAC preparation on
+  macOS for video, lossless audio, or high-bitrate input.
+- Optional Apple Silicon/macOS 15+ `MOSS Local` transcription with
+  diarization through pinned Core ML INT8 models, plus fail-open local Qwen3
+  ForcedAligner Core ML timing for MOSS Local and MOSS Pro.
 - Optional one-way Soniox translation in the original async transcription job,
   with provider-native language targets and no separate translation pass.
 - A local, searchable library; source relinking; editable segments and speaker
@@ -54,23 +62,26 @@ The package name is `meow_stt`. Its permanent desktop identity is
   templates only prefill the Base URL, and model selection is enabled after a
   successful connection test.
 - System/light/dark themes and English/Simplified Chinese localization.
-- Secure Soniox and translation credentials in Keychain/Credential Manager.
-  `SONIOX_API_KEY` is used only as a development fallback for Soniox when secure
-  storage is empty.
+- Separate secure Soniox, MOSS, and translation credentials in
+  Keychain/Credential Manager. `SONIOX_API_KEY` and `MOSS_API_KEY` are used only
+  as development fallbacks when their secure storage entries are empty.
 
 ## Privacy model
 
 MeowSTT is BYOK and has no application backend. Starting a job uploads its
-media directly to Soniox. Optional Soniox translation is performed within that
-same transcription request. Optional LLM translation is a separate operation;
+media directly to the provider recorded on that job; MOSS Pro may first create
+a compact temporary audio copy on macOS. Optional Soniox
+translation is performed within the Soniox request. Optional LLM translation is a separate operation;
 when requested, transcript text—not media—is sent to the single
 OpenAI-compatible endpoint saved in Settings. AI Brief generation also sends
 transcript text, timestamps, and speaker names—not media—to that endpoint only
 after an explicit user action. Manifests store paths, small metadata, raw
 transcript tokens, original and translated edits, AI Brief drafts and evidence,
 generation progress, and only the remote IDs owned by that job—never media
-copies or API keys. Cleanup deletes only those owned Soniox
-file/transcription IDs.
+copies or API keys. Cleanup deletes only provider resources created by that
+job. Soniox files and transcriptions are deleted; MOSS uploaded files are
+deleted, while MOSI task-record retention follows the provider policy because
+the public API exposes no task-delete endpoint.
 Inbox monitoring stores its folder configuration plus canonical path, byte
 size, modification time, disposition, and optional job ID in a separate atomic
 Application Support JSON file. It never moves, modifies, deletes, or uploads a
@@ -81,7 +92,9 @@ See [PRIVACY.md](PRIVACY.md).
 
 ## Development
 
-Requirements: Flutter stable with macOS and/or Windows desktop enabled. The
+Requirements: Flutter stable with macOS and/or Windows desktop enabled. Building
+the Apple Silicon local speech worker also requires Xcode command-line tools;
+its Core ML model bundles are verified downloads and are never bundled. The
 existing `media_kit_libs_video` dependency supplies libmpv. Windows packaging
 fetches the pinned FLAC 1.5.0 encoder described in
 `packaging/flac/manifest.json`; macOS uses its built-in `afconvert` encoder.
@@ -97,8 +110,9 @@ Before `flutter run -d windows`, prepare the small native encoder once with
 `scripts\fetch-flac.ps1 -Arch x64` (or `arm64` on a native ARM64 development
 host). Packaging scripts do this automatically.
 
-Set `SONIOX_API_KEY` only to opt into live development calls. Normal tests use
-fake local services and never consume Soniox credit.
+Set `SONIOX_API_KEY` or `MOSS_API_KEY` only to opt into the corresponding
+billable live smoke test. Normal tests use fake local services and never consume
+provider credit.
 
 The complete keyboard shortcut reference is available in
 **Settings → Shortcuts**. All primary actions remain reachable without a mouse.
@@ -117,7 +131,7 @@ Developer ID Application identity for production. The release script uses the
 `notarytool` keychain profile named `MeowSTT` by default; override it with
 `MEOWSTT_NOTARY_PROFILE`. Signed releases fail before building if that profile
 cannot be used, then notarize and staple both the app and DMG before packaging
-the final DMG. The app stores the Soniox API key in the encrypted macOS login
+the final DMG. The app stores transcription API keys in the encrypted macOS login
 Keychain without opting into the entitlement-only Data Protection Keychain, so
 direct distributions do not require a provisioning profile or the restricted
 Keychain Sharing entitlement. macOS builds run a real Keychain round-trip
@@ -184,7 +198,7 @@ Windows/macOS publishing workflow and dry-run commands.
 
 UI widgets depend on one Provider/ChangeNotifier controller. The controller
 orchestrates injected contracts for credentials, settings, manifests, media,
-Soniox, OpenAI-compatible text translation, playback, and exports. Networking,
+transcription providers, OpenAI-compatible text translation, playback, and exports. Networking,
 subprocesses, persistence, and formatting live outside the UI. Every job
 transition is atomically persisted in an Application Support job directory,
 which is the restart-recovery boundary.
@@ -195,5 +209,7 @@ Distribution artifacts retain the libmpv already supplied by
 `media_kit_libs_video`; there are no standalone FFmpeg or FFprobe programs.
 Windows adds the compact FLAC encoder and its corresponding source archive.
 Provenance, SHA-256 checksums, and license texts live in `packaging/flac/` and
-`assets/third_party/`. Soniox is a separate third-party transcription service
-and requires a user-owned account and API key.
+`assets/third_party/`. The optional arm64 local speech worker uses pinned
+speech-swift/Core ML code; MOSS and Qwen3 model bundles are downloaded
+separately, verified, and covered by the included notices. Soniox and MOSI are separate third-party transcription
+services and each requires a user-owned account and API key when selected.

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
 
@@ -10,8 +11,38 @@ import '../core/models.dart';
 import 'local_repositories.dart';
 import 'waveform_renderer.dart';
 
+abstract interface class CompactAudioEncoder {
+  Future<void> encodeAac({
+    required String inputPath,
+    required String outputPath,
+    required int bitRate,
+  });
+}
+
+class MacosCompactAudioEncoder implements CompactAudioEncoder {
+  const MacosCompactAudioEncoder({MethodChannel? channel})
+    : _channel = channel ?? const MethodChannel(_channelName);
+
+  static const _channelName = 'app.meowstt.desktop/audio_encoder';
+  final MethodChannel _channel;
+
+  @override
+  Future<void> encodeAac({
+    required String inputPath,
+    required String outputPath,
+    required int bitRate,
+  }) => _channel.invokeMethod<void>('encodeAac', {
+    'inputPath': inputPath,
+    'outputPath': outputPath,
+    'bitRate': bitRate,
+  });
+}
+
 class ProcessMediaService implements MediaService {
-  ProcessMediaService(this.paths);
+  ProcessMediaService(
+    this.paths, {
+    CompactAudioEncoder compactAudioEncoder = const MacosCompactAudioEncoder(),
+  }) : _compactAudioEncoder = compactAudioEncoder;
 
   static const supportedAudioExtensions = {'.mp3', '.wav', '.m4a', '.ogg'};
   static const supportedVideoExtensions = {'.mp4', '.mkv', '.avi'};
@@ -21,12 +52,32 @@ class ProcessMediaService implements MediaService {
   };
 
   final AppPaths paths;
+  final CompactAudioEncoder _compactAudioEncoder;
   String? _encoderPath;
 
   @override
-  bool canUploadDirectly(String path, MediaMetadata metadata) =>
-      !metadata.hasVideo &&
-      supportedAudioExtensions.contains(p.extension(path).toLowerCase());
+  bool canUploadDirectly(
+    String path,
+    MediaMetadata metadata, {
+    MediaUploadProfile profile = MediaUploadProfile.standard,
+  }) {
+    final extension = p.extension(path).toLowerCase();
+    if (metadata.hasVideo || !supportedAudioExtensions.contains(extension)) {
+      return false;
+    }
+    if (profile == MediaUploadProfile.standard || !Platform.isMacOS) {
+      return true;
+    }
+    final codec = metadata.audioCodec?.toLowerCase() ?? '';
+    final compactCodec =
+        extension == '.mp3' ||
+        extension == '.ogg' ||
+        (extension == '.m4a' &&
+            (codec.contains('aac') || codec.contains('mp4a')));
+    if (!compactCodec || metadata.durationMs <= 0) return false;
+    final bitsPerSecond = metadata.sizeBytes * 8000 / metadata.durationMs;
+    return bitsPerSecond <= 64000;
+  }
 
   @override
   Future<MediaMetadata> inspect(String sourcePath) async {
@@ -141,6 +192,7 @@ class ProcessMediaService implements MediaService {
     String sourcePath,
     String jobId, {
     required int durationMs,
+    MediaUploadProfile profile = MediaUploadProfile.standard,
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
@@ -169,12 +221,23 @@ class ProcessMediaService implements MediaService {
         throw const OperationCancelledException();
       }
       onProgress?.call(0.9, null);
-      await _encodeLossless(pcmPath, output, shouldCancel: shouldCancel);
+      if (profile == MediaUploadProfile.compactSpeech && Platform.isMacOS) {
+        await _compactAudioEncoder.encodeAac(
+          inputPath: pcmPath,
+          outputPath: output,
+          bitRate: 48000,
+        );
+      } else {
+        await _encodeLossless(pcmPath, output, shouldCancel: shouldCancel);
+      }
+      if (shouldCancel?.call() ?? false) {
+        throw const OperationCancelledException();
+      }
       final outputFile = File(output);
       if (!await outputFile.exists() || await outputFile.length() == 0) {
         throw const MediaException(
           'conversion_failed',
-          'The lossless audio encoder did not create an output file.',
+          'The audio encoder did not create an output file.',
         );
       }
       onProgress?.call(1, null);
@@ -193,6 +256,29 @@ class ProcessMediaService implements MediaService {
     }
   }
 
+  Future<String> extractPcm16kMono(
+    String sourcePath,
+    String cacheKey, {
+    required int durationMs,
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    await paths.temporary.create(recursive: true);
+    final output = p.join(
+      paths.temporary.path,
+      '${_safeCacheKey(cacheKey)}-local.wav',
+    );
+    await _extractPcm(
+      sourcePath,
+      output,
+      sampleRate: 16000,
+      durationMs: durationMs,
+      onProgress: onProgress,
+      shouldCancel: shouldCancel,
+    );
+    return output;
+  }
+
   @override
   Future<String> renderWaveform(String sourcePath, String cacheKey) async {
     final source = File(sourcePath);
@@ -203,7 +289,9 @@ class ProcessMediaService implements MediaService {
       );
     }
     final safeKey = _safeCacheKey(cacheKey);
-    final output = File(p.join(paths.temporary.path, '$safeKey-waveform.png'));
+    final output = File(
+      p.join(paths.temporary.path, '$safeKey-waveform-v2.png'),
+    );
     if (await output.exists() &&
         (await output.lastModified()).isAfter(await source.lastModified())) {
       return output.path;
@@ -456,6 +544,7 @@ class ProcessMediaService implements MediaService {
       '.m4a',
       '-extract.wav',
       '-waveform.wav',
+      '-waveform-v2.png',
       '-waveform.png',
     ]) {
       await deleteTemporary(p.join(paths.temporary.path, '$safeKey$suffix'));
@@ -577,6 +666,7 @@ String _safeCacheKey(String cacheKey) =>
 
 String? generatedMediaCacheKey(String filename) {
   for (final suffix in const [
+    '-waveform-v2.png',
     '-waveform.png',
     '-waveform.wav',
     '-extract.wav',

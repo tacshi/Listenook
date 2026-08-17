@@ -10,6 +10,26 @@ import 'job_actions.dart';
 import 'inbox_monitor_setup_dialog.dart';
 import 'transcript_export_dialog.dart';
 
+double? inboxJobProgressValue(TranscriptionJob job) {
+  final fraction = job.progress.fraction;
+  if (job.transcriptionProvider == TranscriptionProvider.mossLocal &&
+      job.progress.stage == 'local_transcribing' &&
+      (fraction == null || fraction <= 0.12)) {
+    return null;
+  }
+  return fraction;
+}
+
+String? inboxJobProgressPercentage(TranscriptionJob job) {
+  if (!job.status.isActive ||
+      job.transcriptionProvider != TranscriptionProvider.mossLocal ||
+      job.progress.stage != 'local_transcribing' ||
+      job.progress.fraction == null) {
+    return null;
+  }
+  return '${(job.progress.fraction! * 100).clamp(0, 100).floor()}%';
+}
+
 class InboxPage extends StatefulWidget {
   const InboxPage({
     super.key,
@@ -39,7 +59,10 @@ class _InboxPageState extends State<InboxPage> {
       onDragExited: (_) => setState(() => _dragging = false),
       onDragDone: (details) {
         setState(() => _dragging = false);
-        controller.enqueueSources(details.files.map((file) => file.path));
+        controller.enqueueSources(
+          details.files.map((file) => file.path),
+          allowLocalAutoStart: false,
+        );
       },
       child: SafeArea(
         child: Padding(
@@ -47,6 +70,8 @@ class _InboxPageState extends State<InboxPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const _InboxMonitorPanel(),
+              const SizedBox(height: 12),
               if (controller.inboxJobs.isNotEmpty) ...[
                 _InboxActions(
                   onAddFiles: widget.onAddFiles,
@@ -55,8 +80,6 @@ class _InboxPageState extends State<InboxPage> {
                 ),
                 const SizedBox(height: 12),
               ],
-              const _InboxMonitorPanel(),
-              const SizedBox(height: 12),
               if (controller.inboxJobs.isEmpty)
                 Expanded(
                   child: _EmptyDropZone(
@@ -465,6 +488,18 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
     final settings = controller.settings;
+    final provider = controller.sessionTranscriptionProvider;
+    final providerConfigured = controller.isTranscriptionProviderConfigured(
+      provider,
+    );
+    final localDurationExceeded =
+        provider == TranscriptionProvider.mossLocal &&
+        controller.inboxJobs.any(
+          (job) =>
+              !job.transcriptAcquisitionMode.usesPublisherTranscript &&
+              job.status.canTranscribe &&
+              (job.metadata?.durationMs ?? 0) > 90 * 60 * 1000,
+        );
     return Card(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -488,37 +523,87 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
               ),
             ],
           ),
-          if (!controller.keyConfigured) ...[
+          const SizedBox(height: 12),
+          DropdownButtonFormField<TranscriptionProvider>(
+            key: const Key('session-transcription-provider'),
+            initialValue: provider,
+            decoration: InputDecoration(
+              labelText: context.strings.t('transcription_provider'),
+              prefixIcon: const Icon(Icons.hub_outlined),
+            ),
+            items: [
+              for (final item in controller.availableTranscriptionProviders)
+                DropdownMenuItem(
+                  value: item,
+                  child: Text(context.strings.transcriptionProviderName(item)),
+                ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                controller.updateSessionTranscriptionProvider(value);
+              }
+            },
+          ),
+          if (!providerConfigured) ...[
             const SizedBox(height: 12),
             _ReviewLine(
               icon: Icons.key_off_rounded,
-              title: context.strings.t('soniox_key'),
-              value: context.strings.t('key_missing'),
+              title: provider == TranscriptionProvider.soniox
+                  ? context.strings.t('soniox_key')
+                  : provider == TranscriptionProvider.mossPro
+                  ? context.strings.t('moss_key')
+                  : context.strings.t('local_moss_model'),
+              value: context.strings.t(
+                provider == TranscriptionProvider.mossLocal
+                    ? 'local_model_missing'
+                    : 'provider_key_missing',
+              ),
               action: () => controller.setDestination(AppDestination.settings),
             ),
             const Divider(height: 20),
           ] else
             const SizedBox(height: 12),
-          _LanguageHintsPicker(
-            selectedCodes: controller.sessionOptions.languageHints,
-            onChanged: (languageHints) => controller.updateSessionOptions(
-              controller.sessionOptions.copyWith(languageHints: languageHints),
+          if (localDurationExceeded) ...[
+            KeyedSubtree(
+              key: const Key('local-moss-duration-warning'),
+              child: _ReviewLine(
+                icon: Icons.warning_amber_rounded,
+                title: context.strings.t('local_moss_model'),
+                value: context.strings.error('local_stt_duration_exceeded'),
+              ),
             ),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            key: const Key('session-context-terms-field'),
-            controller: _terms,
-            decoration: InputDecoration(
-              labelText: context.strings.t('context_terms'),
-              hintText: context.strings.t('context_terms_hint'),
-              prefixIcon: const Icon(Icons.spellcheck_rounded),
+            const Divider(height: 20),
+          ],
+          if (provider != TranscriptionProvider.mossPro) ...[
+            _LanguageHintsPicker(
+              selectedCodes: controller.sessionOptions.languageHints,
+              onChanged: (languageHints) => controller.updateSessionOptions(
+                controller.sessionOptions.copyWith(
+                  languageHints: languageHints,
+                ),
+              ),
             ),
-            onSubmitted: (_) => _saveSessionOptions(controller),
-            onTapOutside: (_) => _saveSessionOptions(controller),
-          ),
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('session-context-terms-field'),
+              controller: _terms,
+              decoration: InputDecoration(
+                labelText: context.strings.t('context_terms'),
+                hintText: context.strings.t('context_terms_hint'),
+                prefixIcon: const Icon(Icons.spellcheck_rounded),
+              ),
+              onSubmitted: (_) => _saveSessionOptions(controller),
+              onTapOutside: (_) => _saveSessionOptions(controller),
+            ),
+          ] else
+            _ReviewLine(
+              icon: Icons.auto_awesome_outlined,
+              title: context.strings.t('moss_pro'),
+              value: context.strings.t('moss_options_automatic'),
+            ),
           const Divider(height: 20),
-          if (settings.sonioxTranslation.enabled)
+          if (provider == TranscriptionProvider.soniox &&
+              settings.sonioxTranslation.enabled)
             KeyedSubtree(
               key: const Key('soniox-translation-summary'),
               child: _ReviewLine(
@@ -977,13 +1062,23 @@ class _JobTile extends StatelessWidget {
                               job.transcriptAcquisitionMode ==
                                       TranscriptAcquisitionMode
                                           .publisherCaptions
-                                  ? TranscriptAcquisitionMode.soniox
+                                  ? (job.transcriptionProvider ==
+                                            TranscriptionProvider.mossPro
+                                        ? TranscriptAcquisitionMode.mossPro
+                                        : TranscriptAcquisitionMode.soniox)
                                   : TranscriptAcquisitionMode.publisherCaptions,
                             ),
                         child: Text(
                           job.transcriptAcquisitionMode ==
                                   TranscriptAcquisitionMode.publisherCaptions
-                              ? context.strings.t('podcast_use_soniox')
+                              ? context.strings
+                                    .t('podcast_use_provider')
+                                    .replaceFirst(
+                                      '{provider}',
+                                      context.strings.transcriptionProviderName(
+                                        job.transcriptionProvider,
+                                      ),
+                                    )
                               : context.strings.t('podcast_use_captions'),
                         ),
                       ),
@@ -992,7 +1087,7 @@ class _JobTile extends StatelessWidget {
                   if (job.status.isActive) ...[
                     const SizedBox(height: 5),
                     LinearProgressIndicator(
-                      value: job.progress.fraction,
+                      value: inboxJobProgressValue(job),
                       minHeight: 4,
                       borderRadius: BorderRadius.circular(99),
                     ),
@@ -1055,8 +1150,10 @@ class _JobTile extends StatelessWidget {
         context.strings.t('podcast_has_captions'),
       _ => '',
     };
+    final progress = inboxJobProgressPercentage(job) ?? '';
     return [
       context.strings.t('job_${job.status.name}'),
+      progress,
       duration,
       transcript,
     ].where((part) => part.trim().isNotEmpty).join(' · ');

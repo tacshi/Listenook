@@ -587,6 +587,47 @@ class _AppShellState extends State<AppShell>
     );
   }
 
+  Widget _inboxFab(BuildContext context, {required bool extended}) {
+    final label = context.strings.t('inbox');
+    final tooltip = _shortcutTooltip(context, label, 'I');
+    final colors = Theme.of(context).colorScheme;
+    void openInbox() => unawaited(_setDestination(AppDestination.inbox));
+    if (extended) {
+      return FloatingActionButtonTheme(
+        data: FloatingActionButtonTheme.of(context).copyWith(
+          extendedSizeConstraints: const BoxConstraints.tightFor(height: 44),
+        ),
+        child: FloatingActionButton.extended(
+          key: const Key('inbox-fab'),
+          heroTag: 'inbox-fab',
+          tooltip: tooltip,
+          onPressed: openInbox,
+          backgroundColor: colors.surfaceContainerHighest,
+          foregroundColor: colors.primary,
+          elevation: 0,
+          focusElevation: 1,
+          hoverElevation: 2,
+          highlightElevation: 1,
+          icon: const Icon(Icons.inbox_rounded),
+          label: Text(label),
+        ),
+      );
+    }
+    return FloatingActionButton.small(
+      key: const Key('inbox-fab'),
+      heroTag: 'inbox-fab',
+      tooltip: tooltip,
+      onPressed: openInbox,
+      backgroundColor: colors.surfaceContainerHighest,
+      foregroundColor: colors.primary,
+      elevation: 0,
+      focusElevation: 1,
+      hoverElevation: 2,
+      highlightElevation: 1,
+      child: const Icon(Icons.inbox_rounded),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
@@ -605,32 +646,30 @@ class _AppShellState extends State<AppShell>
     final hideWindowToolbar =
         _windowFullscreen && Theme.of(context).platform == TargetPlatform.macOS;
     final sidebarExtended = MediaQuery.sizeOf(context).width >= 1180;
+    const primaryDestinations = [
+      AppDestination.podcast,
+      AppDestination.workspace,
+      AppDestination.library,
+    ];
     final destinations = [
       _destination(
         context: context,
-        labelKey: 'inbox',
-        shortcutKey: '1',
-        icon: Icons.inbox_outlined,
-        selectedIcon: Icons.inbox_rounded,
-      ),
-      _destination(
-        context: context,
         labelKey: 'podcast',
-        shortcutKey: '2',
+        shortcutKey: '1',
         icon: Icons.podcasts_outlined,
         selectedIcon: Icons.podcasts_rounded,
       ),
       _destination(
         context: context,
         labelKey: 'workspace',
-        shortcutKey: '3',
+        shortcutKey: '2',
         icon: Icons.space_dashboard_outlined,
         selectedIcon: Icons.space_dashboard_rounded,
       ),
       _destination(
         context: context,
         labelKey: 'library',
-        shortcutKey: '4',
+        shortcutKey: '3',
         icon: Icons.library_books_outlined,
         selectedIcon: Icons.library_books_rounded,
       ),
@@ -641,21 +680,21 @@ class _AppShellState extends State<AppShell>
       player: player,
       child: CallbackShortcuts(
         bindings: {
+          const SingleActivator(LogicalKeyboardKey.keyI, meta: true): () =>
+              _setDestination(AppDestination.inbox),
+          const SingleActivator(LogicalKeyboardKey.keyI, control: true): () =>
+              _setDestination(AppDestination.inbox),
           const SingleActivator(LogicalKeyboardKey.digit1, meta: true): () =>
-              _setDestination(AppDestination.inbox),
+              _setDestination(AppDestination.podcast),
           const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
-              _setDestination(AppDestination.inbox),
+              _setDestination(AppDestination.podcast),
           const SingleActivator(LogicalKeyboardKey.digit2, meta: true): () =>
-              _setDestination(AppDestination.podcast),
+              _setDestination(AppDestination.workspace),
           const SingleActivator(LogicalKeyboardKey.digit2, control: true): () =>
-              _setDestination(AppDestination.podcast),
+              _setDestination(AppDestination.workspace),
           const SingleActivator(LogicalKeyboardKey.digit3, meta: true): () =>
-              _setDestination(AppDestination.workspace),
-          const SingleActivator(LogicalKeyboardKey.digit3, control: true): () =>
-              _setDestination(AppDestination.workspace),
-          const SingleActivator(LogicalKeyboardKey.digit4, meta: true): () =>
               _setDestination(AppDestination.library),
-          const SingleActivator(LogicalKeyboardKey.digit4, control: true): () =>
+          const SingleActivator(LogicalKeyboardKey.digit3, control: true): () =>
               _setDestination(AppDestination.library),
           const SingleActivator(LogicalKeyboardKey.comma, meta: true): () =>
               _setDestination(AppDestination.settings),
@@ -713,7 +752,11 @@ class _AppShellState extends State<AppShell>
                                   key: const Key('app-sidebar'),
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    SizedBox(
+                                    AnimatedContainer(
+                                      duration: const Duration(
+                                        milliseconds: 180,
+                                      ),
+                                      curve: Curves.easeInOut,
                                       width: sidebarExtended
                                           ? _extendedSidebarWidth
                                           : _compactSidebarWidth,
@@ -722,32 +765,46 @@ class _AppShellState extends State<AppShell>
                                         minExtendedWidth: _extendedSidebarWidth,
                                         selectedIndex:
                                             switch (controller.destination) {
-                                              AppDestination.inbox => 0,
-                                              AppDestination.podcast => 1,
-                                              AppDestination.workspace => 2,
-                                              AppDestination.library => 3,
+                                              AppDestination.podcast => 0,
+                                              AppDestination.workspace => 1,
+                                              AppDestination.library => 2,
+                                              AppDestination.inbox ||
                                               AppDestination.settings => null,
                                             },
                                         onDestinationSelected: (index) =>
                                             unawaited(
                                               _setDestination(
-                                                AppDestination.values[index],
+                                                primaryDestinations[index],
                                               ),
                                             ),
                                         extended: sidebarExtended,
-                                        leading: Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 10,
-                                            bottom: 14,
-                                          ),
-                                          child: Tooltip(
-                                            message: 'MeowSTT',
-                                            child: Image.asset(
-                                              'assets/branding/meowstt-icon.png',
-                                              width: 38,
-                                              height: 38,
+                                        leading: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                top: 10,
+                                                bottom: 12,
+                                              ),
+                                              child: Tooltip(
+                                                message: 'MeowSTT',
+                                                child: Image.asset(
+                                                  'assets/branding/meowstt-icon.png',
+                                                  width: 38,
+                                                  height: 38,
+                                                ),
+                                              ),
                                             ),
-                                          ),
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                bottom: 14,
+                                              ),
+                                              child: _inboxFab(
+                                                context,
+                                                extended: sidebarExtended,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                         trailingAtBottom: true,
                                         trailing: Padding(
@@ -800,9 +857,16 @@ class _AppShellState extends State<AppShell>
                                     onAddFiles: _addFiles,
                                     onImportFolder: _importFolder,
                                   ),
-                                  AppDestination.podcast => const PodcastPage(
-                                    key: ValueKey('podcast'),
-                                  ),
+                                  AppDestination.podcast =>
+                                    podcast == null
+                                        ? const SizedBox.expand(
+                                            key: ValueKey(
+                                              'podcast-unavailable',
+                                            ),
+                                          )
+                                        : const PodcastPage(
+                                            key: ValueKey('podcast'),
+                                          ),
                                   AppDestination.workspace => WorkspacePage(
                                     key: const ValueKey('workspace'),
                                     fullscreenController: _fullscreenController,

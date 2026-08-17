@@ -106,6 +106,75 @@ void main() {
     expect(job.podcastProvenance?.description, episode.description);
   });
 
+  test(
+    'deleting a podcast removes both projections and permits re-download',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-podcast-delete-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      const episode = PodcastEpisode(
+        id: 'https://feeds.example/show\nguid-delete',
+        feedUrl: 'https://feeds.example/show',
+        title: 'Delete and download again',
+        enclosureUrl: 'https://cdn.example/delete.mp3',
+        mediaExtension: 'mp3',
+      );
+      const feed = PodcastFeed(
+        feedUrl: 'https://feeds.example/show',
+        title: 'Study English',
+        episodes: [episode],
+      );
+      final gateway = MemoryPodcastGateway(
+        feeds: {feed.feedUrl: feed},
+        enclosures: {
+          episode.enclosureUrl: [1, 2, 3, 4],
+        },
+      );
+      final jobs = _Jobs();
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: _Settings(),
+        jobRepository: jobs,
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+        podcastGateway: gateway,
+        podcastManagedRoot: directory.path,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await controller.enqueuePodcastEpisode(episode, feed: feed);
+      await _waitFor(
+        () => controller.jobForEpisode(episode.id)?.status == JobStatus.ready,
+      );
+      final original = controller.jobForEpisode(episode.id)!;
+      final originalPath = original.sourcePath;
+      expect(controller.allJobs, hasLength(1));
+      expect(controller.podcastJobs, hasLength(1));
+      expect(File(originalPath).existsSync(), isTrue);
+
+      await controller.deleteHistory(original.id);
+
+      expect(controller.jobForEpisode(episode.id), isNull);
+      expect(controller.allJobs, isEmpty);
+      expect(controller.podcastJobs, isEmpty);
+      expect(jobs.saved, isEmpty);
+      expect(File(originalPath).existsSync(), isFalse);
+
+      await controller.enqueuePodcastEpisode(episode, feed: feed);
+      await _waitFor(
+        () => controller.jobForEpisode(episode.id)?.status == JobStatus.ready,
+      );
+      final downloadedAgain = controller.jobForEpisode(episode.id)!;
+      expect(downloadedAgain.id, isNot(original.id));
+      expect(File(downloadedAgain.sourcePath).existsSync(), isTrue);
+      expect(gateway.downloads, hasLength(2));
+    },
+  );
+
   test('untranscribed podcast cache files appear in Downloads', () async {
     final directory = await Directory.systemTemp.createTemp(
       'meow-podcast-downloads-',
@@ -750,7 +819,11 @@ class _EmptyCredentials implements CredentialStore {
 
 class _Media implements MediaService {
   @override
-  bool canUploadDirectly(String path, MediaMetadata metadata) => true;
+  bool canUploadDirectly(
+    String path,
+    MediaMetadata metadata, {
+    MediaUploadProfile profile = MediaUploadProfile.standard,
+  }) => true;
 
   @override
   Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
@@ -770,6 +843,7 @@ class _Media implements MediaService {
     String sourcePath,
     String jobId, {
     required int durationMs,
+    MediaUploadProfile profile = MediaUploadProfile.standard,
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async => sourcePath;

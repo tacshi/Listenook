@@ -10,6 +10,7 @@ import '../data/podcast/podcast_formatters.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import '../state/podcast_controller.dart';
+import 'job_actions.dart';
 import 'podcast_media_export.dart';
 import 'podcast_episode_description.dart';
 import 'podcast_now_playing.dart';
@@ -59,7 +60,8 @@ class _PodcastPageState extends State<PodcastPage> {
     final strings = context.strings;
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+        key: const Key('podcast-page-padding'),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -142,7 +144,6 @@ class _PodcastPageState extends State<PodcastPage> {
         Row(
           children: [
             Expanded(
-              flex: 3,
               child: TextField(
                 key: const Key('podcast-search-field'),
                 controller: _search,
@@ -176,7 +177,6 @@ class _PodcastPageState extends State<PodcastPage> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              flex: 2,
               child: TextField(
                 key: const Key('podcast-feed-field'),
                 controller: _feedUrl,
@@ -298,6 +298,8 @@ class _PodcastPageState extends State<PodcastPage> {
               null,
         )
         .toList(growable: false);
+    final canRemoveSelected =
+        selectedJobs.isNotEmpty && selectedJobs.every((job) => !job.isBusy);
     final colors = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -324,6 +326,9 @@ class _PodcastPageState extends State<PodcastPage> {
               : () => unawaited(
                   exportDownloadedPodcastMediaBatch(context, exportableJobs),
                 ),
+          onRemove: canRemoveSelected
+              ? () => unawaited(_removePodcastJobs(selectedJobs))
+              : null,
         ),
         const SizedBox(height: 10),
         Expanded(
@@ -482,6 +487,27 @@ class _PodcastPageState extends State<PodcastPage> {
                       unawaited(exportDownloadedPodcastMedia(context, job)),
                   icon: const Icon(Icons.ios_share_rounded),
                 ),
+              if (!selectionMode)
+                PopupMenuButton<String>(
+                  key: ValueKey('podcast-library-menu-${job.id}'),
+                  onSelected: (value) {
+                    if (value == 'remove') {
+                      unawaited(_removePodcastJobs([job]));
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'remove',
+                      enabled: !job.isBusy,
+                      child: Text(
+                        context.strings.t('remove'),
+                        style: !job.isBusy
+                            ? TextStyle(color: colors.error)
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
               Tooltip(
                 message: _actionLabel(context, job),
                 child: FilledButton.tonal(
@@ -501,6 +527,14 @@ class _PodcastPageState extends State<PodcastPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _removePodcastJobs(Iterable<TranscriptionJob> jobs) async {
+    final items = jobs.toList(growable: false);
+    final removed = await confirmAndRemoveLibraryJobs(context, items);
+    if (!removed || !mounted) return;
+    final removedIds = items.map((job) => job.id).toSet();
+    setState(() => _selectedLibraryJobIds.removeAll(removedIds));
   }
 
   PodcastEpisode _episodeFromJob(TranscriptionJob job) {
@@ -1025,6 +1059,14 @@ class _PodcastPageState extends State<PodcastPage> {
                                             tooltip: context.strings.t(
                                               'podcast_export_media',
                                             ),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            style: IconButton.styleFrom(
+                                              minimumSize: const Size(36, 36),
+                                              tapTargetSize:
+                                                  MaterialTapTargetSize
+                                                      .shrinkWrap,
+                                            ),
                                             onPressed: () => unawaited(
                                               exportDownloadedPodcastMedia(
                                                 context,
@@ -1033,6 +1075,7 @@ class _PodcastPageState extends State<PodcastPage> {
                                             ),
                                             icon: const Icon(
                                               Icons.ios_share_rounded,
+                                              size: 20,
                                             ),
                                           ),
                                       ],
@@ -1275,6 +1318,7 @@ class _PodcastLibraryToolbar extends StatelessWidget {
     required this.onToggleSelection,
     required this.onSelectAll,
     required this.onExport,
+    required this.onRemove,
   });
 
   final bool selectionMode;
@@ -1284,6 +1328,7 @@ class _PodcastLibraryToolbar extends StatelessWidget {
   final VoidCallback onToggleSelection;
   final VoidCallback onSelectAll;
   final VoidCallback? onExport;
+  final VoidCallback? onRemove;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -1317,6 +1362,16 @@ class _PodcastLibraryToolbar extends StatelessWidget {
               onPressed: onExport,
               icon: const Icon(Icons.ios_share_rounded),
               label: Text(context.strings.t('export')),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              key: const Key('batch-remove-podcast-jobs'),
+              tooltip: context.strings.t('remove_selected'),
+              style: IconButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.error,
+              ),
+              onPressed: onRemove,
+              icon: const Icon(Icons.delete_outline_rounded),
             ),
             const SizedBox(width: 8),
           ] else

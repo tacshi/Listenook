@@ -128,6 +128,42 @@ void main() {
     expect(repaired.segments.last.id, 'second');
   });
 
+  test('normalizer preserves aligned token ownership when segments merge', () {
+    final repaired = parser.normalizeSegments(
+      TranscriptDocument(
+        tokens: const [
+          TranscriptToken(
+            text: 'Hello',
+            startMs: 0,
+            endMs: 300,
+            segmentId: 'first',
+          ),
+          TranscriptToken(
+            text: 'world',
+            startMs: 320,
+            endMs: 700,
+            segmentId: 'continued',
+          ),
+        ],
+        segments: const [
+          TranscriptSegment(id: 'first', startMs: 0, endMs: 300, text: 'Hello'),
+          TranscriptSegment(
+            id: 'continued',
+            startMs: 320,
+            endMs: 700,
+            text: 'world.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+      ),
+    );
+
+    expect(repaired.segments, hasLength(1));
+    expect(repaired.segments.single.id, 'first');
+    expect(repaired.tokens.map((token) => token.segmentId), ['first', 'first']);
+  });
+
   test('parser omits whitespace-only tokens and empty segments', () {
     final parsed = parser.parse({
       'tokens': [

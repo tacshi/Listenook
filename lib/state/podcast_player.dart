@@ -405,6 +405,9 @@ class PodcastPlayer extends ChangeNotifier {
     TranscriptSegment segment,
     int? nextStartMs,
   ) {
+    if (token.segmentId case final segmentId?) {
+      return segmentId == segment.id;
+    }
     if (token.startMs == 0 && token.endMs == 0 && token.text.trim().isEmpty) {
       return false;
     }

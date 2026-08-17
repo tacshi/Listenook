@@ -3,11 +3,42 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
+import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/core/podcast_models.dart';
 import 'package:meow_stt/data/local_repositories.dart';
 import 'package:meow_stt/state/podcast_player.dart';
 
 void main() {
+  test('segment-owned tokens stay with overlapping speaker cues', () {
+    final document = TranscriptDocument(
+      tokens: const [
+        TranscriptToken(
+          text: 'Alpha',
+          startMs: 1000,
+          endMs: 1300,
+          segmentId: 'a',
+        ),
+        TranscriptToken(
+          text: 'Beta',
+          startMs: 1000,
+          endMs: 1300,
+          segmentId: 'b',
+        ),
+      ],
+      segments: const [
+        TranscriptSegment(id: 'a', startMs: 900, endMs: 1500, text: 'Alpha'),
+        TranscriptSegment(id: 'b', startMs: 900, endMs: 1500, text: 'Beta'),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.utc(2026, 8, 16),
+    );
+
+    final cues = PodcastPlayer.cuesFrom(document);
+
+    expect(cues[0].tokens.map((token) => token.text), ['Alpha']);
+    expect(cues[1].tokens.map((token) => token.text), ['Beta']);
+  });
+
   test('playback progress survives a new player session', () async {
     final directory = await Directory.systemTemp.createTemp('meow-playback-');
     addTearDown(() => directory.delete(recursive: true));

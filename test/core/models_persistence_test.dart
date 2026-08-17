@@ -107,6 +107,163 @@ void main() {
     expect(job.tagIds, isEmpty);
     expect(job.sourceOrigin, JobSourceOrigin.manual);
     expect(job.sourceFingerprint, isNull);
+    expect(job.transcriptionProvider, TranscriptionProvider.soniox);
+  });
+
+  test(
+    'transcription provider defaults to Soniox and round-trips both MOSS modes',
+    () {
+      final defaults = AppSettings.fromJson(const {});
+      expect(
+        defaults.defaultTranscriptionProvider,
+        TranscriptionProvider.soniox,
+      );
+
+      final settings = AppSettings.fromJson(const {
+        'default_transcription_provider': 'mossPro',
+      });
+      expect(
+        settings.defaultTranscriptionProvider,
+        TranscriptionProvider.mossPro,
+      );
+      expect(settings.toJson()['default_transcription_provider'], 'mossPro');
+
+      final now = DateTime.utc(2026, 8, 16);
+      final restored = TranscriptionJob.fromJson(
+        TranscriptionJob(
+          id: 'moss-job',
+          batchId: 'batch',
+          sourcePath: '/meeting.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+          transcriptionProvider: TranscriptionProvider.mossPro,
+        ).toJson(),
+      );
+      expect(restored.transcriptionProvider, TranscriptionProvider.mossPro);
+      expect(
+        restored.transcriptAcquisitionMode,
+        TranscriptAcquisitionMode.mossPro,
+      );
+
+      final inferred = TranscriptionJob.fromJson(
+        {...restored.toJson(), 'transcript_acquisition_mode': 'mossPro'}
+          ..remove('transcription_provider'),
+      );
+      expect(inferred.transcriptionProvider, TranscriptionProvider.mossPro);
+      expect(
+        inferred.transcriptAcquisitionMode,
+        TranscriptAcquisitionMode.mossPro,
+      );
+
+      final local = TranscriptionJob.fromJson(
+        TranscriptionJob(
+          id: 'moss-local-job',
+          batchId: 'batch',
+          sourcePath: '/meeting.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.aligning,
+          transcriptionProvider: TranscriptionProvider.mossLocal,
+          transcriptSource: TranscriptSource.mossLocal,
+          forcedAlignment: const ForcedAlignmentState(
+            status: ForcedAlignmentStatus.running,
+            modelId: 'qwen3-forced-aligner-0.6b-q8_0',
+            modelRevision: 'pinned-revision',
+            alignedSegments: 2,
+            totalSegments: 3,
+            languageAutomaticallyDetermined: true,
+          ),
+        ).toJson(),
+      );
+      expect(local.transcriptionProvider, TranscriptionProvider.mossLocal);
+      expect(
+        local.transcriptAcquisitionMode,
+        TranscriptAcquisitionMode.mossLocal,
+      );
+      expect(local.transcriptSource, TranscriptSource.mossLocal);
+      expect(local.status, JobStatus.aligning);
+      expect(local.forcedAlignment.status, ForcedAlignmentStatus.running);
+      expect(local.forcedAlignment.alignedSegments, 2);
+      expect(local.forcedAlignment.languageAutomaticallyDetermined, isTrue);
+    },
+  );
+
+  test(
+    'word timing provenance survives persistence and old data stays safe',
+    () {
+      const token = TranscriptToken(
+        text: 'Hello',
+        startMs: 120,
+        endMs: 420,
+        segmentId: 'moss-7',
+        speaker: 'S02',
+      );
+      final restored = TranscriptToken.fromJson(token.toJson());
+      expect(restored.segmentId, 'moss-7');
+      expect(restored.speaker, 'S02');
+
+      final legacy = TranscriptToken.fromJson(const {
+        'text': 'Legacy',
+        'start_ms': 0,
+        'end_ms': 300,
+      });
+      expect(legacy.segmentId, isNull);
+
+      final document = TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'moss-7',
+            startMs: 0,
+            endMs: 500,
+            text: 'Hello',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.utc(2026, 8, 16),
+      );
+      expect(
+        document.copyWith(tokens: const [token]).tokens.single.segmentId,
+        'moss-7',
+      );
+    },
+  );
+
+  test('automatic MOSS forced alignment defaults on and round-trips', () {
+    const defaults = AppSettings();
+    expect(defaults.autoAlignMoss, isTrue);
+
+    final disabled = AppSettings.fromJson(const {'auto_align_moss': false});
+    expect(disabled.autoAlignMoss, isFalse);
+    expect(disabled.toJson()['auto_align_moss'], isFalse);
+  });
+
+  test('local automation and restorable content state round-trip safely', () {
+    const defaults = AppSettings();
+    expect(defaults.autoTranscribeLocal, isFalse);
+    expect(defaults.lastContentDestination, AppContentDestination.podcast);
+    expect(defaults.lastWorkspaceJobId, isNull);
+
+    final restored = AppSettings.fromJson(
+      const AppSettings(
+        autoTranscribeLocal: true,
+        lastContentDestination: AppContentDestination.workspace,
+        lastWorkspaceJobId: 'workspace-job',
+      ).toJson(),
+    );
+    expect(restored.autoTranscribeLocal, isTrue);
+    expect(restored.lastContentDestination, AppContentDestination.workspace);
+    expect(restored.lastWorkspaceJobId, 'workspace-job');
+    expect(restored.toJson()['manifest_version'], manifestVersion);
+
+    final legacy = AppSettings.fromJson(const {});
+    expect(legacy.autoTranscribeLocal, isFalse);
+    expect(legacy.lastContentDestination, AppContentDestination.podcast);
+    expect(
+      restored.copyWith(clearLastWorkspaceJobId: true).lastWorkspaceJobId,
+      isNull,
+    );
   });
 
   test('version 6 manifests round-trip monitored source provenance', () {
@@ -132,7 +289,7 @@ void main() {
 
     expect(restored.sourceOrigin, JobSourceOrigin.monitoredFolder);
     expect(restored.sourceFingerprint?.sameVersion(fingerprint), isTrue);
-    expect(restored.toJson()['manifest_version'], 7);
+    expect(restored.toJson()['manifest_version'], manifestVersion);
   });
 
   test('version 7 manifests round-trip podcast provenance', () {
@@ -185,7 +342,7 @@ void main() {
       restored.transcriptAcquisitionMode,
       TranscriptAcquisitionMode.soniox,
     );
-    expect(restored.toJson()['manifest_version'], 7);
+    expect(restored.toJson()['manifest_version'], manifestVersion);
   });
 
   test('legacy publisherWordTimed jobs load as publisher captions', () {
@@ -280,7 +437,7 @@ void main() {
       final json = job.toJson();
       final restored = TranscriptionJob.fromJson(json);
 
-      expect(json['manifest_version'], 7);
+      expect(json['manifest_version'], manifestVersion);
       expect(restored.sourcePath, '/recordings/original.wav');
       expect(restored.fileName, 'original.wav');
       expect(restored.displayName, 'Weekly sync');
@@ -346,7 +503,7 @@ void main() {
     final json = job.toJson();
     final restored = TranscriptionJob.fromJson(json);
 
-    expect(json['manifest_version'], 7);
+    expect(json['manifest_version'], manifestVersion);
     expect(job.toJsonString(), isNot(contains('api_key')));
     expect(restored.document!.segments.single.translatedText, '你好');
     expect(restored.translationState.status, TranslationStatus.completed);

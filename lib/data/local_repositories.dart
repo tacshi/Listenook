@@ -19,6 +19,7 @@ class AppPaths {
 
   Directory get jobs => Directory(p.join(root.path, 'jobs'));
   Directory get temporary => Directory(p.join(root.path, 'temporary'));
+  Directory get models => Directory(p.join(root.path, 'models'));
   File get settings => File(p.join(root.path, 'settings.json'));
   File get libraryCatalog => File(p.join(root.path, 'library_catalog.json'));
   File get inboxMonitor => File(p.join(root.path, 'inbox_monitor.json'));
@@ -32,6 +33,7 @@ class AppPaths {
     await paths.root.create(recursive: true);
     await paths.jobs.create(recursive: true);
     await paths.temporary.create(recursive: true);
+    await paths.models.create(recursive: true);
     await paths.podcasts.create(recursive: true);
     return paths;
   }
@@ -42,8 +44,10 @@ class SecureCredentialStore
   SecureCredentialStore({
     FlutterSecureStorage? storage,
     String storageKey = _defaultKey,
+    String environmentVariable = 'SONIOX_API_KEY',
   }) : _storage = storage ?? const FlutterSecureStorage(),
-       _storageKey = storageKey;
+       _storageKey = storageKey,
+       _environmentVariable = environmentVariable;
 
   static const _service = 'app.meowstt.desktop';
   static const _defaultKey = 'app.meowstt.desktop.soniox_api_key';
@@ -58,6 +62,7 @@ class SecureCredentialStore
   );
   final FlutterSecureStorage _storage;
   final String _storageKey;
+  final String _environmentVariable;
 
   @override
   Future<bool> hasApiKey() async {
@@ -71,7 +76,7 @@ class SecureCredentialStore
         )) {
       return true;
     }
-    final fallback = Platform.environment['SONIOX_API_KEY']?.trim();
+    final fallback = Platform.environment[_environmentVariable]?.trim();
     return fallback != null && fallback.isNotEmpty;
   }
 
@@ -94,7 +99,7 @@ class SecureCredentialStore
       }
     }
     if (stored != null && stored.trim().isNotEmpty) return stored.trim();
-    final fallback = Platform.environment['SONIOX_API_KEY']?.trim();
+    final fallback = Platform.environment[_environmentVariable]?.trim();
     return fallback == null || fallback.isEmpty ? null : fallback;
   }
 

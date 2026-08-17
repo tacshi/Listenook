@@ -71,6 +71,9 @@ meowstt_sign_app_bundle() {
     if [[ "$mode" == "release" ]]; then component_sign_args+=(--timestamp); fi
   fi
   local component_roots=("$app/Contents/Frameworks" "$app/Contents/MacOS")
+  if [[ -d "$app/Contents/Helpers" ]]; then
+    component_roots+=("$app/Contents/Helpers")
+  fi
   if [[ -d "$app/Contents/Library/LoginItems" ]]; then
     component_roots+=("$app/Contents/Library/LoginItems")
   fi
@@ -80,7 +83,8 @@ meowstt_sign_app_bundle() {
     find "${component_roots[@]}" -depth \
       \( -type d -name '*.framework' -o -type d -name '*.appex' \
       -o -type d -name '*.xpc' -o -type d -name '*.app' \
-      -o -type f -name '*.dylib' \) -print0
+      -o -type f -name '*.dylib' \
+      -o -type f -name 'MeowSTTSpeechWorker' \) -print0
   )
 
   local sign_args=(--force --sign "$identity" --entitlements "$entitlements")

@@ -39,6 +39,98 @@ void main() {
   );
 
   test(
+    'startup restores Podcast and Library but ignores transient views',
+    () async {
+      final settings = _Settings(
+        const AppSettings(
+          lastContentDestination: AppContentDestination.library,
+        ),
+      );
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        settings: settings,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      expect(controller.destination, AppDestination.library);
+
+      controller.setDestination(AppDestination.inbox);
+      controller.setDestination(AppDestination.settings);
+      expect(
+        settings.value.lastContentDestination,
+        AppContentDestination.library,
+      );
+
+      controller.setDestination(AppDestination.podcast);
+      await _waitFor(
+        () =>
+            settings.value.lastContentDestination ==
+            AppContentDestination.podcast,
+      );
+    },
+  );
+
+  test('startup restores a valid Workspace transcript', () async {
+    final now = DateTime.now().toUtc();
+    final settings = _Settings(
+      const AppSettings(
+        lastContentDestination: AppContentDestination.workspace,
+        lastWorkspaceJobId: 'transcript',
+      ),
+    );
+    final controller = _controller(
+      jobs: _Jobs([
+        TranscriptionJob(
+          id: 'transcript',
+          batchId: 'batch',
+          sourcePath: '/recording.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          document: _document(now),
+        ),
+      ]),
+      soniox: _Soniox(),
+      settings: settings,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.initialize();
+
+    expect(controller.destination, AppDestination.workspace);
+    expect(controller.activeWorkspaceJobId, 'transcript');
+  });
+
+  test(
+    'invalid saved Workspace state falls back to Podcast and is cleared',
+    () async {
+      final settings = _Settings(
+        const AppSettings(
+          lastContentDestination: AppContentDestination.workspace,
+          lastWorkspaceJobId: 'missing',
+        ),
+      );
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        settings: settings,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+
+      expect(controller.destination, AppDestination.podcast);
+      expect(
+        settings.value.lastContentDestination,
+        AppContentDestination.podcast,
+      );
+      expect(settings.value.lastWorkspaceJobId, isNull);
+    },
+  );
+
+  test(
     'initialization checks credential metadata without reading secrets',
     () async {
       final credentials = _AvailabilityCredentials();
@@ -72,9 +164,10 @@ void main() {
     }
     final jobs = _Jobs();
     final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 40));
-    final controller = _controller(jobs: jobs, soniox: soniox);
+    final media = _Media()..uploadDirectly = false;
+    final controller = _controller(jobs: jobs, soniox: soniox, media: media);
     await controller.initialize();
-    expect(controller.destination, AppDestination.inbox);
+    expect(controller.destination, AppDestination.podcast);
     await controller.enqueueSources(files);
     await _waitFor(() => controller.readyCount == 4);
     final movedId = controller.inboxJobs.first.id;
@@ -86,7 +179,7 @@ void main() {
 
     expect(soniox.maximumUploads, 4);
     expect(controller.completedCount, 4);
-    expect(controller.destination, AppDestination.inbox);
+    expect(controller.destination, AppDestination.podcast);
     expect(
       jobs.saved.values.every(
         (job) => job.cleanupState == CleanupState.complete,
@@ -95,7 +188,101 @@ void main() {
     );
     expect(soniox.deletedFiles, hasLength(4));
     expect(soniox.deletedTranscriptions, hasLength(4));
+    expect(
+      media.extractedUploadProfiles,
+      everyElement(MediaUploadProfile.standard),
+    );
   });
+
+  test(
+    'MOSS Pro default routes new jobs and persists its transcript source',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-moss-route-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/meeting.wav');
+      await file.writeAsBytes([1, 2, 3]);
+      final soniox = _Soniox();
+      final moss = _Moss();
+      final media = _Media()..uploadDirectly = false;
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: soniox,
+        media: media,
+        moss: moss,
+        mossCredentials: _Credentials(),
+        settings: _Settings(
+          const AppSettings(
+            defaultTranscriptionProvider: TranscriptionProvider.mossPro,
+          ),
+        ),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      await controller.enqueueSources([file.path]);
+      await _waitFor(() => controller.readyCount == 1);
+
+      expect(
+        controller.sessionTranscriptionProvider,
+        TranscriptionProvider.mossPro,
+      );
+      expect(
+        controller.inboxJobs.single.transcriptionProvider,
+        TranscriptionProvider.mossPro,
+      );
+      await controller.startReady();
+
+      final job = controller.inboxJobs.single;
+      expect(job.status, JobStatus.completed);
+      expect(job.transcriptSource, TranscriptSource.mossPro);
+      expect(job.document?.segments.single.speaker, 'S01');
+      expect(moss.uploadCalls, 1);
+      expect(moss.deletedFiles, ['moss-file-1']);
+      expect(moss.deletedTranscriptions, isEmpty);
+      expect(soniox.uploadCalls, 0);
+      expect(media.checkedUploadProfiles, [MediaUploadProfile.compactSpeech]);
+      expect(media.extractedUploadProfiles, [MediaUploadProfile.compactSpeech]);
+    },
+  );
+
+  test(
+    'batch provider switch updates unstarted jobs without changing default',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'meow-moss-switch-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/meeting.wav');
+      await file.writeAsBytes([1]);
+      final settings = _Settings();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        moss: _Moss(),
+        mossCredentials: _Credentials(),
+        settings: settings,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.enqueueSources([file.path]);
+      await _waitFor(() => controller.readyCount == 1);
+
+      await controller.updateSessionTranscriptionProvider(
+        TranscriptionProvider.mossPro,
+      );
+
+      expect(
+        controller.inboxJobs.single.transcriptionProvider,
+        TranscriptionProvider.mossPro,
+      );
+      expect(
+        settings.value.defaultTranscriptionProvider,
+        TranscriptionProvider.soniox,
+      );
+    },
+  );
 
   test(
     'worker pool matches smaller queues and caps larger queues at four',
@@ -197,78 +384,125 @@ void main() {
     },
   );
 
-  test(
-    'continuing a ready history job only restores it to the inbox',
-    () async {
-      final directory = await Directory.systemTemp.createTemp(
-        'meow-continue-ready-',
-      );
-      addTearDown(() => directory.delete(recursive: true));
-      final source = File('${directory.path}/ready.wav');
-      await source.writeAsBytes(const [1]);
-      final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
-        TranscriptionJob(
-          id: 'ready',
-          batchId: 'batch',
-          sourcePath: source.path,
-          createdAt: now,
-          updatedAt: now,
-          status: JobStatus.ready,
+  test('restart resumes a MOSS task with its recorded provider', () async {
+    final file = await File(
+      '${Directory.systemTemp.path}/meow-moss-recovery.wav',
+    ).create();
+    addTearDown(() async {
+      if (await file.exists()) await file.delete();
+    });
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'moss-recover',
+        batchId: 'batch',
+        sourcePath: file.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.processing,
+        metadata: const MediaMetadata(
+          sizeBytes: 1,
+          durationMs: 1000,
+          hasAudio: true,
+          hasVideo: false,
+          formatName: 'wav',
         ),
-      ]);
-      final soniox = _Soniox();
-      final controller = _controller(jobs: jobs, soniox: soniox);
-      addTearDown(controller.dispose);
-      await controller.initialize();
-      controller.setDestination(AppDestination.library);
+        remoteFileId: 'moss-file-owned',
+        remoteTranscriptionId: 'moss-task-owned',
+        cleanupState: CleanupState.pending,
+        transcriptionProvider: TranscriptionProvider.mossPro,
+      ),
+    ]);
+    final soniox = _Soniox();
+    final moss = _Moss();
+    final controller = _controller(
+      jobs: jobs,
+      soniox: soniox,
+      moss: moss,
+      mossCredentials: _Credentials(),
+    );
+    addTearDown(controller.dispose);
 
-      controller.continueInInbox('ready');
+    await controller.initialize();
+    await _waitFor(
+      () => jobs.saved['moss-recover']?.status == JobStatus.completed,
+    );
 
-      expect(jobs.saved['ready']?.status, JobStatus.ready);
-      expect(controller.inboxJobs.single.id, 'ready');
-      expect(controller.activeWorkspaceJobId, isNull);
-      expect(controller.destination, AppDestination.inbox);
-      expect(controller.processing, isFalse);
-      expect(soniox.uploadCalls, 0);
-    },
-  );
+    expect(moss.uploadCalls, 0);
+    expect(moss.deletedFiles, contains('moss-file-owned'));
+    expect(soniox.deletedFiles, isEmpty);
+    expect(
+      jobs.saved['moss-recover']?.transcriptSource,
+      TranscriptSource.mossPro,
+    );
+  });
 
-  test(
-    'continuing a ready history job defers missing-source validation',
-    () async {
-      final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
-        TranscriptionJob(
-          id: 'ready',
-          batchId: 'batch',
-          sourcePath: '${Directory.systemTemp.path}/missing-ready-source.wav',
-          createdAt: now,
-          updatedAt: now,
-          status: JobStatus.ready,
-        ),
-      ]);
-      final soniox = _Soniox();
-      final controller = _controller(jobs: jobs, soniox: soniox);
-      addTearDown(controller.dispose);
-      await controller.initialize();
-      controller.setDestination(AppDestination.library);
+  test('adding a ready library job only restores it to the inbox', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'meow-continue-ready-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/ready.wav');
+    await source.writeAsBytes(const [1]);
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'ready',
+        batchId: 'batch',
+        sourcePath: source.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.ready,
+      ),
+    ]);
+    final soniox = _Soniox();
+    final controller = _controller(jobs: jobs, soniox: soniox);
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.setDestination(AppDestination.library);
 
-      controller.continueInInbox('ready');
+    controller.addToInbox('ready');
 
-      expect(jobs.saved['ready']?.status, JobStatus.ready);
-      expect(controller.inboxJobs.single.id, 'ready');
-      expect(controller.activeWorkspaceJobId, isNull);
-      expect(controller.destination, AppDestination.inbox);
-      expect(controller.processing, isFalse);
-      expect(soniox.uploadCalls, 0);
+    expect(jobs.saved['ready']?.status, JobStatus.ready);
+    expect(controller.inboxJobs.single.id, 'ready');
+    expect(controller.activeWorkspaceJobId, isNull);
+    expect(controller.destination, AppDestination.inbox);
+    expect(controller.processing, isFalse);
+    expect(soniox.uploadCalls, 0);
+  });
 
-      await controller.startReady();
+  test('adding a ready library job defers missing-source validation', () async {
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'ready',
+        batchId: 'batch',
+        sourcePath: '${Directory.systemTemp.path}/missing-ready-source.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.ready,
+      ),
+    ]);
+    final soniox = _Soniox();
+    final controller = _controller(jobs: jobs, soniox: soniox);
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.setDestination(AppDestination.library);
 
-      expect(jobs.saved['ready']?.status, JobStatus.missingSource);
-      expect(soniox.uploadCalls, 0);
-    },
-  );
+    controller.addToInbox('ready');
+
+    expect(jobs.saved['ready']?.status, JobStatus.ready);
+    expect(controller.inboxJobs.single.id, 'ready');
+    expect(controller.activeWorkspaceJobId, isNull);
+    expect(controller.destination, AppDestination.inbox);
+    expect(controller.processing, isFalse);
+    expect(soniox.uploadCalls, 0);
+
+    await controller.startReady();
+
+    expect(jobs.saved['ready']?.status, JobStatus.missingSource);
+    expect(soniox.uploadCalls, 0);
+  });
 
   test(
     'cancellation becomes terminal and cleans only the job-owned ids',
@@ -648,6 +882,84 @@ void main() {
     expect(result.status, JobStatus.completed);
   });
 
+  test('reassigning a segment speaker persists only that correction', () async {
+    final now = DateTime.utc(2026, 8, 12);
+    const tokens = [
+      TranscriptToken(text: 'One.', startMs: 0, endMs: 500, speaker: '1'),
+    ];
+    final document = TranscriptDocument(
+      tokens: tokens,
+      segments: const [
+        TranscriptSegment(
+          id: 'one',
+          startMs: 0,
+          endMs: 500,
+          text: 'One.',
+          speaker: '1',
+          translatedText: '一',
+        ),
+        TranscriptSegment(
+          id: 'two',
+          startMs: 500,
+          endMs: 1000,
+          text: 'Two.',
+          speaker: '1',
+          translatedText: '二',
+        ),
+      ],
+      speakers: const [
+        SpeakerProfile(id: '1', name: 'Alice'),
+        SpeakerProfile(id: '2', name: 'Bob'),
+      ],
+      updatedAt: now,
+    );
+    final job = TranscriptionJob(
+      id: 'completed',
+      batchId: 'batch',
+      sourcePath: '/missing/original.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      document: document,
+      translationState: const TranslationState(
+        status: TranslationStatus.completed,
+        targetLanguage: 'zh-Hans',
+        completedSegments: 2,
+        totalSegments: 2,
+      ),
+      aiBrief: AiBrief(
+        overview: 'Original overview',
+        overviewEvidenceSegmentIds: const ['one'],
+        chapters: const [],
+        insights: const [],
+        outputLanguage: 'en',
+        model: 'brief-model',
+        selectedSections: const {AiBriefSection.overview},
+        generatedAt: now,
+        sourceTranscriptUpdatedAt: now,
+      ),
+    );
+    final jobs = _Jobs([job]);
+    final controller = _controller(jobs: jobs, soniox: _Soniox());
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await controller.updateSegmentSpeaker('completed', 'one', '2');
+
+    final result = controller.allJobs.single;
+    final saved = jobs.saved['completed']!;
+    expect(result.document!.segments.first.speaker, '2');
+    expect(result.document!.segments.last.speaker, '1');
+    expect(result.document!.segments.first.text, 'One.');
+    expect(result.document!.segments.first.translatedText, '一');
+    expect(result.document!.tokens, same(tokens));
+    expect(result.translationState.status, TranslationStatus.completed);
+    expect(result.translationState.completedSegments, 2);
+    expect(result.document!.updatedAt.isAfter(now), isTrue);
+    expect(result.aiBrief!.isStaleFor(result.document!), isTrue);
+    expect(saved.document!.segments.first.speaker, '2');
+  });
+
   test(
     'Soniox translation completes in the transcription pass without LLM work',
     () async {
@@ -705,7 +1017,7 @@ void main() {
       await controller.startReady();
 
       final result = controller.inboxJobs.single;
-      expect(settings.value.translationSettings.autoTranslate, isFalse);
+      expect(settings.value.translationSettings.autoTranslate, isTrue);
       expect(soniox.createdOptions?.sonioxTranslation.enabled, isTrue);
       expect(result.document!.segments.single.translatedText, 'Hola.');
       expect(result.translationState.status, TranslationStatus.completed);
@@ -715,7 +1027,53 @@ void main() {
     },
   );
 
-  test('automatic Soniox and LLM translation settings are exclusive', () async {
+  test(
+    'MOSS Pro uses configured LLM translation after transcription',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('meow-moss-llm-');
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/translated.wav');
+      await file.writeAsBytes([1]);
+      final llm = _SuccessfulTranslation();
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        moss: _Moss(),
+        mossCredentials: _Credentials(),
+        settings: _Settings(
+          const AppSettings(
+            defaultTranscriptionProvider: TranscriptionProvider.mossPro,
+            sonioxTranslation: SonioxTranslationOptions(
+              enabled: true,
+              targetLanguage: 'es',
+            ),
+            translationSettings: TranslationSettings(
+              provider: TranslationProviderTemplate.openAi,
+              baseUrl: 'https://api.openai.com/v1',
+              model: 'translation-model',
+              targetLanguage: 'es',
+              autoTranslate: true,
+            ),
+          ),
+        ),
+        translationCredentials: _TranslationCredentials(),
+        translationService: llm,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.enqueueSources([file.path]);
+      await _waitFor(() => controller.readyCount == 1);
+
+      await controller.startReady();
+
+      final job = controller.inboxJobs.single;
+      expect(llm.calls, 1);
+      expect(job.document?.segments.single.translatedText, '补充翻译。');
+      expect(job.translationState.origin, TranslationOrigin.llm);
+    },
+  );
+
+  test('Soniox and LLM automatic translation settings can coexist', () async {
     final directory = await Directory.systemTemp.createTemp('meow-modes-');
     addTearDown(() => directory.delete(recursive: true));
     final file = File('${directory.path}/queued.wav');
@@ -750,23 +1108,23 @@ void main() {
 
     expect(sonioxError, isNull);
     expect(controller.settings.sonioxTranslation.enabled, isTrue);
-    expect(controller.settings.translationSettings.autoTranslate, isFalse);
+    expect(controller.settings.translationSettings.autoTranslate, isTrue);
     expect(
       controller.inboxJobs.single.options.sonioxTranslation.enabled,
       isTrue,
     );
-    expect(controller.inboxJobs.single.translationOptions.enabled, isFalse);
+    expect(controller.inboxJobs.single.translationOptions.enabled, isTrue);
 
     final llmError = await controller.updateTranslationDefaults(
       controller.settings.translationSettings.copyWith(autoTranslate: true),
     );
 
     expect(llmError, isNull);
-    expect(controller.settings.sonioxTranslation.enabled, isFalse);
+    expect(controller.settings.sonioxTranslation.enabled, isTrue);
     expect(controller.settings.translationSettings.autoTranslate, isTrue);
     expect(
       controller.inboxJobs.single.options.sonioxTranslation.enabled,
-      isFalse,
+      isTrue,
     );
     expect(controller.inboxJobs.single.translationOptions.enabled, isTrue);
   });
@@ -1514,6 +1872,8 @@ AppController _controller({
   TranscriptExporter? exporter,
   InboxMonitorRepository? inboxMonitorRepository,
   InboxFolderMonitor? inboxMonitor,
+  TranscriptionClient? moss,
+  CredentialStore? mossCredentials,
 }) => AppController(
   credentialStore: credentials ?? _Credentials(),
   settingsRepository: settings ?? _Settings(),
@@ -1521,6 +1881,8 @@ AppController _controller({
   mediaService: media ?? _Media(),
   sourceResolver: const LocalMediaSourceResolver(),
   sonioxClient: soniox,
+  mossClient: moss,
+  mossCredentialStore: mossCredentials,
   exporter: exporter ?? const DefaultTranscriptExporter(),
   translationCredentialStore: translationCredentials,
   translationService: translationService,
@@ -1847,9 +2209,19 @@ class _Jobs implements JobRepository {
 class _Media implements MediaService {
   final deletedGeneratedMedia = <String>[];
   Set<String>? retainedGeneratedMedia;
+  bool uploadDirectly = true;
+  final checkedUploadProfiles = <MediaUploadProfile>[];
+  final extractedUploadProfiles = <MediaUploadProfile>[];
 
   @override
-  bool canUploadDirectly(String path, MediaMetadata metadata) => true;
+  bool canUploadDirectly(
+    String path,
+    MediaMetadata metadata, {
+    MediaUploadProfile profile = MediaUploadProfile.standard,
+  }) {
+    checkedUploadProfiles.add(profile);
+    return uploadDirectly;
+  }
 
   @override
   Future<void> deleteTemporary(String path) async {}
@@ -1871,9 +2243,13 @@ class _Media implements MediaService {
     String sourcePath,
     String jobId, {
     required int durationMs,
+    MediaUploadProfile profile = MediaUploadProfile.standard,
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
-  }) async => sourcePath;
+  }) async {
+    extractedUploadProfiles.add(profile);
+    return sourcePath;
+  }
 
   @override
   Future<MediaMetadata> inspect(String sourcePath) async => const MediaMetadata(
@@ -1959,6 +2335,57 @@ class _Soniox implements SonioxClient {
     currentUploads--;
     onProgress?.call(1, null);
     return 'file-$call';
+  }
+
+  @override
+  Future<void> validateKey({String? apiKey}) async {}
+}
+
+class _Moss implements TranscriptionClient {
+  int uploadCalls = 0;
+  final deletedFiles = <String>[];
+  final deletedTranscriptions = <String>[];
+
+  @override
+  Future<String> createTranscription(
+    String fileId,
+    TranscriptionOptions options,
+  ) async => 'moss-task-1';
+
+  @override
+  Future<void> deleteFile(String id) async => deletedFiles.add(id);
+
+  @override
+  Future<void> deleteTranscription(String id) async {}
+
+  @override
+  Future<Map<String, dynamic>> getTranscript(String id) async => {
+    'duration': 1,
+    'text': 'MOSS result',
+    'segments': [
+      {
+        'id': 'moss-segment',
+        'start': 0,
+        'end': 1,
+        'text': 'MOSS result',
+        'speaker': 'S01',
+      },
+    ],
+  };
+
+  @override
+  Future<RemoteTranscriptionState> getTranscription(String id) async =>
+      const RemoteTranscriptionState(status: 'SUCCESS');
+
+  @override
+  Future<String> uploadFile(
+    String path, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    uploadCalls++;
+    onProgress?.call(1, null);
+    return 'moss-file-$uploadCalls';
   }
 
   @override

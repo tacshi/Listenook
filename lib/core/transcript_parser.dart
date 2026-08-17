@@ -58,6 +58,7 @@ class TranscriptParser {
         .where((segment) => segment.text.trim().isNotEmpty)
         .toList(growable: false);
     var changed = sourceSegments.length != document.segments.length;
+    final mergedInto = <String, String>{};
     if (sourceSegments.length < 2) {
       return changed ? document.copyWith(segments: sourceSegments) : document;
     }
@@ -107,7 +108,10 @@ class TranscriptParser {
               : translatedQuote.remainder,
         );
         changed = true;
-        if (segment.text.trim().isEmpty) continue;
+        if (segment.text.trim().isEmpty) {
+          mergedInto[segment.id] = previous.id;
+          continue;
+        }
       }
 
       final punctuationOnly = _isPunctuationOnly(segment.text);
@@ -122,6 +126,7 @@ class TranscriptParser {
 
       if (punctuationOnly ||
           (speakersCompatible && continuous && continuesSentence)) {
+        mergedInto[segment.id] = previous.id;
         normalized[normalized.length - 1] = TranscriptSegment(
           id: previous.id,
           startMs: previous.startMs,
@@ -142,7 +147,30 @@ class TranscriptParser {
       }
     }
 
-    return changed ? document.copyWith(segments: normalized) : document;
+    if (!changed) return document;
+    final retainedIds = normalized.map((segment) => segment.id).toSet();
+    final tokens = document.tokens
+        .map((token) {
+          final owner = token.segmentId;
+          if (owner == null) return token;
+          final remappedOwner = mergedInto[owner];
+          if (remappedOwner == null && retainedIds.contains(owner)) {
+            return token;
+          }
+          return TranscriptToken(
+            text: token.text,
+            startMs: token.startMs,
+            endMs: token.endMs,
+            segmentId: remappedOwner,
+            speaker: token.speaker,
+            language: token.language,
+            confidence: token.confidence,
+            translationStatus: token.translationStatus,
+            sourceLanguage: token.sourceLanguage,
+          );
+        })
+        .toList(growable: false);
+    return document.copyWith(segments: normalized, tokens: tokens);
   }
 
   List<TranscriptSegment> _segments(List<TranscriptToken> tokens) {

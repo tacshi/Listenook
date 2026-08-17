@@ -7,10 +7,12 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 import '../core/contracts.dart';
+import '../core/local_speech.dart';
 import '../core/models.dart';
 import '../core/podcast_models.dart';
 import '../core/transcript_parser.dart';
 import '../data/openai_translation_service.dart';
+import '../data/moss_api_client.dart';
 import '../data/inbox_folder_monitor.dart';
 import '../data/podcast/download_location.dart';
 import '../data/podcast/podcast_urls.dart';
@@ -22,8 +24,6 @@ import '../data/transcript_exporter.dart';
 enum AppDestination { inbox, podcast, workspace, library, settings }
 
 class AppController extends ChangeNotifier {
-  static const _maxConcurrentJobs = 4;
-
   AppController({
     required CredentialStore credentialStore,
     required SettingsRepository settingsRepository,
@@ -32,9 +32,14 @@ class AppController extends ChangeNotifier {
     required MediaService mediaService,
     required MediaSourceResolver sourceResolver,
     required SonioxClient sonioxClient,
+    CredentialStore? mossCredentialStore,
+    TranscriptionClient? mossClient,
     required TranscriptExporter exporter,
     TranslationCredentialStore? translationCredentialStore,
     TranslationService? translationService,
+    LocalModelManager? localModelManager,
+    LocalSttService? localSttService,
+    ForcedAlignmentService? forcedAlignmentService,
     AiBriefService? aiBriefService,
     InboxMonitorRepository? inboxMonitorRepository,
     InboxFolderMonitor? inboxFolderMonitor,
@@ -51,10 +56,15 @@ class AppController extends ChangeNotifier {
        _libraryCatalogRepository = libraryCatalogRepository,
        _media = mediaService,
        _soniox = sonioxClient,
+       _mossCredentials = mossCredentialStore,
+       _moss = mossClient,
        _exporter = exporter,
        _sourceResolver = sourceResolver,
        _translationCredentials = translationCredentialStore,
        _translationService = translationService,
+       _localModelManager = localModelManager,
+       _localSttService = localSttService,
+       _forcedAlignmentService = forcedAlignmentService,
        _aiBriefService = aiBriefService,
        _inboxMonitorRepository = inboxMonitorRepository,
        _inboxFolderMonitor = inboxFolderMonitor,
@@ -71,10 +81,15 @@ class AppController extends ChangeNotifier {
   final LibraryCatalogRepository? _libraryCatalogRepository;
   final MediaService _media;
   final SonioxClient _soniox;
+  final CredentialStore? _mossCredentials;
+  final TranscriptionClient? _moss;
   final TranscriptExporter _exporter;
   final MediaSourceResolver _sourceResolver;
   final TranslationCredentialStore? _translationCredentials;
   final TranslationService? _translationService;
+  final LocalModelManager? _localModelManager;
+  final LocalSttService? _localSttService;
+  final ForcedAlignmentService? _forcedAlignmentService;
   final AiBriefService? _aiBriefService;
   final InboxMonitorRepository? _inboxMonitorRepository;
   final InboxFolderMonitor? _inboxFolderMonitor;
@@ -92,18 +107,30 @@ class AppController extends ChangeNotifier {
   final Set<String> _cancelledIds = {};
   final Set<String> _translationCancelledIds = {};
   final Set<String> _aiBriefCancelledIds = {};
+  final Set<String> _alignmentInterruptedIds = {};
   final Set<String> _monitorCandidatesInFlight = {};
+  final Set<String> _localAutoStartCandidates = {};
+  final _remoteLane = _PermitPool(4);
+  final _localModelLane = _PermitPool(1);
+  final Map<String, LocalModelStatus> _localModelStatuses = {};
+  final Map<String, double?> _localModelDownloadProgress = {};
+  final Set<String> _localModelDownloadCancelled = {};
   String _batchId = '';
   bool _processing = false;
   bool _initializing = true;
   bool _keyConfigured = false;
+  bool _mossKeyConfigured = false;
   bool _translationKeyConfigured = false;
   bool _monitorShutDown = false;
-  AppDestination _destination = AppDestination.inbox;
+  bool _localAutoStartDraining = false;
+  AppDestination _destination = AppDestination.podcast;
   String? _activeWorkspaceJobId;
+  Future<void> _settingsSaveTail = Future<void>.value();
   AppSettings _settings = const AppSettings();
   LibraryCatalog _libraryCatalog = const LibraryCatalog();
   TranscriptionOptions _sessionOptions = const TranscriptionOptions();
+  TranscriptionProvider _sessionTranscriptionProvider =
+      TranscriptionProvider.soniox;
   InboxMonitorStorage _inboxMonitorStorage = const InboxMonitorStorage();
   InboxMonitorStatus _inboxMonitorStatus = InboxMonitorStatus.unconfigured;
   String? _inboxMonitorError;
@@ -156,10 +183,37 @@ class AppController extends ChangeNotifier {
   }
 
   TranscriptionOptions get sessionOptions => _sessionOptions;
+  TranscriptionProvider get sessionTranscriptionProvider =>
+      _sessionTranscriptionProvider;
   bool get initializing => _initializing;
   bool get processing => _processing;
   bool get hasActiveWork => _jobs.values.any((job) => job.isBusy);
   bool get keyConfigured => _keyConfigured;
+  bool get mossKeyConfigured => _mossKeyConfigured;
+  bool isTranscriptionProviderConfigured(
+    TranscriptionProvider provider,
+  ) => switch (provider) {
+    TranscriptionProvider.soniox => _keyConfigured,
+    TranscriptionProvider.mossPro => _mossKeyConfigured,
+    TranscriptionProvider.mossLocal =>
+      (_localSttService?.isSupported ?? false) &&
+          (_localModelManager == null ||
+              _localModelStatuses[LocalSpeechModels.mossDiarizeCoreMlInt8.id]
+                      ?.availability ==
+                  LocalModelAvailability.ready),
+  };
+  bool get localSpeechSupported => _localSttService?.isSupported ?? false;
+  List<TranscriptionProvider> get availableTranscriptionProviders => [
+    TranscriptionProvider.soniox,
+    TranscriptionProvider.mossPro,
+    if (localSpeechSupported) TranscriptionProvider.mossLocal,
+  ];
+  LocalModelStatus? localModelStatus(String modelId) =>
+      _localModelStatuses[modelId];
+  bool localModelDownloading(String modelId) =>
+      _localModelDownloadProgress.containsKey(modelId);
+  double? localModelDownloadProgress(String modelId) =>
+      _localModelDownloadProgress[modelId];
   bool get translationKeyConfigured => _translationKeyConfigured;
   bool get translationConfigured => _settings.translationSettings.isConfigured(
     hasApiKey: _translationKeyConfigured,
@@ -227,6 +281,7 @@ class AppController extends ChangeNotifier {
     _libraryCatalog =
         await _libraryCatalogRepository?.load() ?? const LibraryCatalog();
     _settings = await _settingsRepository.load();
+    _sessionTranscriptionProvider = _settings.defaultTranscriptionProvider;
     _inboxMonitorStorage =
         await _inboxMonitorRepository?.load() ?? const InboxMonitorStorage();
     var settingsChanged = false;
@@ -248,18 +303,6 @@ class AppController extends ChangeNotifier {
       );
       settingsChanged = true;
     }
-    if (_settings.sonioxTranslation.enabled &&
-        _settings.translationSettings.autoTranslate) {
-      _settings = _settings.copyWith(
-        translationSettings: _settings.translationSettings.copyWith(
-          autoTranslate: false,
-        ),
-      );
-      settingsChanged = true;
-    }
-    if (settingsChanged) {
-      await _settingsRepository.save(_settings);
-    }
     _sessionOptions = TranscriptionOptions(
       sonioxTranslation: _settings.sonioxTranslation,
     );
@@ -267,7 +310,8 @@ class AppController extends ChangeNotifier {
     final loaded = <TranscriptionJob>[];
     for (final original in stored) {
       final document = original.document;
-      final normalized = document == null
+      final normalized =
+          document == null || original.forcedAlignment.hasWordTiming
           ? null
           : _parser.normalizeSegments(document);
       var job = normalized == null || identical(normalized, document)
@@ -315,6 +359,34 @@ class AppController extends ChangeNotifier {
           ),
         );
       }
+      if (job.status == JobStatus.aligning && job.document != null) {
+        final alignment = job.forcedAlignment;
+        job = job.copyWith(
+          status: job.document!.segments.isEmpty
+              ? JobStatus.empty
+              : JobStatus.completed,
+          progress: const JobProgress(stage: 'complete', fraction: 1),
+          forcedAlignment: ForcedAlignmentState(
+            status: ForcedAlignmentStatus.interrupted,
+            modelId:
+                alignment.modelId ??
+                LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
+            modelRevision:
+                alignment.modelRevision ??
+                LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+            alignedSegments: alignment.alignedSegments,
+            totalSegments: alignment.totalSegments == 0
+                ? job.document!.segments.length
+                : alignment.totalSegments,
+            languageAutomaticallyDetermined:
+                alignment.languageAutomaticallyDetermined ||
+                job.options.languageHints.isEmpty,
+            warningCode: 'alignment_interrupted',
+            warningMessage:
+                'Precise word timing was interrupted before it finished.',
+          ),
+        );
+      }
       _jobs[job.id] = job;
       loaded.add(job);
       if (!identical(job, original)) {
@@ -325,10 +397,20 @@ class AppController extends ChangeNotifier {
       _credentials,
       _credentials.readApiKey,
     );
+    _mossKeyConfigured = await _credentialIsAvailable(
+      _mossCredentials,
+      _mossCredentials?.readApiKey,
+    );
     _translationKeyConfigured = await _credentialIsAvailable(
       _translationCredentials,
       _translationCredentials?.readApiKey,
     );
+    await _refreshLocalModelStatuses(notify: false);
+    if (!availableTranscriptionProviders.contains(
+      _sessionTranscriptionProvider,
+    )) {
+      _sessionTranscriptionProvider = TranscriptionProvider.soniox;
+    }
     _batchId = _uuid.v4();
     for (final job in List<TranscriptionJob>.of(loaded)) {
       if (job.status != JobStatus.downloading) continue;
@@ -348,12 +430,18 @@ class AppController extends ChangeNotifier {
     if (interrupted.isNotEmpty) {
       _batchId = interrupted.first.batchId;
       _sessionOptions = interrupted.first.options;
+      _sessionTranscriptionProvider = interrupted.first.transcriptionProvider;
       _inboxIds.addAll(interrupted.map((job) => job.id));
+    }
+    settingsChanged = _restoreContentDestination() || settingsChanged;
+    if (settingsChanged) {
+      await _queueSettingsSave(_settings);
     }
     await _seedMonitorLedgerFromJobs(loaded);
     _initializing = false;
     notifyListeners();
     await _restartInboxMonitor();
+    unawaited(_verifyLocalModelStatusesInBackground());
     unawaited(_recover(interrupted));
     unawaited(_retryPendingCleanup(loaded));
   }
@@ -365,6 +453,75 @@ class AppController extends ChangeNotifier {
     if (store == null || read == null) return false;
     if (store is CredentialAvailabilityStore) return store.hasApiKey();
     return (await read())?.isNotEmpty ?? false;
+  }
+
+  Future<void> refreshLocalModelStatuses() =>
+      _refreshLocalModelStatuses(verifyIntegrity: true);
+
+  Future<void> _refreshLocalModelStatuses({
+    bool notify = true,
+    bool verifyIntegrity = false,
+  }) async {
+    final manager = _localModelManager;
+    if (manager == null) return;
+    for (final model in manager.models) {
+      _localModelStatuses[model.id] = await manager.status(
+        model.id,
+        verifyIntegrity: verifyIntegrity,
+      );
+    }
+    if (notify) notifyListeners();
+    _scheduleLocalAutoStart();
+  }
+
+  Future<void> _verifyLocalModelStatusesInBackground() async {
+    try {
+      await _refreshLocalModelStatuses(verifyIntegrity: true);
+    } on Object catch (error) {
+      debugPrint('Unable to verify local speech models: $error');
+    }
+  }
+
+  Future<void> downloadLocalModel(String modelId) async {
+    final manager = _localModelManager;
+    if (manager == null || _localModelDownloadProgress.containsKey(modelId)) {
+      return;
+    }
+    _localModelDownloadProgress[modelId] = 0;
+    _localModelDownloadCancelled.remove(modelId);
+    notifyListeners();
+    try {
+      await manager.download(
+        modelId,
+        onProgress: (downloaded, total) {
+          _localModelDownloadProgress[modelId] = total == 0
+              ? null
+              : downloaded / total;
+          notifyListeners();
+        },
+        shouldCancel: () => _localModelDownloadCancelled.contains(modelId),
+      );
+    } finally {
+      _localModelDownloadCancelled.remove(modelId);
+      _localModelDownloadProgress.remove(modelId);
+      _localModelStatuses[modelId] = await manager.status(modelId);
+      notifyListeners();
+      _scheduleLocalAutoStart();
+    }
+  }
+
+  void cancelLocalModelDownload(String modelId) {
+    if (localModelDownloading(modelId)) {
+      _localModelDownloadCancelled.add(modelId);
+    }
+  }
+
+  Future<void> deleteLocalModel(String modelId) async {
+    final manager = _localModelManager;
+    if (manager == null || localModelDownloading(modelId)) return;
+    await manager.delete(modelId);
+    _localModelStatuses[modelId] = await manager.status(modelId);
+    notifyListeners();
   }
 
   Future<void> configureInboxMonitor({
@@ -656,9 +813,77 @@ class AppController extends ChangeNotifier {
       Future<void>.value();
 
   void setDestination(AppDestination destination) {
-    if (_destination == destination) return;
+    final destinationChanged = _destination != destination;
     _destination = destination;
-    notifyListeners();
+    final restoreStateChanged = _rememberContentDestination(destination);
+    if (destinationChanged || restoreStateChanged) notifyListeners();
+  }
+
+  bool _restoreContentDestination() {
+    switch (_settings.lastContentDestination) {
+      case AppContentDestination.podcast:
+        _destination = AppDestination.podcast;
+        return false;
+      case AppContentDestination.library:
+        _destination = AppDestination.library;
+        return false;
+      case AppContentDestination.workspace:
+        final jobId = _settings.lastWorkspaceJobId;
+        final job = jobId == null ? null : _jobs[jobId];
+        if (job?.document != null) {
+          _activeWorkspaceJobId = jobId;
+          _destination = AppDestination.workspace;
+          return false;
+        }
+        _activeWorkspaceJobId = null;
+        _destination = AppDestination.podcast;
+        _settings = _settings.copyWith(
+          lastContentDestination: AppContentDestination.podcast,
+          clearLastWorkspaceJobId: true,
+        );
+        return true;
+    }
+  }
+
+  bool _rememberContentDestination(AppDestination destination) {
+    final contentDestination = switch (destination) {
+      AppDestination.podcast => AppContentDestination.podcast,
+      AppDestination.library => AppContentDestination.library,
+      AppDestination.workspace
+          when _jobs[_activeWorkspaceJobId]?.document != null =>
+        AppContentDestination.workspace,
+      _ => null,
+    };
+    if (contentDestination == null) return false;
+    final workspaceJobId = contentDestination == AppContentDestination.workspace
+        ? _activeWorkspaceJobId
+        : _settings.lastWorkspaceJobId;
+    if (_settings.lastContentDestination == contentDestination &&
+        _settings.lastWorkspaceJobId == workspaceJobId) {
+      return false;
+    }
+    _settings = _settings.copyWith(
+      lastContentDestination: contentDestination,
+      lastWorkspaceJobId: workspaceJobId,
+    );
+    unawaited(_saveNavigationState());
+    return true;
+  }
+
+  Future<void> _saveNavigationState() async {
+    try {
+      await _queueSettingsSave(_settings);
+    } on Object catch (error) {
+      debugPrint('Unable to save navigation state: $error');
+    }
+  }
+
+  Future<void> _queueSettingsSave(AppSettings settings) {
+    final save = _settingsSaveTail.then(
+      (_) => _settingsRepository.save(settings),
+    );
+    _settingsSaveTail = save.catchError((Object _) {});
+    return save;
   }
 
   Future<void> renameLibraryItem(String id, String? title) async {
@@ -889,7 +1114,17 @@ class AppController extends ChangeNotifier {
         job.status != JobStatus.cancelled) {
       return;
     }
-    await _transition(job, transcriptAcquisitionMode: mode);
+    await _transition(
+      job,
+      transcriptAcquisitionMode: mode,
+      transcriptionProvider: switch (mode) {
+        TranscriptAcquisitionMode.mossPro => TranscriptionProvider.mossPro,
+        TranscriptAcquisitionMode.mossLocal => TranscriptionProvider.mossLocal,
+        TranscriptAcquisitionMode.soniox => TranscriptionProvider.soniox,
+        TranscriptAcquisitionMode.publisherCaptions =>
+          job.transcriptionProvider,
+      },
+    );
   }
 
   Future<TranscriptionJob?> enqueuePodcastEpisode(
@@ -946,12 +1181,14 @@ class AppController extends ChangeNotifier {
       sourceOrigin: JobSourceOrigin.podcast,
       displayTitle: provenance.displayName,
       podcastProvenance: provenance,
+      transcriptionProvider: _sessionTranscriptionProvider,
       transcriptAcquisitionMode: episode.transcripts.isNotEmpty
           ? TranscriptAcquisitionMode.publisherCaptions
-          : TranscriptAcquisitionMode.soniox,
+          : _providerAcquisitionMode(_sessionTranscriptionProvider),
     );
     _jobs[job.id] = job;
     _inboxIds.add(job.id);
+    _trackLocalAutoStartCandidate(job.id);
     await _jobsRepository.save(job);
     notifyListeners();
     unawaited(_downloadPodcastJob(job, location));
@@ -1044,6 +1281,7 @@ class AppController extends ChangeNotifier {
         fingerprint: fingerprint,
       );
     }
+    _scheduleLocalAutoStart();
   }
 
   Future<(PodcastEpisodeProvenance?, TranscriptAcquisitionMode)>
@@ -1051,7 +1289,7 @@ class AppController extends ChangeNotifier {
     final provenance = job.podcastProvenance;
     final gateway = _podcastGateway;
     if (provenance == null || provenance.transcripts.isEmpty) {
-      return (provenance, TranscriptAcquisitionMode.soniox);
+      return (provenance, _providerAcquisitionMode(job.transcriptionProvider));
     }
     if (gateway == null) {
       return (provenance, TranscriptAcquisitionMode.publisherCaptions);
@@ -1079,10 +1317,17 @@ class AppController extends ChangeNotifier {
 
   bool _canStart(TranscriptionJob job) {
     if (job.transcriptAcquisitionMode.usesPublisherTranscript) return true;
-    return _keyConfigured;
+    if (job.transcriptionProvider == TranscriptionProvider.mossLocal &&
+        (job.metadata?.durationMs ?? 0) > 90 * 60 * 1000) {
+      return false;
+    }
+    return isTranscriptionProviderConfigured(job.transcriptionProvider);
   }
 
-  Future<void> enqueueSources(Iterable<String> paths) async {
+  Future<void> enqueueSources(
+    Iterable<String> paths, {
+    bool allowLocalAutoStart = true,
+  }) async {
     if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
     final existing = <String>{
       for (final job in inboxJobs) _sourceResolver.identityFor(job.sourcePath),
@@ -1094,6 +1339,7 @@ class AppController extends ChangeNotifier {
         source,
         sourceOrigin: JobSourceOrigin.manual,
         fingerprint: await fingerprintMonitoredFile(source.path),
+        allowLocalAutoStart: allowLocalAutoStart,
       );
     }
   }
@@ -1102,6 +1348,7 @@ class AppController extends ChangeNotifier {
     ResolvedMediaSource source, {
     required JobSourceOrigin sourceOrigin,
     SourceFingerprint? fingerprint,
+    bool allowLocalAutoStart = true,
   }) async {
     if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
     final now = DateTime.now().toUtc();
@@ -1121,9 +1368,14 @@ class AppController extends ChangeNotifier {
           ? JobSourceOrigin.podcast
           : sourceOrigin,
       sourceFingerprint: fingerprint,
+      transcriptionProvider: _sessionTranscriptionProvider,
+      transcriptAcquisitionMode: _providerAcquisitionMode(
+        _sessionTranscriptionProvider,
+      ),
     );
     _jobs[job.id] = job;
     _inboxIds.add(job.id);
+    if (allowLocalAutoStart) _trackLocalAutoStartCandidate(job.id);
     await _jobsRepository.save(job);
     notifyListeners();
     unawaited(_prepare(job.id));
@@ -1151,6 +1403,7 @@ class AppController extends ChangeNotifier {
           fraction: 0,
         ),
       );
+      _scheduleLocalAutoStart();
     } on MediaException catch (error) {
       if (!_jobs.containsKey(id)) return;
       await _transition(
@@ -1175,132 +1428,113 @@ class AppController extends ChangeNotifier {
         .map((job) => job.id)
         .toList();
     if (queue.isEmpty) return;
+    _localAutoStartCandidates.removeAll(queue);
     _processing = true;
     notifyListeners();
-    await _runWorkerPool(queue);
-    _processing = false;
+    try {
+      await _runWorkerPool(queue);
+    } finally {
+      _processing = false;
+      notifyListeners();
+      _scheduleLocalAutoStart();
+    }
+  }
+
+  void _trackLocalAutoStartCandidate(String jobId) {
+    if (_settings.autoTranscribeLocal) {
+      _localAutoStartCandidates.add(jobId);
+    }
+  }
+
+  List<String> _readyLocalAutoStartIds() {
+    _localAutoStartCandidates.removeWhere((id) {
+      final job = _jobs[id];
+      return job == null ||
+          !_inboxIds.contains(id) ||
+          job.document != null ||
+          job.status.isTerminal ||
+          job.transcriptAcquisitionMode.usesPublisherTranscript;
+    });
+    return [
+      for (final id in _localAutoStartCandidates)
+        if (_jobs[id] case final TranscriptionJob job
+            when job.status.canTranscribe &&
+                job.transcriptionProvider == TranscriptionProvider.mossLocal &&
+                job.transcriptAcquisitionMode ==
+                    TranscriptAcquisitionMode.mossLocal &&
+                _canStart(job))
+          id,
+    ];
+  }
+
+  void _scheduleLocalAutoStart() {
+    if (!_settings.autoTranscribeLocal ||
+        _localAutoStartDraining ||
+        _processing ||
+        _readyLocalAutoStartIds().isEmpty) {
+      return;
+    }
+    _localAutoStartDraining = true;
+    unawaited(_drainLocalAutoStart());
+  }
+
+  Future<void> _drainLocalAutoStart() async {
+    if (_processing) {
+      _localAutoStartDraining = false;
+      return;
+    }
+    _processing = true;
     notifyListeners();
+    try {
+      while (_settings.autoTranscribeLocal) {
+        final queue = _readyLocalAutoStartIds();
+        if (queue.isEmpty) break;
+        final jobId = queue.first;
+        _localAutoStartCandidates.remove(jobId);
+        await _runWorkerPool([jobId]);
+      }
+    } finally {
+      _processing = false;
+      _localAutoStartDraining = false;
+      notifyListeners();
+      _scheduleLocalAutoStart();
+    }
   }
 
   Future<void> _runWorkerPool(List<String> jobIds) async {
-    var cursor = 0;
-    Future<void> worker() async {
-      while (cursor < jobIds.length) {
-        final id = jobIds[cursor++];
-        await _runJob(id);
-      }
-    }
-
-    await Future.wait(
-      List.generate(min(_maxConcurrentJobs, jobIds.length), (_) => worker()),
-    );
+    await Future.wait(jobIds.map(_runJob));
   }
 
   Future<void> _runJob(String id) async {
     final initialJob = _jobs[id];
     if (initialJob == null) return;
     TranscriptionJob job = initialJob;
-    String? temporary;
     try {
       if (job.transcriptAcquisitionMode.usesPublisherTranscript) {
         await _importPublisherTranscript(job);
         return;
       }
-      if (!await File(job.sourcePath).exists()) {
-        throw const MediaException(
-          'missing_source',
-          'The source file is missing.',
-        );
-      }
-      _checkCancelled(id);
-      var uploadPath = job.sourcePath;
-      final metadata = job.metadata ?? await _media.inspect(job.sourcePath);
-      if (!_media.canUploadDirectly(job.sourcePath, metadata)) {
+      job = job.transcriptionProvider == TranscriptionProvider.mossLocal
+          ? await _localModelLane.withPermit(() => _acquireLocalMoss(job))
+          : await _remoteLane.withPermit(() => _acquireRemoteTranscript(job));
+
+      if (_isMossJob(job) &&
+          job.document?.segments.isNotEmpty == true &&
+          _settings.autoAlignMoss) {
+        job = await _runMossAlignment(job);
+      } else if (job.status == JobStatus.aligning) {
         job = await _transition(
           job,
-          status: JobStatus.converting,
-          metadata: metadata,
-          progress: const JobProgress(stage: 'converting', fraction: 0),
-        );
-        temporary = await _media.extractAudio(
-          job.sourcePath,
-          job.id,
-          durationMs: metadata.durationMs,
-          onProgress: (fraction, detail) =>
-              unawaited(_progress(id, 'converting', fraction, detail)),
-          shouldCancel: () => _cancelledIds.contains(id),
-        );
-        uploadPath = temporary;
-      }
-      _checkCancelled(id);
-      var fileId = job.remoteFileId;
-      if (fileId == null) {
-        job = await _transition(
-          _jobs[id] ?? job,
-          status: JobStatus.uploading,
-          progress: const JobProgress(stage: 'uploading', fraction: 0),
-        );
-        fileId = await _soniox.uploadFile(
-          uploadPath,
-          onProgress: (fraction, detail) =>
-              unawaited(_progress(id, 'uploading', fraction, detail)),
-          shouldCancel: () => _cancelledIds.contains(id),
-        );
-        job = await _transition(
-          _jobs[id] ?? job,
-          remoteFileId: fileId,
-          cleanupState: CleanupState.pending,
+          status: JobStatus.completed,
+          progress: const JobProgress(stage: 'complete', fraction: 1),
         );
       }
-      _checkCancelled(id);
-      var transcriptionId = job.remoteTranscriptionId;
-      if (transcriptionId == null) {
-        transcriptionId = await _soniox.createTranscription(
-          fileId,
-          job.options,
-        );
-        job = await _transition(
-          job,
-          remoteTranscriptionId: transcriptionId,
-          cleanupState: CleanupState.pending,
-          status: JobStatus.queuedRemote,
-          progress: const JobProgress(stage: 'queued_remote'),
-        );
-      }
-      await _poll(id, transcriptionId);
-      _checkCancelled(id);
-      job = await _transition(
-        _jobs[id] ?? job,
-        status: JobStatus.fetching,
-        progress: const JobProgress(stage: 'fetching'),
-      );
-      final payload = await _soniox.getTranscript(transcriptionId);
-      final sonioxTranslation = job.options.sonioxTranslation;
-      final document = _parser.parse(
-        payload,
-        sonioxTranslationTargetLanguage: sonioxTranslation.enabled
-            ? sonioxTranslation.targetLanguage
-            : null,
-      );
-      final status = document.segments.isEmpty
-          ? JobStatus.empty
-          : JobStatus.completed;
-      final sonioxTranslationState = sonioxTranslation.enabled
-          ? _sonioxTranslationState(document, sonioxTranslation.targetLanguage)
-          : null;
-      job = await _transition(
-        job,
-        status: status,
-        document: document,
-        translationState: sonioxTranslationState,
-        transcriptSource: TranscriptSource.soniox,
-        progress: const JobProgress(stage: 'complete', fraction: 1),
-        clearError: true,
-      );
-      await _cleanup(job);
       job = _jobs[id] ?? job;
-      if (status == JobStatus.completed &&
-          !job.options.sonioxTranslation.enabled &&
+      final usesEmbeddedTranslation =
+          job.transcriptionProvider == TranscriptionProvider.soniox &&
+          job.options.sonioxTranslation.enabled;
+      if (job.status == JobStatus.completed &&
+          !usesEmbeddedTranslation &&
           job.translationOptions.enabled &&
           job.translationOptions.targetLanguage.isNotEmpty) {
         await _runTranslation(
@@ -1322,7 +1556,7 @@ class AppController extends ChangeNotifier {
         errorCode: 'cancelled',
         errorMessage: 'Cancelled by the user.',
       );
-      await _cleanup(_jobs[id] ?? job);
+      await _cleanupIfRemote(_jobs[id] ?? job);
     } on MediaException catch (error) {
       await _fail(
         _jobs[id] ?? job,
@@ -1332,17 +1566,367 @@ class AppController extends ChangeNotifier {
             ? JobStatus.missingSource
             : JobStatus.failed,
       );
-      await _cleanup(_jobs[id] ?? job);
+      await _cleanupIfRemote(_jobs[id] ?? job);
     } on SonioxException catch (error) {
       await _fail(_jobs[id] ?? job, error.code, error.message);
-      await _cleanup(_jobs[id] ?? job);
+      await _cleanupIfRemote(_jobs[id] ?? job);
+    } on MossException catch (error) {
+      await _fail(_jobs[id] ?? job, error.code, error.message);
+      await _cleanupIfRemote(_jobs[id] ?? job);
+    } on LocalSpeechException catch (error) {
+      await _fail(_jobs[id] ?? job, error.code, error.message ?? error.code);
     } on Object catch (error) {
       await _fail(_jobs[id] ?? job, 'unexpected', _safeError(error));
-      await _cleanup(_jobs[id] ?? job);
+      await _cleanupIfRemote(_jobs[id] ?? job);
+    } finally {
+      _cancelledIds.remove(id);
+      _alignmentInterruptedIds.remove(id);
+    }
+  }
+
+  Future<TranscriptionJob> _acquireLocalMoss(TranscriptionJob job) async {
+    final service = _localSttService;
+    if (service == null || !service.isSupported) {
+      throw const LocalSpeechException('local_stt_unsupported');
+    }
+    if (!await File(job.sourcePath).exists()) {
+      throw const MediaException(
+        'missing_source',
+        'The source file is missing.',
+      );
+    }
+    _checkCancelled(job.id);
+    final metadata = job.metadata ?? await _media.inspect(job.sourcePath);
+    if (metadata.durationMs > 90 * 60 * 1000) {
+      throw const LocalSpeechException('local_stt_duration_exceeded');
+    }
+    job = await _transition(
+      job,
+      status: JobStatus.converting,
+      metadata: metadata,
+      progress: const JobProgress(stage: 'converting', fraction: 0),
+      clearError: true,
+    );
+    final document = await service.transcribe(
+      LocalSttRequest(
+        sourcePath: job.sourcePath,
+        durationMs: metadata.durationMs,
+        options: job.options,
+      ),
+      onProgress: (fraction, detail) {
+        final transcribing = detail != 'converting';
+        unawaited(
+          _progress(
+            job.id,
+            transcribing ? 'local_transcribing' : 'converting',
+            fraction,
+            detail,
+            status: transcribing ? JobStatus.processing : JobStatus.converting,
+          ),
+        );
+      },
+      shouldCancel: () => _cancelledIds.contains(job.id),
+    );
+    _checkCancelled(job.id);
+    final shouldAlign = document.segments.isNotEmpty && _settings.autoAlignMoss;
+    return _transition(
+      _jobs[job.id] ?? job,
+      status: document.segments.isEmpty
+          ? JobStatus.empty
+          : shouldAlign
+          ? JobStatus.aligning
+          : JobStatus.completed,
+      document: document,
+      transcriptSource: TranscriptSource.mossLocal,
+      forcedAlignment: shouldAlign
+          ? _queuedAlignmentState(
+              document.segments.length,
+              languageAutomaticallyDetermined:
+                  job.options.languageHints.isEmpty,
+            )
+          : null,
+      progress: JobProgress(
+        stage: shouldAlign ? 'aligning' : 'complete',
+        fraction: shouldAlign ? 0 : 1,
+      ),
+      clearError: true,
+    );
+  }
+
+  Future<TranscriptionJob> _acquireRemoteTranscript(
+    TranscriptionJob initial,
+  ) async {
+    var job = initial;
+    String? temporary;
+    final transcriptionClient = _transcriptionClient(job.transcriptionProvider);
+    try {
+      if (!await File(job.sourcePath).exists()) {
+        throw const MediaException(
+          'missing_source',
+          'The source file is missing.',
+        );
+      }
+      _checkCancelled(job.id);
+      var uploadPath = job.sourcePath;
+      final metadata = job.metadata ?? await _media.inspect(job.sourcePath);
+      final uploadProfile =
+          job.transcriptionProvider == TranscriptionProvider.mossPro
+          ? MediaUploadProfile.compactSpeech
+          : MediaUploadProfile.standard;
+      if (!_media.canUploadDirectly(
+        job.sourcePath,
+        metadata,
+        profile: uploadProfile,
+      )) {
+        job = await _transition(
+          job,
+          status: JobStatus.converting,
+          metadata: metadata,
+          progress: const JobProgress(stage: 'converting', fraction: 0),
+        );
+        temporary = await _media.extractAudio(
+          job.sourcePath,
+          job.id,
+          durationMs: metadata.durationMs,
+          profile: uploadProfile,
+          onProgress: (fraction, detail) =>
+              unawaited(_progress(job.id, 'converting', fraction, detail)),
+          shouldCancel: () => _cancelledIds.contains(job.id),
+        );
+        uploadPath = temporary;
+      }
+      _checkCancelled(job.id);
+      var fileId = job.remoteFileId;
+      if (fileId == null) {
+        job = await _transition(
+          _jobs[job.id] ?? job,
+          status: JobStatus.uploading,
+          progress: const JobProgress(stage: 'uploading', fraction: 0),
+        );
+        fileId = await transcriptionClient.uploadFile(
+          uploadPath,
+          onProgress: (fraction, detail) =>
+              unawaited(_progress(job.id, 'uploading', fraction, detail)),
+          shouldCancel: () => _cancelledIds.contains(job.id),
+        );
+        job = await _transition(
+          _jobs[job.id] ?? job,
+          remoteFileId: fileId,
+          cleanupState: CleanupState.pending,
+        );
+      }
+      _checkCancelled(job.id);
+      var transcriptionId = job.remoteTranscriptionId;
+      if (transcriptionId == null) {
+        transcriptionId = await transcriptionClient.createTranscription(
+          fileId,
+          job.options,
+        );
+        job = await _transition(
+          job,
+          remoteTranscriptionId: transcriptionId,
+          cleanupState: CleanupState.pending,
+          status: JobStatus.queuedRemote,
+          progress: const JobProgress(stage: 'queued_remote'),
+        );
+      }
+      await _poll(
+        job.id,
+        transcriptionId,
+        job.transcriptionProvider,
+        transcriptionClient,
+      );
+      _checkCancelled(job.id);
+      job = await _transition(
+        _jobs[job.id] ?? job,
+        status: JobStatus.fetching,
+        progress: const JobProgress(stage: 'fetching'),
+      );
+      final payload = await transcriptionClient.getTranscript(transcriptionId);
+      final usesSoniox =
+          job.transcriptionProvider == TranscriptionProvider.soniox;
+      final embedded = usesSoniox && job.options.sonioxTranslation.enabled;
+      final document = usesSoniox
+          ? _parser.parse(
+              payload,
+              sonioxTranslationTargetLanguage: embedded
+                  ? job.options.sonioxTranslation.targetLanguage
+                  : null,
+            )
+          : const MossTranscriptParser().parse(payload);
+      final shouldAlign =
+          !usesSoniox &&
+          document.segments.isNotEmpty &&
+          _settings.autoAlignMoss;
+      job = await _transition(
+        job,
+        status: document.segments.isEmpty
+            ? JobStatus.empty
+            : shouldAlign
+            ? JobStatus.aligning
+            : JobStatus.completed,
+        document: document,
+        translationState: embedded
+            ? _sonioxTranslationState(
+                document,
+                job.options.sonioxTranslation.targetLanguage,
+              )
+            : null,
+        transcriptSource: usesSoniox
+            ? TranscriptSource.soniox
+            : TranscriptSource.mossPro,
+        forcedAlignment: shouldAlign
+            ? _queuedAlignmentState(
+                document.segments.length,
+                languageAutomaticallyDetermined:
+                    job.options.languageHints.isEmpty,
+              )
+            : null,
+        progress: JobProgress(
+          stage: shouldAlign ? 'aligning' : 'complete',
+          fraction: shouldAlign ? 0 : 1,
+        ),
+        clearError: true,
+      );
+      await _cleanup(job);
+      return _jobs[job.id] ?? job;
     } finally {
       if (temporary != null) await _media.deleteTemporary(temporary);
-      _cancelledIds.remove(id);
     }
+  }
+
+  bool _isMossJob(TranscriptionJob job) =>
+      job.transcriptSource == TranscriptSource.mossPro ||
+      job.transcriptSource == TranscriptSource.mossLocal ||
+      job.transcriptionProvider == TranscriptionProvider.mossPro ||
+      job.transcriptionProvider == TranscriptionProvider.mossLocal;
+
+  ForcedAlignmentState _queuedAlignmentState(
+    int totalSegments, {
+    required bool languageAutomaticallyDetermined,
+  }) => ForcedAlignmentState(
+    status: ForcedAlignmentStatus.queued,
+    modelId: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
+    modelRevision: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+    totalSegments: totalSegments,
+    languageAutomaticallyDetermined: languageAutomaticallyDetermined,
+  );
+
+  Future<TranscriptionJob> _runMossAlignment(TranscriptionJob initial) async {
+    var job = initial;
+    final document = job.document;
+    if (document == null || document.segments.isEmpty) return job;
+    final service = _forcedAlignmentService;
+    if (service == null || !service.isSupported) {
+      return _completeWithoutAlignment(
+        job,
+        ForcedAlignmentStatus.unavailable,
+        'alignment_unsupported',
+      );
+    }
+    if (!await File(job.sourcePath).exists()) {
+      return _completeWithoutAlignment(
+        job,
+        ForcedAlignmentStatus.unavailable,
+        'alignment_source_missing',
+      );
+    }
+    job = await _transition(
+      job,
+      status: JobStatus.aligning,
+      forcedAlignment: ForcedAlignmentState(
+        status: ForcedAlignmentStatus.running,
+        modelId: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
+        modelRevision: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+        totalSegments: document.segments.length,
+        languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
+      ),
+      progress: const JobProgress(stage: 'aligning', fraction: 0),
+    );
+    try {
+      final result = await _localModelLane.withPermit(
+        () => service.align(
+          ForcedAlignmentRequest(
+            sourcePath: job.sourcePath,
+            document: document,
+            languageHints: job.options.languageHints,
+          ),
+          onProgress: (fraction, detail) =>
+              unawaited(_progress(job.id, 'aligning', fraction, detail)),
+          shouldCancel: () => _cancelledIds.contains(job.id),
+        ),
+      );
+      final publishTokens =
+          result.status == ForcedAlignmentStatus.completed ||
+          result.status == ForcedAlignmentStatus.partial;
+      return await _transition(
+        _jobs[job.id] ?? job,
+        status: JobStatus.completed,
+        document: publishTokens
+            ? document.copyWith(tokens: result.tokens)
+            : document,
+        forcedAlignment: result.toState(
+          LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8,
+        ),
+        progress: const JobProgress(stage: 'complete', fraction: 1),
+        clearError: true,
+      );
+    } on OperationCancelledException {
+      final interrupted = _alignmentInterruptedIds.contains(job.id);
+      return _completeWithoutAlignment(
+        _jobs[job.id] ?? job,
+        interrupted
+            ? ForcedAlignmentStatus.interrupted
+            : ForcedAlignmentStatus.cancelled,
+        interrupted ? 'alignment_interrupted' : 'alignment_cancelled',
+      );
+    } on LocalSpeechException catch (error) {
+      return _completeWithoutAlignment(
+        _jobs[job.id] ?? job,
+        ForcedAlignmentStatus.failed,
+        error.code,
+        error.message,
+      );
+    } on Object catch (error) {
+      return _completeWithoutAlignment(
+        _jobs[job.id] ?? job,
+        ForcedAlignmentStatus.failed,
+        'alignment_failed',
+        _safeError(error),
+      );
+    }
+  }
+
+  Future<TranscriptionJob> _completeWithoutAlignment(
+    TranscriptionJob job,
+    ForcedAlignmentStatus status,
+    String warningCode, [
+    String? warningMessage,
+  ]) => _transition(
+    job,
+    status: job.document?.segments.isEmpty == true
+        ? JobStatus.empty
+        : JobStatus.completed,
+    forcedAlignment: ForcedAlignmentState(
+      status: status,
+      modelId: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
+      modelRevision: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+      alignedSegments: job.forcedAlignment.alignedSegments,
+      totalSegments:
+          job.document?.segments.length ?? job.forcedAlignment.totalSegments,
+      languageAutomaticallyDetermined:
+          job.forcedAlignment.languageAutomaticallyDetermined ||
+          job.options.languageHints.isEmpty,
+      warningCode: warningCode,
+      warningMessage: warningMessage,
+    ),
+    progress: const JobProgress(stage: 'complete', fraction: 1),
+    clearError: true,
+  );
+
+  Future<void> _cleanupIfRemote(TranscriptionJob job) async {
+    if (job.transcriptionProvider == TranscriptionProvider.mossLocal) return;
+    await _cleanup(job);
   }
 
   Future<void> _importPublisherTranscript(TranscriptionJob job) async {
@@ -1411,15 +1995,53 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> _poll(String id, String transcriptionId) async {
+  TranscriptAcquisitionMode _providerAcquisitionMode(
+    TranscriptionProvider provider,
+  ) => switch (provider) {
+    TranscriptionProvider.soniox => TranscriptAcquisitionMode.soniox,
+    TranscriptionProvider.mossPro => TranscriptAcquisitionMode.mossPro,
+    TranscriptionProvider.mossLocal => TranscriptAcquisitionMode.mossLocal,
+  };
+
+  TranscriptionClient _transcriptionClient(TranscriptionProvider provider) =>
+      switch (provider) {
+        TranscriptionProvider.soniox => _soniox,
+        TranscriptionProvider.mossPro =>
+          _moss ??
+              (throw const MossException(
+                code: 'moss_unavailable',
+                message: 'MOSS Pro transcription is unavailable.',
+              )),
+        TranscriptionProvider.mossLocal => throw const LocalSpeechException(
+          'local_stt_unavailable',
+        ),
+      };
+
+  Future<void> _poll(
+    String id,
+    String transcriptionId,
+    TranscriptionProvider provider,
+    TranscriptionClient client,
+  ) async {
     var failures = 0;
     while (true) {
       _checkCancelled(id);
       try {
-        final state = await _soniox.getTranscription(transcriptionId);
+        final state = await client.getTranscription(transcriptionId);
         failures = 0;
         if (state.isComplete) return;
         if (state.isFailed) {
+          if (provider == TranscriptionProvider.mossPro) {
+            throw MossException(
+              code: canonicalMossErrorCode(
+                state.errorType,
+                fallback: 'moss_transcription_failed',
+              ),
+              message:
+                  state.errorMessage ?? 'MOSS could not transcribe this file.',
+              errorType: state.errorType,
+            );
+          }
           throw SonioxException(
             code: canonicalSonioxErrorCode(
               state.errorType,
@@ -1438,8 +2060,14 @@ class AppController extends ChangeNotifier {
           status: status,
           progress: JobProgress(stage: status.name),
         );
-        await Future<void>.delayed(const Duration(seconds: 2));
+        await Future<void>.delayed(
+          state.retryAfter ?? const Duration(seconds: 2),
+        );
       } on SonioxException catch (error) {
+        if (!error.retryable || failures >= 7) rethrow;
+        failures++;
+        await Future<void>.delayed(Duration(seconds: min(30, 1 << failures)));
+      } on MossException catch (error) {
         if (!error.retryable || failures >= 7) rethrow;
         failures++;
         await Future<void>.delayed(Duration(seconds: min(30, 1 << failures)));
@@ -1496,6 +2124,30 @@ class AppController extends ChangeNotifier {
       }
       if (job.status.isActive) {
         _cancelledIds.add(job.id);
+        if (job.status == JobStatus.aligning && job.document != null) {
+          _alignmentInterruptedIds.add(job.id);
+          await _transition(
+            _jobs[job.id] ?? job,
+            status: job.document!.segments.isEmpty
+                ? JobStatus.empty
+                : JobStatus.completed,
+            forcedAlignment: ForcedAlignmentState(
+              status: ForcedAlignmentStatus.interrupted,
+              modelId: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
+              modelRevision:
+                  LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+              alignedSegments: job.forcedAlignment.alignedSegments,
+              totalSegments: job.document!.segments.length,
+              languageAutomaticallyDetermined:
+                  job.forcedAlignment.languageAutomaticallyDetermined ||
+                  job.options.languageHints.isEmpty,
+              warningCode: 'alignment_interrupted',
+            ),
+            progress: const JobProgress(stage: 'complete', fraction: 1),
+            clearError: true,
+          );
+          continue;
+        }
         await _cleanup(job);
         await _transition(
           _jobs[job.id] ?? job,
@@ -1512,6 +2164,30 @@ class AppController extends ChangeNotifier {
     if (_cancelledIds.contains(id)) {
       throw const OperationCancelledException();
     }
+  }
+
+  Future<void> retryForcedAlignment(String id) async {
+    final job = _jobs[id];
+    if (job == null ||
+        job.document == null ||
+        job.document!.segments.isEmpty ||
+        !_isMossJob(job) ||
+        job.status.isActive) {
+      return;
+    }
+    _cancelledIds.remove(id);
+    final queued = await _transition(
+      job,
+      status: JobStatus.aligning,
+      forcedAlignment: _queuedAlignmentState(
+        job.document!.segments.length,
+        languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
+      ),
+      progress: const JobProgress(stage: 'aligning', fraction: 0),
+      clearError: true,
+    );
+    await _runMossAlignment(queued);
+    _cancelledIds.remove(id);
   }
 
   Future<void> retry(String id) async {
@@ -1574,17 +2250,25 @@ class AppController extends ChangeNotifier {
     if (!_inboxIds.contains(id)) _inboxIds.add(id);
     notifyListeners();
     if (_canStart(updated) && !_processing) {
+      _localAutoStartCandidates.remove(updated.id);
       _processing = true;
       notifyListeners();
-      await _runJob(updated.id);
-      _processing = false;
-      notifyListeners();
+      try {
+        await _runJob(updated.id);
+      } finally {
+        _processing = false;
+        notifyListeners();
+        _scheduleLocalAutoStart();
+      }
     }
   }
 
-  void continueInInbox(String id) {
+  void addToInbox(String id) {
     final job = _jobs[id];
-    if (job == null || job.status != JobStatus.ready) return;
+    if (job == null ||
+        (job.status != JobStatus.ready && job.status != JobStatus.failed)) {
+      return;
+    }
     if (!_inboxIds.contains(id)) _inboxIds.add(id);
     _destination = AppDestination.inbox;
     notifyListeners();
@@ -1618,6 +2302,7 @@ class AppController extends ChangeNotifier {
   Future<void> removeFromInbox(String id) async {
     final job = _jobs[id];
     if (job == null || job.isBusy) return;
+    _localAutoStartCandidates.remove(id);
     _inboxIds.remove(id);
     if (job.document == null) {
       if (_pathIsInMonitoredFolder(job.sourcePath)) {
@@ -1639,6 +2324,7 @@ class AppController extends ChangeNotifier {
         if (_jobs[id]?.document == null) id,
     ];
     for (final id in discardedIds) {
+      _localAutoStartCandidates.remove(id);
       final discarded = _jobs[id];
       if (discarded != null && _pathIsInMonitoredFolder(discarded.sourcePath)) {
         await _recordMonitoredFile(
@@ -1653,10 +2339,12 @@ class AppController extends ChangeNotifier {
       await _jobsRepository.delete(id);
     }
     _inboxIds.clear();
+    _localAutoStartCandidates.clear();
     _batchId = _uuid.v4();
     _sessionOptions = TranscriptionOptions(
       sonioxTranslation: _settings.sonioxTranslation,
     );
+    _sessionTranscriptionProvider = _settings.defaultTranscriptionProvider;
     notifyListeners();
   }
 
@@ -1664,9 +2352,11 @@ class AppController extends ChangeNotifier {
     final job = _jobs[id];
     if (job == null || job.isBusy) return;
     _jobs.remove(id);
+    _localAutoStartCandidates.remove(id);
     _playbackPositions.remove(id);
     _inboxIds.remove(id);
     if (_activeWorkspaceJobId == id) _activeWorkspaceJobId = null;
+    _forgetWorkspaceJob(id);
     await _deleteManagedPodcastAudio(job);
     await _media.deleteGeneratedMedia(id);
     await _jobsRepository.delete(id);
@@ -1685,6 +2375,7 @@ class AppController extends ChangeNotifier {
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
       _jobs.remove(id);
+      _localAutoStartCandidates.remove(id);
       _playbackPositions.remove(id);
       _inboxIds.remove(id);
     }
@@ -1693,6 +2384,11 @@ class AppController extends ChangeNotifier {
         !_jobs.containsKey(_activeWorkspaceJobId)) {
       _activeWorkspaceJobId = null;
     }
+    final savedWorkspaceJobId = _settings.lastWorkspaceJobId;
+    if (savedWorkspaceJobId != null &&
+        !_jobs.containsKey(savedWorkspaceJobId)) {
+      _forgetWorkspaceJob(savedWorkspaceJobId);
+    }
     notifyListeners();
   }
 
@@ -1700,8 +2396,20 @@ class AppController extends ChangeNotifier {
     final job = _jobs[id];
     if (job?.document == null) return;
     _activeWorkspaceJobId = id;
-    _destination = AppDestination.workspace;
-    notifyListeners();
+    setDestination(AppDestination.workspace);
+  }
+
+  void _forgetWorkspaceJob(String id) {
+    if (_settings.lastWorkspaceJobId != id) return;
+    final wasWorkspace =
+        _settings.lastContentDestination == AppContentDestination.workspace;
+    _settings = _settings.copyWith(
+      lastContentDestination: wasWorkspace
+          ? AppContentDestination.podcast
+          : _settings.lastContentDestination,
+      clearLastWorkspaceJobId: true,
+    );
+    unawaited(_saveNavigationState());
   }
 
   Future<void> updateSegment(
@@ -1757,10 +2465,37 @@ class AppController extends ChangeNotifier {
     await _transition(job, document: document.copyWith(speakers: speakers));
   }
 
+  Future<void> updateSegmentSpeaker(
+    String jobId,
+    String segmentId,
+    String speakerId,
+  ) async {
+    final job = _jobs[jobId];
+    final document = job?.document;
+    if (job == null || document == null) return;
+    if (!document.speakers.any((speaker) => speaker.id == speakerId)) return;
+    final target = document.segments
+        .where((segment) => segment.id == segmentId)
+        .firstOrNull;
+    if (target == null || target.speaker == speakerId) return;
+    final segments = [
+      for (final segment in document.segments)
+        if (segment.id == segmentId)
+          segment.copyWith(speaker: speakerId)
+        else
+          segment,
+    ];
+    await _transition(job, document: document.copyWith(segments: segments));
+  }
+
   Future<void> updateSettings(AppSettings value) async {
+    final disableLocalAutoStart =
+        _settings.autoTranscribeLocal && !value.autoTranscribeLocal;
     _settings = value;
-    await _settingsRepository.save(value);
+    if (disableLocalAutoStart) _localAutoStartCandidates.clear();
+    await _queueSettingsSave(value);
     notifyListeners();
+    _scheduleLocalAutoStart();
   }
 
   Future<void> updateSessionOptions(TranscriptionOptions value) async {
@@ -1773,6 +2508,38 @@ class AppController extends ChangeNotifier {
     )) {
       await _transition(job, options: value);
     }
+    notifyListeners();
+  }
+
+  Future<void> updateSessionTranscriptionProvider(
+    TranscriptionProvider provider,
+  ) async {
+    _sessionTranscriptionProvider = provider;
+    for (final job in inboxJobs.where(
+      (job) =>
+          job.status == JobStatus.pending ||
+          job.status == JobStatus.probing ||
+          job.status.canTranscribe,
+    )) {
+      if (job.transcriptAcquisitionMode.usesPublisherTranscript) continue;
+      await _transition(
+        job,
+        transcriptionProvider: provider,
+        transcriptAcquisitionMode: _providerAcquisitionMode(provider),
+      );
+    }
+    notifyListeners();
+    _scheduleLocalAutoStart();
+  }
+
+  Future<void> updateDefaultTranscriptionProvider(
+    TranscriptionProvider provider,
+  ) async {
+    _settings = _settings.copyWith(defaultTranscriptionProvider: provider);
+    if (_inboxIds.isEmpty && !_processing) {
+      _sessionTranscriptionProvider = provider;
+    }
+    await _queueSettingsSave(_settings);
     notifyListeners();
   }
 
@@ -1795,6 +2562,33 @@ class AppController extends ChangeNotifier {
       await _soniox.validateKey(apiKey: candidate);
       return null;
     } on SonioxException catch (error) {
+      return error.code;
+    } on Object {
+      return 'unexpected';
+    }
+  }
+
+  Future<void> saveMossApiKey(String value) async {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty || _mossCredentials == null) return;
+    await _mossCredentials.writeApiKey(trimmed);
+    _mossKeyConfigured = true;
+    notifyListeners();
+  }
+
+  Future<void> removeMossApiKey() async {
+    await _mossCredentials?.deleteApiKey();
+    _mossKeyConfigured = false;
+    notifyListeners();
+  }
+
+  Future<String?> testMossApiKey([String? candidate]) async {
+    final client = _moss;
+    if (client == null) return 'moss_unavailable';
+    try {
+      await client.validateKey(apiKey: candidate);
+      return null;
+    } on MossException catch (error) {
       return error.code;
     } on Object {
       return 'unexpected';
@@ -1829,7 +2623,7 @@ class AppController extends ChangeNotifier {
       _translationKeyConfigured = true;
     }
     _settings = _settings.copyWith(translationSettings: settings);
-    await _settingsRepository.save(_settings);
+    await _queueSettingsSave(_settings);
     await _updateQueuedTranslationOptions();
     notifyListeners();
     return null;
@@ -1844,7 +2638,7 @@ class AppController extends ChangeNotifier {
           autoTranslate: false,
         ),
       );
-      await _settingsRepository.save(_settings);
+      await _queueSettingsSave(_settings);
       await _updateQueuedTranslationOptions();
     }
     notifyListeners();
@@ -1898,21 +2692,9 @@ class AppController extends ChangeNotifier {
         !settings.isConfigured(hasApiKey: _translationKeyConfigured)) {
       return settings.validationError() ?? 'translation_missing_credentials';
     }
-    final sonioxTranslation = settings.autoTranslate
-        ? _settings.sonioxTranslation.copyWith(enabled: false)
-        : _settings.sonioxTranslation;
-    _settings = _settings.copyWith(
-      translationSettings: settings,
-      sonioxTranslation: sonioxTranslation,
-    );
-    if (settings.autoTranslate) {
-      _sessionOptions = _sessionOptions.copyWith(
-        sonioxTranslation: sonioxTranslation,
-      );
-    }
-    await _settingsRepository.save(_settings);
+    _settings = _settings.copyWith(translationSettings: settings);
+    await _queueSettingsSave(_settings);
     await _updateQueuedTranslationOptions();
-    if (settings.autoTranslate) await _updateQueuedSonioxTranslationOptions();
     notifyListeners();
     return null;
   }
@@ -1924,17 +2706,10 @@ class AppController extends ChangeNotifier {
     final options = value.copyWith(targetLanguage: targetLanguage);
     final validation = options.validationError();
     if (validation != null) return validation;
-    final translationSettings = options.enabled
-        ? _settings.translationSettings.copyWith(autoTranslate: false)
-        : _settings.translationSettings;
-    _settings = _settings.copyWith(
-      sonioxTranslation: options,
-      translationSettings: translationSettings,
-    );
+    _settings = _settings.copyWith(sonioxTranslation: options);
     _sessionOptions = _sessionOptions.copyWith(sonioxTranslation: options);
-    await _settingsRepository.save(_settings);
+    await _queueSettingsSave(_settings);
     await _updateQueuedSonioxTranslationOptions();
-    if (options.enabled) await _updateQueuedTranslationOptions();
     notifyListeners();
     return null;
   }
@@ -1981,7 +2756,7 @@ class AppController extends ChangeNotifier {
       _settings = _settings.copyWith(
         translationSettings: settings.copyWith(targetLanguage: targetLanguage),
       );
-      await _settingsRepository.save(_settings);
+      await _queueSettingsSave(_settings);
       await _updateQueuedTranslationOptions();
     }
     var updatedDocument = document;
@@ -2930,7 +3705,8 @@ class AppController extends ChangeNotifier {
     if (interrupted.isEmpty) return;
     final resumable = <String>[];
     for (final job in interrupted) {
-      if (job.remoteTranscriptionId != null) {
+      if (job.remoteTranscriptionId != null &&
+          isTranscriptionProviderConfigured(job.transcriptionProvider)) {
         resumable.add(job.id);
       } else {
         await _transition(
@@ -2941,36 +3717,44 @@ class AppController extends ChangeNotifier {
         );
       }
     }
-    if (resumable.isEmpty || !_keyConfigured) return;
+    if (resumable.isEmpty) return;
     _processing = true;
     notifyListeners();
-    await _runWorkerPool(resumable);
-    _processing = false;
-    notifyListeners();
+    try {
+      await _runWorkerPool(resumable);
+    } finally {
+      _processing = false;
+      notifyListeners();
+      _scheduleLocalAutoStart();
+    }
   }
 
   Future<void> _retryPendingCleanup(List<TranscriptionJob> jobs) async {
-    if (!_keyConfigured) return;
     for (final job in jobs.where(
       (item) => item.cleanupState == CleanupState.pending,
     )) {
-      if (!job.status.isActive) await _cleanup(job);
+      if (!job.status.isActive &&
+          isTranscriptionProviderConfigured(job.transcriptionProvider)) {
+        await _cleanup(job);
+      }
     }
   }
 
   Future<void> _cleanup(TranscriptionJob job) async {
+    if (job.transcriptionProvider == TranscriptionProvider.mossLocal) return;
     if (job.cleanupState == CleanupState.complete) return;
+    final client = _transcriptionClient(job.transcriptionProvider);
     var success = true;
     if (job.remoteTranscriptionId case final id?) {
       try {
-        await _soniox.deleteTranscription(id);
+        await client.deleteTranscription(id);
       } on Object {
         success = false;
       }
     }
     if (job.remoteFileId case final id?) {
       try {
-        await _soniox.deleteFile(id);
+        await client.deleteFile(id);
       } on Object {
         success = false;
       }
@@ -2985,12 +3769,14 @@ class AppController extends ChangeNotifier {
     String id,
     String stage,
     double? fraction,
-    String? detail,
-  ) async {
+    String? detail, {
+    JobStatus? status,
+  }) async {
     final job = _jobs[id];
     if (job == null) throw StateError('Job not found.');
     return _transition(
       job,
+      status: status,
       progress: JobProgress(stage: stage, fraction: fraction, detail: detail),
     );
   }
@@ -3069,7 +3855,9 @@ class AppController extends ChangeNotifier {
     SourceFingerprint? sourceFingerprint,
     PodcastEpisodeProvenance? podcastProvenance,
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
+    TranscriptionProvider? transcriptionProvider,
     TranscriptSource? transcriptSource,
+    ForcedAlignmentState? forcedAlignment,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
@@ -3100,7 +3888,9 @@ class AppController extends ChangeNotifier {
       sourceFingerprint: sourceFingerprint,
       podcastProvenance: podcastProvenance,
       transcriptAcquisitionMode: transcriptAcquisitionMode,
+      transcriptionProvider: transcriptionProvider,
       transcriptSource: transcriptSource,
+      forcedAlignment: forcedAlignment,
       clearError: clearError,
       clearRemoteFileId: clearRemoteFileId,
       clearRemoteTranscriptionId: clearRemoteTranscriptionId,
@@ -3108,6 +3898,9 @@ class AppController extends ChangeNotifier {
       clearGroupId: clearGroupId,
     );
     _jobs[job.id] = updated;
+    if (updated.document != null || updated.status.isTerminal) {
+      _localAutoStartCandidates.remove(updated.id);
+    }
     await _jobsRepository.save(updated);
     if ((updated.status == JobStatus.completed ||
             updated.status == JobStatus.empty) &&
@@ -3124,18 +3917,54 @@ class AppController extends ChangeNotifier {
       }
     }
     notifyListeners();
+    _scheduleLocalAutoStart();
     return updated;
   }
 
   Future<void> shutdown() async {
-    if (_monitorShutDown) return;
-    _monitorShutDown = true;
-    await _inboxFolderMonitor?.dispose();
+    if (!_monitorShutDown) {
+      _monitorShutDown = true;
+      await _inboxFolderMonitor?.dispose();
+    }
+    await _settingsSaveTail;
   }
 
   @override
   void dispose() {
     unawaited(shutdown());
     super.dispose();
+  }
+}
+
+class _PermitPool {
+  _PermitPool(this._capacity) : assert(_capacity > 0);
+
+  final int _capacity;
+  int _active = 0;
+  final List<Completer<void>> _waiters = [];
+
+  Future<T> withPermit<T>(Future<T> Function() operation) async {
+    await _acquire();
+    try {
+      return await operation();
+    } finally {
+      _release();
+    }
+  }
+
+  Future<void> _acquire() async {
+    if (_active < _capacity) {
+      _active++;
+      return;
+    }
+    final waiter = Completer<void>();
+    _waiters.add(waiter);
+    await waiter.future;
+    _active++;
+  }
+
+  void _release() {
+    _active--;
+    if (_waiters.isNotEmpty) _waiters.removeAt(0).complete();
   }
 }

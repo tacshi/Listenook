@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/contracts.dart';
+import '../core/local_speech.dart';
 import '../core/models.dart';
 import '../data/desktop_runtime.dart';
 import '../l10n/strings.dart';
@@ -14,6 +16,7 @@ import 'inbox_monitor_setup_dialog.dart';
 typedef ExternalUrlLauncher = Future<bool> Function(Uri url);
 
 final _sonioxConsoleUrl = Uri.parse('https://console.soniox.com');
+final _mossConsoleUrl = Uri.parse('https://platform.mosi.cn/app/api-keys');
 
 Future<bool> _launchExternalUrl(Uri url) =>
     launchUrl(url, mode: LaunchMode.externalApplication);
@@ -29,14 +32,20 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final _key = TextEditingController();
+  final _mossKey = TextEditingController();
   bool _savingKey = false;
   bool _testingKey = false;
+  bool _savingMossKey = false;
+  bool _testingMossKey = false;
+  TranscriptionProvider? _selectedTranscriptionProvider;
 
   bool get _hasCandidateKey => _key.text.trim().isNotEmpty;
+  bool get _hasCandidateMossKey => _mossKey.text.trim().isNotEmpty;
 
   @override
   void dispose() {
     _key.dispose();
+    _mossKey.dispose();
     super.dispose();
   }
 
@@ -46,7 +55,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final settings = controller.settings;
     return SafeArea(
       child: DefaultTabController(
-        length: 5,
+        length: 4,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -75,12 +84,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     text: context.strings.t('settings_general'),
                   ),
                   Tab(
-                    icon: const Icon(Icons.transcribe_rounded),
-                    text: context.strings.t('settings_transcription'),
-                  ),
-                  Tab(
-                    icon: const Icon(Icons.palette_outlined),
-                    text: context.strings.t('appearance'),
+                    icon: const Icon(Icons.hub_outlined),
+                    text: context.strings.t('settings_providers'),
                   ),
                   Tab(
                     icon: const Icon(Icons.keyboard_outlined),
@@ -97,9 +102,8 @@ class _SettingsPageState extends State<SettingsPage> {
             Expanded(
               child: TabBarView(
                 children: [
-                  _generalTab(context, controller),
-                  _transcriptionTab(context, controller, settings),
-                  _appearanceTab(context, controller, settings),
+                  _generalTab(context, controller, settings),
+                  _providersTab(context, controller, settings),
                   _shortcutsTab(context),
                   _aboutTab(context),
                 ],
@@ -116,222 +120,337 @@ class _SettingsPageState extends State<SettingsPage> {
     children: children,
   );
 
-  Widget _transcriptionTab(
+  Widget _providersTab(
     BuildContext context,
     AppController controller,
     AppSettings settings,
-  ) => _tabList([
-    _Section(
-      title: context.strings.t('soniox_key'),
-      icon: Icons.key_rounded,
-      titleAction: TextButton.icon(
-        key: const Key('create-soniox-key-link'),
-        onPressed: _openSonioxConsole,
-        style: TextButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          minimumSize: Size.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          visualDensity: VisualDensity.compact,
-        ),
-        icon: const Icon(Icons.open_in_new_rounded, size: 18),
-        label: Text(context.strings.t('create_soniox_key')),
-      ),
-      trailing: controller.keyConfigured
-          ? Tooltip(
-              key: const Key('soniox-key-status'),
-              message: context.strings.t('key_configured'),
-              child: const Icon(
-                Icons.verified_user_outlined,
-                color: Colors.green,
+  ) {
+    final providers = controller.availableTranscriptionProviders;
+    final defaultProvider =
+        providers.contains(settings.defaultTranscriptionProvider)
+        ? settings.defaultTranscriptionProvider
+        : TranscriptionProvider.soniox;
+    final candidate = _selectedTranscriptionProvider ?? defaultProvider;
+    final selectedProvider = providers.contains(candidate)
+        ? candidate
+        : defaultProvider;
+    return _tabList([
+      _Section(
+        title: context.strings.t('default_transcription_provider'),
+        icon: Icons.hub_outlined,
+        child: DropdownButtonFormField<TranscriptionProvider>(
+          key: const Key('default-transcription-provider'),
+          initialValue: defaultProvider,
+          decoration: InputDecoration(
+            labelText: context.strings.t('transcription_provider'),
+          ),
+          items: [
+            for (final provider in providers)
+              DropdownMenuItem(
+                value: provider,
+                child: Text(
+                  context.strings.transcriptionProviderName(provider),
+                ),
               ),
-            )
-          : null,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            key: const Key('soniox-key-field'),
-            controller: _key,
-            obscureText: true,
-            enableSuggestions: false,
-            autocorrect: false,
-            onChanged: (_) => setState(() {}),
-            decoration: InputDecoration(
-              hintText: context.strings.t('key_hint'),
+          ],
+          onChanged: (provider) {
+            if (provider != null) {
+              setState(() => _selectedTranscriptionProvider = provider);
+              controller.updateDefaultTranscriptionProvider(provider);
+            }
+          },
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: SegmentedButton<TranscriptionProvider>(
+            key: const Key('transcription-provider-tabs'),
+            showSelectedIcon: false,
+            segments: [
+              for (final provider in providers)
+                ButtonSegment(
+                  value: provider,
+                  label: Text(
+                    context.strings.transcriptionProviderName(provider),
+                  ),
+                ),
+            ],
+            selected: {selectedProvider},
+            onSelectionChanged: (providers) => setState(
+              () => _selectedTranscriptionProvider = providers.first,
             ),
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+        ),
+      ),
+      if (selectedProvider == TranscriptionProvider.soniox)
+        _Section(
+          title: context.strings.t('soniox_key'),
+          icon: Icons.key_rounded,
+          titleAction: TextButton.icon(
+            key: const Key('create-soniox-key-link'),
+            onPressed: _openSonioxConsole,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            icon: const Icon(Icons.open_in_new_rounded, size: 18),
+            label: Text(context.strings.t('create_soniox_key')),
+          ),
+          trailing: controller.keyConfigured
+              ? Tooltip(
+                  key: const Key('soniox-key-status'),
+                  message: context.strings.t('key_configured'),
+                  child: const Icon(
+                    Icons.verified_user_outlined,
+                    color: Colors.green,
+                  ),
+                )
+              : null,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              OutlinedButton.icon(
-                onPressed: () async {
-                  final data = await Clipboard.getData(Clipboard.kTextPlain);
-                  if (data?.text != null && mounted) {
-                    setState(() => _key.text = data!.text!);
+              TextField(
+                key: const Key('soniox-key-field'),
+                controller: _key,
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: context.strings.t('key_hint'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final data = await Clipboard.getData(
+                        Clipboard.kTextPlain,
+                      );
+                      if (data?.text != null && mounted) {
+                        setState(() => _key.text = data!.text!);
+                      }
+                    },
+                    icon: const Icon(Icons.content_paste_rounded),
+                    label: Text(context.strings.t('paste')),
+                  ),
+                  FilledButton.icon(
+                    key: const Key('save-soniox-key'),
+                    onPressed: _hasCandidateKey && !_savingKey
+                        ? () => _saveKey(controller)
+                        : null,
+                    icon: _savingKey
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.lock_rounded),
+                    label: Text(context.strings.t('save')),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('test-soniox-key'),
+                    onPressed:
+                        (controller.keyConfigured || _hasCandidateKey) &&
+                            !_testingKey
+                        ? () => _testKey(controller)
+                        : null,
+                    icon: _testingKey
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.network_check_rounded),
+                    label: Text(context.strings.t('test')),
+                  ),
+                  if (controller.keyConfigured)
+                    TextButton.icon(
+                      onPressed: controller.removeApiKey,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: Text(context.strings.t('remove')),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                key: const Key('soniox-translation-switch'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(context.strings.t('soniox_translation')),
+                subtitle: Text(
+                  context.strings.t('soniox_translation_description'),
+                ),
+                value: settings.sonioxTranslation.enabled,
+                onChanged: (value) async {
+                  final error = await controller.updateSonioxTranslation(
+                    settings.sonioxTranslation.copyWith(enabled: value),
+                  );
+                  if (error != null && context.mounted) {
+                    _showMessage(context.strings.error(error));
                   }
                 },
-                icon: const Icon(Icons.content_paste_rounded),
-                label: Text(context.strings.t('paste')),
               ),
-              FilledButton.icon(
-                key: const Key('save-soniox-key'),
-                onPressed: _hasCandidateKey && !_savingKey
-                    ? () => _saveKey(controller)
-                    : null,
-                icon: _savingKey
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.lock_rounded),
-                label: Text(context.strings.t('save')),
-              ),
-              OutlinedButton.icon(
-                key: const Key('test-soniox-key'),
-                onPressed:
-                    (controller.keyConfigured || _hasCandidateKey) &&
-                        !_testingKey
-                    ? () => _testKey(controller)
-                    : null,
-                icon: _testingKey
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.network_check_rounded),
-                label: Text(context.strings.t('test')),
-              ),
-              if (controller.keyConfigured)
-                TextButton.icon(
-                  onPressed: controller.removeApiKey,
-                  icon: const Icon(Icons.delete_outline_rounded),
-                  label: Text(context.strings.t('remove')),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                key: const Key('soniox-translation-target'),
+                initialValue: settings.sonioxTranslation.targetLanguage,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: context.strings.t('soniox_translation_target'),
+                  prefixIcon: const Icon(Icons.language_rounded),
                 ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SwitchListTile(
-            key: const Key('soniox-translation-switch'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(context.strings.t('soniox_translation')),
-            subtitle: Text(context.strings.t('soniox_translation_description')),
-            value: settings.sonioxTranslation.enabled,
-            onChanged: (value) async {
-              final error = await controller.updateSonioxTranslation(
-                settings.sonioxTranslation.copyWith(enabled: value),
-              );
-              if (error != null && context.mounted) {
-                _showMessage(context.strings.error(error));
-              }
-            },
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            key: const Key('soniox-translation-target'),
-            initialValue: settings.sonioxTranslation.targetLanguage,
-            isExpanded: true,
-            decoration: InputDecoration(
-              labelText: context.strings.t('soniox_translation_target'),
-              prefixIcon: const Icon(Icons.language_rounded),
-            ),
-            items: [
-              for (final code in supportedSonioxTranslationLanguageCodes)
-                DropdownMenuItem(
-                  value: code,
-                  child: Text(context.strings.translationLanguageName(code)),
-                ),
-            ],
-            onChanged: settings.sonioxTranslation.enabled
-                ? (value) async {
-                    if (value == null) return;
-                    final error = await controller.updateSonioxTranslation(
-                      settings.sonioxTranslation.copyWith(
-                        targetLanguage: value,
+                items: [
+                  for (final code in supportedSonioxTranslationLanguageCodes)
+                    DropdownMenuItem(
+                      value: code,
+                      child: Text(
+                        context.strings.translationLanguageName(code),
                       ),
-                    );
-                    if (error != null && context.mounted) {
-                      _showMessage(context.strings.error(error));
-                    }
-                  }
-                : null,
+                    ),
+                ],
+                onChanged: settings.sonioxTranslation.enabled
+                    ? (value) async {
+                        if (value == null) return;
+                        final error = await controller.updateSonioxTranslation(
+                          settings.sonioxTranslation.copyWith(
+                            targetLanguage: value,
+                          ),
+                        );
+                        if (error != null && context.mounted) {
+                          _showMessage(context.strings.error(error));
+                        }
+                      }
+                    : null,
+              ),
+            ],
           ),
-        ],
-      ),
-    ),
-    _TranslationSettingsSection(
-      controller: controller,
-      settings: settings.translationSettings,
-    ),
-  ]);
-
-  Widget _appearanceTab(
-    BuildContext context,
-    AppController controller,
-    AppSettings settings,
-  ) => _tabList([
-    Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Expanded(child: Text(context.strings.t('theme'))),
-                DropdownButton<AppThemeMode>(
-                  value: settings.themeMode,
-                  items: [
-                    DropdownMenuItem(
-                      value: AppThemeMode.system,
-                      child: Text(context.strings.t('system')),
-                    ),
-                    DropdownMenuItem(
-                      value: AppThemeMode.light,
-                      child: Text(context.strings.t('light')),
-                    ),
-                    DropdownMenuItem(
-                      value: AppThemeMode.dark,
-                      child: Text(context.strings.t('dark')),
-                    ),
-                  ],
-                  onChanged: (value) => controller.updateSettings(
-                    settings.copyWith(themeMode: value),
-                  ),
-                ),
-              ],
-            ),
-            Row(
-              children: [
-                Expanded(child: Text(context.strings.t('locale'))),
-                DropdownButton<AppLocaleMode>(
-                  value: settings.localeMode,
-                  items: [
-                    DropdownMenuItem(
-                      value: AppLocaleMode.system,
-                      child: Text(context.strings.t('system')),
-                    ),
-                    DropdownMenuItem(
-                      value: AppLocaleMode.english,
-                      child: Text(context.strings.t('english')),
-                    ),
-                    DropdownMenuItem(
-                      value: AppLocaleMode.simplifiedChinese,
-                      child: Text(context.strings.t('chinese')),
-                    ),
-                  ],
-                  onChanged: (value) => controller.updateSettings(
-                    settings.copyWith(localeMode: value),
-                  ),
-                ),
-              ],
-            ),
-          ],
         ),
+      if (selectedProvider == TranscriptionProvider.mossPro)
+        _Section(
+          title: context.strings.t('moss_key'),
+          icon: Icons.key_rounded,
+          titleAction: TextButton.icon(
+            key: const Key('create-moss-key-link'),
+            onPressed: _openMossConsole,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            icon: const Icon(Icons.open_in_new_rounded, size: 18),
+            label: Text(context.strings.t('create_moss_key')),
+          ),
+          trailing: controller.mossKeyConfigured
+              ? Tooltip(
+                  key: const Key('moss-key-status'),
+                  message: context.strings.t('key_configured'),
+                  child: const Icon(
+                    Icons.verified_user_outlined,
+                    color: Colors.green,
+                  ),
+                )
+              : null,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                key: const Key('moss-key-field'),
+                controller: _mossKey,
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: context.strings.t('key_hint'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final data = await Clipboard.getData(
+                        Clipboard.kTextPlain,
+                      );
+                      if (data?.text != null && mounted) {
+                        setState(() => _mossKey.text = data!.text!);
+                      }
+                    },
+                    icon: const Icon(Icons.content_paste_rounded),
+                    label: Text(context.strings.t('paste')),
+                  ),
+                  FilledButton.icon(
+                    key: const Key('save-moss-key'),
+                    onPressed: _hasCandidateMossKey && !_savingMossKey
+                        ? () => _saveMossKey(controller)
+                        : null,
+                    icon: _savingMossKey
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.lock_rounded),
+                    label: Text(context.strings.t('save')),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('test-moss-key'),
+                    onPressed:
+                        (controller.mossKeyConfigured ||
+                                _hasCandidateMossKey) &&
+                            !_testingMossKey
+                        ? () => _testMossKey(controller)
+                        : null,
+                    icon: _testingMossKey
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.network_check_rounded),
+                    label: Text(context.strings.t('test')),
+                  ),
+                  if (controller.mossKeyConfigured)
+                    TextButton.icon(
+                      onPressed: controller.removeMossApiKey,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: Text(context.strings.t('remove')),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                context.strings.t('moss_pro_description'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      if (selectedProvider == TranscriptionProvider.mossLocal)
+        _Section(
+          title: context.strings.t('moss_local'),
+          icon: Icons.memory_rounded,
+          child: Text(context.strings.t('moss_local_description')),
+        ),
+      if (controller.localSpeechSupported)
+        _LocalSpeechModelsSection(
+          controller: controller,
+          settings: settings,
+          showMessage: _showMessage,
+        ),
+      _TranslationSettingsSection(
+        controller: controller,
+        settings: settings.translationSettings,
       ),
-    ),
-  ]);
+    ]);
+  }
 
   Widget _shortcutsTab(BuildContext context) {
     final commandKey = Theme.of(context).platform == TargetPlatform.macOS
@@ -367,22 +486,22 @@ class _SettingsPageState extends State<SettingsPage> {
           _ShortcutDefinition(
             id: 'inbox',
             description: context.strings.t('inbox'),
-            keys: [commandKey, '1'],
+            keys: [commandKey, 'I'],
           ),
           _ShortcutDefinition(
             id: 'podcast',
             description: context.strings.t('podcast'),
-            keys: [commandKey, '2'],
+            keys: [commandKey, '1'],
           ),
           _ShortcutDefinition(
             id: 'workspace',
             description: context.strings.t('workspace'),
-            keys: [commandKey, '3'],
+            keys: [commandKey, '2'],
           ),
           _ShortcutDefinition(
             id: 'library',
             description: context.strings.t('library'),
-            keys: [commandKey, '4'],
+            keys: [commandKey, '3'],
           ),
           _ShortcutDefinition(
             id: 'settings',
@@ -441,40 +560,112 @@ class _SettingsPageState extends State<SettingsPage> {
     ]);
   }
 
-  Widget _generalTab(BuildContext context, AppController controller) {
+  Widget _generalTab(
+    BuildContext context,
+    AppController controller,
+    AppSettings settings,
+  ) {
     final config = controller.inboxMonitorConfig;
     final macOS = Platform.isMacOS;
     return _tabList([
-      _ToggleSection(
-        key: const Key('settings-launch-at-login'),
-        title: context.strings.t('inbox_monitor_launch_at_login'),
-        subtitle: config.showTrayIcon
-            ? context.strings.t(
-                macOS
-                    ? 'desktop_menu_bar_launch_hint'
-                    : 'desktop_tray_launch_hint',
-              )
-            : null,
-        icon: Icons.login_rounded,
-        value: config.launchAtLogin,
-        onChanged: (enabled) async {
-          await controller.setInboxMonitorLaunchAtLogin(enabled);
-          if (!context.mounted) return;
-          await Provider.of<DesktopRuntime?>(
-            context,
-            listen: false,
-          )?.setLaunchAtLogin(enabled);
-        },
-      ),
-      _ToggleSection(
-        key: const Key('settings-show-tray-icon'),
-        title: context.strings.t(
-          macOS ? 'desktop_menu_bar_icon' : 'desktop_tray_icon',
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(child: Text(context.strings.t('theme'))),
+                  DropdownButton<AppThemeMode>(
+                    value: settings.themeMode,
+                    items: [
+                      DropdownMenuItem(
+                        value: AppThemeMode.system,
+                        child: Text(context.strings.t('system')),
+                      ),
+                      DropdownMenuItem(
+                        value: AppThemeMode.light,
+                        child: Text(context.strings.t('light')),
+                      ),
+                      DropdownMenuItem(
+                        value: AppThemeMode.dark,
+                        child: Text(context.strings.t('dark')),
+                      ),
+                    ],
+                    onChanged: (value) => controller.updateSettings(
+                      settings.copyWith(themeMode: value),
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  Expanded(child: Text(context.strings.t('locale'))),
+                  DropdownButton<AppLocaleMode>(
+                    value: settings.localeMode,
+                    items: [
+                      DropdownMenuItem(
+                        value: AppLocaleMode.system,
+                        child: Text(context.strings.t('system')),
+                      ),
+                      DropdownMenuItem(
+                        value: AppLocaleMode.english,
+                        child: Text(context.strings.t('english')),
+                      ),
+                      DropdownMenuItem(
+                        value: AppLocaleMode.simplifiedChinese,
+                        child: Text(context.strings.t('chinese')),
+                      ),
+                    ],
+                    onChanged: (value) => controller.updateSettings(
+                      settings.copyWith(localeMode: value),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
-        subtitle: context.strings.t('desktop_icon_hint'),
-        icon: macOS ? Icons.menu_rounded : Icons.move_to_inbox_outlined,
-        value: config.showTrayIcon,
-        onChanged: controller.setDesktopTrayIconVisible,
+      ),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Column(
+            children: [
+              _CompactToggleRow(
+                key: const Key('settings-launch-at-login'),
+                title: context.strings.t('inbox_monitor_launch_at_login'),
+                subtitle: config.showTrayIcon
+                    ? context.strings.t(
+                        macOS
+                            ? 'desktop_menu_bar_launch_hint'
+                            : 'desktop_tray_launch_hint',
+                      )
+                    : null,
+                icon: Icons.login_rounded,
+                value: config.launchAtLogin,
+                onChanged: (enabled) async {
+                  await controller.setInboxMonitorLaunchAtLogin(enabled);
+                  if (!context.mounted) return;
+                  await Provider.of<DesktopRuntime?>(
+                    context,
+                    listen: false,
+                  )?.setLaunchAtLogin(enabled);
+                },
+              ),
+              _CompactToggleRow(
+                key: const Key('settings-show-tray-icon'),
+                title: context.strings.t(
+                  macOS ? 'desktop_menu_bar_icon' : 'desktop_tray_icon',
+                ),
+                subtitle: context.strings.t('desktop_icon_hint'),
+                icon: macOS ? Icons.menu_rounded : Icons.move_to_inbox_outlined,
+                value: config.showTrayIcon,
+                onChanged: controller.setDesktopTrayIconVisible,
+              ),
+            ],
+          ),
+        ),
       ),
       _Section(
         title: context.strings.t('inbox_monitor_settings_title'),
@@ -526,6 +717,19 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _openMossConsole() async {
+    try {
+      final opened = await widget.launchExternalUrl(_mossConsoleUrl);
+      if (!opened && mounted) {
+        _showMessage(context.strings.t('moss_console_open_failed'));
+      }
+    } on Object {
+      if (mounted) {
+        _showMessage(context.strings.t('moss_console_open_failed'));
+      }
+    }
+  }
+
   Future<void> _testKey(AppController controller) async {
     if (_testingKey) return;
     setState(() => _testingKey = true);
@@ -540,6 +744,39 @@ class _SettingsPageState extends State<SettingsPage> {
         _showMessage(context.strings.error(errorCode));
       }
       setState(() => _testingKey = false);
+    }
+  }
+
+  Future<void> _saveMossKey(AppController controller) async {
+    final candidate = _mossKey.text.trim();
+    if (candidate.isEmpty || _savingMossKey) return;
+    setState(() => _savingMossKey = true);
+    try {
+      await controller.saveMossApiKey(candidate);
+      if (!mounted) return;
+      _mossKey.clear();
+      _showMessage(context.strings.t('moss_key_saved'));
+    } on Object {
+      if (mounted) _showMessage(context.strings.t('key_save_failed'));
+    } finally {
+      if (mounted) setState(() => _savingMossKey = false);
+    }
+  }
+
+  Future<void> _testMossKey(AppController controller) async {
+    if (_testingMossKey) return;
+    setState(() => _testingMossKey = true);
+    final candidate = _mossKey.text.trim();
+    final errorCode = await controller.testMossApiKey(
+      candidate.isEmpty ? null : candidate,
+    );
+    if (mounted) {
+      if (errorCode == null) {
+        _showMessage(context.strings.t('moss_key_valid'));
+      } else {
+        _showMessage(context.strings.error(errorCode));
+      }
+      setState(() => _testingMossKey = false);
     }
   }
 
@@ -702,30 +939,7 @@ class _TranslationSettingsSectionState
             ),
           ),
           const SizedBox(height: 10),
-          if (_candidate.requiresApiKey)
-            TextField(
-              key: const Key('translation-key-field'),
-              controller: _apiKey,
-              obscureText: true,
-              enableSuggestions: false,
-              autocorrect: false,
-              onChanged: (_) => _invalidateTest(clearModel: false),
-              decoration: InputDecoration(
-                hintText: _canUseStoredKey
-                    ? context.strings.t('key_hint')
-                    : context.strings.t('translation_key_hint'),
-              ),
-            )
-          else
-            Row(
-              children: [
-                const Icon(Icons.computer_rounded, size: 20),
-                const SizedBox(width: 8),
-                Text(context.strings.t('translation_local_no_key')),
-              ],
-            ),
-          const SizedBox(height: 10),
-          _modelField(context),
+          _credentialsAndModelFields(context),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -835,6 +1049,60 @@ class _TranslationSettingsSectionState
       if (provider.name == name) return provider;
     }
     return null;
+  }
+
+  Widget _credentialsAndModelFields(BuildContext context) {
+    final model = _modelField(context);
+    if (!_candidate.requiresApiKey) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.computer_rounded, size: 20),
+              const SizedBox(width: 8),
+              Text(context.strings.t('translation_local_no_key')),
+            ],
+          ),
+          const SizedBox(height: 10),
+          model,
+        ],
+      );
+    }
+
+    final keyField = TextField(
+      key: const Key('translation-key-field'),
+      controller: _apiKey,
+      obscureText: true,
+      enableSuggestions: false,
+      autocorrect: false,
+      onChanged: (_) => _invalidateTest(clearModel: false),
+      decoration: InputDecoration(
+        hintText: _canUseStoredKey
+            ? context.strings.t('key_hint')
+            : context.strings.t('translation_key_hint'),
+      ),
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 680) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [keyField, const SizedBox(height: 10), model],
+          );
+        }
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: keyField),
+              const SizedBox(width: 10),
+              Expanded(child: model),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Widget _modelField(BuildContext context) {
@@ -1163,8 +1431,179 @@ class _InboxMonitorSettings extends StatelessWidget {
   }
 }
 
-class _ToggleSection extends StatelessWidget {
-  const _ToggleSection({
+class _LocalSpeechModelsSection extends StatelessWidget {
+  const _LocalSpeechModelsSection({
+    required this.controller,
+    required this.settings,
+    required this.showMessage,
+  });
+
+  final AppController controller;
+  final AppSettings settings;
+  final ValueChanged<String> showMessage;
+
+  @override
+  Widget build(BuildContext context) => _Section(
+    title: context.strings.t('local_speech_models'),
+    icon: Icons.download_for_offline_outlined,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _LocalModelRow(
+          descriptor: LocalSpeechModels.mossDiarizeCoreMlInt8,
+          status: controller.localModelStatus(
+            LocalSpeechModels.mossDiarizeCoreMlInt8.id,
+          ),
+          controller: controller,
+          showMessage: showMessage,
+        ),
+        const SizedBox(height: 8),
+        _LocalModelRow(
+          descriptor: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8,
+          status: controller.localModelStatus(
+            LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
+          ),
+          controller: controller,
+          showMessage: showMessage,
+        ),
+        const SizedBox(height: 8),
+        SwitchListTile(
+          key: const Key('auto-transcribe-local-switch'),
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: Text(context.strings.t('auto_transcribe_local')),
+          subtitle: Text(
+            context.strings.t('auto_transcribe_local_description'),
+          ),
+          value: settings.autoTranscribeLocal,
+          onChanged: (value) => controller.updateSettings(
+            settings.copyWith(autoTranscribeLocal: value),
+          ),
+        ),
+        SwitchListTile(
+          key: const Key('auto-align-moss-switch'),
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: Text(context.strings.t('auto_align_moss')),
+          subtitle: Text(context.strings.t('auto_align_moss_description')),
+          value: settings.autoAlignMoss,
+          onChanged: (value) => controller.updateSettings(
+            settings.copyWith(autoAlignMoss: value),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _LocalModelRow extends StatelessWidget {
+  const _LocalModelRow({
+    required this.descriptor,
+    required this.status,
+    required this.controller,
+    required this.showMessage,
+  });
+
+  final LocalModelDescriptor descriptor;
+  final LocalModelStatus? status;
+  final AppController controller;
+  final ValueChanged<String> showMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final downloading = controller.localModelDownloading(descriptor.id);
+    final progress = controller.localModelDownloadProgress(descriptor.id);
+    final installed = status?.availability == LocalModelAvailability.ready;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    descriptor.displayName,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${_size(descriptor.sizeBytes)} · ${context.strings.t(_statusKey(status))}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (downloading) ...[
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(value: progress),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            if (downloading)
+              TextButton(
+                key: Key('cancel-model-${descriptor.id}'),
+                onPressed: () =>
+                    controller.cancelLocalModelDownload(descriptor.id),
+                child: Text(context.strings.t('cancel')),
+              )
+            else if (installed)
+              TextButton.icon(
+                key: Key('delete-model-${descriptor.id}'),
+                onPressed: () => _run(
+                  context,
+                  () => controller.deleteLocalModel(descriptor.id),
+                ),
+                icon: const Icon(Icons.delete_outline_rounded),
+                label: Text(context.strings.t('remove')),
+              )
+            else
+              OutlinedButton.icon(
+                key: Key('download-model-${descriptor.id}'),
+                onPressed: () => _run(
+                  context,
+                  () => controller.downloadLocalModel(descriptor.id),
+                ),
+                icon: const Icon(Icons.download_rounded),
+                label: Text(context.strings.t('download')),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _run(
+    BuildContext context,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } on OperationCancelledException {
+      return;
+    } on Object {
+      if (context.mounted) {
+        showMessage(context.strings.t('model_action_failed'));
+      }
+    }
+  }
+
+  String _statusKey(LocalModelStatus? value) => switch (value?.availability) {
+    LocalModelAvailability.ready => 'model_installed',
+    LocalModelAvailability.partial => 'model_partial',
+    LocalModelAvailability.corrupt => 'model_corrupt',
+    LocalModelAvailability.missing || null => 'model_not_installed',
+  };
+
+  String _size(int bytes) => '${(bytes / 1000000000).toStringAsFixed(2)} GB';
+}
+
+class _CompactToggleRow extends StatelessWidget {
+  const _CompactToggleRow({
     super.key,
     required this.title,
     this.subtitle,
@@ -1181,41 +1620,36 @@ class _ToggleSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 10),
-    child: Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Icon(icon, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  if (subtitle case final value?) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      value,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ],
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: Row(
+      children: [
+        Icon(icon, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
-            ),
-            const SizedBox(width: 16),
-            Switch.adaptive(value: value, onChanged: onChanged),
-          ],
+              if (subtitle case final value?) ...[
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
-      ),
+        const SizedBox(width: 16),
+        Switch.adaptive(value: value, onChanged: onChanged),
+      ],
     ),
   );
 }
