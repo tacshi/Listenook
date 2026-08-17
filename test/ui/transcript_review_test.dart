@@ -3412,7 +3412,7 @@ void main() {
           final arguments = call.arguments as Map<Object?, Object?>;
           events.add('prevent:${arguments['isPreventClose']}');
         }
-        if (call.method == 'close') events.add('close');
+        if (call.method == 'destroy') events.add('destroy');
         return null;
       });
       addTearDown(
@@ -3482,7 +3482,7 @@ void main() {
         'media-done',
         'podcast-save',
         'prevent:false',
-        'close',
+        'destroy',
       ]);
 
       await appShellState.onWindowClose();
@@ -3491,7 +3491,7 @@ void main() {
         'media-done',
         'podcast-save',
         'prevent:false',
-        'close',
+        'destroy',
       ]);
     },
   );
@@ -3513,7 +3513,7 @@ void main() {
         }
         if (call.method == 'setSkipTaskbar') events.add('skip-taskbar');
         if (call.method == 'hide') events.add('hide');
-        if (call.method == 'close') events.add('close');
+        if (call.method == 'destroy') events.add('destroy');
         return null;
       });
       messenger.setMockMethodCallHandler(trayChannel, (call) async {
@@ -3566,7 +3566,7 @@ void main() {
       await appShellState.onWindowClose();
 
       expect(events, containsAllInOrder(['skip-taskbar', 'hide']));
-      expect(events, isNot(contains('close')));
+      expect(events, isNot(contains('destroy')));
       expect(events, isNot(contains('prevent:false')));
 
       events.clear();
@@ -3574,7 +3574,7 @@ void main() {
       await tester.pump();
       await appShellState.onWindowClose();
 
-      expect(events, containsAllInOrder(['prevent:false', 'close']));
+      expect(events, containsAllInOrder(['prevent:false', 'destroy']));
       expect(events, isNot(contains('hide')));
     },
   );

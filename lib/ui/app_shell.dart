@@ -440,7 +440,7 @@ class _AppShellState extends State<AppShell>
       await _podcastController(listen: false)?.shutdown();
       await _controller.shutdown();
       await windowManager.setPreventClose(false);
-      await windowManager.close();
+      await windowManager.destroy();
     } on Object {
       _windowClosing = false;
       rethrow;
