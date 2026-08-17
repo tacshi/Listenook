@@ -17,8 +17,8 @@ Future<void> renderPcmWaveform(
   final pixels = Uint8List(rowBytes * height);
   final center = height ~/ 2;
   for (var x = 0; x < width; x++) {
-    final positive = math.sqrt(envelope.maxima[x] / 32767.0);
-    final negative = math.sqrt(-envelope.minima[x] / 32768.0);
+    final positive = math.sqrt(envelope.positiveAverages[x] / 32767.0);
+    final negative = math.sqrt(envelope.negativeAverages[x] / 32768.0);
     final top = math.max(0, center - (positive * center).round());
     final bottom = math.min(
       height - 1,
@@ -64,10 +64,17 @@ Future<Uint16List> readPcm16MonoPeaks(String path, int width) async {
 }
 
 class Pcm16MonoEnvelope {
-  const Pcm16MonoEnvelope({required this.minima, required this.maxima});
+  const Pcm16MonoEnvelope({
+    required this.minima,
+    required this.maxima,
+    required this.positiveAverages,
+    required this.negativeAverages,
+  });
 
   final Int16List minima;
   final Int16List maxima;
+  final Uint16List positiveAverages;
+  final Uint16List negativeAverages;
 }
 
 Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
@@ -129,6 +136,9 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
     final sampleCount = dataLength ~/ 2;
     final minima = Int16List(width);
     final maxima = Int16List(width);
+    final positiveSums = List<int>.filled(width, 0);
+    final negativeSums = List<int>.filled(width, 0);
+    final bucketCounts = Uint32List(width);
     await input.setPosition(dataOffset);
     var sampleIndex = 0;
     var remaining = sampleCount * 2;
@@ -144,6 +154,12 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
         final bucket = math.min(width - 1, sampleIndex * width ~/ sampleCount);
         if (signed < minima[bucket]) minima[bucket] = signed;
         if (signed > maxima[bucket]) maxima[bucket] = signed;
+        if (signed > 0) {
+          positiveSums[bucket] += signed;
+        } else if (signed < 0) {
+          negativeSums[bucket] += signed == -32768 ? 32768 : -signed;
+        }
+        bucketCounts[bucket]++;
         sampleIndex++;
       }
       remaining -= evenLength;
@@ -151,7 +167,20 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
     if (sampleIndex != sampleCount) {
       throw const FormatException('WAVE audio data is truncated.');
     }
-    return Pcm16MonoEnvelope(minima: minima, maxima: maxima);
+    final positiveAverages = Uint16List(width);
+    final negativeAverages = Uint16List(width);
+    for (var index = 0; index < width; index++) {
+      final count = bucketCounts[index];
+      if (count == 0) continue;
+      positiveAverages[index] = (positiveSums[index] / count).round();
+      negativeAverages[index] = (negativeSums[index] / count).round();
+    }
+    return Pcm16MonoEnvelope(
+      minima: minima,
+      maxima: maxima,
+      positiveAverages: positiveAverages,
+      negativeAverages: negativeAverages,
+    );
   } finally {
     await input.close();
   }
