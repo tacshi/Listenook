@@ -12,6 +12,9 @@
 .swiftpm/
 migrate_working_dir/
 
+# Local tool state
+.brooks-lint-history.json
+
 # Local environment and secrets
 .env
 .env.*
