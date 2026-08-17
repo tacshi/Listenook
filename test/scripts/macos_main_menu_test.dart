@@ -35,4 +35,16 @@ void main() {
     expect(project, contains('Embed Login Items'));
     expect(project, contains('app.meowstt.desktop.Launcher'));
   }, skip: !Platform.isMacOS);
+
+  test('macOS second launch activates the lock-owning instance', () {
+    final delegate = File(
+      '${Directory.current.path}/macos/Runner/AppDelegate.swift',
+    ).readAsStringSync();
+
+    expect(delegate, contains('applicationWillFinishLaunching'));
+    expect(delegate, contains('Darwin.lockf(descriptor, F_TLOCK, 0)'));
+    expect(delegate, contains('DistributedNotificationCenter.default()'));
+    expect(delegate, contains('showWindow'));
+    expect(delegate, contains('NSApp.terminate'));
+  }, skip: !Platform.isMacOS);
 }
