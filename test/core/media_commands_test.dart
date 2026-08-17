@@ -1,14 +1,18 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as image;
+import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/data/local_repositories.dart';
 import 'package:meow_stt/data/process_media_service.dart';
 import 'package:meow_stt/data/waveform_renderer.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('input policy is restricted to the requested seven formats', () {
     expect(ProcessMediaService.supportedAudioExtensions, {
       '.mp3',
@@ -46,6 +50,102 @@ void main() {
     expect(service.canUploadDirectly('clip.mp4', video), isFalse);
     expect(service.canUploadDirectly('renamed.mp3', video), isFalse);
   });
+
+  test('compact speech profile keeps only efficient lossy audio direct', () {
+    final service = ProcessMediaService(
+      AppPaths.forTesting(Directory.systemTemp.path),
+    );
+    const compactAac = MediaMetadata(
+      sizeBytes: 360000,
+      durationMs: 60000,
+      hasAudio: true,
+      hasVideo: false,
+      formatName: 'm4a',
+      audioCodec: 'aac',
+    );
+    const highBitrateAac = MediaMetadata(
+      sizeBytes: 1200000,
+      durationMs: 60000,
+      hasAudio: true,
+      hasVideo: false,
+      formatName: 'm4a',
+      audioCodec: 'aac',
+    );
+    const losslessM4a = MediaMetadata(
+      sizeBytes: 360000,
+      durationMs: 60000,
+      hasAudio: true,
+      hasVideo: false,
+      formatName: 'm4a',
+      audioCodec: 'alac',
+    );
+
+    if (Platform.isMacOS) {
+      expect(
+        service.canUploadDirectly(
+          'compact.m4a',
+          compactAac,
+          profile: MediaUploadProfile.compactSpeech,
+        ),
+        isTrue,
+      );
+      expect(
+        service.canUploadDirectly(
+          'large.m4a',
+          highBitrateAac,
+          profile: MediaUploadProfile.compactSpeech,
+        ),
+        isFalse,
+      );
+      expect(
+        service.canUploadDirectly(
+          'lossless.m4a',
+          losslessM4a,
+          profile: MediaUploadProfile.compactSpeech,
+        ),
+        isFalse,
+      );
+      expect(
+        service.canUploadDirectly(
+          'speech.wav',
+          compactAac,
+          profile: MediaUploadProfile.compactSpeech,
+        ),
+        isFalse,
+      );
+    }
+    expect(service.canUploadDirectly('large.m4a', highBitrateAac), isTrue);
+  });
+
+  test(
+    'macOS compact encoder sends the AAC contract to the native channel',
+    () async {
+      const channel = MethodChannel('app.meowstt.test/audio_encoder');
+      MethodCall? received;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            received = call;
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+
+      await const MacosCompactAudioEncoder(channel: channel).encodeAac(
+        inputPath: '/tmp/input.wav',
+        outputPath: '/tmp/output.m4a',
+        bitRate: 48000,
+      );
+
+      expect(received?.method, 'encodeAac');
+      expect(received?.arguments, {
+        'inputPath': '/tmp/input.wav',
+        'outputPath': '/tmp/output.m4a',
+        'bitRate': 48000,
+      });
+    },
+  );
 
   test('PCM waveform renderer streams peaks and writes a valid PNG', () async {
     final root = await Directory.systemTemp.createTemp('meow-waveform-');

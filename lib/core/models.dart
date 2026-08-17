@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 8;
+const int manifestVersion = 10;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 const Set<String> supportedMonitoredMediaExtensions = {
@@ -23,6 +23,7 @@ enum JobStatus {
   queuedRemote,
   processing,
   fetching,
+  aligning,
   completed,
   empty,
   failed,
@@ -39,7 +40,8 @@ extension JobStatusX on JobStatus {
     JobStatus.uploading ||
     JobStatus.queuedRemote ||
     JobStatus.processing ||
-    JobStatus.fetching => true,
+    JobStatus.fetching ||
+    JobStatus.aligning => true,
     _ => false,
   };
 
@@ -185,20 +187,98 @@ enum AppThemeMode { system, light, dark }
 
 enum AppLocaleMode { system, english, simplifiedChinese }
 
+enum AppContentDestination { podcast, workspace, library }
+
 enum CleanupState { none, pending, complete }
 
 enum JobSourceOrigin { manual, monitoredFolder, podcast }
 
-enum TranscriptionProvider { soniox, mossPro }
+enum TranscriptionProvider { soniox, mossPro, mossLocal }
 
-enum TranscriptAcquisitionMode { soniox, mossPro, publisherCaptions }
+enum TranscriptAcquisitionMode { soniox, mossPro, mossLocal, publisherCaptions }
 
 extension TranscriptAcquisitionModeX on TranscriptAcquisitionMode {
   bool get usesPublisherTranscript =>
       this == TranscriptAcquisitionMode.publisherCaptions;
 }
 
-enum TranscriptSource { soniox, mossPro, publisher }
+enum TranscriptSource { soniox, mossPro, mossLocal, publisher }
+
+enum ForcedAlignmentStatus {
+  notRequested,
+  queued,
+  running,
+  completed,
+  partial,
+  unavailable,
+  failed,
+  cancelled,
+  interrupted,
+}
+
+class ForcedAlignmentState {
+  const ForcedAlignmentState({
+    this.status = ForcedAlignmentStatus.notRequested,
+    this.modelId,
+    this.modelRevision,
+    this.alignedSegments = 0,
+    this.totalSegments = 0,
+    this.languageAutomaticallyDetermined = false,
+    this.warningCode,
+    this.warningMessage,
+  });
+
+  final ForcedAlignmentStatus status;
+  final String? modelId;
+  final String? modelRevision;
+  final int alignedSegments;
+  final int totalSegments;
+  final bool languageAutomaticallyDetermined;
+  final String? warningCode;
+  final String? warningMessage;
+
+  bool get hasWordTiming =>
+      status == ForcedAlignmentStatus.completed ||
+      status == ForcedAlignmentStatus.partial;
+
+  bool get canRetry => switch (status) {
+    ForcedAlignmentStatus.unavailable ||
+    ForcedAlignmentStatus.failed ||
+    ForcedAlignmentStatus.cancelled ||
+    ForcedAlignmentStatus.interrupted => true,
+    _ => false,
+  };
+
+  bool get canRequest =>
+      status == ForcedAlignmentStatus.notRequested || canRetry;
+
+  Map<String, dynamic> toJson() => {
+    'status': status.name,
+    if (modelId case final value?) 'model_id': value,
+    if (modelRevision case final value?) 'model_revision': value,
+    'aligned_segments': alignedSegments,
+    'total_segments': totalSegments,
+    if (languageAutomaticallyDetermined)
+      'language_automatically_determined': true,
+    if (warningCode case final value?) 'warning_code': value,
+    if (warningMessage case final value?) 'warning_message': value,
+  };
+
+  factory ForcedAlignmentState.fromJson(Map<String, dynamic>? json) =>
+      ForcedAlignmentState(
+        status:
+            _enumByName(ForcedAlignmentStatus.values, json?['status']) ??
+            ForcedAlignmentStatus.notRequested,
+        modelId: json?['model_id'] as String?,
+        modelRevision: json?['model_revision'] as String?,
+        alignedSegments: (json?['aligned_segments'] as num?)?.toInt() ?? 0,
+        totalSegments: (json?['total_segments'] as num?)?.toInt() ?? 0,
+        languageAutomaticallyDetermined:
+            json?['language_automatically_determined'] as bool? ?? false,
+        warningCode: json?['warning_code'] as String?,
+        warningMessage: json?['warning_message'] as String?,
+      );
+}
 
 enum PodcastTranscriptTiming { none, cue, word }
 
@@ -422,6 +502,7 @@ class TranscriptToken {
     required this.text,
     required this.startMs,
     required this.endMs,
+    this.segmentId,
     this.speaker,
     this.language,
     this.confidence,
@@ -432,6 +513,7 @@ class TranscriptToken {
   final String text;
   final int startMs;
   final int endMs;
+  final String? segmentId;
   final String? speaker;
   final String? language;
   final double? confidence;
@@ -442,6 +524,7 @@ class TranscriptToken {
     'text': text,
     'start_ms': startMs,
     'end_ms': endMs,
+    if (segmentId case final value?) 'segment_id': value,
     if (speaker case final value?) 'speaker': value,
     if (language case final value?) 'language': value,
     if (confidence case final value?) 'confidence': value,
@@ -454,6 +537,7 @@ class TranscriptToken {
         text: json['text'] as String? ?? '',
         startMs: (json['start_ms'] as num?)?.toInt() ?? 0,
         endMs: (json['end_ms'] as num?)?.toInt() ?? 0,
+        segmentId: json['segment_id'] as String?,
         speaker: json['speaker']?.toString(),
         language: json['language'] as String?,
         confidence: (json['confidence'] as num?)?.toDouble(),
@@ -558,11 +642,12 @@ class TranscriptDocument {
   }
 
   TranscriptDocument copyWith({
+    List<TranscriptToken>? tokens,
     List<TranscriptSegment>? segments,
     List<SpeakerProfile>? speakers,
     bool preserveUpdatedAt = false,
   }) => TranscriptDocument(
-    tokens: tokens,
+    tokens: tokens ?? this.tokens,
     segments: segments ?? this.segments,
     speakers: speakers ?? this.speakers,
     updatedAt: preserveUpdatedAt ? updatedAt : DateTime.now().toUtc(),
@@ -1510,6 +1595,10 @@ class AppSettings {
     TranslationSettings? translationSettings,
     this.sonioxTranslation = const SonioxTranslationOptions(),
     this.defaultTranscriptionProvider = TranscriptionProvider.soniox,
+    this.autoAlignMoss = true,
+    this.autoTranscribeLocal = false,
+    this.lastContentDestination = AppContentDestination.podcast,
+    this.lastWorkspaceJobId,
   }) : _llmProviderSettings = llmProviderSettings,
        _translationPreferences = translationPreferences,
        _legacyTranslationSettings = translationSettings;
@@ -1525,6 +1614,10 @@ class AppSettings {
   final TranslationSettings? _legacyTranslationSettings;
   final SonioxTranslationOptions sonioxTranslation;
   final TranscriptionProvider defaultTranscriptionProvider;
+  final bool autoAlignMoss;
+  final bool autoTranscribeLocal;
+  final AppContentDestination lastContentDestination;
+  final String? lastWorkspaceJobId;
 
   LlmProviderSettings get llmProviderSettings =>
       _legacyTranslationSettings?.providerSettings ?? _llmProviderSettings;
@@ -1549,6 +1642,11 @@ class AppSettings {
     TranslationSettings? translationSettings,
     SonioxTranslationOptions? sonioxTranslation,
     TranscriptionProvider? defaultTranscriptionProvider,
+    bool? autoAlignMoss,
+    bool? autoTranscribeLocal,
+    AppContentDestination? lastContentDestination,
+    String? lastWorkspaceJobId,
+    bool clearLastWorkspaceJobId = false,
   }) => AppSettings(
     themeMode: themeMode ?? this.themeMode,
     localeMode: localeMode ?? this.localeMode,
@@ -1567,6 +1665,13 @@ class AppSettings {
     sonioxTranslation: sonioxTranslation ?? this.sonioxTranslation,
     defaultTranscriptionProvider:
         defaultTranscriptionProvider ?? this.defaultTranscriptionProvider,
+    autoAlignMoss: autoAlignMoss ?? this.autoAlignMoss,
+    autoTranscribeLocal: autoTranscribeLocal ?? this.autoTranscribeLocal,
+    lastContentDestination:
+        lastContentDestination ?? this.lastContentDestination,
+    lastWorkspaceJobId: clearLastWorkspaceJobId
+        ? null
+        : lastWorkspaceJobId ?? this.lastWorkspaceJobId,
   );
 
   Map<String, dynamic> toJson() => {
@@ -1581,6 +1686,10 @@ class AppSettings {
     'translation_preferences': translationPreferences.toJson(),
     'soniox_translation': sonioxTranslation.toJson(),
     'default_transcription_provider': defaultTranscriptionProvider.name,
+    'auto_align_moss': autoAlignMoss,
+    'auto_transcribe_local': autoTranscribeLocal,
+    'last_content_destination': lastContentDestination.name,
+    if (lastWorkspaceJobId case final value?) 'last_workspace_job_id': value,
   };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
@@ -1621,6 +1730,15 @@ class AppSettings {
             json['default_transcription_provider'],
           ) ??
           TranscriptionProvider.soniox,
+      autoAlignMoss: json['auto_align_moss'] as bool? ?? true,
+      autoTranscribeLocal: json['auto_transcribe_local'] as bool? ?? false,
+      lastContentDestination:
+          _enumByName(
+            AppContentDestination.values,
+            json['last_content_destination'],
+          ) ??
+          AppContentDestination.podcast,
+      lastWorkspaceJobId: json['last_workspace_job_id'] as String?,
     );
   }
 }
@@ -1894,10 +2012,13 @@ class TranscriptionJob {
     this.transcriptionProvider = TranscriptionProvider.soniox,
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
     this.transcriptSource,
+    this.forcedAlignment = const ForcedAlignmentState(),
   }) : transcriptAcquisitionMode =
            transcriptAcquisitionMode ??
            (transcriptionProvider == TranscriptionProvider.mossPro
                ? TranscriptAcquisitionMode.mossPro
+               : transcriptionProvider == TranscriptionProvider.mossLocal
+               ? TranscriptAcquisitionMode.mossLocal
                : TranscriptAcquisitionMode.soniox);
 
   final String id;
@@ -1929,6 +2050,7 @@ class TranscriptionJob {
   final TranscriptAcquisitionMode transcriptAcquisitionMode;
   final TranscriptionProvider transcriptionProvider;
   final TranscriptSource? transcriptSource;
+  final ForcedAlignmentState forcedAlignment;
 
   bool get isBusy =>
       status.isActive ||
@@ -1967,6 +2089,7 @@ class TranscriptionJob {
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
     TranscriptionProvider? transcriptionProvider,
     TranscriptSource? transcriptSource,
+    ForcedAlignmentState? forcedAlignment,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
@@ -2006,6 +2129,7 @@ class TranscriptionJob {
         transcriptAcquisitionMode ?? this.transcriptAcquisitionMode,
     transcriptionProvider: transcriptionProvider ?? this.transcriptionProvider,
     transcriptSource: transcriptSource ?? this.transcriptSource,
+    forcedAlignment: forcedAlignment ?? this.forcedAlignment,
   );
 
   Map<String, dynamic> toJson() => {
@@ -2042,6 +2166,7 @@ class TranscriptionJob {
     'transcript_acquisition_mode': transcriptAcquisitionMode.name,
     'transcription_provider': transcriptionProvider.name,
     if (transcriptSource case final value?) 'transcript_source': value.name,
+    'forced_alignment': forcedAlignment.toJson(),
   };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -2127,6 +2252,9 @@ class TranscriptionJob {
         TranscriptSource.values,
         json['transcript_source'],
       ),
+      forcedAlignment: ForcedAlignmentState.fromJson(
+        (json['forced_alignment'] as Map?)?.cast<String, dynamic>(),
+      ),
     );
   }
 }
@@ -2198,9 +2326,11 @@ TranscriptionProvider _transcriptionProviderFromJson(
   dynamic acquisitionMode,
 ) =>
     _enumByName(TranscriptionProvider.values, provider) ??
-    (acquisitionMode == 'mossPro'
-        ? TranscriptionProvider.mossPro
-        : TranscriptionProvider.soniox);
+    switch (acquisitionMode) {
+      'mossPro' => TranscriptionProvider.mossPro,
+      'mossLocal' => TranscriptionProvider.mossLocal,
+      _ => TranscriptionProvider.soniox,
+    };
 
 extension _FirstOrNull<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;

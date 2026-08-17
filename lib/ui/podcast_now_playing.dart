@@ -211,7 +211,9 @@ class _PodcastCaptionPaneState extends State<PodcastCaptionPane>
     final tokens = _cues[cueIndex].tokens;
     int? start;
     for (final token in tokens) {
-      if (token.startMs == 0 && token.endMs == 0) continue;
+      if (token.startMs == 0 && token.endMs == 0 && token.segmentId == null) {
+        continue;
+      }
       if (token.startMs > positionMs) break;
       start = token.startMs;
     }

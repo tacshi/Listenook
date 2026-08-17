@@ -364,78 +364,97 @@ void main() {
     expect(find.text('completed.wav'), findsNothing);
   });
 
-  testWidgets('Add to Inbox queues a ready job without transcribing', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1200, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final temporaryDirectory = await tester.runAsync(
-      () => Directory.systemTemp.createTemp('meow-stt-ready-job-'),
-    );
-    expect(temporaryDirectory, isNotNull);
-    final directory = temporaryDirectory!;
-    addTearDown(() => directory.delete(recursive: true));
-    final source = File('${directory.path}/ready.wav');
-    await tester.runAsync(() => source.writeAsBytes(const [0]));
-    final now = DateTime.now().toUtc();
-    final soniox = _Soniox();
-    final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([
-        TranscriptionJob(
-          id: 'ready',
-          batchId: 'batch',
-          sourcePath: source.path,
-          createdAt: now,
-          updatedAt: now,
-          status: JobStatus.ready,
+  testWidgets(
+    'Add to Inbox restores ready and failed jobs without transcribing',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final temporaryDirectory = await tester.runAsync(
+        () => Directory.systemTemp.createTemp('meow-stt-ready-job-'),
+      );
+      expect(temporaryDirectory, isNotNull);
+      final directory = temporaryDirectory!;
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/ready.wav');
+      await tester.runAsync(() => source.writeAsBytes(const [0]));
+      final now = DateTime.now().toUtc();
+      final soniox = _Soniox();
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: _Settings(),
+        jobRepository: _Jobs([
+          TranscriptionJob(
+            id: 'ready',
+            batchId: 'batch',
+            sourcePath: source.path,
+            createdAt: now,
+            updatedAt: now,
+            status: JobStatus.ready,
+          ),
+          TranscriptionJob(
+            id: 'failed',
+            batchId: 'batch',
+            sourcePath: source.path,
+            createdAt: now,
+            updatedAt: now,
+            status: JobStatus.failed,
+            errorCode: 'conversion_failed',
+            errorMessage: 'The audio could not be extracted.',
+          ),
+        ]),
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: soniox,
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      controller.setDestination(AppDestination.library);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: LibraryPage()),
+          ),
         ),
-      ]),
-      mediaService: _Media(),
-      sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: soniox,
-      exporter: const DefaultTranscriptExporter(),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    controller.setDestination(AppDestination.library);
+      );
 
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: const MaterialApp(
-          locale: Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [AppStrings.delegate],
-          home: Scaffold(body: LibraryPage()),
-        ),
-      ),
-    );
+      final addToInboxButton = find.byKey(
+        const Key('add-to-inbox-ready-job-ready'),
+      );
+      final addFailedToInboxButton = find.byKey(
+        const Key('add-to-inbox-failed-job-failed'),
+      );
+      expect(addToInboxButton, findsOneWidget);
+      expect(addFailedToInboxButton, findsOneWidget);
+      expect(tester.widget<IconButton>(addToInboxButton).onPressed, isNotNull);
+      expect(
+        tester.widget<IconButton>(addFailedToInboxButton).onPressed,
+        isNotNull,
+      );
+      expect(tester.getSize(addToInboxButton).width, lessThanOrEqualTo(48));
+      expect(find.text('Add to Inbox'), findsNothing);
+      expect(find.byIcon(Icons.input_rounded), findsNWidgets(2));
+      expect(
+        find.byTooltip('Adds this file to the Inbox transcription queue.'),
+        findsNWidgets(2),
+      );
 
-    final addToInboxButton = find.byKey(
-      const Key('add-to-inbox-ready-job-ready'),
-    );
-    expect(addToInboxButton, findsOneWidget);
-    expect(tester.widget<IconButton>(addToInboxButton).onPressed, isNotNull);
-    expect(tester.getSize(addToInboxButton).width, lessThanOrEqualTo(48));
-    expect(find.text('Add to Inbox'), findsNothing);
-    expect(find.byIcon(Icons.input_rounded), findsOneWidget);
-    expect(
-      find.byTooltip('Adds this file to the Inbox transcription queue.'),
-      findsOneWidget,
-    );
+      await tester.tap(addFailedToInboxButton);
+      await tester.pumpAndSettle();
 
-    await tester.tap(addToInboxButton);
-    await tester.pumpAndSettle();
-
-    expect(controller.destination, AppDestination.inbox);
-    expect(controller.inboxJobs.single.id, 'ready');
-    expect(controller.activeWorkspaceJobId, isNull);
-    expect(controller.inboxJobs.single.status, JobStatus.ready);
-    expect(controller.processing, isFalse);
-    expect(soniox.uploadCalls, 0);
-  });
+      expect(controller.destination, AppDestination.inbox);
+      expect(controller.inboxJobs.single.id, 'failed');
+      expect(controller.activeWorkspaceJobId, isNull);
+      expect(controller.inboxJobs.single.status, JobStatus.failed);
+      expect(controller.processing, isFalse);
+      expect(soniox.uploadCalls, 0);
+    },
+  );
 
   testWidgets('Open enters Workspace without adding history to Inbox', (
     tester,
@@ -506,6 +525,19 @@ void main() {
     expect(
       openButton.style?.backgroundColor?.resolve(const <WidgetState>{}),
       Colors.transparent,
+    );
+    expect(
+      tester
+          .getCenter(find.byKey(const ValueKey('open-library-job-completed')))
+          .dx,
+      lessThan(
+        tester
+            .getCenter(
+              find.byKey(const ValueKey('export-library-job-completed')),
+            )
+            .dx,
+      ),
+      reason: 'Library actions should match Inbox: Open, then Export.',
     );
     await tester.tap(find.byKey(const ValueKey('open-library-job-completed')));
     await tester.pump();
@@ -1491,13 +1523,89 @@ void main() {
     await tester.tap(find.byKey(const Key('bulk-remove-library-items')));
     await tester.pumpAndSettle();
     expect(find.textContaining('2 selected'), findsWidgets);
-    await tester.tap(find.byKey(const Key('confirm-bulk-remove')));
+    await tester.tap(find.byKey(const Key('confirm-remove-library-jobs')));
     await tester.pumpAndSettle();
 
     expect(jobs.saved, isEmpty);
     expect(find.text('one.wav'), findsNothing);
     expect(find.text('two.wav'), findsNothing);
   });
+
+  testWidgets(
+    'Library podcast removal also clears Downloads and cached audio',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final directory = Directory.systemTemp.createTempSync(
+        'meow-library-podcast-remove-',
+      );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+      final media = File('${directory.path}/podcasts/podcast-job/episode.mp3');
+      media.parent.createSync(recursive: true);
+      media.writeAsBytesSync(const [1, 2, 3]);
+      final now = DateTime.now().toUtc();
+      final jobs = _Jobs([
+        TranscriptionJob(
+          id: 'podcast-job',
+          batchId: 'batch',
+          sourcePath: media.path,
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          displayTitle: 'Shared podcast episode',
+          sourceOrigin: JobSourceOrigin.podcast,
+          podcastProvenance: const PodcastEpisodeProvenance(
+            feedUrl: 'https://feeds.example/show',
+            episodeId: 'episode-id',
+            enclosureUrl: 'https://cdn.example/episode.mp3',
+            showTitle: 'The Daily',
+            episodeTitle: 'Shared podcast episode',
+          ),
+        ),
+      ]);
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: _Settings(),
+        jobRepository: jobs,
+        libraryCatalogRepository: _Catalog(),
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: LibraryPage()),
+          ),
+        ),
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('library-item-menu-podcast-job')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove from library'));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove podcast item?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('confirm-remove-library-jobs')));
+      await tester.pumpAndSettle();
+
+      expect(controller.allJobs, isEmpty);
+      expect(controller.podcastJobs, isEmpty);
+      expect(jobs.saved, isEmpty);
+      expect(find.text('Shared podcast episode'), findsNothing);
+    },
+  );
 
   testWidgets('Changing the visible search scope clears hidden selections', (
     tester,
@@ -1680,7 +1788,11 @@ class _Catalog implements LibraryCatalogRepository {
 
 class _Media implements MediaService {
   @override
-  bool canUploadDirectly(String path, MediaMetadata metadata) => true;
+  bool canUploadDirectly(
+    String path,
+    MediaMetadata metadata, {
+    MediaUploadProfile profile = MediaUploadProfile.standard,
+  }) => true;
 
   @override
   Future<void> deleteTemporary(String path) async {}
@@ -1700,6 +1812,7 @@ class _Media implements MediaService {
     String sourcePath,
     String jobId, {
     required int durationMs,
+    MediaUploadProfile profile = MediaUploadProfile.standard,
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async => sourcePath;

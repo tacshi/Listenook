@@ -19,6 +19,10 @@ class WorkspacePage extends StatefulWidget {
 
 class _WorkspacePageState extends State<WorkspacePage> {
   late final ReviewFullscreenController _localFullscreenController;
+  final Map<String, ForcedAlignmentStatus> _observedAlignmentStatuses =
+      <String, ForcedAlignmentStatus>{};
+  final Set<String> _visibleAlignmentNotices = <String>{};
+  String? _observedWorkspaceJobId;
 
   ReviewFullscreenController get _fullscreenController =>
       widget.fullscreenController ?? _localFullscreenController;
@@ -32,26 +36,174 @@ class _WorkspacePageState extends State<WorkspacePage> {
   @override
   Widget build(BuildContext context) {
     final job = context.watch<AppController>().activeWorkspaceJob;
+    final showAlignmentNotice = _shouldShowAlignmentNotice(job);
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
         child: job == null
             ? const _EmptyWorkspace()
-            : Column(
+            : Stack(
                 children: [
-                  if (job.podcastProvenance != null) ...[
-                    _PodcastProvenanceBar(job: job),
-                    const SizedBox(height: 10),
-                  ],
-                  Expanded(
-                    child: TranscriptReview(
-                      key: ValueKey('workspace-review-${job.id}'),
-                      jobId: job.id,
-                      fullscreenController: _fullscreenController,
+                  Positioned.fill(
+                    child: Column(
+                      children: [
+                        if (job.podcastProvenance != null) ...[
+                          _PodcastProvenanceBar(job: job),
+                          const SizedBox(height: 10),
+                        ],
+                        Expanded(
+                          child: TranscriptReview(
+                            key: ValueKey('workspace-review-${job.id}'),
+                            jobId: job.id,
+                            fullscreenController: _fullscreenController,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+                  if (showAlignmentNotice)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 760),
+                          child: _MossTimingBar(
+                            job: job,
+                            onDismiss: () => setState(
+                              () => _visibleAlignmentNotices.remove(job.id),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
+      ),
+    );
+  }
+
+  bool _showsAlignment(TranscriptionJob job) =>
+      job.transcriptSource == TranscriptSource.mossPro ||
+      job.transcriptSource == TranscriptSource.mossLocal ||
+      job.transcriptionProvider == TranscriptionProvider.mossPro ||
+      job.transcriptionProvider == TranscriptionProvider.mossLocal;
+
+  bool _shouldShowAlignmentNotice(TranscriptionJob? job) {
+    final jobId = job?.id;
+    if (_observedWorkspaceJobId != jobId) {
+      if (_observedWorkspaceJobId case final previousJobId?) {
+        _visibleAlignmentNotices.remove(previousJobId);
+      }
+      _observedWorkspaceJobId = jobId;
+    }
+    if (job == null || !_showsAlignment(job)) return false;
+
+    final current = job.forcedAlignment.status;
+    final previous = _observedAlignmentStatuses[job.id];
+    _observedAlignmentStatuses[job.id] = current;
+    if (_isAlignmentActive(current)) {
+      _visibleAlignmentNotices.remove(job.id);
+    } else if (previous != null &&
+        _isAlignmentActive(previous) &&
+        _isAlignmentResult(current)) {
+      _visibleAlignmentNotices.add(job.id);
+    }
+    return _visibleAlignmentNotices.contains(job.id);
+  }
+
+  bool _isAlignmentActive(ForcedAlignmentStatus status) =>
+      status == ForcedAlignmentStatus.queued ||
+      status == ForcedAlignmentStatus.running;
+
+  bool _isAlignmentResult(ForcedAlignmentStatus status) => switch (status) {
+    ForcedAlignmentStatus.completed ||
+    ForcedAlignmentStatus.partial ||
+    ForcedAlignmentStatus.unavailable ||
+    ForcedAlignmentStatus.failed ||
+    ForcedAlignmentStatus.cancelled ||
+    ForcedAlignmentStatus.interrupted => true,
+    _ => false,
+  };
+}
+
+class _MossTimingBar extends StatelessWidget {
+  const _MossTimingBar({required this.job, required this.onDismiss});
+
+  final TranscriptionJob job;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final alignment = job.forcedAlignment;
+    final local =
+        job.transcriptSource == TranscriptSource.mossLocal ||
+        job.transcriptionProvider == TranscriptionProvider.mossLocal;
+    final labelKey = switch (alignment.status) {
+      ForcedAlignmentStatus.completed =>
+        local ? 'moss_local_word_level' : 'moss_pro_local_alignment',
+      ForcedAlignmentStatus.partial =>
+        local ? 'moss_local_word_level' : 'moss_pro_local_alignment',
+      ForcedAlignmentStatus.queued ||
+      ForcedAlignmentStatus.running => 'moss_alignment_running',
+      _ => local ? 'moss_local_segment_level' : 'moss_pro_segment_level',
+    };
+    final colors = Theme.of(context).colorScheme;
+    final usefulPartial =
+        alignment.status == ForcedAlignmentStatus.partial &&
+        alignment.alignedSegments > 0 &&
+        alignment.totalSegments > 0;
+    final coverage = usefulPartial
+        ? context.strings
+              .t('alignment_segment_coverage')
+              .replaceFirst('{aligned}', '${alignment.alignedSegments}')
+              .replaceFirst('{total}', '${alignment.totalSegments}')
+        : null;
+    final visibleWarning = usefulPartial ? null : alignment.warningCode;
+    return Material(
+      key: const Key('workspace-moss-timing-status'),
+      color: colors.surfaceContainerHigh,
+      elevation: 6,
+      shadowColor: colors.shadow.withValues(alpha: 0.22),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Icon(
+              alignment.hasWordTiming
+                  ? Icons.graphic_eq_rounded
+                  : Icons.segment_rounded,
+              size: 18,
+              color: colors.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                [
+                  context.strings.t(labelKey),
+                  if (coverage case final value?) value,
+                ].join(' · '),
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
+            if (visibleWarning case final warning?)
+              Tooltip(
+                message:
+                    alignment.warningMessage ?? context.strings.error(warning),
+                child: const Icon(Icons.warning_amber_rounded, size: 18),
+              ),
+            const SizedBox(width: 4),
+            IconButton(
+              key: const Key('dismiss-alignment-notification'),
+              tooltip: context.strings.t('close'),
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close_rounded, size: 18),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -68,11 +220,14 @@ class _PodcastProvenanceBar extends StatelessWidget {
     final sourceKey = switch (job.transcriptSource) {
       TranscriptSource.publisher => 'podcast_source_publisher_captions',
       TranscriptSource.mossPro => 'podcast_source_moss_pro',
+      TranscriptSource.mossLocal => 'podcast_source_moss_local',
       TranscriptSource.soniox => 'podcast_source_soniox_words',
       null when job.transcriptAcquisitionMode.usesPublisherTranscript =>
         'podcast_source_publisher_captions',
       null when job.transcriptionProvider == TranscriptionProvider.mossPro =>
         'podcast_source_moss_pro',
+      null when job.transcriptionProvider == TranscriptionProvider.mossLocal =>
+        'podcast_source_moss_local',
       null => 'podcast_source_soniox_words',
     };
     final rawLink =

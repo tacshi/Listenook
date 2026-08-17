@@ -39,6 +39,98 @@ void main() {
   );
 
   test(
+    'startup restores Podcast and Library but ignores transient views',
+    () async {
+      final settings = _Settings(
+        const AppSettings(
+          lastContentDestination: AppContentDestination.library,
+        ),
+      );
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        settings: settings,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      expect(controller.destination, AppDestination.library);
+
+      controller.setDestination(AppDestination.inbox);
+      controller.setDestination(AppDestination.settings);
+      expect(
+        settings.value.lastContentDestination,
+        AppContentDestination.library,
+      );
+
+      controller.setDestination(AppDestination.podcast);
+      await _waitFor(
+        () =>
+            settings.value.lastContentDestination ==
+            AppContentDestination.podcast,
+      );
+    },
+  );
+
+  test('startup restores a valid Workspace transcript', () async {
+    final now = DateTime.now().toUtc();
+    final settings = _Settings(
+      const AppSettings(
+        lastContentDestination: AppContentDestination.workspace,
+        lastWorkspaceJobId: 'transcript',
+      ),
+    );
+    final controller = _controller(
+      jobs: _Jobs([
+        TranscriptionJob(
+          id: 'transcript',
+          batchId: 'batch',
+          sourcePath: '/recording.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          document: _document(now),
+        ),
+      ]),
+      soniox: _Soniox(),
+      settings: settings,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.initialize();
+
+    expect(controller.destination, AppDestination.workspace);
+    expect(controller.activeWorkspaceJobId, 'transcript');
+  });
+
+  test(
+    'invalid saved Workspace state falls back to Podcast and is cleared',
+    () async {
+      final settings = _Settings(
+        const AppSettings(
+          lastContentDestination: AppContentDestination.workspace,
+          lastWorkspaceJobId: 'missing',
+        ),
+      );
+      final controller = _controller(
+        jobs: _Jobs(),
+        soniox: _Soniox(),
+        settings: settings,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+
+      expect(controller.destination, AppDestination.podcast);
+      expect(
+        settings.value.lastContentDestination,
+        AppContentDestination.podcast,
+      );
+      expect(settings.value.lastWorkspaceJobId, isNull);
+    },
+  );
+
+  test(
     'initialization checks credential metadata without reading secrets',
     () async {
       final credentials = _AvailabilityCredentials();
@@ -72,9 +164,10 @@ void main() {
     }
     final jobs = _Jobs();
     final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 40));
-    final controller = _controller(jobs: jobs, soniox: soniox);
+    final media = _Media()..uploadDirectly = false;
+    final controller = _controller(jobs: jobs, soniox: soniox, media: media);
     await controller.initialize();
-    expect(controller.destination, AppDestination.inbox);
+    expect(controller.destination, AppDestination.podcast);
     await controller.enqueueSources(files);
     await _waitFor(() => controller.readyCount == 4);
     final movedId = controller.inboxJobs.first.id;
@@ -86,7 +179,7 @@ void main() {
 
     expect(soniox.maximumUploads, 4);
     expect(controller.completedCount, 4);
-    expect(controller.destination, AppDestination.inbox);
+    expect(controller.destination, AppDestination.podcast);
     expect(
       jobs.saved.values.every(
         (job) => job.cleanupState == CleanupState.complete,
@@ -95,6 +188,10 @@ void main() {
     );
     expect(soniox.deletedFiles, hasLength(4));
     expect(soniox.deletedTranscriptions, hasLength(4));
+    expect(
+      media.extractedUploadProfiles,
+      everyElement(MediaUploadProfile.standard),
+    );
   });
 
   test(
@@ -108,9 +205,11 @@ void main() {
       await file.writeAsBytes([1, 2, 3]);
       final soniox = _Soniox();
       final moss = _Moss();
+      final media = _Media()..uploadDirectly = false;
       final controller = _controller(
         jobs: _Jobs(),
         soniox: soniox,
+        media: media,
         moss: moss,
         mossCredentials: _Credentials(),
         settings: _Settings(
@@ -143,6 +242,8 @@ void main() {
       expect(moss.deletedFiles, ['moss-file-1']);
       expect(moss.deletedTranscriptions, isEmpty);
       expect(soniox.uploadCalls, 0);
+      expect(media.checkedUploadProfiles, [MediaUploadProfile.compactSpeech]);
+      expect(media.extractedUploadProfiles, [MediaUploadProfile.compactSpeech]);
     },
   );
 
@@ -2030,9 +2131,19 @@ class _Jobs implements JobRepository {
 class _Media implements MediaService {
   final deletedGeneratedMedia = <String>[];
   Set<String>? retainedGeneratedMedia;
+  bool uploadDirectly = true;
+  final checkedUploadProfiles = <MediaUploadProfile>[];
+  final extractedUploadProfiles = <MediaUploadProfile>[];
 
   @override
-  bool canUploadDirectly(String path, MediaMetadata metadata) => true;
+  bool canUploadDirectly(
+    String path,
+    MediaMetadata metadata, {
+    MediaUploadProfile profile = MediaUploadProfile.standard,
+  }) {
+    checkedUploadProfiles.add(profile);
+    return uploadDirectly;
+  }
 
   @override
   Future<void> deleteTemporary(String path) async {}
@@ -2054,9 +2165,13 @@ class _Media implements MediaService {
     String sourcePath,
     String jobId, {
     required int durationMs,
+    MediaUploadProfile profile = MediaUploadProfile.standard,
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
-  }) async => sourcePath;
+  }) async {
+    extractedUploadProfiles.add(profile);
+    return sourcePath;
+  }
 
   @override
   Future<MediaMetadata> inspect(String sourcePath) async => const MediaMetadata(

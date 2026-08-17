@@ -2,6 +2,8 @@ import Cocoa
 import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
+  private let applicationChannels = ApplicationChannels()
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -9,6 +11,9 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    applicationChannels.register(
+      with: flutterViewController.engine.binaryMessenger
+    )
 
     super.awakeFromNib()
   }

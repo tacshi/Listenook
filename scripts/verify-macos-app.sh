@@ -19,6 +19,25 @@ if [[ ! -x "$EXECUTABLE" ]]; then
   exit 1
 fi
 
+APP_ARCHS="$(lipo -archs "$EXECUTABLE")"
+SPEECH_WORKER="$APP/Contents/Helpers/MeowSTTSpeechWorker"
+if [[ " $APP_ARCHS " == *" arm64 "* ]]; then
+  if [[ ! -x "$SPEECH_WORKER" ]]; then
+    echo "Apple Silicon bundle is missing its speech worker: $SPEECH_WORKER" >&2
+    exit 1
+  fi
+  if [[ "$(lipo -archs "$SPEECH_WORKER")" != "arm64" ]]; then
+    echo "Speech worker must be arm64-only: $SPEECH_WORKER" >&2
+    exit 1
+  fi
+  codesign --verify --strict "$SPEECH_WORKER"
+elif [[ -e "$SPEECH_WORKER" ]]; then
+  echo "Intel bundle must not contain the arm64-only speech worker." >&2
+  exit 1
+fi
+
+codesign --verify --deep --strict "$APP"
+
 open -n -W "$APP" &
 OPEN_PID=$!
 APP_PID=""

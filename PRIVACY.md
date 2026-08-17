@@ -12,7 +12,11 @@ are written either to `Podcasts/` inside a configured Inbox folder or to an
 application-managed cache. Inbox-folder copies are user files and are not
 deleted with the job; managed copies are removed when the job is deleted.
 Nothing is uploaded to a transcription provider until you press **Transcribe**, except a
-word-level publisher transcript that can complete without uploading media.
+word-level publisher transcript that can complete without uploading media. When
+MOSS Local is selected, transcription and forced alignment run in separate local
+processes and the media is never uploaded. Installing either optional model
+connects to Hugging Face and stores the verified Core ML model bundle under
+Application Support.
 
 Inbox folder monitoring is optional and entirely local. When configured,
 MeowSTT recursively reads directory metadata for supported audio and video
@@ -31,14 +35,22 @@ When the window is hidden, the operating system may show a grouped local
 notification for newly discovered files. Notification permission can be
 denied without disabling monitoring; the tray waiting count remains available.
 
-When you explicitly start transcription, MeowSTT uploads the selected media
-directly to the Soniox or MOSI service recorded on that job, using the matching
-API key. Soniox jobs create a file and transcription resource; MeowSTT attempts
+When you explicitly start cloud transcription, MeowSTT uploads the selected
+media directly to the Soniox or MOSI service recorded on that job, using the
+matching API key. For MOSS Pro on macOS, video, lossless audio, and high-bitrate
+audio are first converted locally to a temporary 16 kHz mono AAC copy; only the
+derived audio is uploaded, and the temporary copy is deleted after use. Soniox
+jobs create a file and transcription resource; MeowSTT attempts
 to delete both after retrieval, cancellation, or terminal failure. MOSS jobs
 create a file and asynchronous task; MeowSTT deletes the uploaded file, while
 the task record follows MOSI's retention policy because its public API has no
 task-delete operation. Failed supported cleanup is marked locally and retried.
 The app never lists or deletes unrelated account resources.
+
+For MOSS Local and MOSS Pro transcripts, optional precise word timing is
+generated locally with Qwen3 ForcedAligner. A failed, cancelled, unavailable,
+or partially successful alignment never causes a cloud fallback and does not
+discard the speaker-level MOSS transcript.
 
 Translation is optional. When Soniox built-in translation is enabled, the
 selected target language is included in the original Soniox transcription

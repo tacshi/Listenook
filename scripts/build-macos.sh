@@ -99,11 +99,18 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
     echo "Expected $EXPECTED_MACHO app, found: $APP_ARCHS" >&2; exit 1;
   }
 
+  if [[ "$CURRENT_ARCH" == "arm64" ]]; then
+    mkdir -p "$APP/Contents/Helpers"
+    bash "$ROOT/scripts/build-speech-worker.sh" \
+      "$APP/Contents/Helpers/MeowSTTSpeechWorker"
+  else
+    rm -f "$APP/Contents/Helpers/MeowSTTSpeechWorker"
+  fi
+
   [[ -x /usr/bin/afconvert ]] || { echo "Missing macOS afconvert." >&2; exit 1; }
   rm -rf "$APP/Contents/Resources/ffmpeg" "$APP/Contents/Resources/flac"
+  rm -rf "$APP/Contents/Resources/third_party"
   mkdir -p "$APP/Contents/Resources/third_party"
-  rm -f "$APP/Contents/Resources/third_party/ffmpeg-manifest.json"
-  rm -f "$APP/Contents/Resources/third_party/flac-manifest.json"
   cp "$ROOT/assets/third_party/"* "$APP/Contents/Resources/third_party/"
   bash "$ROOT/scripts/strip-macos-download-metadata.sh" "$APP"
   if [[ "$MODE" == "debug" ]]; then

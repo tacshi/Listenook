@@ -19,6 +19,7 @@ class AppPaths {
 
   Directory get jobs => Directory(p.join(root.path, 'jobs'));
   Directory get temporary => Directory(p.join(root.path, 'temporary'));
+  Directory get models => Directory(p.join(root.path, 'models'));
   File get settings => File(p.join(root.path, 'settings.json'));
   File get libraryCatalog => File(p.join(root.path, 'library_catalog.json'));
   File get inboxMonitor => File(p.join(root.path, 'inbox_monitor.json'));
@@ -32,6 +33,7 @@ class AppPaths {
     await paths.root.create(recursive: true);
     await paths.jobs.create(recursive: true);
     await paths.temporary.create(recursive: true);
+    await paths.models.create(recursive: true);
     await paths.podcasts.create(recursive: true);
     return paths;
   }

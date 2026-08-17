@@ -118,11 +118,8 @@ class _LibraryPageState extends State<LibraryPage> {
                             onRemove:
                                 selectedJobs.isNotEmpty &&
                                     selectedJobs.every((job) => !job.isBusy)
-                                ? () => _confirmBulkRemove(
-                                    context,
-                                    controller,
-                                    selectedJobs,
-                                  )
+                                ? () =>
+                                      _confirmBulkRemove(context, selectedJobs)
                                 : null,
                           ),
                         ],
@@ -419,40 +416,10 @@ class _LibraryPageState extends State<LibraryPage> {
 
   Future<void> _confirmBulkRemove(
     BuildContext context,
-    AppController controller,
     List<TranscriptionJob> jobs,
   ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(context.strings.t('remove_selected_title')),
-        content: Text(
-          context.strings
-              .t('remove_selected_body')
-              .replaceFirst('{count}', '${jobs.length}'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(context.strings.t('cancel')),
-          ),
-          FilledButton(
-            key: const Key('confirm-bulk-remove'),
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-              foregroundColor: Theme.of(context).colorScheme.onError,
-            ),
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(context.strings.t('remove_selected')),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    for (final job in jobs) {
-      await controller.deleteHistory(job.id);
-    }
-    if (mounted) setState(_selectedIds.clear);
+    final removed = await confirmAndRemoveLibraryJobs(context, jobs);
+    if (removed && mounted) setState(_selectedIds.clear);
   }
 }
 
@@ -817,27 +784,27 @@ class _HistoryListItem extends StatelessWidget {
               icon: const Icon(Icons.link_rounded),
               label: Text(context.strings.t('relink')),
             ),
-          if (job.status == JobStatus.ready)
+          if (job.status == JobStatus.ready || job.status == JobStatus.failed)
             IconButton(
-              key: Key('add-to-inbox-ready-job-${job.id}'),
+              key: Key('add-to-inbox-${job.status.name}-job-${job.id}'),
               tooltip: context.strings.t('add_to_inbox_tooltip'),
               onPressed: () => controller.addToInbox(job.id),
               icon: const Icon(Icons.input_rounded),
             ),
           if (job.document != null) ...[
             IconButton(
-              key: ValueKey('export-library-job-${job.id}'),
-              tooltip: context.strings.t('export'),
-              onPressed: () =>
-                  showTranscriptExportDialog(context, jobIds: [job.id]),
-              icon: const Icon(Icons.ios_share_rounded),
-            ),
-            IconButton(
               key: ValueKey('open-library-job-${job.id}'),
               tooltip: context.strings.t('open'),
               style: IconButton.styleFrom(backgroundColor: Colors.transparent),
               onPressed: () => controller.openInWorkspace(job.id),
               icon: const Icon(Icons.open_in_new_rounded),
+            ),
+            IconButton(
+              key: ValueKey('export-library-job-${job.id}'),
+              tooltip: context.strings.t('export'),
+              onPressed: () =>
+                  showTranscriptExportDialog(context, jobIds: [job.id]),
+              icon: const Icon(Icons.ios_share_rounded),
             ),
           ],
           PopupMenuButton<String>(
@@ -851,7 +818,13 @@ class _HistoryListItem extends StatelessWidget {
                 case 'tags':
                   await onManageTags?.call();
                 case 'delete':
-                  await controller.deleteHistory(job.id);
+                  if (controller.podcastJobs.any(
+                    (podcastJob) => podcastJob.id == job.id,
+                  )) {
+                    await confirmAndRemoveLibraryJobs(context, [job]);
+                  } else {
+                    await controller.deleteHistory(job.id);
+                  }
               }
             },
             itemBuilder: (context) => [

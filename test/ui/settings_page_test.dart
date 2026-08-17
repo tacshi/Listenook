@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
+import 'package:meow_stt/core/local_speech.dart';
 import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
@@ -50,9 +51,12 @@ void main() {
       ),
     );
 
-    await tester.tap(
-      find.byKey(const Key('settings-inbox-monitor-remove-folder')),
+    final removeFolder = find.byKey(
+      const Key('settings-inbox-monitor-remove-folder'),
     );
+    await tester.ensureVisible(removeFolder);
+    await tester.pumpAndSettle();
+    await tester.tap(removeFolder);
     await tester.pump();
     await tester.pump();
 
@@ -242,6 +246,79 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Apple Silicon local speech exposes both independent model cards',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 2600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final settings = _Settings();
+      final controller = AppController(
+        credentialStore: _Credentials(),
+        settingsRepository: settings,
+        jobRepository: _Jobs(),
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+        localSttService: _SupportedLocalStt(),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: SettingsPage()),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Providers'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('MOSS Local'), findsWidgets);
+      expect(find.textContaining('Beta'), findsNothing);
+      expect(
+        find.byKey(
+          const Key('download-model-moss-transcribe-diarize-0.9b-coreml-int8'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key('download-model-qwen3-forced-aligner-0.6b-coreml-int8'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('install-local-quality-package')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('auto-align-moss-switch')), findsOneWidget);
+      final autoTranscribe = find.byKey(
+        const Key('auto-transcribe-local-switch'),
+      );
+      expect(autoTranscribe, findsOneWidget);
+      expect(tester.widget<SwitchListTile>(autoTranscribe).value, isFalse);
+      expect(find.text('Auto-transcribe new items'), findsOneWidget);
+      expect(
+        find.textContaining('Files dropped into Inbox still require'),
+        findsOneWidget,
+      );
+
+      await tester.tap(autoTranscribe);
+      await tester.pumpAndSettle();
+
+      expect(controller.settings.autoTranscribeLocal, isTrue);
+      expect(settings.value.autoTranscribeLocal, isTrue);
+    },
+  );
+
   testWidgets('an unsaved Soniox key can be tested and then saved', (
     tester,
   ) async {
@@ -296,13 +373,16 @@ void main() {
     );
     expect(find.text('General'), findsOneWidget);
     expect(find.text('Providers'), findsOneWidget);
-    expect(find.text('Appearance'), findsWidgets);
+    expect(find.text('Appearance'), findsNothing);
     expect(find.text('Shortcuts'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
     expect(find.byIcon(Icons.tune_rounded), findsOneWidget);
     expect(find.byIcon(Icons.hub_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.palette_outlined), findsNothing);
     expect(find.byIcon(Icons.keyboard_outlined), findsOneWidget);
     expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
+    expect(find.text('Theme').hitTestable(), findsOneWidget);
+    expect(find.text('Language').hitTestable(), findsOneWidget);
     expect(find.text('Batch options'), findsNothing);
     expect(find.text('Concurrent jobs'), findsNothing);
     expect(find.text('Inbox monitoring').hitTestable(), findsOneWidget);
@@ -333,7 +413,7 @@ void main() {
       find.text('Launch MeowSTT at login'),
     );
     final settingsTheme = Theme.of(tester.element(startupSetting)).textTheme;
-    expect(startupTitle.style?.fontSize, settingsTheme.titleMedium?.fontSize);
+    expect(startupTitle.style?.fontSize, settingsTheme.bodyMedium?.fontSize);
     final menuBarCard = find.ancestor(
       of: find.text('Show menu bar icon'),
       matching: find.byType(Card),
@@ -349,13 +429,9 @@ void main() {
     expect(menuBarCard, findsOneWidget);
     expect(startupCard, findsOneWidget);
     expect(inboxMonitoringCard, findsOneWidget);
-    expect(menuBarCard.evaluate().single, isNot(startupCard.evaluate().single));
+    expect(menuBarCard.evaluate().single, same(startupCard.evaluate().single));
     expect(
       tester.getTopLeft(startupCard).dy,
-      lessThan(tester.getTopLeft(menuBarCard).dy),
-    );
-    expect(
-      tester.getTopLeft(menuBarCard).dy,
       lessThan(tester.getTopLeft(inboxMonitoringCard).dy),
     );
     await tester.tap(
@@ -471,12 +547,6 @@ void main() {
       tester.getCenter(sonioxStatus).dx,
       greaterThan(tester.getCenter(find.text('Soniox API key')).dx),
     );
-
-    await tester.tap(find.text('Appearance').first);
-    await tester.pumpAndSettle();
-    expect(find.text('Appearance'), findsOneWidget);
-    expect(find.text('Theme').hitTestable(), findsOneWidget);
-    expect(find.byKey(const Key('show-fullscreen-shortcuts')), findsNothing);
 
     await tester.tap(find.text('Shortcuts'));
     await tester.pumpAndSettle();
@@ -747,6 +817,18 @@ class _Credentials implements CredentialStore {
   Future<void> writeApiKey(String key) async => value = key;
 }
 
+class _SupportedLocalStt implements LocalSttService {
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<TranscriptDocument> transcribe(
+    LocalSttRequest request, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) => throw UnimplementedError();
+}
+
 class _TranslationCredentials implements TranslationCredentialStore {
   String? value;
 
@@ -812,7 +894,11 @@ class _Jobs implements JobRepository {
 
 class _Media implements MediaService {
   @override
-  bool canUploadDirectly(String path, MediaMetadata metadata) => true;
+  bool canUploadDirectly(
+    String path,
+    MediaMetadata metadata, {
+    MediaUploadProfile profile = MediaUploadProfile.standard,
+  }) => true;
 
   @override
   Future<void> deleteTemporary(String path) async {}
@@ -832,6 +918,7 @@ class _Media implements MediaService {
     String sourcePath,
     String jobId, {
     required int durationMs,
+    MediaUploadProfile profile = MediaUploadProfile.standard,
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async => sourcePath;

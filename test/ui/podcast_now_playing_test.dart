@@ -1137,17 +1137,22 @@ void main() {
         ),
         findsOneWidget,
       );
+      expect(find.byKey(ValueKey('podcast-library-menu-$id')), findsOneWidget);
     }
 
     await tester.tap(find.byKey(const Key('toggle-podcast-library-selection')));
     await tester.pump();
 
     expect(find.byKey(const Key('batch-export-podcast-media')), findsOneWidget);
+    final batchRemove = find.byKey(const Key('batch-remove-podcast-jobs'));
+    expect(batchRemove, findsOneWidget);
+    expect(tester.widget<IconButton>(batchRemove).onPressed, isNull);
     for (final id in ['one', 'two']) {
       expect(
         find.byKey(ValueKey('select-podcast-library-job-$id')),
         findsOneWidget,
       );
+      expect(find.byKey(ValueKey('podcast-library-menu-$id')), findsNothing);
     }
     expect(
       tester
@@ -1170,6 +1175,7 @@ void main() {
           .onPressed,
       isNotNull,
     );
+    expect(tester.widget<IconButton>(batchRemove).onPressed, isNotNull);
     for (final id in ['one', 'two']) {
       expect(
         tester
@@ -1180,6 +1186,246 @@ void main() {
         isTrue,
       );
     }
+  });
+
+  testWidgets(
+    'Downloads removal confirms, stops playback, and removes the shared item',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final directory = Directory.systemTemp.createTempSync(
+        'meow-podcast-remove-',
+      );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+      const episode = PodcastEpisode(
+        id: 'https://feeds.example/show\nguid-remove',
+        feedUrl: 'https://feeds.example/show',
+        title: 'Episode to remove',
+        enclosureUrl: 'https://cdn.example/remove.mp3',
+        mediaExtension: 'mp3',
+      );
+      const feed = PodcastFeed(
+        feedUrl: 'https://feeds.example/show',
+        title: 'The Daily',
+        episodes: [episode],
+      );
+      final media = File('${directory.path}/podcasts/job-remove/episode.mp3');
+      media.parent.createSync(recursive: true);
+      media.writeAsBytesSync(const [1, 2, 3]);
+      final now = DateTime.now().toUtc();
+      final job = TranscriptionJob(
+        id: 'job-remove',
+        batchId: 'batch',
+        sourcePath: media.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        sourceOrigin: JobSourceOrigin.podcast,
+        podcastProvenance: const PodcastEpisodeProvenance(
+          feedUrl: 'https://feeds.example/show',
+          episodeId: 'https://feeds.example/show\nguid-remove',
+          enclosureUrl: 'https://cdn.example/remove.mp3',
+          showTitle: 'The Daily',
+          episodeTitle: 'Episode to remove',
+        ),
+        document: TranscriptDocument(
+          tokens: const [],
+          segments: const [],
+          speakers: const [],
+          updatedAt: now,
+        ),
+      );
+      final repository = _MemoryPodcastRepo()
+        ..value = PodcastLibraryState(
+          followed: [
+            FollowedPodcast(
+              feedUrl: feed.feedUrl,
+              title: feed.title,
+              followedAt: now,
+            ),
+          ],
+        );
+      final player = _RemovalPodcastPlayer(episode, positionMs: 42000);
+      addTearDown(player.dispose);
+      final podcast = PodcastController(
+        gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
+        repository: repository,
+        player: player,
+      );
+      addTearDown(podcast.dispose);
+      await podcast.initialize();
+      podcast.setPane(PodcastPane.library);
+      final app = AppController(
+        credentialStore: _EmptyCredentials(),
+        settingsRepository: _Settings(),
+        jobRepository: _Jobs([job]),
+        mediaService: _Media(),
+        sourceResolver: const LocalMediaSourceResolver(),
+        sonioxClient: _Soniox(),
+        exporter: const DefaultTranscriptExporter(),
+      );
+      addTearDown(app.dispose);
+      await app.initialize();
+
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: podcast),
+            ChangeNotifierProvider.value(value: app),
+          ],
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: PodcastPage()),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final menu = find.byKey(
+        const ValueKey('podcast-library-menu-job-remove'),
+      );
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove podcast item?'), findsOneWidget);
+      expect(find.textContaining('from Downloads and Library'), findsOneWidget);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(app.allJobs, hasLength(1));
+      expect(media.existsSync(), isTrue);
+      expect(player.stopped, isFalse);
+
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-remove-library-jobs')));
+      await tester.pumpAndSettle();
+
+      expect(player.stopped, isTrue);
+      expect(player.storedPositionMs(episode.id), 42000);
+      expect(podcast.followed, hasLength(1));
+      expect(app.allJobs, isEmpty);
+      expect(app.podcastJobs, isEmpty);
+      expect(find.byKey(const Key('podcast-library-empty')), findsOneWidget);
+    },
+  );
+
+  testWidgets('Downloads batch removal rejects mixed busy selections', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final directory = Directory.systemTemp.createTempSync(
+      'meow-podcast-batch-remove-',
+    );
+    addTearDown(() {
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
+    });
+    final now = DateTime.now().toUtc();
+    final readyJobs = [
+      for (final id in ['one', 'two'])
+        TranscriptionJob(
+          id: id,
+          batchId: 'batch',
+          sourcePath: '${directory.path}/fixtures/$id/$id.mp3',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+          sourceOrigin: JobSourceOrigin.podcast,
+        ),
+    ];
+    for (final job in readyJobs) {
+      final file = File(job.sourcePath);
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(const [1, 2, 3]);
+    }
+    const busyEpisode = PodcastEpisode(
+      id: 'https://feeds.example/show\nguid-busy',
+      feedUrl: 'https://feeds.example/show',
+      title: 'Still downloading',
+      enclosureUrl: 'https://cdn.example/busy.mp3',
+      mediaExtension: 'mp3',
+    );
+    const feed = PodcastFeed(
+      feedUrl: 'https://feeds.example/show',
+      title: 'The Daily',
+      episodes: [busyEpisode],
+    );
+    final gateway = _DeferredDownloadGateway()
+      ..feeds = {feed.feedUrl: feed}
+      ..enclosures = {
+        busyEpisode.enclosureUrl: [1, 2, 3],
+      };
+    addTearDown(gateway.release);
+    final podcast = PodcastController(
+      gateway: gateway,
+      repository: _MemoryPodcastRepo(),
+    );
+    addTearDown(podcast.dispose);
+    await podcast.initialize();
+    podcast.setPane(PodcastPane.library);
+    final app = AppController(
+      credentialStore: _EmptyCredentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(readyJobs),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+      podcastGateway: gateway,
+      podcastManagedRoot: '${directory.path}/managed',
+    );
+    addTearDown(app.dispose);
+    await app.initialize();
+    final busyJob = await app.enqueuePodcastEpisode(busyEpisode, feed: feed);
+    expect(busyJob?.status, JobStatus.downloading);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: podcast),
+          ChangeNotifierProvider.value(value: app),
+        ],
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: PodcastPage()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('toggle-podcast-library-selection')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('podcast-library-select-all')));
+    await tester.pump();
+    final batchRemove = find.byKey(const Key('batch-remove-podcast-jobs'));
+    expect(tester.widget<IconButton>(batchRemove).onPressed, isNull);
+
+    await tester.tap(
+      find.byKey(ValueKey('select-podcast-library-job-${busyJob!.id}')),
+    );
+    await tester.pump();
+    expect(tester.widget<IconButton>(batchRemove).onPressed, isNotNull);
+
+    await tester.tap(batchRemove);
+    await tester.pumpAndSettle();
+    expect(find.text('Remove selected podcast items?'), findsOneWidget);
+    expect(find.textContaining('removes 2 episodes'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-remove-library-jobs')));
+    await tester.pumpAndSettle();
+
+    expect(app.allJobs.map((job) => job.id), [busyJob.id]);
+    gateway.release();
+    await tester.pump(const Duration(milliseconds: 100));
   });
 
   testWidgets('switching from Downloads to Following keeps the follow list', (
@@ -1333,6 +1579,26 @@ class _DeferredDownloadGateway extends MemoryPodcastGateway {
   }
 }
 
+class _RemovalPodcastPlayer extends PodcastPlayer {
+  _RemovalPodcastPlayer(this.currentEpisode, {required this.positionMs});
+
+  PodcastEpisode? currentEpisode;
+  final int positionMs;
+  bool stopped = false;
+
+  @override
+  PodcastEpisode? get episode => currentEpisode;
+
+  @override
+  int storedPositionMs(String episodeId) => positionMs;
+
+  @override
+  Future<void> stop() async {
+    stopped = true;
+    currentEpisode = null;
+  }
+}
+
 class _Jobs implements JobRepository {
   _Jobs([this.jobs = const []]);
 
@@ -1369,7 +1635,11 @@ class _EmptyCredentials implements CredentialStore {
 
 class _Media implements MediaService {
   @override
-  bool canUploadDirectly(String path, MediaMetadata metadata) => true;
+  bool canUploadDirectly(
+    String path,
+    MediaMetadata metadata, {
+    MediaUploadProfile profile = MediaUploadProfile.standard,
+  }) => true;
 
   @override
   Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
@@ -1389,6 +1659,7 @@ class _Media implements MediaService {
     String sourcePath,
     String jobId, {
     required int durationMs,
+    MediaUploadProfile profile = MediaUploadProfile.standard,
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async => sourcePath;

@@ -4,6 +4,8 @@ import 'podcast_models.dart';
 typedef ProgressCallback = void Function(double? fraction, String? detail);
 typedef CancelCheck = bool Function();
 
+enum MediaUploadProfile { standard, compactSpeech }
+
 class OperationCancelledException implements Exception {
   const OperationCancelledException();
 }
@@ -174,12 +176,17 @@ abstract interface class InboxFolderMonitor {
 }
 
 abstract interface class MediaService {
-  bool canUploadDirectly(String path, MediaMetadata metadata);
+  bool canUploadDirectly(
+    String path,
+    MediaMetadata metadata, {
+    MediaUploadProfile profile = MediaUploadProfile.standard,
+  });
   Future<MediaMetadata> inspect(String sourcePath);
   Future<String> extractAudio(
     String sourcePath,
     String jobId, {
     required int durationMs,
+    MediaUploadProfile profile = MediaUploadProfile.standard,
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   });

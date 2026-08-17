@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -10,6 +11,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:meow_stt/core/contracts.dart';
+import 'package:meow_stt/core/local_speech.dart';
 import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/core/podcast_models.dart';
 import 'package:meow_stt/data/podcast/http_podcast_gateway.dart';
@@ -907,7 +909,7 @@ void main() {
     );
   });
 
-  testWidgets('active translation exposes only the adjacent cancel icon', (
+  testWidgets('active translation places its cancel icon after progress', (
     tester,
   ) async {
     _setTestWindow(tester, const Size(600, 900));
@@ -974,23 +976,25 @@ void main() {
     expect(find.byKey(const Key('toggle-timestamps')), findsOneWidget);
     expect(find.byKey(const Key('copy-transcript-toolbar')), findsOneWidget);
     expect(find.byKey(const Key('export-transcript-toolbar')), findsOneWidget);
-    expect(
-      tester
-          .widget<IconButton>(
-            find.byKey(const Key('translation-toolbar-action')),
-          )
-          .tooltip,
-      'Cancel',
+    expect(find.byKey(const Key('translation-toolbar-action')), findsNothing);
+    final progressBar = find.byKey(const Key('translation-progress-bar'));
+    final cancelTranslation = find.byKey(
+      const Key('cancel-translation-progress'),
     );
+    expect(progressBar, findsOneWidget);
+    expect(cancelTranslation, findsOneWidget);
+    expect(tester.widget<IconButton>(cancelTranslation).tooltip, 'Cancel');
     expect(
       tester
-          .widget<IconButton>(
-            find.byKey(const Key('translation-toolbar-action')),
-          )
+          .widget<IconButton>(cancelTranslation)
           .style
           ?.backgroundColor
           ?.resolve({}),
       isNull,
+    );
+    expect(
+      tester.getTopLeft(cancelTranslation).dx,
+      greaterThan(tester.getTopRight(progressBar).dx),
     );
     expect(find.byIcon(Icons.stop_circle_outlined), findsOneWidget);
 
@@ -2502,6 +2506,39 @@ void main() {
     expect(_backgroundTexts(tester), isEmpty);
   });
 
+  testWidgets('segment-owned tied timing at zero remains highlightable', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: PlaybackHighlightedText(
+            text: '日本',
+            tokens: [
+              TranscriptToken(
+                text: '日',
+                startMs: 0,
+                endMs: 0,
+                segmentId: 'one',
+              ),
+              TranscriptToken(
+                text: '本',
+                startMs: 80,
+                endMs: 160,
+                segmentId: 'one',
+              ),
+            ],
+            positionMs: 0,
+            segmentStartMs: 0,
+            segmentEndMs: 200,
+          ),
+        ),
+      ),
+    );
+
+    expect(_backgroundTexts(tester), ['日']);
+  });
+
   testWidgets('current sentences keep a bar without a fill', (tester) async {
     for (final brightness in Brightness.values) {
       final theme = ThemeData(
@@ -2979,6 +3016,19 @@ void main() {
     }
     expect(find.byKey(const Key('app-sidebar')), findsOneWidget);
     expect(find.byType(NavigationRail), findsOneWidget);
+    final inboxFab = find.byKey(const Key('inbox-fab'));
+    expect(inboxFab, findsOneWidget);
+    final inboxFabWidget = tester.widget<FloatingActionButton>(inboxFab);
+    final inboxFabColors = Theme.of(tester.element(inboxFab)).colorScheme;
+    expect(inboxFabWidget.isExtended, isTrue);
+    expect(
+      inboxFabWidget.backgroundColor,
+      inboxFabColors.surfaceContainerHighest,
+    );
+    expect(inboxFabWidget.foregroundColor, inboxFabColors.primary);
+    expect(inboxFabWidget.elevation, 0);
+    expect(tester.getSize(inboxFab).height, 44);
+    expect(controller.destination, AppDestination.podcast);
     final sidebar = find.byKey(const Key('app-sidebar'));
     final settingsNavigation = find.byKey(
       const Key('settings-navigation-button'),
@@ -3035,10 +3085,10 @@ void main() {
     expect(
       tooltipMessages,
       containsAll([
-        'Inbox (⌘1)',
-        'Podcast (⌘2)',
-        'Workspace (⌘3)',
-        'Library (⌘4)',
+        'Inbox (⌘I)',
+        'Podcast (⌘1)',
+        'Workspace (⌘2)',
+        'Library (⌘3)',
         'Settings (⌘,)',
       ]),
     );
@@ -3047,8 +3097,18 @@ void main() {
       'Hide sidebar (⌘B)',
     );
 
+    await tester.tap(inboxFab);
+    await tester.pumpAndSettle();
+    expect(controller.destination, AppDestination.inbox);
+
+    tester.view.physicalSize = const Size(1000, 820);
+    await tester.pumpAndSettle();
+    expect(tester.widget<FloatingActionButton>(inboxFab).isExtended, isFalse);
+    tester.view.physicalSize = const Size(1240, 820);
+    await tester.pumpAndSettle();
+
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-    await tester.sendKeyEvent(LogicalKeyboardKey.digit4);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit3);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.library);
@@ -3067,7 +3127,7 @@ void main() {
     await tester.pump();
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-    await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyI);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.inbox);
@@ -3113,7 +3173,7 @@ void main() {
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-    await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyI);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.inbox);
@@ -3143,7 +3203,7 @@ void main() {
       tester.getCenter(find.byIcon(Icons.space_dashboard_outlined)),
     );
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Workspace (⌘3)'), findsOneWidget);
+    expect(find.text('Workspace (⌘2)'), findsOneWidget);
     await mouse.moveTo(tester.getCenter(sidebarToggle));
     await tester.pump(const Duration(seconds: 1));
     expect(find.text('Hide sidebar (⌘B)'), findsOneWidget);
@@ -3508,6 +3568,70 @@ void main() {
     );
   });
 
+  testWidgets('cold restored video schedules native media initialization', (
+    tester,
+  ) async {
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-cold-video-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/restored.mp4');
+    await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+    late _ReviewFakePlatformPlayer platform;
+    debugTranscriptReviewPlayerFactory = () =>
+        Player(platformPlayer: platform = _ReviewFakePlatformPlayer());
+    debugTranscriptReviewSourceExists = (_) async => true;
+    final originalDebugPrint = debugPrint;
+    debugPrint = (message, {wrapWidth}) {};
+    var scheduledMediaFrames = 0;
+    debugTranscriptReviewScheduleMediaFrame = () => scheduledMediaFrames++;
+    addTearDown(() {
+      debugTranscriptReviewPlayerFactory = null;
+      debugTranscriptReviewSourceExists = null;
+      debugTranscriptReviewScheduleMediaFrame = null;
+      debugPrint = originalDebugPrint;
+    });
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      metadata: _videoMetadata,
+      sourcePath: source.path,
+    );
+    addTearDown(controller.dispose);
+    controller.rememberPlaybackPosition(
+      'job',
+      const Duration(milliseconds: 500),
+    );
+
+    await tester.pumpWidget(
+      TickerMode(
+        enabled: false,
+        child: ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: TranscriptReview(jobId: 'job')),
+          ),
+        ),
+      ),
+    );
+
+    expect(scheduledMediaFrames, 1);
+    await tester.pump();
+    await tester.pump();
+    expect(platform.openCalls, 1);
+    expect(find.byType(Video), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('video-viewport')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
+    debugPrint = originalDebugPrint;
+  });
+
   testWidgets('macOS toolbar aligns sidebar toggle with traffic lights', (
     tester,
   ) async {
@@ -3656,6 +3780,156 @@ void main() {
     );
   });
 
+  testWidgets('legacy MOSS transcripts expose manual local alignment', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      transcriptAcquisitionMode: TranscriptAcquisitionMode.mossPro,
+      transcriptSource: TranscriptSource.mossPro,
+    );
+    addTearDown(controller.dispose);
+    controller.openInWorkspace('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: WorkspacePage()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('retry-forced-alignment')), findsNothing);
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('retry-forced-alignment')), findsOneWidget);
+    expect(find.text('Generate precise timeline locally'), findsOneWidget);
+  });
+
+  testWidgets('saved partial alignment stays quiet and offers rerun', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      transcriptAcquisitionMode: TranscriptAcquisitionMode.mossPro,
+      transcriptSource: TranscriptSource.mossPro,
+      forcedAlignment: const ForcedAlignmentState(
+        status: ForcedAlignmentStatus.partial,
+        alignedSegments: 69,
+        totalSegments: 74,
+        languageAutomaticallyDetermined: true,
+        warningCode: 'alignment_partial',
+      ),
+    );
+    addTearDown(controller.dispose);
+    controller.openInWorkspace('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: WorkspacePage()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('69/74 segments'), findsNothing);
+    expect(
+      find.textContaining('language determined automatically'),
+      findsNothing,
+    );
+    expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
+    expect(find.byKey(const Key('retry-forced-alignment')), findsNothing);
+    expect(find.byKey(const Key('rerun-forced-alignment')), findsNothing);
+
+    expect(find.byKey(const Key('workspace-moss-timing-status')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pumpAndSettle();
+
+    final retryAlignment = find.byKey(const Key('rerun-forced-alignment'));
+    final translateWithLlm = find.byKey(const Key('translate-transcript'));
+    expect(retryAlignment, findsOneWidget);
+    expect(find.text('Retry local alignment'), findsOneWidget);
+    expect(translateWithLlm, findsOneWidget);
+    expect(
+      tester.getTopLeft(retryAlignment).dy,
+      lessThan(tester.getTopLeft(translateWithLlm).dy),
+    );
+  });
+
+  testWidgets('workspace notifies only after local alignment yields', (
+    tester,
+  ) async {
+    final root = await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-alignment-progress-'),
+    );
+    addTearDown(() => root!.delete(recursive: true));
+    final source = File('${root!.path}/source.wav');
+    await tester.runAsync(() => source.writeAsBytes(const [1]));
+    final alignment = _BlockingAlignmentService();
+    addTearDown(() {
+      if (!alignment.release.isCompleted) alignment.release.complete();
+    });
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      sourcePath: source.path,
+      transcriptAcquisitionMode: TranscriptAcquisitionMode.mossPro,
+      transcriptSource: TranscriptSource.mossPro,
+      forcedAlignmentService: alignment,
+    );
+    addTearDown(controller.dispose);
+    controller.openInWorkspace('job');
+
+    late Future<void> retry;
+    await tester.runAsync(() async {
+      retry = controller.retryForcedAlignment('job');
+      await _waitForController(
+        () =>
+            controller.jobById('job')!.forcedAlignment.status ==
+                ForcedAlignmentStatus.running &&
+            controller.jobById('job')!.progress.fraction == 0.42,
+      );
+    });
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: WorkspacePage()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('workspace-moss-timing-status')), findsNothing);
+
+    alignment.release.complete();
+    await tester.runAsync(() => retry);
+    await tester.pump();
+
+    final notification = find.byKey(const Key('workspace-moss-timing-status'));
+    expect(notification, findsOneWidget);
+    expect(
+      tester.getCenter(notification).dy,
+      greaterThan(tester.getCenter(find.byType(TranscriptReview)).dy),
+    );
+    await tester.tap(find.byKey(const Key('dismiss-alignment-notification')));
+    await tester.pump();
+    expect(notification, findsNothing);
+  });
+
   testWidgets('inbox keeps completed batches visible until explicitly opened', (
     tester,
   ) async {
@@ -3692,7 +3966,7 @@ void main() {
     });
 
     expect(controller.completedCount, 2);
-    expect(controller.destination, AppDestination.inbox);
+    expect(controller.destination, AppDestination.podcast);
     final firstJobId = controller.inboxJobs.first.id;
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
@@ -3769,6 +4043,58 @@ void main() {
     expect(find.byKey(const Key('video-transcript-divider')), findsNothing);
     expect(find.byKey(const Key('video-audio-mode-toggle')), findsOneWidget);
     expect(find.byKey(const Key('transcript-scroll')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('video layout moves the title above the media', (tester) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      metadata: _videoMetadata,
+      sourcePath: '/missing/test.mp4',
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final filename = find.byKey(const Key('review-filename'));
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('video-media-header')),
+        matching: filename,
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('transcript-pane-header')),
+        matching: filename,
+      ),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const Key('video-audio-mode-toggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('video-media-header')), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('transcript-pane-header')),
+        matching: filename,
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -4430,6 +4756,76 @@ void main() {
     },
   );
 
+  testWidgets('drag-and-drop Inbox imports remain manual with automation', (
+    tester,
+  ) async {
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-manual-drop-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/dropped.wav');
+    await tester.runAsync(() => source.writeAsBytes(const [1, 2, 3]));
+    final localStt = _DropCountingLocalStt();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(
+        const AppSettings(
+          defaultTranscriptionProvider: TranscriptionProvider.mossLocal,
+          autoTranscribeLocal: true,
+        ),
+      ),
+      jobRepository: _Jobs([]),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+      localSttService: localStt,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(
+            body: InboxPage(onAddFiles: _noop, onImportFolder: _noop),
+          ),
+        ),
+      ),
+    );
+    final dropTarget = tester.widget<DropTarget>(find.byType(DropTarget));
+    await tester.runAsync(() async {
+      dropTarget.onDragDone!(
+        DropDoneDetails(
+          files: [DropItemFile(source.path)],
+          localPosition: Offset.zero,
+          globalPosition: Offset.zero,
+        ),
+      );
+      await _waitForController(
+        () =>
+            controller.inboxJobs.isNotEmpty &&
+            controller.inboxJobs.single.status == JobStatus.ready,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pump();
+
+    expect(localStt.calls, 0);
+    expect(controller.processing, isFalse);
+    expect(controller.inboxJobs.single.sourceOrigin, JobSourceOrigin.manual);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('header-transcribe')))
+          .onPressed,
+      isNotNull,
+    );
+  });
+
   testWidgets('language and context options belong to the inbox batch', (
     tester,
   ) async {
@@ -4475,6 +4871,10 @@ void main() {
     expect(find.byKey(const Key('header-import-folder')), findsOneWidget);
     expect(find.byKey(const Key('header-add-files')), findsOneWidget);
     expect(find.byKey(const Key('header-transcribe')), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(const Key('inbox-monitor-setup-card'))).dy,
+      lessThan(tester.getTopLeft(find.byKey(const Key('header-add-files'))).dy),
+    );
     expect(find.widgetWithText(SwitchListTile, 'Speaker labels'), findsNothing);
     expect(find.widgetWithText(SwitchListTile, 'Timestamps'), findsNothing);
     expect(find.text('Concurrent jobs'), findsNothing);
@@ -4650,6 +5050,125 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const Key('soniox-translation-summary')), findsNothing);
+  });
+
+  testWidgets('MOSS Local explains why audio over 90 minutes cannot start', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(
+        const AppSettings(
+          defaultTranscriptionProvider: TranscriptionProvider.mossLocal,
+        ),
+      ),
+      jobRepository: _Jobs([
+        TranscriptionJob(
+          id: 'long-local',
+          batchId: 'batch',
+          sourcePath: '/long.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+          transcriptionProvider: TranscriptionProvider.mossLocal,
+          metadata: const MediaMetadata(
+            sizeBytes: 1,
+            durationMs: 91 * 60 * 1000,
+            hasAudio: true,
+            hasVideo: false,
+            formatName: 'wav',
+          ),
+        ),
+      ]),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+      localSttService: _SupportedLocalStt(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.addToInbox('long-local');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(
+            body: InboxPage(onAddFiles: _noop, onImportFolder: _noop),
+          ),
+        ),
+      ),
+    );
+
+    expect(controller.canStartReady, isFalse);
+    expect(
+      find.byKey(const Key('local-moss-duration-warning')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('up to 90 minutes'), findsOneWidget);
+  });
+
+  test('local model inference uses indeterminate progress', () {
+    final now = DateTime.now().toUtc();
+    final local = TranscriptionJob(
+      id: 'local-running',
+      batchId: 'batch',
+      sourcePath: '/source.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.processing,
+      transcriptionProvider: TranscriptionProvider.mossLocal,
+      progress: const JobProgress(stage: 'local_transcribing', fraction: 0.12),
+    );
+    expect(inboxJobProgressValue(local), isNull);
+    expect(inboxJobProgressPercentage(local), '12%');
+    expect(
+      inboxJobProgressValue(
+        local.copyWith(
+          progress: const JobProgress(
+            stage: 'local_transcribing',
+            fraction: 0.3,
+          ),
+        ),
+      ),
+      0.3,
+    );
+    expect(
+      inboxJobProgressPercentage(
+        local.copyWith(
+          progress: const JobProgress(
+            stage: 'local_transcribing',
+            fraction: 0.306,
+          ),
+        ),
+      ),
+      '30%',
+    );
+    expect(
+      inboxJobProgressValue(
+        local.copyWith(
+          status: JobStatus.converting,
+          progress: const JobProgress(stage: 'converting', fraction: 0.4),
+        ),
+      ),
+      0.4,
+    );
+    expect(
+      inboxJobProgressPercentage(
+        local.copyWith(
+          status: JobStatus.converting,
+          progress: const JobProgress(stage: 'converting', fraction: 0.4),
+        ),
+      ),
+      isNull,
+    );
   });
 
   testWidgets('inbox keeps two panes at Windows initial content width', (
@@ -5739,7 +6258,10 @@ void main() {
       lessThanOrEqualTo(tester.getRect(transcript).top),
     );
     expect(
-      tester.getSize(media).height - VideoTransport.height,
+      tester.getSize(media).height -
+          tester.getSize(find.byKey(const Key('video-media-header'))).height -
+          1 -
+          VideoTransport.height,
       closeTo(tester.getSize(media).width / (16 / 9), .1),
     );
 
@@ -5751,7 +6273,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.getSize(media).height, greaterThan(initialMediaHeight));
     expect(
-      tester.getSize(media).height - VideoTransport.height,
+      tester.getSize(media).height -
+          tester.getSize(find.byKey(const Key('video-media-header'))).height -
+          1 -
+          VideoTransport.height,
       closeTo(tester.getSize(media).width / (16 / 9), .1),
     );
 
@@ -6214,6 +6739,8 @@ Future<AppController> _controllerForDocument(
   TranscriptAcquisitionMode transcriptAcquisitionMode =
       TranscriptAcquisitionMode.soniox,
   TranscriptSource? transcriptSource,
+  ForcedAlignmentService? forcedAlignmentService,
+  ForcedAlignmentState forcedAlignment = const ForcedAlignmentState(),
 }) async {
   final now = DateTime.now().toUtc();
   final controller = AppController(
@@ -6236,6 +6763,7 @@ Future<AppController> _controllerForDocument(
         podcastProvenance: podcastProvenance,
         transcriptAcquisitionMode: transcriptAcquisitionMode,
         transcriptSource: transcriptSource,
+        forcedAlignment: forcedAlignment,
       ),
     ]),
     mediaService: mediaService ?? _Media(),
@@ -6245,9 +6773,34 @@ Future<AppController> _controllerForDocument(
     translationCredentialStore: translationCredentials,
     translationService: translationService,
     aiBriefService: aiBriefService,
+    forcedAlignmentService: forcedAlignmentService,
   );
   await controller.initialize();
   return controller;
+}
+
+class _BlockingAlignmentService implements ForcedAlignmentService {
+  final release = Completer<void>();
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<AlignmentResult> align(
+    ForcedAlignmentRequest request, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    onProgress?.call(0.42, 'aligning');
+    await release.future;
+    return AlignmentResult(
+      tokens: const [],
+      status: ForcedAlignmentStatus.partial,
+      alignedSegments: 0,
+      totalSegments: request.document.segments.length,
+      warningCode: 'alignment_partial',
+    );
+  }
 }
 
 Future<void> _selectTranslationView(WidgetTester tester, String label) async {
@@ -6393,7 +6946,11 @@ class _ReviewFakePlatformPlayer extends PlatformPlayer {
   Future<int> get handle async => 0;
 
   @override
-  Future<void> open(Playable playable, {bool play = true}) async {}
+  Future<void> open(Playable playable, {bool play = true}) async {
+    openCalls++;
+  }
+
+  int openCalls = 0;
 
   @override
   Future<void> play() async {}
@@ -6597,6 +7154,35 @@ class _Settings implements SettingsRepository {
   Future<void> save(AppSettings settings) async => value = settings;
 }
 
+class _SupportedLocalStt implements LocalSttService {
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<TranscriptDocument> transcribe(
+    LocalSttRequest request, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) => throw UnimplementedError();
+}
+
+class _DropCountingLocalStt implements LocalSttService {
+  int calls = 0;
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<TranscriptDocument> transcribe(
+    LocalSttRequest request, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    calls++;
+    return _simpleDocument();
+  }
+}
+
 class _Jobs implements JobRepository {
   _Jobs(this.jobs);
 
@@ -6617,7 +7203,11 @@ class _Jobs implements JobRepository {
 
 class _Media implements MediaService {
   @override
-  bool canUploadDirectly(String path, MediaMetadata metadata) => true;
+  bool canUploadDirectly(
+    String path,
+    MediaMetadata metadata, {
+    MediaUploadProfile profile = MediaUploadProfile.standard,
+  }) => true;
 
   @override
   Future<void> deleteTemporary(String path) async {}
@@ -6637,6 +7227,7 @@ class _Media implements MediaService {
     String sourcePath,
     String jobId, {
     required int durationMs,
+    MediaUploadProfile profile = MediaUploadProfile.standard,
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async => sourcePath;

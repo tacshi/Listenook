@@ -40,7 +40,11 @@ The package name is `meow_stt`. Its permanent desktop identity is
   error mapping, and transient polling backoff.
 - Streaming MOSS asset upload with `moss-transcribe-diarize`, asynchronous task
   recovery, speaker-labelled segments, server-directed polling, 512 MB upload
-  validation, and owned-file cleanup.
+  validation, owned-file cleanup, and compact 16 kHz mono AAC preparation on
+  macOS for video, lossless audio, or high-bitrate input.
+- Optional Apple Silicon/macOS 15+ `MOSS Local` transcription with
+  diarization through pinned Core ML INT8 models, plus fail-open local Qwen3
+  ForcedAligner Core ML timing for MOSS Local and MOSS Pro.
 - Optional one-way Soniox translation in the original async transcription job,
   with provider-native language targets and no separate translation pass.
 - A local, searchable library; source relinking; editable segments and speaker
@@ -65,7 +69,8 @@ The package name is `meow_stt`. Its permanent desktop identity is
 ## Privacy model
 
 MeowSTT is BYOK and has no application backend. Starting a job uploads its
-media directly to the provider recorded on that job. Optional Soniox
+media directly to the provider recorded on that job; MOSS Pro may first create
+a compact temporary audio copy on macOS. Optional Soniox
 translation is performed within the Soniox request. Optional LLM translation is a separate operation;
 when requested, transcript text—not media—is sent to the single
 OpenAI-compatible endpoint saved in Settings. AI Brief generation also sends
@@ -87,7 +92,9 @@ See [PRIVACY.md](PRIVACY.md).
 
 ## Development
 
-Requirements: Flutter stable with macOS and/or Windows desktop enabled. The
+Requirements: Flutter stable with macOS and/or Windows desktop enabled. Building
+the Apple Silicon local speech worker also requires Xcode command-line tools;
+its Core ML model bundles are verified downloads and are never bundled. The
 existing `media_kit_libs_video` dependency supplies libmpv. Windows packaging
 fetches the pinned FLAC 1.5.0 encoder described in
 `packaging/flac/manifest.json`; macOS uses its built-in `afconvert` encoder.
@@ -202,5 +209,7 @@ Distribution artifacts retain the libmpv already supplied by
 `media_kit_libs_video`; there are no standalone FFmpeg or FFprobe programs.
 Windows adds the compact FLAC encoder and its corresponding source archive.
 Provenance, SHA-256 checksums, and license texts live in `packaging/flac/` and
-`assets/third_party/`. Soniox and MOSI are separate third-party transcription
+`assets/third_party/`. The optional arm64 local speech worker uses pinned
+speech-swift/Core ML code; MOSS and Qwen3 model bundles are downloaded
+separately, verified, and covered by the included notices. Soniox and MOSI are separate third-party transcription
 services and each requires a user-owned account and API key when selected.

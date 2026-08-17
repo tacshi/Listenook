@@ -73,6 +73,7 @@ class AppStrings {
       switch (provider) {
         TranscriptionProvider.soniox => 'Soniox',
         TranscriptionProvider.mossPro => 'MOSS Pro',
+        TranscriptionProvider.mossLocal => 'MOSS Local',
       };
 
   String translationProviderHelp(TranslationProviderTemplate provider) =>
@@ -152,6 +153,17 @@ class AppStrings {
     'podcast_source_publisher_captions': 'Official captions · sentence-level',
     'podcast_source_soniox_words': 'Soniox · word-level',
     'podcast_source_moss_pro': 'MOSS Pro · speaker-level',
+    'podcast_source_moss_local': 'MOSS Local · local word timing',
+    'moss_local_word_level': 'MOSS Local · local word timing',
+    'moss_pro_local_alignment': 'MOSS Pro · locally aligned',
+    'moss_local_partial_alignment': 'MOSS Local · partially aligned',
+    'moss_pro_partial_alignment': 'MOSS Pro · partially aligned locally',
+    'moss_local_segment_level': 'MOSS Local · speaker-level timing',
+    'moss_pro_segment_level': 'MOSS Pro · speaker-level timing',
+    'moss_alignment_running': 'Generating precise word timing locally…',
+    'alignment_segment_coverage': '{aligned}/{total} segments',
+    'retry_local_alignment': 'Retry local alignment',
+    'run_local_alignment': 'Generate precise timeline locally',
     'podcast_open_episode_page': 'Open episode page',
     'podcast_export_media': 'Export downloaded audio',
     'podcast_media_exported': 'Downloaded audio exported',
@@ -159,6 +171,14 @@ class AppStrings {
     'podcast_media_batch_exported': '{count} downloaded episodes exported',
     'podcast_media_batch_export_failed':
         'Could not export all selected episodes.',
+    'remove_podcast_title': 'Remove podcast item?',
+    'remove_podcasts_title': 'Remove selected podcast items?',
+    'remove_podcast_body':
+        'This removes the episode from Downloads and Library and deletes its downloaded audio and local transcript. Following and listening progress are kept.',
+    'remove_podcasts_body':
+        'This removes {count} episodes from Downloads and Library and deletes their downloaded audio and local transcripts. Following and listening progress are kept.',
+    'remove_selected_with_podcasts_body':
+        'This permanently removes {count} selected library items and their local transcripts. Downloaded podcast audio is also deleted; imported original media files, following, and listening progress are kept.',
     'podcast_back': 'Back',
     'close': 'Close',
     'podcast_collapse_player': 'Collapse player',
@@ -339,7 +359,6 @@ class AppStrings {
     'language_hints': 'Language hints',
     'context_terms': 'Names and context terms',
     'context_terms_hint': 'Product names, people, acronyms…',
-    'appearance': 'Appearance',
     'theme': 'Theme',
     'locale': 'Language',
     'system': 'System',
@@ -356,8 +375,26 @@ class AppStrings {
     'moss_key_valid': 'MOSS key is valid.',
     'moss_key_saved': 'MOSS key saved securely.',
     'moss_pro_description':
-        'Uses MOSS-Transcribe-Diarize-Pro with speaker labels. Language hints, context terms, and Soniox translation are not sent to MOSS.',
+        'Uses MOSS-Transcribe-Diarize-Pro with speaker labels. Media is converted to compact AAC before upload when needed; Soniox-only options are not sent to MOSS.',
     'moss_pro': 'MOSS Pro',
+    'moss_local': 'MOSS Local',
+    'moss_local_description':
+        'Local transcription with speaker labels. Media stays on this Mac.',
+    'local_moss_model': 'Local MOSS model',
+    'local_model_missing': 'Install the local MOSS model in Settings to start',
+    'local_speech_models': 'Local models',
+    'auto_transcribe_local': 'Auto-transcribe new items',
+    'auto_transcribe_local_description':
+        'Automatically start eligible new MOSS Local items. Files dropped into Inbox still require Start Transcription.',
+    'auto_align_moss': 'Word timing',
+    'auto_align_moss_description':
+        'Add precise word timing to MOSS transcripts.',
+    'model_installed': 'Installed',
+    'model_not_installed': 'Not installed',
+    'model_partial': 'Download can resume',
+    'model_corrupt': 'Verification failed',
+    'model_action_failed': 'The local model operation failed.',
+    'download': 'Download',
     'moss_options_automatic':
         'Multilingual diarized transcription; language and context are automatic',
     'provider_key_missing': 'Add an API key for this provider to transcribe',
@@ -548,6 +585,7 @@ class AppStrings {
     'job_queuedRemote': 'Queued by transcription provider',
     'job_processing': 'Transcribing',
     'job_fetching': 'Fetching transcript',
+    'job_aligning': 'Generating precise timeline',
     'job_completed': 'Completed',
     'job_empty': 'No speech found',
     'job_failed': 'Failed',
@@ -582,6 +620,36 @@ class AppStrings {
     'error_moss_invalid_response': 'MOSS returned an invalid response.',
     'error_moss_transcription_failed': 'MOSS could not transcribe this file.',
     'error_moss_unavailable': 'MOSS Pro transcription is unavailable.',
+    'error_local_stt_unsupported':
+        'MOSS Local requires an Apple Silicon Mac running macOS 15 or later.',
+    'error_local_stt_model_missing':
+        'Install the local MOSS model in Settings.',
+    'error_local_stt_duration_exceeded':
+        'MOSS Local supports audio up to 90 minutes. Choose MOSS Pro or Soniox for this file.',
+    'error_local_worker_missing':
+        'The signed local speech worker is missing from this app.',
+    'error_moss_truncated_output':
+        'MOSS Local returned an incomplete tagged transcript.',
+    'error_alignment_partial':
+        'Some segments could not receive reliable word timing.',
+    'error_alignment_segment_too_long':
+        'A segment over 110 seconds was skipped during local alignment.',
+    'error_alignment_failed':
+        'Precise word timing failed; the speaker-level transcript was kept.',
+    'error_alignment_unsupported':
+        'Local alignment is unavailable on this Mac.',
+    'error_alignment_language_unsupported':
+        'The selected language is not supported by local forced alignment.',
+    'error_alignment_model_missing':
+        'Install the Qwen3 ForcedAligner model to generate word timing.',
+    'error_alignment_no_eligible_segments':
+        'No transcript segments were eligible for forced alignment.',
+    'error_alignment_source_missing':
+        'Relink the source media before retrying local alignment.',
+    'error_alignment_cancelled':
+        'Local alignment was cancelled; the speaker-level transcript was kept.',
+    'error_alignment_interrupted':
+        'Local alignment was interrupted; retry it from the workspace.',
     'error_missing_source':
         'The source file is missing. Relink it to continue.',
     'error_unreadable_source': 'The source file cannot be read.',
@@ -739,12 +807,30 @@ class AppStrings {
     'podcast_source_publisher_captions': '官方字幕 · 句级',
     'podcast_source_soniox_words': 'Soniox · 词级',
     'podcast_source_moss_pro': 'MOSS Pro · 说话人分段',
+    'podcast_source_moss_local': 'MOSS Local · 本地词级',
+    'moss_local_word_level': 'MOSS Local · 本地词级',
+    'moss_pro_local_alignment': 'MOSS Pro · 本地对齐',
+    'moss_local_partial_alignment': 'MOSS Local · 部分对齐',
+    'moss_pro_partial_alignment': 'MOSS Pro · 本地部分对齐',
+    'moss_local_segment_level': 'MOSS Local · 段落级',
+    'moss_pro_segment_level': 'MOSS Pro · 段落级',
+    'moss_alignment_running': '正在本地生成精确词级时间…',
+    'alignment_segment_coverage': '{aligned}/{total} 个片段',
+    'retry_local_alignment': '重试本地对齐',
+    'run_local_alignment': '在本地生成精确时间轴',
     'podcast_open_episode_page': '打开单集页面',
     'podcast_export_media': '导出已下载音频',
     'podcast_media_exported': '已导出下载音频',
     'podcast_media_export_failed': '无法导出已下载音频。',
     'podcast_media_batch_exported': '已导出 {count} 个已下载单集',
     'podcast_media_batch_export_failed': '无法导出所有所选单集。',
+    'remove_podcast_title': '移除播客项目？',
+    'remove_podcasts_title': '移除所选播客项目？',
+    'remove_podcast_body': '这会从“已下载”和“资料库”中移除该单集，并删除已下载的音频和本地转写。关注状态和播放进度会保留。',
+    'remove_podcasts_body':
+        '这会从“已下载”和“资料库”中移除 {count} 个单集，并删除已下载的音频和本地转写。关注状态和播放进度会保留。',
+    'remove_selected_with_podcasts_body':
+        '这会永久移除 {count} 个所选资料库项目及其本地转写，并删除已下载的播客音频；导入的原始媒体、关注状态和播放进度会保留。',
     'podcast_back': '返回',
     'close': '关闭',
     'podcast_collapse_player': '收起播放器',
@@ -915,7 +1001,6 @@ class AppStrings {
     'language_hints': '语言提示',
     'context_terms': '姓名与上下文词语',
     'context_terms_hint': '产品名称、人名、缩写…',
-    'appearance': '外观',
     'theme': '主题',
     'locale': '语言',
     'system': '跟随系统',
@@ -932,8 +1017,24 @@ class AppStrings {
     'moss_key_valid': 'MOSS 密钥有效。',
     'moss_key_saved': 'MOSS 密钥已安全保存。',
     'moss_pro_description':
-        '使用带说话人标签的 MOSS-Transcribe-Diarize-Pro。语言提示、术语提示和 Soniox 翻译不会发送给 MOSS。',
+        '使用带说话人标签的 MOSS-Transcribe-Diarize-Pro；必要时会先转换为小体积 AAC 再上传，Soniox 专属选项不会发送给 MOSS。',
     'moss_pro': 'MOSS Pro',
+    'moss_local': 'MOSS Local',
+    'moss_local_description': '本地转写并区分说话人，媒体不会离开本机。',
+    'local_moss_model': '本地 MOSS 模型',
+    'local_model_missing': '请先在“设置”中安装本地 MOSS 模型',
+    'local_speech_models': '本地模型',
+    'auto_transcribe_local': '自动转写新项目',
+    'auto_transcribe_local_description':
+        '自动开始符合条件的新 MOSS Local 任务。拖入收件箱的文件仍需手动点击“开始转写”。',
+    'auto_align_moss': '词级时间',
+    'auto_align_moss_description': '为 MOSS 转写添加精确的词级时间。',
+    'model_installed': '已安装',
+    'model_not_installed': '未安装',
+    'model_partial': '可继续下载',
+    'model_corrupt': '校验失败',
+    'model_action_failed': '本地模型操作失败。',
+    'download': '下载',
     'moss_options_automatic': '自动进行多语言说话人转写；无需语言和术语参数',
     'provider_key_missing': '添加当前转写服务的 API 密钥后即可开始',
     'soniox_translation': 'Soniox 内置翻译',
@@ -1110,6 +1211,7 @@ class AppStrings {
     'job_queuedRemote': '云端转写队列中',
     'job_processing': '正在转写',
     'job_fetching': '正在获取转写',
+    'job_aligning': '正在生成精确时间轴',
     'job_completed': '已完成',
     'job_empty': '未检测到语音',
     'job_failed': '失败',
@@ -1138,6 +1240,23 @@ class AppStrings {
     'error_moss_invalid_response': 'MOSS 返回了无效响应。',
     'error_moss_transcription_failed': 'MOSS 无法转写此文件。',
     'error_moss_unavailable': 'MOSS Pro 转写不可用。',
+    'error_local_stt_unsupported':
+        'MOSS Local 需要运行 macOS 15 或更高版本的 Apple Silicon Mac。',
+    'error_local_stt_model_missing': '请先在“设置”中安装本地 MOSS 模型。',
+    'error_local_stt_duration_exceeded':
+        'MOSS Local 最长支持 90 分钟音频，请为此文件改用 MOSS Pro 或 Soniox。',
+    'error_local_worker_missing': '应用中缺少已签名的本地语音工作进程。',
+    'error_moss_truncated_output': 'MOSS Local 返回了不完整的标签化转写。',
+    'error_alignment_partial': '部分片段无法生成可靠的词级时间。',
+    'error_alignment_segment_too_long': '本地对齐已跳过超过 110 秒的异常片段。',
+    'error_alignment_failed': '精确时间轴生成失败，已保留说话人段落稿。',
+    'error_alignment_unsupported': '此 Mac 无法使用本地对齐。',
+    'error_alignment_language_unsupported': '本地强制对齐不支持所选语言。',
+    'error_alignment_model_missing': '请安装 Qwen3 ForcedAligner 模型以生成词级时间。',
+    'error_alignment_no_eligible_segments': '没有可进行强制对齐的转写片段。',
+    'error_alignment_source_missing': '重试本地对齐前，请先重新关联源媒体。',
+    'error_alignment_cancelled': '已取消本地对齐，并保留说话人段落稿。',
+    'error_alignment_interrupted': '本地对齐已中断，可在工作区中重试。',
     'error_missing_source': '源文件丢失，请重新关联后继续。',
     'error_unreadable_source': '无法读取源文件。',
     'error_no_audio': '此文件中未找到音频流。',

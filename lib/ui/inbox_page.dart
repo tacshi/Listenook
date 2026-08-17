@@ -10,6 +10,26 @@ import 'job_actions.dart';
 import 'inbox_monitor_setup_dialog.dart';
 import 'transcript_export_dialog.dart';
 
+double? inboxJobProgressValue(TranscriptionJob job) {
+  final fraction = job.progress.fraction;
+  if (job.transcriptionProvider == TranscriptionProvider.mossLocal &&
+      job.progress.stage == 'local_transcribing' &&
+      (fraction == null || fraction <= 0.12)) {
+    return null;
+  }
+  return fraction;
+}
+
+String? inboxJobProgressPercentage(TranscriptionJob job) {
+  if (!job.status.isActive ||
+      job.transcriptionProvider != TranscriptionProvider.mossLocal ||
+      job.progress.stage != 'local_transcribing' ||
+      job.progress.fraction == null) {
+    return null;
+  }
+  return '${(job.progress.fraction! * 100).clamp(0, 100).floor()}%';
+}
+
 class InboxPage extends StatefulWidget {
   const InboxPage({
     super.key,
@@ -39,7 +59,10 @@ class _InboxPageState extends State<InboxPage> {
       onDragExited: (_) => setState(() => _dragging = false),
       onDragDone: (details) {
         setState(() => _dragging = false);
-        controller.enqueueSources(details.files.map((file) => file.path));
+        controller.enqueueSources(
+          details.files.map((file) => file.path),
+          allowLocalAutoStart: false,
+        );
       },
       child: SafeArea(
         child: Padding(
@@ -47,6 +70,8 @@ class _InboxPageState extends State<InboxPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const _InboxMonitorPanel(),
+              const SizedBox(height: 12),
               if (controller.inboxJobs.isNotEmpty) ...[
                 _InboxActions(
                   onAddFiles: widget.onAddFiles,
@@ -55,8 +80,6 @@ class _InboxPageState extends State<InboxPage> {
                 ),
                 const SizedBox(height: 12),
               ],
-              const _InboxMonitorPanel(),
-              const SizedBox(height: 12),
               if (controller.inboxJobs.isEmpty)
                 Expanded(
                   child: _EmptyDropZone(
@@ -469,6 +492,14 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
     final providerConfigured = controller.isTranscriptionProviderConfigured(
       provider,
     );
+    final localDurationExceeded =
+        provider == TranscriptionProvider.mossLocal &&
+        controller.inboxJobs.any(
+          (job) =>
+              !job.transcriptAcquisitionMode.usesPublisherTranscript &&
+              job.status.canTranscribe &&
+              (job.metadata?.durationMs ?? 0) > 90 * 60 * 1000,
+        );
     return Card(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -501,7 +532,7 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
               prefixIcon: const Icon(Icons.hub_outlined),
             ),
             items: [
-              for (final item in TranscriptionProvider.values)
+              for (final item in controller.availableTranscriptionProviders)
                 DropdownMenuItem(
                   value: item,
                   child: Text(context.strings.transcriptionProviderName(item)),
@@ -519,14 +550,31 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
               icon: Icons.key_off_rounded,
               title: provider == TranscriptionProvider.soniox
                   ? context.strings.t('soniox_key')
-                  : context.strings.t('moss_key'),
-              value: context.strings.t('provider_key_missing'),
+                  : provider == TranscriptionProvider.mossPro
+                  ? context.strings.t('moss_key')
+                  : context.strings.t('local_moss_model'),
+              value: context.strings.t(
+                provider == TranscriptionProvider.mossLocal
+                    ? 'local_model_missing'
+                    : 'provider_key_missing',
+              ),
               action: () => controller.setDestination(AppDestination.settings),
             ),
             const Divider(height: 20),
           ] else
             const SizedBox(height: 12),
-          if (provider == TranscriptionProvider.soniox) ...[
+          if (localDurationExceeded) ...[
+            KeyedSubtree(
+              key: const Key('local-moss-duration-warning'),
+              child: _ReviewLine(
+                icon: Icons.warning_amber_rounded,
+                title: context.strings.t('local_moss_model'),
+                value: context.strings.error('local_stt_duration_exceeded'),
+              ),
+            ),
+            const Divider(height: 20),
+          ],
+          if (provider != TranscriptionProvider.mossPro) ...[
             _LanguageHintsPicker(
               selectedCodes: controller.sessionOptions.languageHints,
               onChanged: (languageHints) => controller.updateSessionOptions(
@@ -1039,7 +1087,7 @@ class _JobTile extends StatelessWidget {
                   if (job.status.isActive) ...[
                     const SizedBox(height: 5),
                     LinearProgressIndicator(
-                      value: job.progress.fraction,
+                      value: inboxJobProgressValue(job),
                       minHeight: 4,
                       borderRadius: BorderRadius.circular(99),
                     ),
@@ -1102,8 +1150,10 @@ class _JobTile extends StatelessWidget {
         context.strings.t('podcast_has_captions'),
       _ => '',
     };
+    final progress = inboxJobProgressPercentage(job) ?? '';
     return [
       context.strings.t('job_${job.status.name}'),
+      progress,
       duration,
       transcript,
     ].where((part) => part.trim().isNotEmpty).join(' · ');

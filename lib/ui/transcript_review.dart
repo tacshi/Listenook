@@ -38,6 +38,12 @@ enum _ReviewMediaMode { video, audio }
 @visibleForTesting
 Player Function()? debugTranscriptReviewPlayerFactory;
 
+@visibleForTesting
+Future<bool> Function(String path)? debugTranscriptReviewSourceExists;
+
+@visibleForTesting
+VoidCallback? debugTranscriptReviewScheduleMediaFrame;
+
 class _ReviewPlaybackTick extends ChangeNotifier {
   void tick() => notifyListeners();
 }
@@ -47,6 +53,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   static const _reviewDividerWidth = 9.0;
   static const _minimumReviewPaneWidth = 280.0;
   static const _minimumCompanionPaneWidth = 420.0;
+  static const _videoTitleHeaderHeight = 52.0;
   static const _mediaModeTransitionDuration = Duration(milliseconds: 320);
   static const _missingSourceAudioHeight = 112.0;
 
@@ -147,6 +154,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _player = player;
     _seekDispatcher = LatestSeekDispatcher(player.seek);
     _video = VideoController(player);
+    (debugTranscriptReviewScheduleMediaFrame ??
+        WidgetsBinding.instance.scheduleFrame)();
     _video!.platform.future.ignore();
     _positionSubscription = player.stream.position.listen(_handlePosition);
     _durationSubscription = player.stream.duration.listen((value) {
@@ -327,7 +336,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
       return;
     }
     final request = ++_sourceRequest;
-    if (await File(job.sourcePath).exists()) {
+    final sourceExists = debugTranscriptReviewSourceExists;
+    if (await (sourceExists == null
+        ? File(job.sourcePath).exists()
+        : sourceExists(job.sourcePath))) {
       if (!mounted || request != _sourceRequest || widget.jobId != job.id) {
         return;
       }
@@ -527,6 +539,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                   query: query,
                   segments: segments,
                   currentIndex: currentIndex,
+                  showFilename: !hasVideo || audioMode,
                 );
                 final aiBriefPane = _buildAiBriefPane(
                   job: job,
@@ -617,7 +630,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
                     .clamp(180.0, 300.0)
                     .toDouble();
                 final stackedMediaHeight =
-                    stackedVideoHeight + VideoTransport.height;
+                    _videoTitleHeaderHeight +
+                    1 +
+                    stackedVideoHeight +
+                    VideoTransport.height;
                 final videoMediaRect = sideBySide
                     ? Rect.fromLTWH(0, 0, videoWidth, constraints.maxHeight)
                     : Rect.fromLTWH(
@@ -839,7 +855,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ? _videoAspectRatio
         : 16 / 9;
     final availableViewportHeight =
-        (constraints.maxHeight - VideoTransport.height - 1)
+        (constraints.maxHeight -
+                _videoTitleHeaderHeight -
+                VideoTransport.height -
+                2)
             .clamp(0.0, double.infinity)
             .toDouble();
     final viewportHeight = videoViewportHeight(
@@ -847,7 +866,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
       aspectRatio: aspect,
       availableHeight: availableViewportHeight,
     );
-    final mediaHeight = viewportHeight + VideoTransport.height;
+    final mediaHeight =
+        _videoTitleHeaderHeight + 1 + viewportHeight + VideoTransport.height;
     final sourcePane = Column(
       key: const Key('video-ai-brief-source-column'),
       children: [
@@ -902,6 +922,19 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final canSwitchMediaMode = _supportsMediaModeSwitch(job);
     final audioMode =
         canSwitchMediaMode && presentation == _ReviewMediaMode.audio;
+    final showVideoTitle = hasVideo && !audioMode;
+
+    Widget withVideoTitle(Widget child) {
+      if (!showVideoTitle) return child;
+      return Column(
+        children: [
+          _VideoMediaHeader(job: job),
+          const Divider(height: 1),
+          if (fillHeight) Expanded(child: child) else child,
+        ],
+      );
+    }
+
     if (!File(job.sourcePath).existsSync()) {
       final banner = MaterialBanner(
         content: Text(context.strings.t('source_missing')),
@@ -928,7 +961,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       final missingSource = fillHeight
           ? Align(alignment: Alignment.topCenter, child: banner)
           : banner;
-      return missingSource;
+      return withVideoTitle(missingSource);
     }
     if (_player == null || _video == null) {
       if (_mediaShutdown == null) {
@@ -936,12 +969,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
           if (mounted) unawaited(_openSource());
         });
       }
-      return SizedBox(
-        height: fillHeight ? null : 64,
-        child: const Center(
-          child: SizedBox.square(
-            dimension: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
+      return withVideoTitle(
+        SizedBox(
+          height: fillHeight ? null : 64,
+          child: const Center(
+            child: SizedBox.square(
+              dimension: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
           ),
         ),
       );
@@ -984,13 +1019,17 @@ class _TranscriptReviewState extends State<TranscriptReview>
             : null,
         controls: _videoControls,
       );
-      pane = video;
+      pane = withVideoTitle(video);
     } else {
       pane = audio;
     }
     if (!fillHeight && hasVideo) {
       return SizedBox(
-        height: (videoHeight ?? 180) + VideoTransport.height,
+        height:
+            _videoTitleHeaderHeight +
+            1 +
+            (videoHeight ?? 180) +
+            VideoTransport.height,
         child: pane,
       );
     }
@@ -1004,6 +1043,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     required String query,
     required List<TranscriptSegment> segments,
     required int? currentIndex,
+    required bool showFilename,
   }) {
     final transcript = Column(
       children: [
@@ -1118,6 +1158,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
               ? null
               : _focusCurrentSentence,
           onGenerateAiBrief: () => _showAiBriefDialog(job),
+          showFilename: showFilename,
         ),
         const Divider(height: 1),
         Expanded(child: transcript),
@@ -1629,7 +1670,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
     };
     var segmentIndex = 0;
     for (final token in document.tokens) {
-      if (token.startMs == 0 && token.endMs == 0) continue;
+      if (token.startMs == 0 && token.endMs == 0 && token.segmentId == null) {
+        continue;
+      }
+      final ownedSegmentId = token.segmentId;
+      if (ownedSegmentId != null && result.containsKey(ownedSegmentId)) {
+        result[ownedSegmentId]!.add(token);
+        continue;
+      }
       while (segmentIndex + 1 < document.segments.length &&
           token.startMs >= document.segments[segmentIndex + 1].startMs) {
         segmentIndex++;
@@ -3179,6 +3227,7 @@ enum _TranscriptMoreAction {
   original,
   translated,
   bilingual,
+  retryAlignment,
   translate,
   copy,
   export,
@@ -3201,6 +3250,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     required this.onSearch,
     required this.onFocusCurrentSentence,
     required this.onGenerateAiBrief,
+    this.showFilename = true,
   });
 
   static const _fullBreakpoint = 900.0;
@@ -3222,6 +3272,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   final VoidCallback onSearch;
   final VoidCallback? onFocusCurrentSentence;
   final VoidCallback onGenerateAiBrief;
+  final bool showFilename;
 
   bool get _translationStarted =>
       job.translationState.status != TranslationStatus.idle ||
@@ -3288,7 +3339,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           return Row(
             key: const Key('transcript-pane-toolbar-row'),
             children: [
-              Expanded(child: _filename(context)),
+              if (showFilename)
+                Expanded(child: _ReviewFilename(job: job))
+              else
+                const Spacer(),
               if (_translationStarted && medium)
                 _TranslationViewDropdown(
                   value: viewMode,
@@ -3340,23 +3394,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     width: width,
     showAiBrief: showAiBrief,
     onChanged: onTabChanged,
-  );
-
-  Widget _filename(BuildContext context) => Tooltip(
-    message: job.displayName,
-    waitDuration: const Duration(milliseconds: 400),
-    child: Padding(
-      padding: const EdgeInsets.only(right: 12),
-      child: Text(
-        job.displayName,
-        key: const Key('review-filename'),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: Theme.of(
-          context,
-        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-      ),
-    ),
   );
 
   Widget _buildPaneSearchRow(BuildContext context) => Row(
@@ -3454,8 +3491,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           ),
         ],
         _focusButton(context),
-        if (job.translationState.status.isActive)
-          _TranslationActionIconButton(job: job, controller: controller),
         if (showDirectActions) ...[
           IconButton(
             key: const Key('copy-transcript-toolbar'),
@@ -3521,6 +3556,12 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     final translateIcon = _translationStarted
         ? _translationToolbarActionIcon(translationAction)
         : Icons.translate_rounded;
+    final alignment = job.forcedAlignment;
+    final supportsLocalAlignment =
+        job.transcriptSource == TranscriptSource.mossPro ||
+        job.transcriptSource == TranscriptSource.mossLocal ||
+        job.transcriptionProvider == TranscriptionProvider.mossPro ||
+        job.transcriptionProvider == TranscriptionProvider.mossLocal;
     final entries = <PopupMenuEntry<_TranscriptMoreAction>>[];
     void addSection(List<PopupMenuEntry<_TranscriptMoreAction>> section) {
       if (section.isEmpty) return;
@@ -3566,8 +3607,28 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         ),
       ]);
     }
+    final processingActions = <PopupMenuEntry<_TranscriptMoreAction>>[];
+    if (supportsLocalAlignment &&
+        (alignment.hasWordTiming || alignment.canRequest)) {
+      processingActions.add(
+        _menuItem(
+          key: Key(
+            alignment.hasWordTiming
+                ? 'rerun-forced-alignment'
+                : 'retry-forced-alignment',
+          ),
+          value: _TranscriptMoreAction.retryAlignment,
+          icon: Icons.refresh_rounded,
+          label: context.strings.t(
+            alignment.status == ForcedAlignmentStatus.notRequested
+                ? 'run_local_alignment'
+                : 'retry_local_alignment',
+          ),
+        ),
+      );
+    }
     if (job.translationState.status.isActive == false) {
-      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
+      processingActions.add(
         _menuItem(
           key: const Key('translate-transcript'),
           value: _TranscriptMoreAction.translate,
@@ -3575,8 +3636,9 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           label: translateLabel,
           enabled: controller.translationConfigured,
         ),
-      ]);
+      );
     }
+    addSection(processingActions);
     if (includeDocumentActions) {
       addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
         _menuItem(
@@ -3652,6 +3714,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         onViewModeChanged(TranslationViewMode.translated);
       case _TranscriptMoreAction.bilingual:
         onViewModeChanged(TranslationViewMode.bilingual);
+      case _TranscriptMoreAction.retryAlignment:
+        unawaited(controller.retryForcedAlignment(job.id));
       case _TranscriptMoreAction.translate:
         if (_translationStarted) {
           _runTranslationToolbarAction(
@@ -3837,42 +3901,6 @@ IconData _translationToolbarActionIcon(_TranslationToolbarAction action) =>
       _TranslationToolbarAction.cancel => Icons.stop_circle_outlined,
     };
 
-class _TranslationActionIconButton extends StatelessWidget {
-  const _TranslationActionIconButton({
-    required this.job,
-    required this.controller,
-  });
-
-  final TranscriptionJob job;
-  final AppController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final action = _translationToolbarAction(job.translationState.status);
-    final label = _translationToolbarActionLabel(context, action);
-    final enabled =
-        action == _TranslationToolbarAction.cancel ||
-        controller.translationConfigured;
-    return IconButton(
-      key: const Key('translation-toolbar-action'),
-      style: action == _TranslationToolbarAction.cancel
-          ? IconButton.styleFrom(
-              foregroundColor: Theme.of(context).colorScheme.error,
-            )
-          : null,
-      tooltip: enabled
-          ? label
-          : context.strings.t('auto_translate_requires_config'),
-      onPressed: enabled
-          ? () => _runTranslationToolbarAction(context, job, controller, action)
-          : null,
-      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-      padding: EdgeInsets.zero,
-      icon: Icon(_translationToolbarActionIcon(action)),
-    );
-  }
-}
-
 class _TranslationStatusStrip extends StatelessWidget {
   const _TranslationStatusStrip({required this.job});
 
@@ -3892,10 +3920,34 @@ class _TranslationStatusStrip extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (state.status == TranslationStatus.translating)
-            LinearProgressIndicator(
-              value: state.totalSegments == 0
-                  ? null
-                  : state.progress.clamp(0, 1),
+            Row(
+              children: [
+                Expanded(
+                  child: LinearProgressIndicator(
+                    key: const Key('translation-progress-bar'),
+                    value: state.totalSegments == 0
+                        ? null
+                        : state.progress.clamp(0, 1),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  key: const Key('cancel-translation-progress'),
+                  tooltip: context.strings.t('cancel'),
+                  style: IconButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                  onPressed: () =>
+                      context.read<AppController>().cancelTranslation(job.id),
+                  constraints: const BoxConstraints.tightFor(
+                    width: 40,
+                    height: 40,
+                  ),
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.stop_circle_outlined),
+                ),
+                const SizedBox(width: 4),
+              ],
             ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -4788,6 +4840,49 @@ class _MediaModeButton extends StatelessWidget {
             ? Icons.videocam_rounded
             : Icons.headphones_rounded,
         key: ValueKey(destination),
+      ),
+    ),
+  );
+}
+
+class _VideoMediaHeader extends StatelessWidget {
+  const _VideoMediaHeader({required this.job});
+
+  final TranscriptionJob job;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    key: const Key('video-media-header'),
+    height: _TranscriptReviewState._videoTitleHeaderHeight,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: _ReviewFilename(job: job),
+      ),
+    ),
+  );
+}
+
+class _ReviewFilename extends StatelessWidget {
+  const _ReviewFilename({required this.job});
+
+  final TranscriptionJob job;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: job.displayName,
+    waitDuration: const Duration(milliseconds: 400),
+    child: Padding(
+      padding: const EdgeInsets.only(right: 12),
+      child: Text(
+        job.displayName,
+        key: const Key('review-filename'),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
       ),
     ),
   );
@@ -6250,7 +6345,9 @@ TextRange? _currentTimedTextRange({
   final timedTokens = tokens
       .where(
         (token) =>
-            (token.startMs != 0 || token.endMs != 0) &&
+            (token.startMs != 0 ||
+                token.endMs != 0 ||
+                token.segmentId != null) &&
             token.startMs >= segmentStartMs &&
             (segmentEndMs <= segmentStartMs || token.startMs < segmentEndMs),
       )

@@ -22,6 +22,13 @@ void main() {
     expect(strings.t('automatic'), '自动识别');
     expect(strings.t('none'), '无');
     expect(strings.t('delete_history'), '从资料库移除');
+    expect(strings.t('remove_podcast_title'), '移除播客项目？');
+    expect(strings.t('remove_podcast_body'), contains('从“已下载”和“资料库”中移除'));
+    expect(strings.t('remove_podcast_body'), contains('播放进度会保留'));
+    expect(
+      strings.t('auto_transcribe_local_description'),
+      contains('拖入收件箱的文件仍需手动'),
+    );
     expect(strings.t('notices'), '第三方声明');
     expect(strings.t('notices_body'), contains('第三方转写服务提供商'));
     expect(strings.error('bad_credentials'), 'Soniox API 密钥无效。');
