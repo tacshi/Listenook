@@ -1670,6 +1670,10 @@ void main() {
       isNull,
     );
     expect(find.byKey(speakerLabel), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('segment-speaker-dropdown-segment')),
+      findsNothing,
+    );
     expect(find.byType(SpeakerStrip), findsOneWidget);
     expect(find.byKey(timestamp), findsNothing);
     expect(
@@ -1702,6 +1706,104 @@ void main() {
       tester.widget<IconButton>(find.byKey(timestampToggle)).isSelected,
       isTrue,
     );
+  });
+
+  testWidgets('sentence speaker dropdown reassigns only that segment', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1000, 620));
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'first',
+            startMs: 0,
+            endMs: 1000,
+            text: 'First sentence.',
+            speaker: '1',
+          ),
+          TranscriptSegment(
+            id: 'second',
+            startMs: 1000,
+            endMs: 2000,
+            text: 'Second sentence.',
+            speaker: '1',
+          ),
+          TranscriptSegment(
+            id: 'third',
+            startMs: 2000,
+            endMs: 3000,
+            text: 'Third sentence.',
+            speaker: '2',
+          ),
+        ],
+        speakers: const [
+          SpeakerProfile(id: '1', name: 'Alice'),
+          SpeakerProfile(id: '2', name: 'Bob'),
+        ],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Color? speakerColor(String segmentId) {
+      final label = find.descendant(
+        of: find.byKey(ValueKey('segment-speaker-$segmentId')),
+        matching: find.byType(Text),
+      );
+      return tester.widget<Text>(label).style?.color;
+    }
+
+    final originalFirstColor = speakerColor('first');
+    final thirdColor = speakerColor('third');
+    expect(originalFirstColor, isNot(thirdColor));
+    expect(find.byTooltip('Change speaker'), findsNWidgets(3));
+
+    await tester.tap(
+      find.byKey(const ValueKey('segment-speaker-dropdown-first')),
+    );
+    await tester.pumpAndSettle();
+
+    final aliceOption = find.byKey(
+      const ValueKey('segment-speaker-option-first-1'),
+    );
+    final bobOption = find.byKey(
+      const ValueKey('segment-speaker-option-first-2'),
+    );
+    expect(aliceOption, findsOneWidget);
+    expect(bobOption, findsOneWidget);
+    expect(tester.widget<MenuItemButton>(aliceOption).onPressed, isNull);
+    expect(tester.widget<MenuItemButton>(bobOption).onPressed, isNotNull);
+
+    await tester.tap(bobOption);
+    await tester.pumpAndSettle();
+
+    final document = controller.allJobs.single.document!;
+    expect(document.segments.first.speaker, '2');
+    expect(document.segments[1].speaker, '1');
+    expect(document.segments.last.speaker, '2');
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('segment-speaker-first')),
+        matching: find.text('Bob'),
+      ),
+      findsOneWidget,
+    );
+    expect(speakerColor('first'), thirdColor);
   });
 
   testWidgets('transcript pane toolbar adapts at each breakpoint', (

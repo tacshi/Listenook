@@ -882,6 +882,84 @@ void main() {
     expect(result.status, JobStatus.completed);
   });
 
+  test('reassigning a segment speaker persists only that correction', () async {
+    final now = DateTime.utc(2026, 8, 12);
+    const tokens = [
+      TranscriptToken(text: 'One.', startMs: 0, endMs: 500, speaker: '1'),
+    ];
+    final document = TranscriptDocument(
+      tokens: tokens,
+      segments: const [
+        TranscriptSegment(
+          id: 'one',
+          startMs: 0,
+          endMs: 500,
+          text: 'One.',
+          speaker: '1',
+          translatedText: '一',
+        ),
+        TranscriptSegment(
+          id: 'two',
+          startMs: 500,
+          endMs: 1000,
+          text: 'Two.',
+          speaker: '1',
+          translatedText: '二',
+        ),
+      ],
+      speakers: const [
+        SpeakerProfile(id: '1', name: 'Alice'),
+        SpeakerProfile(id: '2', name: 'Bob'),
+      ],
+      updatedAt: now,
+    );
+    final job = TranscriptionJob(
+      id: 'completed',
+      batchId: 'batch',
+      sourcePath: '/missing/original.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      document: document,
+      translationState: const TranslationState(
+        status: TranslationStatus.completed,
+        targetLanguage: 'zh-Hans',
+        completedSegments: 2,
+        totalSegments: 2,
+      ),
+      aiBrief: AiBrief(
+        overview: 'Original overview',
+        overviewEvidenceSegmentIds: const ['one'],
+        chapters: const [],
+        insights: const [],
+        outputLanguage: 'en',
+        model: 'brief-model',
+        selectedSections: const {AiBriefSection.overview},
+        generatedAt: now,
+        sourceTranscriptUpdatedAt: now,
+      ),
+    );
+    final jobs = _Jobs([job]);
+    final controller = _controller(jobs: jobs, soniox: _Soniox());
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await controller.updateSegmentSpeaker('completed', 'one', '2');
+
+    final result = controller.allJobs.single;
+    final saved = jobs.saved['completed']!;
+    expect(result.document!.segments.first.speaker, '2');
+    expect(result.document!.segments.last.speaker, '1');
+    expect(result.document!.segments.first.text, 'One.');
+    expect(result.document!.segments.first.translatedText, '一');
+    expect(result.document!.tokens, same(tokens));
+    expect(result.translationState.status, TranslationStatus.completed);
+    expect(result.translationState.completedSegments, 2);
+    expect(result.document!.updatedAt.isAfter(now), isTrue);
+    expect(result.aiBrief!.isStaleFor(result.document!), isTrue);
+    expect(saved.document!.segments.first.speaker, '2');
+  });
+
   test(
     'Soniox translation completes in the transcription pass without LLM work',
     () async {

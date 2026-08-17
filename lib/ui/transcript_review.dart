@@ -1091,6 +1091,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
                       speakerName: context.strings.speakerName(
                         document.speakerName(segment.speaker),
                       ),
+                      speakers: document.speakers,
                       showSpeaker: controller.settings.showSpeakers,
                       showTimestamp: controller.settings.showTimestamps,
                       highlightTranslated:
@@ -1112,6 +1113,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
                       onEditOriginal: () => _startEditing(segment.id),
                       onCancelOriginal: () => _cancelEditing(segment.id),
                       onSaveOriginal: (text) => _saveSegment(segment.id, text),
+                      onSpeakerChanged: (speakerId) =>
+                          _saveSegmentSpeaker(segment.id, speakerId),
                       onEditTranslation: () =>
                           _startTranslationEditing(segment.id),
                       onCancelTranslation: () =>
@@ -1622,6 +1625,21 @@ class _TranscriptReviewState extends State<TranscriptReview>
       if (mounted && _editingSegmentId == segmentId) {
         setState(() => _editingSegmentId = null);
       }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.strings.t('error_unexpected'))),
+      );
+    }
+  }
+
+  Future<void> _saveSegmentSpeaker(String segmentId, String speakerId) async {
+    try {
+      await context.read<AppController>().updateSegmentSpeaker(
+        widget.jobId,
+        segmentId,
+        speakerId,
+      );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4188,6 +4206,7 @@ class _TranscriptSegmentGroup extends StatefulWidget {
     required this.viewMode,
     required this.query,
     required this.speakerName,
+    required this.speakers,
     required this.showSpeaker,
     required this.showTimestamp,
     required this.highlightTranslated,
@@ -4199,6 +4218,7 @@ class _TranscriptSegmentGroup extends StatefulWidget {
     required this.onEditOriginal,
     required this.onCancelOriginal,
     required this.onSaveOriginal,
+    required this.onSpeakerChanged,
     required this.onEditTranslation,
     required this.onCancelTranslation,
     required this.onSaveTranslation,
@@ -4212,6 +4232,7 @@ class _TranscriptSegmentGroup extends StatefulWidget {
   final TranslationViewMode viewMode;
   final String query;
   final String speakerName;
+  final List<SpeakerProfile> speakers;
   final bool showSpeaker;
   final bool showTimestamp;
   final bool highlightTranslated;
@@ -4223,6 +4244,7 @@ class _TranscriptSegmentGroup extends StatefulWidget {
   final VoidCallback onEditOriginal;
   final VoidCallback onCancelOriginal;
   final Future<void> Function(String) onSaveOriginal;
+  final Future<void> Function(String) onSpeakerChanged;
   final VoidCallback onEditTranslation;
   final VoidCallback onCancelTranslation;
   final Future<void> Function(String) onSaveTranslation;
@@ -4265,9 +4287,11 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
                 segment: widget.segment,
                 query: widget.query,
                 speakerName: widget.speakerName,
+                speakers: widget.speakers,
                 showSpeaker: widget.showSpeaker,
                 showTimestamp: widget.showTimestamp,
                 onSeek: widget.onSeek,
+                onSpeakerChanged: widget.onSpeakerChanged,
               ),
             if (showOriginal)
               TranscriptSegmentEditor(
@@ -4394,21 +4418,37 @@ class _TranscriptSegmentMetadata extends StatelessWidget {
     required this.segment,
     required this.query,
     required this.speakerName,
+    this.speakers = const [],
     required this.showSpeaker,
     required this.showTimestamp,
     required this.onSeek,
+    this.onSpeakerChanged,
   });
 
   final TranscriptSegment segment;
   final String query;
   final String speakerName;
+  final List<SpeakerProfile> speakers;
   final bool showSpeaker;
   final bool showTimestamp;
   final TranscriptSegmentSeekCallback onSeek;
+  final Future<void> Function(String)? onSpeakerChanged;
 
   @override
   Widget build(BuildContext context) {
     final showsSpeaker = showSpeaker && speakerName.isNotEmpty;
+    final canChangeSpeaker =
+        showsSpeaker && speakers.length > 1 && onSpeakerChanged != null;
+    final speakerColor = _speakerColor(context, segment.speaker ?? speakerName);
+    final speakerLabel = SearchHighlightedText(
+      key: ValueKey('segment-speaker-${segment.id}'),
+      text: speakerName,
+      query: query,
+      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+        color: speakerColor,
+        fontWeight: FontWeight.w700,
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.only(left: 4, bottom: 4),
       child: Row(
@@ -4434,15 +4474,69 @@ class _TranscriptSegmentMetadata extends StatelessWidget {
           if (showTimestamp && showsSpeaker) const SizedBox(width: 8),
           if (showsSpeaker)
             Expanded(
-              child: SearchHighlightedText(
-                key: ValueKey('segment-speaker-${segment.id}'),
-                text: speakerName,
-                query: query,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: _speakerColor(context, segment.speaker ?? speakerName),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
+              child: canChangeSpeaker
+                  ? Align(
+                      alignment: Alignment.centerLeft,
+                      child: MenuAnchor(
+                        key: ValueKey('segment-speaker-menu-${segment.id}'),
+                        menuChildren: [
+                          for (final speaker in speakers)
+                            MenuItemButton(
+                              key: ValueKey(
+                                'segment-speaker-option-${segment.id}-${speaker.id}',
+                              ),
+                              leadingIcon: Icon(
+                                speaker.id == segment.speaker
+                                    ? Icons.check_rounded
+                                    : Icons.circle,
+                                size: speaker.id == segment.speaker ? 18 : 10,
+                                color: _speakerColor(context, speaker.id),
+                              ),
+                              onPressed: speaker.id == segment.speaker
+                                  ? null
+                                  : () => unawaited(
+                                      onSpeakerChanged!(speaker.id),
+                                    ),
+                              child: Text(
+                                context.strings.speakerName(speaker.name),
+                                style: TextStyle(
+                                  color: _speakerColor(context, speaker.id),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                        ],
+                        builder: (context, menuController, child) => Tooltip(
+                          message: context.strings.t('change_speaker'),
+                          child: TextButton(
+                            key: ValueKey(
+                              'segment-speaker-dropdown-${segment.id}',
+                            ),
+                            onPressed: () => menuController.isOpen
+                                ? menuController.close()
+                                : menuController.open(),
+                            style: TextButton.styleFrom(
+                              foregroundColor: speakerColor,
+                              minimumSize: Size.zero,
+                              padding: EdgeInsets.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(child: speakerLabel),
+                                const SizedBox(width: 2),
+                                const Icon(
+                                  Icons.arrow_drop_down_rounded,
+                                  size: 18,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                  : speakerLabel,
             ),
         ],
       ),

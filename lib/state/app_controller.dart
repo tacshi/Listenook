@@ -2465,6 +2465,29 @@ class AppController extends ChangeNotifier {
     await _transition(job, document: document.copyWith(speakers: speakers));
   }
 
+  Future<void> updateSegmentSpeaker(
+    String jobId,
+    String segmentId,
+    String speakerId,
+  ) async {
+    final job = _jobs[jobId];
+    final document = job?.document;
+    if (job == null || document == null) return;
+    if (!document.speakers.any((speaker) => speaker.id == speakerId)) return;
+    final target = document.segments
+        .where((segment) => segment.id == segmentId)
+        .firstOrNull;
+    if (target == null || target.speaker == speakerId) return;
+    final segments = [
+      for (final segment in document.segments)
+        if (segment.id == segmentId)
+          segment.copyWith(speaker: speakerId)
+        else
+          segment,
+    ];
+    await _transition(job, document: document.copyWith(segments: segments));
+  }
+
   Future<void> updateSettings(AppSettings value) async {
     final disableLocalAutoStart =
         _settings.autoTranscribeLocal && !value.autoTranscribeLocal;
