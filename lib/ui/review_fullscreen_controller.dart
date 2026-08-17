@@ -6,6 +6,7 @@ class ReviewFullscreenController {
   NavigatorState? _navigator;
   Future<void>? _pendingExit;
   final Map<Object, Future<void> Function()> _mediaShutdowns = {};
+  final Map<Object, Future<void> Function()> _mediaResumes = {};
   bool _active = false;
 
   bool get isActive => _active;
@@ -20,17 +21,29 @@ class ReviewFullscreenController {
     _navigator = null;
   }
 
-  void registerMediaShutdown(Object owner, Future<void> Function() shutdown) {
+  void registerMediaShutdown(
+    Object owner,
+    Future<void> Function() shutdown, {
+    Future<void> Function()? resume,
+  }) {
     _mediaShutdowns[owner] = shutdown;
+    if (resume != null) _mediaResumes[owner] = resume;
   }
 
   void unregisterMediaShutdown(Object owner) {
     _mediaShutdowns.remove(owner);
+    _mediaResumes.remove(owner);
   }
 
   Future<void> shutdownMedia() async {
     for (final shutdown in List.of(_mediaShutdowns.values)) {
       await shutdown();
+    }
+  }
+
+  Future<void> resumeMedia() async {
+    for (final resume in List.of(_mediaResumes.values)) {
+      await resume();
     }
   }
 
