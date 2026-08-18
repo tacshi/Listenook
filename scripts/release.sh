@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/release-notes.sh"
 
 RELEASE_REPO="tacshi/MeowSTT-Release"
 RELEASE_REPO_DIR="${RELEASE_REPO_DIR:-$ROOT/../MeowSTT-Release}"
@@ -104,9 +105,7 @@ else
   PREVIOUS_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
   RANGE="HEAD"
   [[ -z "$PREVIOUS_TAG" ]] || RANGE="$PREVIOUS_TAG..HEAD"
-  git log "$RANGE" --pretty=format:'%s' \
-    | sed -E '/^(chore|ci|build|test|style|refactor|docs)(\([^)]*\))?:/d; /^(release|bump|merge|wip)(:| )/Id; s/^(feat|fix|perf)(\([^)]*\))?:[[:space:]]*//; s/[[:space:]]*\(#[0-9]+\)$//; s/^/- /' \
-    > "$NOTES_FILE"
+  write_release_notes "$NOTES_FILE" "$RANGE"
   [[ -s "$NOTES_FILE" ]] || printf -- '- Maintenance release\n' > "$NOTES_FILE"
 fi
 
