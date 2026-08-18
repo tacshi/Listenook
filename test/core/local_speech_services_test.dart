@@ -4,6 +4,8 @@ import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/data/local_speech_services.dart';
 
 void main() {
+  const alignmentModel = LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8;
+
   test('MOSS tagged output becomes speaker-attributed segments', () {
     final document = const MossTaggedTranscriptParser().parse(
       '[0.48][S01]Welcome everyone[1.66]'
@@ -257,6 +259,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: source,
           languageHints: const ['en'],
@@ -322,6 +325,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: document,
           languageHints: const ['en'],
@@ -358,6 +362,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/dense-cjk.wav',
           document: TranscriptDocument(
             tokens: const [],
@@ -405,6 +410,7 @@ void main() {
 
     final result = await service.align(
       ForcedAlignmentRequest(
+        model: alignmentModel,
         sourcePath: '/meeting.wav',
         document: document,
         languageHints: const ['en'],
@@ -440,6 +446,7 @@ void main() {
 
     final result = await service.align(
       ForcedAlignmentRequest(
+        model: alignmentModel,
         sourcePath: '/meeting.wav',
         document: document,
         languageHints: const ['ja'],
@@ -541,6 +548,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/opening.wav',
           document: document,
           languageHints: const ['en'],
@@ -585,6 +593,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: document,
           languageHints: const ['ja'],
@@ -627,6 +636,7 @@ void main() {
 
     final result = await service.align(
       ForcedAlignmentRequest(
+        model: alignmentModel,
         sourcePath: '/meeting.wav',
         document: document,
         languageHints: const ['zh'],
@@ -665,6 +675,7 @@ void main() {
 
     final result = await service.align(
       ForcedAlignmentRequest(
+        model: alignmentModel,
         sourcePath: '/meeting.wav',
         document: document,
         languageHints: const ['zh'],
@@ -718,6 +729,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: document,
           languageHints: const ['zh'],
@@ -748,6 +760,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: _document(),
           languageHints: const ['ar'],
@@ -773,6 +786,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: _document(),
           languageHints: const ['en'],
@@ -784,6 +798,67 @@ void main() {
       expect(worker.command, isNull);
     },
   );
+
+  test('alignment loads the selected FP16 model directory', () async {
+    final worker = _Worker(const {
+      'tokens': <Object>[],
+      'failed_window_ids': <Object>[],
+    });
+    final models = _Models(ready: true);
+    final service = ProcessForcedAlignmentService(
+      models: models,
+      pcm: _Pcm(),
+      worker: worker,
+      platformSupported: true,
+    );
+
+    await service.align(
+      ForcedAlignmentRequest(
+        model: LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16,
+        sourcePath: '/meeting.wav',
+        document: _document(),
+        languageHints: const ['en'],
+      ),
+    );
+
+    expect(models.statusRequests, [
+      LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16.id,
+    ]);
+    expect(
+      worker.request?['model_directory'],
+      '/models/${LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16.id}',
+    );
+  });
+
+  test('missing selected FP16 model does not fall back to INT8', () async {
+    final worker = _Worker(const {});
+    final models = _Models(
+      ready: false,
+      readyIds: {LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id},
+    );
+    final service = ProcessForcedAlignmentService(
+      models: models,
+      pcm: _Pcm(),
+      worker: worker,
+      platformSupported: true,
+    );
+
+    final result = await service.align(
+      ForcedAlignmentRequest(
+        model: LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16,
+        sourcePath: '/meeting.wav',
+        document: _document(),
+        languageHints: const ['en'],
+      ),
+    );
+
+    expect(result.status, ForcedAlignmentStatus.unavailable);
+    expect(result.warningCode, 'alignment_model_missing');
+    expect(models.statusRequests, [
+      LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16.id,
+    ]);
+    expect(worker.command, isNull);
+  });
 
   test(
     'one invalid overlap window publishes only the reliable tokens',
@@ -802,6 +877,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: _document(),
           languageHints: const ['en'],
@@ -839,6 +915,7 @@ void main() {
 
       await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: document,
           languageHints: const ['en'],
@@ -878,6 +955,7 @@ void main() {
 
     final result = await service.align(
       ForcedAlignmentRequest(
+        model: alignmentModel,
         sourcePath: '/meeting.wav',
         document: document,
         languageHints: const ['en'],
@@ -914,6 +992,7 @@ void main() {
 
       final result = await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: _document(),
         ),
@@ -948,6 +1027,7 @@ void main() {
 
       await service.align(
         ForcedAlignmentRequest(
+          model: alignmentModel,
           sourcePath: '/meeting.wav',
           document: _document(),
           languageHints: const ['en'],
@@ -989,8 +1069,10 @@ TranscriptDocument _document() => TranscriptDocument(
 );
 
 class _Models implements LocalModelManager {
-  _Models({required this.ready});
+  _Models({required this.ready, this.readyIds});
   final bool ready;
+  final Set<String>? readyIds;
+  final statusRequests = <String>[];
 
   @override
   List<LocalModelDescriptor> get models => LocalSpeechModels.all;
@@ -1012,13 +1094,16 @@ class _Models implements LocalModelManager {
   Future<LocalModelStatus> status(
     String modelId, {
     bool verifyIntegrity = false,
-  }) async => LocalModelStatus(
-    descriptor: models.singleWhere((model) => model.id == modelId),
-    availability: ready
-        ? LocalModelAvailability.ready
-        : LocalModelAvailability.missing,
-    downloadedBytes: 0,
-  );
+  }) async {
+    statusRequests.add(modelId);
+    return LocalModelStatus(
+      descriptor: models.singleWhere((model) => model.id == modelId),
+      availability: (readyIds?.contains(modelId) ?? ready)
+          ? LocalModelAvailability.ready
+          : LocalModelAvailability.missing,
+      downloadedBytes: 0,
+    );
+  }
 }
 
 class _Pcm implements LocalPcmPreparer {

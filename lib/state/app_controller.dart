@@ -379,12 +379,8 @@ class AppController extends ChangeNotifier {
           progress: const JobProgress(stage: 'complete', fraction: 1),
           forcedAlignment: ForcedAlignmentState(
             status: ForcedAlignmentStatus.interrupted,
-            modelId:
-                alignment.modelId ??
-                LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
-            modelRevision:
-                alignment.modelRevision ??
-                LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+            modelId: alignment.modelId,
+            modelRevision: alignment.modelRevision,
             alignedSegments: alignment.alignedSegments,
             totalSegments: alignment.totalSegments == 0
                 ? job.document!.segments.length
@@ -417,6 +413,8 @@ class AppController extends ChangeNotifier {
       _translationCredentials?.readApiKey,
     );
     await _refreshLocalModelStatuses(notify: false);
+    settingsChanged =
+        _selectSoleInstalledForcedAlignerIfUnset() || settingsChanged;
     if (!availableTranscriptionProviders.contains(
       _sessionTranscriptionProvider,
     )) {
@@ -493,6 +491,27 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  bool _selectSoleInstalledForcedAlignerIfUnset() {
+    if (_settings.defaultForcedAlignmentModel != null) return false;
+    final installed = LocalSpeechModels.forcedAligners.entries
+        .where(
+          (entry) =>
+              _localModelStatuses[entry.value.id]?.availability ==
+              LocalModelAvailability.ready,
+        )
+        .toList(growable: false);
+    if (installed.length != 1) return false;
+    _settings = _settings.copyWith(
+      defaultForcedAlignmentModel: installed.single.key,
+    );
+    return true;
+  }
+
+  LocalModelDescriptor? get _defaultForcedAligner {
+    final model = _settings.defaultForcedAlignmentModel;
+    return model == null ? null : LocalSpeechModels.forcedAligner(model);
+  }
+
   Future<void> downloadLocalModel(String modelId) async {
     final manager = _localModelManager;
     if (manager == null || _localModelDownloadProgress.containsKey(modelId)) {
@@ -516,6 +535,9 @@ class AppController extends ChangeNotifier {
       _localModelDownloadCancelled.remove(modelId);
       _localModelDownloadProgress.remove(modelId);
       _localModelStatuses[modelId] = await manager.status(modelId);
+      if (_selectSoleInstalledForcedAlignerIfUnset()) {
+        await _queueSettingsSave(_settings);
+      }
       notifyListeners();
       _scheduleLocalAutoStart();
     }
@@ -1666,6 +1688,7 @@ class AppController extends ChangeNotifier {
       forcedAlignment: shouldAlign
           ? _queuedAlignmentState(
               document.segments.length,
+              model: _defaultForcedAligner,
               languageAutomaticallyDetermined:
                   job.options.languageHints.isEmpty,
             )
@@ -1803,6 +1826,7 @@ class AppController extends ChangeNotifier {
         forcedAlignment: shouldAlign
             ? _queuedAlignmentState(
                 document.segments.length,
+                model: _defaultForcedAligner,
                 languageAutomaticallyDetermined:
                     job.options.languageHints.isEmpty,
               )
@@ -1828,11 +1852,12 @@ class AppController extends ChangeNotifier {
 
   ForcedAlignmentState _queuedAlignmentState(
     int totalSegments, {
+    required LocalModelDescriptor? model,
     required bool languageAutomaticallyDetermined,
   }) => ForcedAlignmentState(
     status: ForcedAlignmentStatus.queued,
-    modelId: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
-    modelRevision: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+    modelId: model?.id,
+    modelRevision: model?.revision,
     totalSegments: totalSegments,
     languageAutomaticallyDetermined: languageAutomaticallyDetermined,
   );
@@ -1856,13 +1881,25 @@ class AppController extends ChangeNotifier {
         'alignment_source_missing',
       );
     }
+    final model = LocalSpeechModels.forcedAlignerById(
+      job.forcedAlignment.modelId,
+    );
+    if (model == null) {
+      return _completeWithoutAlignment(
+        job,
+        ForcedAlignmentStatus.unavailable,
+        job.forcedAlignment.modelId == null
+            ? 'alignment_model_not_selected'
+            : 'alignment_model_missing',
+      );
+    }
     job = await _transition(
       job,
       status: JobStatus.aligning,
       forcedAlignment: ForcedAlignmentState(
         status: ForcedAlignmentStatus.running,
-        modelId: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
-        modelRevision: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+        modelId: model.id,
+        modelRevision: model.revision,
         totalSegments: document.segments.length,
         languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
       ),
@@ -1874,6 +1911,7 @@ class AppController extends ChangeNotifier {
           ForcedAlignmentRequest(
             sourcePath: job.sourcePath,
             document: document,
+            model: model,
             languageHints: job.options.languageHints,
           ),
           onProgress: (fraction, detail) =>
@@ -1890,9 +1928,7 @@ class AppController extends ChangeNotifier {
         document: publishTokens
             ? document.copyWith(tokens: result.tokens)
             : document,
-        forcedAlignment: result.toState(
-          LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8,
-        ),
+        forcedAlignment: result.toState(model),
         progress: const JobProgress(stage: 'complete', fraction: 1),
         clearError: true,
       );
@@ -1934,8 +1970,8 @@ class AppController extends ChangeNotifier {
         : JobStatus.completed,
     forcedAlignment: ForcedAlignmentState(
       status: status,
-      modelId: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
-      modelRevision: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+      modelId: job.forcedAlignment.modelId,
+      modelRevision: job.forcedAlignment.modelRevision,
       alignedSegments: job.forcedAlignment.alignedSegments,
       totalSegments:
           job.document?.segments.length ?? job.forcedAlignment.totalSegments,
@@ -2158,9 +2194,8 @@ class AppController extends ChangeNotifier {
                 : JobStatus.completed,
             forcedAlignment: ForcedAlignmentState(
               status: ForcedAlignmentStatus.interrupted,
-              modelId: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
-              modelRevision:
-                  LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
+              modelId: job.forcedAlignment.modelId,
+              modelRevision: job.forcedAlignment.modelRevision,
               alignedSegments: job.forcedAlignment.alignedSegments,
               totalSegments: job.document!.segments.length,
               languageAutomaticallyDetermined:
@@ -2206,6 +2241,7 @@ class AppController extends ChangeNotifier {
       status: JobStatus.aligning,
       forcedAlignment: _queuedAlignmentState(
         job.document!.segments.length,
+        model: _defaultForcedAligner,
         languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
       ),
       progress: const JobProgress(stage: 'aligning', fraction: 0),

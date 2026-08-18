@@ -8,8 +8,8 @@ Optional model weights are downloaded by the user and are not bundled:
 
 - OpenMOSS-Team/MOSS-Transcribe-Diarize-0.9B, converted to Core ML INT8 by
   aufklarer, licensed under Apache License 2.0.
-- Qwen/Qwen3-ForcedAligner-0.6B, converted to Core ML INT8 by aufklarer,
-  licensed under Apache License 2.0.
+- Qwen/Qwen3-ForcedAligner-0.6B, converted to selectable Core ML INT8 and
+  FP16 variants by aufklarer, licensed under Apache License 2.0.
 
 See `APACHE-2.0.txt` for the license text. Model revisions, expected sizes, and
 SHA-256 hashes are pinned in the application source and verified before use.

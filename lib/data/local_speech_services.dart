@@ -410,7 +410,10 @@ class ProcessForcedAlignmentService implements ForcedAlignmentService {
       return _unavailable(total, 'alignment_language_unsupported');
     }
 
-    final model = LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8;
+    final model = LocalSpeechModels.forcedAlignerById(request.model.id);
+    if (model == null || model.revision != request.model.revision) {
+      return _unavailable(total, 'alignment_model_missing');
+    }
     final modelStatus = await _models.status(model.id, verifyIntegrity: true);
     if (modelStatus.availability != LocalModelAvailability.ready) {
       return _unavailable(total, 'alignment_model_missing');

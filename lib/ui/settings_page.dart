@@ -1480,6 +1480,53 @@ class _LocalSpeechModelsSection extends StatelessWidget {
           showMessage: showMessage,
         ),
         const SizedBox(height: 8),
+        _LocalModelRow(
+          descriptor: LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16,
+          status: controller.localModelStatus(
+            LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16.id,
+          ),
+          controller: controller,
+          showMessage: showMessage,
+        ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<ForcedAlignmentModel>(
+          key: const Key('default-forced-alignment-model'),
+          initialValue: settings.defaultForcedAlignmentModel,
+          decoration: InputDecoration(
+            labelText: context.strings.t('default_alignment_model'),
+            helperText: context.strings.t(
+              'default_alignment_model_description',
+            ),
+          ),
+          hint: Text(context.strings.t('alignment_model_download_to_select')),
+          items: [
+            for (final entry in LocalSpeechModels.forcedAligners.entries)
+              DropdownMenuItem(
+                value: entry.key,
+                enabled:
+                    controller.localModelStatus(entry.value.id)?.availability ==
+                    LocalModelAvailability.ready,
+                child: Text(
+                  controller.localModelStatus(entry.value.id)?.availability ==
+                          LocalModelAvailability.ready
+                      ? entry.value.displayName
+                      : '${entry.value.displayName} · ${context.strings.t('model_not_installed')}',
+                ),
+              ),
+          ],
+          onChanged: (model) {
+            if (model == null) return;
+            final descriptor = LocalSpeechModels.forcedAligner(model);
+            if (controller.localModelStatus(descriptor.id)?.availability !=
+                LocalModelAvailability.ready) {
+              return;
+            }
+            controller.updateSettings(
+              settings.copyWith(defaultForcedAlignmentModel: model),
+            );
+          },
+        ),
+        const SizedBox(height: 8),
         SwitchListTile(
           key: const Key('auto-transcribe-local-switch'),
           contentPadding: EdgeInsets.zero,

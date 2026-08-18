@@ -14,7 +14,7 @@ deleted with the job; managed copies are removed when the job is deleted.
 Nothing is uploaded to a transcription provider until you press **Transcribe**, except a
 word-level publisher transcript that can complete without uploading media. When
 MOSS Local is selected, transcription and forced alignment run in separate local
-processes and the media is never uploaded. Installing either optional model
+processes and the media is never uploaded. Installing any optional speech model
 connects to Hugging Face and stores the verified Core ML model bundle under
 Application Support.
 
@@ -50,7 +50,9 @@ The app never lists or deletes unrelated account resources.
 For MOSS Local and MOSS Pro transcripts, optional precise word timing is
 generated locally with Qwen3 ForcedAligner. A failed, cancelled, unavailable,
 or partially successful alignment never causes a cloud fallback and does not
-discard the speaker-level MOSS transcript.
+discard the speaker-level MOSS transcript. Users choose between independently
+downloaded INT8 and FP16 alignment variants; MeowSTT never substitutes one for
+the other when the selected variant is unavailable.
 
 Translation is optional. When Soniox built-in translation is enabled, the
 selected target language is included in the original Soniox transcription

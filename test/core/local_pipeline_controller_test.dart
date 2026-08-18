@@ -33,6 +33,154 @@ void main() {
     models.releaseVerification.complete();
   });
 
+  test('startup selects and persists the sole installed aligner', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.dispose);
+    final models = _AlignmentModels({
+      LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
+    });
+
+    final controller = await fixture.controller(
+      settings: const AppSettings(),
+      localStt: _LocalStt(),
+      alignment: _Alignment(),
+      localModelManager: models,
+      preserveUnselectedAlignmentModel: true,
+    );
+
+    expect(
+      controller.settings.defaultForcedAlignmentModel,
+      ForcedAlignmentModel.qwen3CoreMlInt8,
+    );
+    expect(
+      (await JsonSettingsRepository(
+        fixture.paths,
+      ).load()).defaultForcedAlignmentModel,
+      ForcedAlignmentModel.qwen3CoreMlInt8,
+    );
+  });
+
+  test(
+    'startup leaves the choice unset when both aligners are installed',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.dispose);
+      final models = _AlignmentModels({
+        for (final descriptor in LocalSpeechModels.forcedAligners.values)
+          descriptor.id,
+      });
+
+      final controller = await fixture.controller(
+        settings: const AppSettings(),
+        localStt: _LocalStt(),
+        alignment: _Alignment(),
+        localModelManager: models,
+        preserveUnselectedAlignmentModel: true,
+      );
+
+      expect(controller.settings.defaultForcedAlignmentModel, isNull);
+    },
+  );
+
+  test('the first downloaded aligner becomes the default', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.dispose);
+    final models = _AlignmentModels({});
+    final controller = await fixture.controller(
+      settings: const AppSettings(),
+      localStt: _LocalStt(),
+      alignment: _Alignment(),
+      localModelManager: models,
+      preserveUnselectedAlignmentModel: true,
+    );
+
+    await controller.downloadLocalModel(
+      LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16.id,
+    );
+
+    expect(
+      controller.settings.defaultForcedAlignmentModel,
+      ForcedAlignmentModel.qwen3CoreMlFp16,
+    );
+  });
+
+  test('MOSS alignment stays unavailable until a model is selected', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.dispose);
+    final alignment = _CountingAlignment();
+    final controller = await fixture.controller(
+      settings: const AppSettings(
+        defaultTranscriptionProvider: TranscriptionProvider.mossLocal,
+      ),
+      localStt: _LocalStt(),
+      alignment: alignment,
+      preserveUnselectedAlignmentModel: true,
+    );
+
+    await controller.enqueueSources([fixture.audio.path]);
+    await _waitFor(() => controller.inboxJobs.single.status == JobStatus.ready);
+    await controller.startReady();
+
+    final job = controller.inboxJobs.single;
+    expect(alignment.calls, 0);
+    expect(job.forcedAlignment.status, ForcedAlignmentStatus.unavailable);
+    expect(job.forcedAlignment.warningCode, 'alignment_model_not_selected');
+    expect(job.forcedAlignment.modelId, isNull);
+    expect(job.document!.segments.single.text, 'Hello world');
+  });
+
+  test(
+    'queued alignment keeps its model while retries use the new default',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.dispose);
+      final alignment = _SwitchingAlignment();
+      final controller = await fixture.controller(
+        settings: const AppSettings(
+          defaultTranscriptionProvider: TranscriptionProvider.mossLocal,
+          defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlInt8,
+        ),
+        localStt: _LocalStt(),
+        alignment: alignment,
+      );
+
+      await controller.enqueueSources([fixture.audio.path]);
+      await _waitFor(
+        () => controller.inboxJobs.single.status == JobStatus.ready,
+      );
+      final firstRun = controller.startReady();
+      await alignment.firstEntered.future;
+      await controller.updateSettings(
+        controller.settings.copyWith(
+          defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlFp16,
+        ),
+      );
+      alignment.releaseFirst.complete();
+      await firstRun;
+
+      var job = controller.inboxJobs.single;
+      expect(
+        alignment.models.first,
+        same(LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8),
+      );
+      expect(
+        job.forcedAlignment.modelId,
+        LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
+      );
+
+      await controller.retryForcedAlignment(job.id);
+      job = controller.inboxJobs.single;
+      expect(
+        alignment.models.last,
+        same(LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16),
+      );
+      expect(
+        job.forcedAlignment.modelId,
+        LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16.id,
+      );
+    },
+  );
+
   test(
     'local MOSS persists segments then adds segment-owned word timing',
     () async {
@@ -845,9 +993,17 @@ class _Fixture {
     InboxFolderMonitor? inboxMonitor,
     PodcastGateway? podcastGateway,
     String? podcastManagedRoot,
+    bool preserveUnselectedAlignmentModel = false,
   }) async {
     final settingsRepository = JsonSettingsRepository(paths);
-    await settingsRepository.save(settings);
+    final effectiveSettings =
+        !preserveUnselectedAlignmentModel &&
+            settings.defaultForcedAlignmentModel == null
+        ? settings.copyWith(
+            defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlInt8,
+          )
+        : settings;
+    await settingsRepository.save(effectiveSettings);
     final controller = AppController(
       credentialStore: _Credentials(),
       settingsRepository: settingsRepository,
@@ -1156,6 +1312,107 @@ class _TestInboxMonitor implements InboxFolderMonitor {
 
   @override
   Future<void> stop() async => _onCandidate = null;
+}
+
+class _AlignmentModels implements LocalModelManager {
+  _AlignmentModels(Set<String> installed) : installed = {...installed};
+
+  final Set<String> installed;
+
+  @override
+  List<LocalModelDescriptor> get models =>
+      LocalSpeechModels.forcedAligners.values.toList(growable: false);
+
+  @override
+  Future<void> delete(String modelId) async => installed.remove(modelId);
+
+  @override
+  Future<void> download(
+    String modelId, {
+    ModelDownloadProgress? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    installed.add(modelId);
+    final descriptor = LocalSpeechModels.forcedAlignerById(modelId)!;
+    onProgress?.call(descriptor.sizeBytes, descriptor.sizeBytes);
+  }
+
+  @override
+  String pathFor(String modelId) => '/models/$modelId';
+
+  @override
+  Future<LocalModelStatus> status(
+    String modelId, {
+    bool verifyIntegrity = false,
+  }) async {
+    final descriptor = LocalSpeechModels.forcedAlignerById(modelId)!;
+    final ready = installed.contains(modelId);
+    return LocalModelStatus(
+      descriptor: descriptor,
+      availability: ready
+          ? LocalModelAvailability.ready
+          : LocalModelAvailability.missing,
+      downloadedBytes: ready ? descriptor.sizeBytes : 0,
+    );
+  }
+}
+
+class _CountingAlignment implements ForcedAlignmentService {
+  int calls = 0;
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<AlignmentResult> align(
+    ForcedAlignmentRequest request, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    calls++;
+    return const AlignmentResult(
+      tokens: [],
+      status: ForcedAlignmentStatus.completed,
+      alignedSegments: 0,
+      totalSegments: 1,
+    );
+  }
+}
+
+class _SwitchingAlignment implements ForcedAlignmentService {
+  final firstEntered = Completer<void>();
+  final releaseFirst = Completer<void>();
+  final models = <LocalModelDescriptor>[];
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<AlignmentResult> align(
+    ForcedAlignmentRequest request, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    models.add(request.model);
+    if (models.length == 1) {
+      firstEntered.complete();
+      await releaseFirst.future;
+    }
+    return const AlignmentResult(
+      tokens: [
+        TranscriptToken(
+          text: 'Hello',
+          startMs: 0,
+          endMs: 800,
+          segmentId: 'moss-0',
+          speaker: 'S01',
+        ),
+      ],
+      status: ForcedAlignmentStatus.completed,
+      alignedSegments: 1,
+      totalSegments: 1,
+    );
+  }
 }
 
 class _Alignment implements ForcedAlignmentService {

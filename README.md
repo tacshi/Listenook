@@ -43,8 +43,9 @@ The package name is `meow_stt`. Its permanent desktop identity is
   validation, owned-file cleanup, and compact 16 kHz mono AAC preparation on
   macOS for video, lossless audio, or high-bitrate input.
 - Optional Apple Silicon/macOS 15+ `MOSS Local` transcription with
-  diarization through pinned Core ML INT8 models, plus fail-open local Qwen3
-  ForcedAligner Core ML timing for MOSS Local and MOSS Pro.
+  diarization through a pinned Core ML INT8 model, plus fail-open local Qwen3
+  ForcedAligner timing with independently downloadable INT8 and FP16 Core ML
+  variants for MOSS Local and MOSS Pro.
 - Optional one-way Soniox translation in the original async transcription job,
   with provider-native language targets and no separate translation pass.
 - A local, searchable library; source relinking; editable segments and speaker

@@ -4183,6 +4183,9 @@ void main() {
       transcriptAcquisitionMode: TranscriptAcquisitionMode.mossPro,
       transcriptSource: TranscriptSource.mossPro,
       forcedAlignmentService: alignment,
+      settings: const AppSettings(
+        defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlInt8,
+      ),
     );
     addTearDown(controller.dispose);
     controller.openInWorkspace('job');

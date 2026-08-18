@@ -13,6 +13,10 @@ void main() {
   final pcmPath = Platform.environment['MEOWSTT_TEST_ALIGNMENT_PCM'];
   final modelDirectory =
       Platform.environment['MEOWSTT_TEST_ALIGNMENT_COREML_DIRECTORY'];
+  final alignmentModel =
+      Platform.environment['MEOWSTT_TEST_ALIGNMENT_MODEL'] == 'fp16'
+      ? LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16
+      : LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8;
   final workerPath = Platform.environment['MEOWSTT_TEST_SPEECH_WORKER'];
   final requestedSegmentIds = Platform
       .environment['MEOWSTT_TEST_ALIGNMENT_SEGMENT_IDS']
@@ -41,7 +45,7 @@ void main() {
       if (requestedSegmentIds != null) {
         final captureWorker = _RequestCapturingWorker();
         final planningService = ProcessForcedAlignmentService(
-          models: _InstalledAlignmentModel(modelDirectory!),
+          models: _InstalledAlignmentModel(modelDirectory!, alignmentModel),
           pcm: _ExistingPcm(pcmPath!),
           worker: captureWorker,
           platformSupported: true,
@@ -50,6 +54,7 @@ void main() {
           ForcedAlignmentRequest(
             sourcePath: job.sourcePath,
             document: savedDocument.copyWith(tokens: const []),
+            model: alignmentModel,
             languageHints: job.options.languageHints,
           ),
         );
@@ -81,7 +86,7 @@ void main() {
         ),
       );
       final service = ProcessForcedAlignmentService(
-        models: _InstalledAlignmentModel(modelDirectory!),
+        models: _InstalledAlignmentModel(modelDirectory!, alignmentModel),
         pcm: _ExistingPcm(pcmPath!),
         worker: worker,
         platformSupported: true,
@@ -91,6 +96,7 @@ void main() {
         ForcedAlignmentRequest(
           sourcePath: job.sourcePath,
           document: document.copyWith(tokens: const []),
+          model: alignmentModel,
           languageHints: job.options.languageHints,
         ),
       );
@@ -212,9 +218,10 @@ class _RequestCapturingWorker implements LocalSpeechWorker {
 }
 
 class _InstalledAlignmentModel implements LocalModelManager {
-  _InstalledAlignmentModel(this.modelDirectory);
+  _InstalledAlignmentModel(this.modelDirectory, this.model);
 
   final String modelDirectory;
+  final LocalModelDescriptor model;
 
   @override
   List<LocalModelDescriptor> get models => LocalSpeechModels.all;
@@ -227,9 +234,9 @@ class _InstalledAlignmentModel implements LocalModelManager {
     String modelId, {
     bool verifyIntegrity = false,
   }) async => LocalModelStatus(
-    descriptor: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8,
+    descriptor: model,
     availability: LocalModelAvailability.ready,
-    downloadedBytes: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.sizeBytes,
+    downloadedBytes: model.sizeBytes,
   );
 
   @override

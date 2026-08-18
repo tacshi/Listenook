@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 10;
+const int manifestVersion = 11;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 const Set<String> supportedMonitoredMediaExtensions = {
@@ -194,6 +194,8 @@ enum CleanupState { none, pending, complete }
 enum JobSourceOrigin { manual, monitoredFolder, podcast }
 
 enum TranscriptionProvider { soniox, mossPro, mossLocal }
+
+enum ForcedAlignmentModel { qwen3CoreMlInt8, qwen3CoreMlFp16 }
 
 enum TranscriptAcquisitionMode { soniox, mossPro, mossLocal, publisherCaptions }
 
@@ -1595,6 +1597,7 @@ class AppSettings {
     TranslationSettings? translationSettings,
     this.sonioxTranslation = const SonioxTranslationOptions(),
     this.defaultTranscriptionProvider = TranscriptionProvider.soniox,
+    this.defaultForcedAlignmentModel,
     this.autoAlignMoss = true,
     this.autoTranscribeLocal = false,
     this.lastContentDestination = AppContentDestination.podcast,
@@ -1614,6 +1617,7 @@ class AppSettings {
   final TranslationSettings? _legacyTranslationSettings;
   final SonioxTranslationOptions sonioxTranslation;
   final TranscriptionProvider defaultTranscriptionProvider;
+  final ForcedAlignmentModel? defaultForcedAlignmentModel;
   final bool autoAlignMoss;
   final bool autoTranscribeLocal;
   final AppContentDestination lastContentDestination;
@@ -1642,6 +1646,7 @@ class AppSettings {
     TranslationSettings? translationSettings,
     SonioxTranslationOptions? sonioxTranslation,
     TranscriptionProvider? defaultTranscriptionProvider,
+    ForcedAlignmentModel? defaultForcedAlignmentModel,
     bool? autoAlignMoss,
     bool? autoTranscribeLocal,
     AppContentDestination? lastContentDestination,
@@ -1665,6 +1670,8 @@ class AppSettings {
     sonioxTranslation: sonioxTranslation ?? this.sonioxTranslation,
     defaultTranscriptionProvider:
         defaultTranscriptionProvider ?? this.defaultTranscriptionProvider,
+    defaultForcedAlignmentModel:
+        defaultForcedAlignmentModel ?? this.defaultForcedAlignmentModel,
     autoAlignMoss: autoAlignMoss ?? this.autoAlignMoss,
     autoTranscribeLocal: autoTranscribeLocal ?? this.autoTranscribeLocal,
     lastContentDestination:
@@ -1686,6 +1693,8 @@ class AppSettings {
     'translation_preferences': translationPreferences.toJson(),
     'soniox_translation': sonioxTranslation.toJson(),
     'default_transcription_provider': defaultTranscriptionProvider.name,
+    if (defaultForcedAlignmentModel case final value?)
+      'default_forced_alignment_model': value.name,
     'auto_align_moss': autoAlignMoss,
     'auto_transcribe_local': autoTranscribeLocal,
     'last_content_destination': lastContentDestination.name,
@@ -1730,6 +1739,10 @@ class AppSettings {
             json['default_transcription_provider'],
           ) ??
           TranscriptionProvider.soniox,
+      defaultForcedAlignmentModel: _enumByName(
+        ForcedAlignmentModel.values,
+        json['default_forced_alignment_model'],
+      ),
       autoAlignMoss: json['auto_align_moss'] as bool? ?? true,
       autoTranscribeLocal: json['auto_transcribe_local'] as bool? ?? false,
       lastContentDestination:

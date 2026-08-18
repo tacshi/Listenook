@@ -379,6 +379,11 @@ class AppStrings {
     'local_moss_model': 'Local MOSS model',
     'local_model_missing': 'Install the local MOSS model in Settings to start',
     'local_speech_models': 'Local models',
+    'default_alignment_model': 'Default word-timing model',
+    'default_alignment_model_description':
+        'INT8 uses less disk and memory; FP16 provides full precision. The choice applies to new and retried alignments.',
+    'alignment_model_download_to_select':
+        'Download a word-timing model to select it',
     'auto_transcribe_local': 'Auto-transcribe new items',
     'auto_transcribe_local_description':
         'Automatically start eligible new MOSS Local items. Files dropped into Inbox still require Start Transcription.',
@@ -638,7 +643,9 @@ class AppStrings {
     'error_alignment_language_unsupported':
         'The selected language is not supported by local forced alignment.',
     'error_alignment_model_missing':
-        'Install the Qwen3 ForcedAligner model to generate word timing.',
+        'Install the selected Qwen3 alignment model to generate word timing.',
+    'error_alignment_model_not_selected':
+        'Choose a default word-timing model in Settings.',
     'error_alignment_no_eligible_segments':
         'No transcript segments were eligible for forced alignment.',
     'error_alignment_source_missing':
@@ -1017,6 +1024,10 @@ class AppStrings {
     'local_moss_model': '本地 MOSS 模型',
     'local_model_missing': '请先在“设置”中安装本地 MOSS 模型',
     'local_speech_models': '本地模型',
+    'default_alignment_model': '默认词级时间模型',
+    'default_alignment_model_description':
+        'INT8 占用更少磁盘和内存；FP16 提供完整精度。此选择适用于新的对齐任务和重试。',
+    'alignment_model_download_to_select': '请先下载词级时间模型再选择',
     'auto_transcribe_local': '自动转写新项目',
     'auto_transcribe_local_description':
         '自动开始符合条件的新 MOSS Local 任务。拖入收件箱的文件仍需手动点击“开始转写”。',
@@ -1245,7 +1256,8 @@ class AppStrings {
     'error_alignment_failed': '精确时间轴生成失败，已保留说话人段落稿。',
     'error_alignment_unsupported': '此 Mac 无法使用本地对齐。',
     'error_alignment_language_unsupported': '本地强制对齐不支持所选语言。',
-    'error_alignment_model_missing': '请安装 Qwen3 ForcedAligner 模型以生成词级时间。',
+    'error_alignment_model_missing': '请安装已选择的 Qwen3 对齐模型以生成词级时间。',
+    'error_alignment_model_not_selected': '请在“设置”中选择默认词级时间模型。',
     'error_alignment_no_eligible_segments': '没有可进行强制对齐的转写片段。',
     'error_alignment_source_missing': '重试本地对齐前，请先重新关联源媒体。',
     'error_alignment_cancelled': '已取消本地对齐，并保留说话人段落稿。',
