@@ -233,10 +233,36 @@ void main() {
   test('automatic MOSS forced alignment defaults on and round-trips', () {
     const defaults = AppSettings();
     expect(defaults.autoAlignMoss, isTrue);
+    expect(defaults.defaultForcedAlignmentModel, isNull);
 
-    final disabled = AppSettings.fromJson(const {'auto_align_moss': false});
+    final disabled = AppSettings.fromJson(const {
+      'auto_align_moss': false,
+      'default_forced_alignment_model': 'qwen3CoreMlFp16',
+    });
     expect(disabled.autoAlignMoss, isFalse);
+    expect(
+      disabled.defaultForcedAlignmentModel,
+      ForcedAlignmentModel.qwen3CoreMlFp16,
+    );
     expect(disabled.toJson()['auto_align_moss'], isFalse);
+    expect(
+      disabled.toJson()['default_forced_alignment_model'],
+      'qwen3CoreMlFp16',
+    );
+
+    final int8 = AppSettings.fromJson(const {
+      'default_forced_alignment_model': 'qwen3CoreMlInt8',
+    });
+    expect(
+      int8.defaultForcedAlignmentModel,
+      ForcedAlignmentModel.qwen3CoreMlInt8,
+    );
+    expect(
+      AppSettings.fromJson(const {
+        'default_forced_alignment_model': 'unknown',
+      }).defaultForcedAlignmentModel,
+      isNull,
+    );
   });
 
   test('local automation and restorable content state round-trip safely', () {

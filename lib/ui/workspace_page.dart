@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../core/models.dart';
 import '../l10n/strings.dart';
@@ -47,10 +46,6 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   Positioned.fill(
                     child: Column(
                       children: [
-                        if (job.podcastProvenance != null) ...[
-                          _PodcastProvenanceBar(job: job),
-                          const SizedBox(height: 10),
-                        ],
                         Expanded(
                           child: TranscriptReview(
                             key: ValueKey('workspace-review-${job.id}'),
@@ -202,74 +197,6 @@ class _MossTimingBar extends StatelessWidget {
               onPressed: onDismiss,
               icon: const Icon(Icons.close_rounded, size: 18),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PodcastProvenanceBar extends StatelessWidget {
-  const _PodcastProvenanceBar({required this.job});
-
-  final TranscriptionJob job;
-
-  @override
-  Widget build(BuildContext context) {
-    final provenance = job.podcastProvenance!;
-    final sourceKey = switch (job.transcriptSource) {
-      TranscriptSource.publisher => 'podcast_source_publisher_captions',
-      TranscriptSource.mossPro => 'podcast_source_moss_pro',
-      TranscriptSource.mossLocal => 'podcast_source_moss_local',
-      TranscriptSource.soniox => 'podcast_source_soniox_words',
-      null when job.transcriptAcquisitionMode.usesPublisherTranscript =>
-        'podcast_source_publisher_captions',
-      null when job.transcriptionProvider == TranscriptionProvider.mossPro =>
-        'podcast_source_moss_pro',
-      null when job.transcriptionProvider == TranscriptionProvider.mossLocal =>
-        'podcast_source_moss_local',
-      null => 'podcast_source_soniox_words',
-    };
-    final rawLink =
-        provenance.episodeUrl ?? provenance.showUrl ?? provenance.feedUrl;
-    final link = Uri.tryParse(rawLink);
-    final colors = Theme.of(context).colorScheme;
-    return Material(
-      key: const Key('podcast-workspace-provenance'),
-      color: colors.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            Icon(Icons.podcasts_rounded, size: 18, color: colors.primary),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                provenance.showTitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              context.strings.t(sourceKey),
-              key: const Key('podcast-workspace-transcript-source'),
-              style: Theme.of(
-                context,
-              ).textTheme.labelMedium?.copyWith(color: colors.onSurfaceVariant),
-            ),
-            if (link != null && link.hasScheme) ...[
-              const SizedBox(width: 6),
-              IconButton(
-                key: const Key('podcast-workspace-open-episode'),
-                tooltip: context.strings.t('podcast_open_episode_page'),
-                onPressed: () => launchUrl(link),
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.open_in_new_rounded, size: 18),
-              ),
-            ],
           ],
         ),
       ),

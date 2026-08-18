@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 
+import '../core/aligned_token_timing.dart';
 import '../core/contracts.dart';
 import '../core/models.dart';
 import '../core/podcast_models.dart';
@@ -100,6 +101,7 @@ class PodcastPlayer extends ChangeNotifier {
   Duration? _resumeAt;
   PodcastPlaybackClock _clock = const PodcastPlaybackClock();
   String _mediaSource = '';
+  bool _openingAdSkipPending = false;
 
   PodcastEpisode? get episode => _episode;
   PodcastFeed? get feed => _feed;
@@ -169,6 +171,7 @@ class PodcastPlayer extends ChangeNotifier {
     PodcastFeed feed, {
     TranscriptDocument? document,
     String? localPath,
+    int? feedDurationMs,
   }) async {
     final source = podcastPlaybackSource(
       enclosureUrl: episode.enclosureUrl,
@@ -203,6 +206,7 @@ class PodcastPlayer extends ChangeNotifier {
       }
     }
     _resumeAt = resume;
+    _openingAdSkipPending = resume == null && document != null;
     if (_resumeAt != null) _position = _resumeAt!;
     _syncClock();
     notifyListeners();
@@ -228,6 +232,17 @@ class PodcastPlayer extends ChangeNotifier {
       }),
       player.stream.duration.listen((value) {
         _duration = value;
+        if (_openingAdSkipPending && value > Duration.zero) {
+          _openingAdSkipPending = false;
+          final skipMs = podcastOpeningAdSkipMs(
+            feedDurationMs: feedDurationMs ?? episode.durationMs ?? 0,
+            mediaDurationMs: value.inMilliseconds,
+            document: _document,
+          );
+          if (skipMs > 0 && _position.inMilliseconds < 2000) {
+            _resumeAt = Duration(milliseconds: skipMs);
+          }
+        }
         _syncClock();
         unawaited(_applyResume());
         notifyListeners();
@@ -335,6 +350,7 @@ class PodcastPlayer extends ChangeNotifier {
     _rate = 1;
     _loadingCues = false;
     _mediaSource = '';
+    _openingAdSkipPending = false;
     _syncClock();
     notifyListeners();
   }
@@ -385,17 +401,20 @@ class PodcastPlayer extends ChangeNotifier {
           startMs: segments[index].startMs,
           endMs: segments[index].endMs,
           text: segments[index].text.trim(),
-          tokens: [
-            for (final token in document.tokens)
-              if (_tokenBelongsToSegment(
-                token,
-                segments[index],
-                index + 1 < segments.length
-                    ? segments[index + 1].startMs
-                    : null,
-              ))
-                token,
-          ],
+          tokens: stabilizeAlignedTokenTransitions(
+            segment: segments[index],
+            tokens: [
+              for (final token in document.tokens)
+                if (_tokenBelongsToSegment(
+                  token,
+                  segments[index],
+                  index + 1 < segments.length
+                      ? segments[index + 1].startMs
+                      : null,
+                ))
+                  token,
+            ],
+          ),
         ),
     ];
   }
@@ -529,4 +548,37 @@ String podcastPlaybackSource({
   final file = File(path);
   if (!file.existsSync()) return enclosureUrl;
   return Uri.file(file.absolute.path).toString();
+}
+
+int podcastOpeningAdSkipMs({
+  required int feedDurationMs,
+  required int mediaDurationMs,
+  required TranscriptDocument? document,
+}) {
+  const minimumInsertedAdMs = 15000;
+  const maximumInsertedAdMs = 3 * 60 * 1000;
+  const transitionPrerollMs = 1000;
+  if (feedDurationMs <= 0 || mediaDurationMs <= feedDurationMs) return 0;
+  final insertedMs = mediaDurationMs - feedDurationMs;
+  if (insertedMs < minimumInsertedAdMs ||
+      insertedMs > maximumInsertedAdMs ||
+      !_hasOpeningAdDisclosure(document)) {
+    return 0;
+  }
+  return insertedMs > transitionPrerollMs
+      ? insertedMs - transitionPrerollMs
+      : insertedMs;
+}
+
+bool _hasOpeningAdDisclosure(TranscriptDocument? document) {
+  if (document == null) return false;
+  final opening = document.segments
+      .where((segment) => segment.startMs < 10000)
+      .map((segment) => segment.text.trim())
+      .where((text) => text.isNotEmpty)
+      .join(' ')
+      .toLowerCase();
+  return RegExp(
+    r'podcast\s+is\s+supported\s+by\s+(?:ads|advertising).*outside\s+(?:the\s+)?(?:uk|united\s+kingdom)',
+  ).hasMatch(opening);
 }

@@ -193,7 +193,32 @@ void main() {
     expect(paintedRows(4), greaterThanOrEqualTo(2));
   });
 
-  test('PCM waveform preserves the signed peak envelope', () async {
+  test('PCM waveform overview is not saturated by isolated peaks', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'meow-waveform-transients-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final wav = File('${root.path}/input.wav');
+    final png = File('${root.path}/output.png');
+    final samples = <int>[
+      for (var bucket = 0; bucket < 8; bucket++) ...[
+        32767,
+        for (var index = 1; index < 64; index++) index.isEven ? 1024 : -1024,
+      ],
+    ];
+    await wav.writeAsBytes(_pcmWave(samples));
+
+    await renderPcmWaveform(wav.path, png.path, width: 8, height: 100);
+    final rendered = image.decodePng(await png.readAsBytes())!;
+    var painted = 0;
+    for (final pixel in rendered) {
+      if (pixel.a > 0) painted++;
+    }
+
+    expect(painted / (rendered.width * rendered.height), lessThan(0.35));
+  });
+
+  test('PCM waveform preserves the signed average envelope', () async {
     final root = await Directory.systemTemp.createTemp('meow-waveform-sign-');
     addTearDown(() => root.delete(recursive: true));
     final wav = File('${root.path}/input.wav');
@@ -218,10 +243,10 @@ void main() {
 
     final positiveHeavy = paintedRows(0);
     final negativeHeavy = paintedRows(1);
-    expect(positiveHeavy.first, lessThanOrEqualTo(2));
-    expect(positiveHeavy.last, lessThanOrEqualTo(20));
-    expect(negativeHeavy.first, greaterThanOrEqualTo(13));
-    expect(negativeHeavy.last, greaterThanOrEqualTo(29));
+    expect(positiveHeavy.first, 5);
+    expect(positiveHeavy.last, 18);
+    expect(negativeHeavy.first, 14);
+    expect(negativeHeavy.last, 26);
   });
 
   test(
@@ -244,7 +269,8 @@ void main() {
     final macAudio = File('${paths.temporary.path}/job.m4a');
     final extraction = File('${paths.temporary.path}/job-extract.wav');
     final waveformPcm = File('${paths.temporary.path}/job-waveform.wav');
-    final currentWaveform = File('${paths.temporary.path}/job-waveform-v2.png');
+    final currentWaveform = File('${paths.temporary.path}/job-waveform-v3.png');
+    final priorWaveform = File('${paths.temporary.path}/job-waveform-v2.png');
     final waveform = File('${paths.temporary.path}/job-waveform.png');
     final unrelated = File('${paths.temporary.path}/other.flac');
     for (final file in [
@@ -253,6 +279,7 @@ void main() {
       extraction,
       waveformPcm,
       currentWaveform,
+      priorWaveform,
       waveform,
       unrelated,
     ]) {
@@ -266,6 +293,7 @@ void main() {
     expect(await extraction.exists(), isFalse);
     expect(await waveformPcm.exists(), isFalse);
     expect(await currentWaveform.exists(), isFalse);
+    expect(await priorWaveform.exists(), isFalse);
     expect(await waveform.exists(), isFalse);
     expect(await unrelated.exists(), isTrue);
 

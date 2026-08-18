@@ -17,6 +17,7 @@ import '../state/app_controller.dart';
 import '../state/podcast_controller.dart';
 import '../state/podcast_player.dart';
 import 'inbox_page.dart';
+import 'keyboard_shortcuts.dart';
 import 'library_page.dart';
 import 'podcast_mini_bar.dart';
 import 'podcast_page.dart';
@@ -227,7 +228,7 @@ class _AppShellState extends State<AppShell>
             tray.MenuItem.separator(),
             tray.MenuItem(
               key: 'open-inbox',
-              label: strings.t('tray_open_inbox'),
+              label: strings.t('tray_open_main_window'),
             ),
             if (configured)
               tray.MenuItem(
@@ -681,6 +682,7 @@ class _AppShellState extends State<AppShell>
     final settingsTooltip = _shortcutTooltip(context, settingsLabel, ',');
     return PodcastPlaybackShortcuts(
       player: player,
+      enabled: controller.destination != AppDestination.workspace,
       child: CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.keyI, meta: true): () =>
@@ -907,23 +909,49 @@ class PodcastPlaybackShortcuts extends StatelessWidget {
     super.key,
     required this.player,
     required this.child,
+    this.enabled = true,
   });
 
   final PodcastPlayer? player;
   final Widget child;
+  final bool enabled;
 
   @override
-  Widget build(BuildContext context) => CallbackShortcuts(
-    bindings: player?.hasSession == true
-        ? {
-            const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
-                _seek(const Duration(seconds: -5)),
-            const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
-                _seek(const Duration(seconds: 5)),
-          }
-        : const {},
-    child: child,
+  Widget build(BuildContext context) => Focus(
+    canRequestFocus: false,
+    skipTraversal: true,
+    onKeyEvent: _handleKeyEvent,
+    child: CallbackShortcuts(
+      bindings: enabled && player?.hasSession == true
+          ? {
+              const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+                  _seek(const Duration(seconds: -5)),
+              const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+                  _seek(const Duration(seconds: 5)),
+            }
+          : const {},
+      child: child,
+    ),
   );
+
+  KeyEventResult _handleKeyEvent(FocusNode _, KeyEvent event) {
+    final activePlayer = player;
+    if (!enabled ||
+        activePlayer == null ||
+        !activePlayer.hasSession ||
+        event.logicalKey != LogicalKeyboardKey.space ||
+        primaryFocusIsEditable() ||
+        shortcutModifierPressed()) {
+      return KeyEventResult.ignored;
+    }
+    if (event is KeyDownEvent) {
+      unawaited(activePlayer.toggle());
+      return KeyEventResult.handled;
+    }
+    return event is KeyRepeatEvent || event is KeyUpEvent
+        ? KeyEventResult.handled
+        : KeyEventResult.ignored;
+  }
 
   void _seek(Duration offset) {
     final activePlayer = player;

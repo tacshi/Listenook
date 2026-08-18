@@ -95,33 +95,118 @@ void main() {
     expect(PodcastPlayer.cueIndexAt(cues, clock.at(sampledAt)), 1);
   });
 
-  test('playback source prefers an existing local file over the stream', () async {
-    final directory = await Directory.systemTemp.createTemp('meow-local-');
-    addTearDown(() => directory.delete(recursive: true));
-    final file = File('${directory.path}/episode.mp3')
-      ..writeAsBytesSync(const [1, 2, 3]);
+  test('opening inserted ad is skipped from the measured duration delta', () {
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'opening',
+          startMs: 110,
+          endMs: 3590,
+          text: 'This BBC podcast is supported by ads outside the UK.',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.utc(2026, 8, 17),
+    );
 
     expect(
-      podcastPlaybackSource(
-        enclosureUrl: 'https://cdn.example/episode.mp3',
-        localPath: file.path,
+      podcastOpeningAdSkipMs(
+        feedDurationMs: 395000,
+        mediaDurationMs: 434233,
+        document: document,
       ),
-      Uri.file(file.absolute.path).toString(),
-    );
-    expect(
-      podcastPlaybackSource(
-        enclosureUrl: 'https://cdn.example/episode.mp3',
-        localPath: '${directory.path}/missing.mp3',
-      ),
-      'https://cdn.example/episode.mp3',
-    );
-    expect(
-      podcastPlaybackSource(
-        enclosureUrl: 'https://cdn.example/episode.mp3',
-      ),
-      'https://cdn.example/episode.mp3',
+      38233,
     );
   });
+
+  test('duration drift without an ad disclosure is never skipped', () {
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'opening',
+          startMs: 0,
+          endMs: 4000,
+          text: 'Hello, this is Six Minute English.',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.utc(2026, 8, 17),
+    );
+
+    expect(
+      podcastOpeningAdSkipMs(
+        feedDurationMs: 395000,
+        mediaDurationMs: 434233,
+        document: document,
+      ),
+      0,
+    );
+  });
+
+  test('saved podcast cues smooth late word transitions at playback', () {
+    final document = TranscriptDocument(
+      tokens: const [
+        TranscriptToken(
+          text: 'Hello',
+          startMs: 0,
+          endMs: 200,
+          segmentId: 'opening',
+        ),
+        TranscriptToken(
+          text: 'world',
+          startMs: 400,
+          endMs: 600,
+          segmentId: 'opening',
+        ),
+      ],
+      segments: const [
+        TranscriptSegment(
+          id: 'opening',
+          startMs: 0,
+          endMs: 1000,
+          text: 'Hello world',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.utc(2026, 8, 17),
+    );
+
+    final cue = PodcastPlayer.cuesFrom(document).single;
+
+    expect(cue.tokens.last.startMs, 300);
+    expect(cue.tokens.every((token) => token.endMs > token.startMs), isTrue);
+  });
+
+  test(
+    'playback source prefers an existing local file over the stream',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('meow-local-');
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/episode.mp3')
+        ..writeAsBytesSync(const [1, 2, 3]);
+
+      expect(
+        podcastPlaybackSource(
+          enclosureUrl: 'https://cdn.example/episode.mp3',
+          localPath: file.path,
+        ),
+        Uri.file(file.absolute.path).toString(),
+      );
+      expect(
+        podcastPlaybackSource(
+          enclosureUrl: 'https://cdn.example/episode.mp3',
+          localPath: '${directory.path}/missing.mp3',
+        ),
+        'https://cdn.example/episode.mp3',
+      );
+      expect(
+        podcastPlaybackSource(enclosureUrl: 'https://cdn.example/episode.mp3'),
+        'https://cdn.example/episode.mp3',
+      );
+    },
+  );
 
   test('provenance rebuilds a playable episode and feed', () {
     const provenance = PodcastEpisodeProvenance(

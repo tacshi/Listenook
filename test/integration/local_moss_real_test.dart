@@ -85,6 +85,7 @@ void main() {
               ForcedAlignmentRequest(
                 sourcePath: sourcePath,
                 document: document,
+                model: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8,
               ),
             );
         expect(alignment.alignedSegments, document.segments.length);
@@ -123,9 +124,9 @@ class _InstalledModels implements LocalModelManager {
     String modelId, {
     bool verifyIntegrity = false,
   }) async {
-    final descriptor = modelId == LocalSpeechModels.mossDiarizeCoreMlInt8.id
-        ? LocalSpeechModels.mossDiarizeCoreMlInt8
-        : LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8;
+    final descriptor = LocalSpeechModels.all.singleWhere(
+      (model) => model.id == modelId,
+    );
     return LocalModelStatus(
       descriptor: descriptor,
       availability: LocalModelAvailability.ready,

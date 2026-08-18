@@ -246,78 +246,138 @@ void main() {
     },
   );
 
-  testWidgets(
-    'Apple Silicon local speech exposes both independent model cards',
-    (tester) async {
-      tester.view.physicalSize = const Size(1200, 2600);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final settings = _Settings();
-      final controller = AppController(
-        credentialStore: _Credentials(),
-        settingsRepository: settings,
-        jobRepository: _Jobs(),
-        mediaService: _Media(),
-        sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
-        exporter: const DefaultTranscriptExporter(),
-        localSttService: _SupportedLocalStt(),
-      );
-      addTearDown(controller.dispose);
-      await controller.initialize();
+  testWidgets('Apple Silicon local speech exposes independent model cards', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final settings = _Settings();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: settings,
+      jobRepository: _Jobs(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+      localSttService: _SupportedLocalStt(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
 
-      await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: controller,
-          child: const MaterialApp(
-            locale: Locale('en'),
-            supportedLocales: AppStrings.supportedLocales,
-            localizationsDelegates: [AppStrings.delegate],
-            home: Scaffold(body: SettingsPage()),
-          ),
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: SettingsPage()),
         ),
-      );
-      await tester.tap(find.text('Providers'));
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.tap(find.text('Providers'));
+    await tester.pumpAndSettle();
 
-      expect(find.text('MOSS Local'), findsWidgets);
-      expect(find.textContaining('Beta'), findsNothing);
-      expect(
-        find.byKey(
-          const Key('download-model-moss-transcribe-diarize-0.9b-coreml-int8'),
+    expect(find.text('MOSS Local'), findsWidgets);
+    expect(find.textContaining('Beta'), findsNothing);
+    expect(
+      find.byKey(
+        const Key('download-model-moss-transcribe-diarize-0.9b-coreml-int8'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const Key('download-model-qwen3-forced-aligner-0.6b-coreml-int8'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const Key('download-model-qwen3-forced-aligner-0.6b-coreml-fp16'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('default-forced-alignment-model')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('install-local-quality-package')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('auto-align-moss-switch')), findsOneWidget);
+    final autoTranscribe = find.byKey(
+      const Key('auto-transcribe-local-switch'),
+    );
+    expect(autoTranscribe, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(autoTranscribe).value, isFalse);
+    expect(find.text('Auto-transcribe new items'), findsOneWidget);
+    expect(
+      find.textContaining('Files dropped into Inbox still require'),
+      findsOneWidget,
+    );
+
+    await tester.tap(autoTranscribe);
+    await tester.pumpAndSettle();
+
+    expect(controller.settings.autoTranscribeLocal, isTrue);
+    expect(settings.value.autoTranscribeLocal, isTrue);
+  });
+
+  testWidgets('an installed FP16 aligner can be selected and persisted', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final settings = _Settings();
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: settings,
+      jobRepository: _Jobs(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+      localModelManager: _UiModels(),
+      localSttService: _SupportedLocalStt(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: SettingsPage()),
         ),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(
-          const Key('download-model-qwen3-forced-aligner-0.6b-coreml-int8'),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('install-local-quality-package')),
-        findsNothing,
-      );
-      expect(find.byKey(const Key('auto-align-moss-switch')), findsOneWidget);
-      final autoTranscribe = find.byKey(
-        const Key('auto-transcribe-local-switch'),
-      );
-      expect(autoTranscribe, findsOneWidget);
-      expect(tester.widget<SwitchListTile>(autoTranscribe).value, isFalse);
-      expect(find.text('Auto-transcribe new items'), findsOneWidget);
-      expect(
-        find.textContaining('Files dropped into Inbox still require'),
-        findsOneWidget,
-      );
+      ),
+    );
+    await tester.tap(find.text('Providers'));
+    await tester.pumpAndSettle();
 
-      await tester.tap(autoTranscribe);
-      await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('default-forced-alignment-model')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Qwen3 word alignment — FP16').last);
+    await tester.pumpAndSettle();
 
-      expect(controller.settings.autoTranscribeLocal, isTrue);
-      expect(settings.value.autoTranscribeLocal, isTrue);
-    },
-  );
+    expect(
+      controller.settings.defaultForcedAlignmentModel,
+      ForcedAlignmentModel.qwen3CoreMlFp16,
+    );
+    expect(
+      settings.value.defaultForcedAlignmentModel,
+      ForcedAlignmentModel.qwen3CoreMlFp16,
+    );
+  });
 
   testWidgets('an unsaved Soniox key can be tested and then saved', (
     tester,
@@ -412,8 +472,14 @@ void main() {
     final startupTitle = tester.widget<Text>(
       find.text('Launch MeowSTT at login'),
     );
+    final themeTitle = tester.widget<Text>(find.text('Theme'));
+    final languageTitle = tester.widget<Text>(find.text('Language'));
     final settingsTheme = Theme.of(tester.element(startupSetting)).textTheme;
     expect(startupTitle.style?.fontSize, settingsTheme.bodyMedium?.fontSize);
+    expect(themeTitle.style?.fontSize, startupTitle.style?.fontSize);
+    expect(themeTitle.style?.fontWeight, startupTitle.style?.fontWeight);
+    expect(languageTitle.style?.fontSize, startupTitle.style?.fontSize);
+    expect(languageTitle.style?.fontWeight, startupTitle.style?.fontWeight);
     final menuBarCard = find.ancestor(
       of: find.text('Show menu bar icon'),
       matching: find.byType(Card),
@@ -552,7 +618,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Application').hitTestable(), findsOneWidget);
     expect(find.text('Navigation').hitTestable(), findsOneWidget);
-    expect(find.text('Review playback').hitTestable(), findsOneWidget);
+    expect(find.text('Playback').hitTestable(), findsOneWidget);
     expect(find.text('Fullscreen playback').hitTestable(), findsOneWidget);
     expect(find.text('Hold to repeat the current sentence'), findsOneWidget);
     for (final id in [
@@ -631,7 +697,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('应用').hitTestable(), findsOneWidget);
     expect(find.text('导航').hitTestable(), findsOneWidget);
-    expect(find.text('校对播放').hitTestable(), findsOneWidget);
+    expect(find.text('播放').hitTestable(), findsOneWidget);
     expect(find.text('全屏播放').hitTestable(), findsOneWidget);
     expect(find.text('按住以重复当前句'), findsOneWidget);
     expect(
@@ -879,6 +945,42 @@ class _Settings implements SettingsRepository {
 
   @override
   Future<void> save(AppSettings settings) async => value = settings;
+}
+
+class _UiModels implements LocalModelManager {
+  @override
+  List<LocalModelDescriptor> get models => LocalSpeechModels.all;
+
+  @override
+  Future<void> delete(String modelId) async {}
+
+  @override
+  Future<void> download(
+    String modelId, {
+    ModelDownloadProgress? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {}
+
+  @override
+  String pathFor(String modelId) => '/models/$modelId';
+
+  @override
+  Future<LocalModelStatus> status(
+    String modelId, {
+    bool verifyIntegrity = false,
+  }) async {
+    final descriptor = LocalSpeechModels.all.singleWhere(
+      (model) => model.id == modelId,
+    );
+    final installed = LocalSpeechModels.forcedAlignerById(modelId) != null;
+    return LocalModelStatus(
+      descriptor: descriptor,
+      availability: installed
+          ? LocalModelAvailability.ready
+          : LocalModelAvailability.missing,
+      downloadedBytes: installed ? descriptor.sizeBytes : 0,
+    );
+  }
 }
 
 class _Jobs implements JobRepository {

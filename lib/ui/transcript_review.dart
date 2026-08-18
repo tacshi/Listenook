@@ -17,6 +17,7 @@ import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'job_actions.dart';
+import 'keyboard_shortcuts.dart';
 import 'review_fullscreen_controller.dart';
 import 'transcript_export_dialog.dart';
 
@@ -125,7 +126,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _shutdownMedia,
       resume: _resumeMedia,
     );
-    HardwareKeyboard.instance.addHandler(_handleRepeatShortcut);
+    HardwareKeyboard.instance.addHandler(_handleReviewShortcut);
     windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
   }
@@ -409,7 +410,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   @override
   void dispose() {
     _endSentenceRepeatHold(notify: false);
-    HardwareKeyboard.instance.removeHandler(_handleRepeatShortcut);
+    HardwareKeyboard.instance.removeHandler(_handleReviewShortcut);
     _rememberPlaybackPosition(widget.jobId);
     _fullscreenController.unregisterMediaShutdown(this);
     windowManager.removeListener(this);
@@ -1382,8 +1383,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _queueRepeatRestart(resumeAfterSeek: true);
   }
 
-  bool _handleRepeatShortcut(KeyEvent event) {
+  bool _handleReviewShortcut(KeyEvent event) {
     if (_fullscreenController.isActive) return false;
+    if (event.logicalKey == LogicalKeyboardKey.space) {
+      return _handlePlayPauseShortcut(event);
+    }
     if (event.logicalKey != LogicalKeyboardKey.keyR) {
       return false;
     }
@@ -1396,14 +1400,30 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ModalRoute.of(context)?.isCurrent == false) {
       return false;
     }
-    if (_primaryFocusIsEditable()) return false;
+    if (primaryFocusIsEditable()) return false;
     if (event is KeyRepeatEvent) {
       return _heldRepeatingSegmentId != null;
     }
-    if (event is! KeyDownEvent || _shortcutModifierPressed()) {
+    if (event is! KeyDownEvent || shortcutModifierPressed()) {
       return false;
     }
     return _beginHoldingCurrentSentence();
+  }
+
+  bool _handlePlayPauseShortcut(KeyEvent event) {
+    final player = _player;
+    if (player == null ||
+        _appController.destination != AppDestination.workspace ||
+        ModalRoute.of(context)?.isCurrent == false ||
+        primaryFocusIsEditable() ||
+        shortcutModifierPressed()) {
+      return false;
+    }
+    if (event is KeyDownEvent) {
+      unawaited(player.playOrPause());
+      return true;
+    }
+    return event is KeyRepeatEvent || event is KeyUpEvent;
   }
 
   bool _beginHoldingCurrentSentence() {
@@ -1457,21 +1477,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
     } on Object {
       // Media teardown can race a lost key-up during navigation or shutdown.
     }
-  }
-
-  bool _primaryFocusIsEditable() {
-    final focusContext = FocusManager.instance.primaryFocus?.context;
-    if (focusContext == null) return false;
-    return focusContext.widget is EditableText ||
-        focusContext.findAncestorWidgetOfExactType<EditableText>() != null;
-  }
-
-  bool _shortcutModifierPressed() {
-    final keyboard = HardwareKeyboard.instance;
-    return keyboard.isControlPressed ||
-        keyboard.isMetaPressed ||
-        keyboard.isAltPressed ||
-        keyboard.isShiftPressed;
   }
 
   void _queueRepeatRestart({bool resumeAfterSeek = false}) {
@@ -3257,6 +3262,7 @@ enum _TranscriptMoreAction {
   original,
   translated,
   bilingual,
+  addBackToInbox,
   retryAlignment,
   translate,
   copy,
@@ -3638,6 +3644,16 @@ class _UnifiedReviewToolbar extends StatelessWidget {
       ]);
     }
     final processingActions = <PopupMenuEntry<_TranscriptMoreAction>>[];
+    if (job.translationState.status.isActive == false) {
+      processingActions.add(
+        _menuItem(
+          key: const Key('add-back-to-inbox'),
+          value: _TranscriptMoreAction.addBackToInbox,
+          icon: Icons.input_rounded,
+          label: context.strings.t('add_back_to_inbox'),
+        ),
+      );
+    }
     if (supportsLocalAlignment &&
         (alignment.hasWordTiming || alignment.canRequest)) {
       processingActions.add(
@@ -3744,6 +3760,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         onViewModeChanged(TranslationViewMode.translated);
       case _TranscriptMoreAction.bilingual:
         onViewModeChanged(TranslationViewMode.bilingual);
+      case _TranscriptMoreAction.addBackToInbox:
+        unawaited(_enqueueAgain(context, controller));
       case _TranscriptMoreAction.retryAlignment:
         unawaited(controller.retryForcedAlignment(job.id));
       case _TranscriptMoreAction.translate:
@@ -3761,6 +3779,18 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         unawaited(_copyTranscript(context, controller, settings));
       case _TranscriptMoreAction.export:
         unawaited(showTranscriptExportDialog(context, jobIds: [job.id]));
+    }
+  }
+
+  Future<void> _enqueueAgain(
+    BuildContext context,
+    AppController controller,
+  ) async {
+    final queued = await controller.enqueueAgain(job.id);
+    if (queued == null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.strings.t('source_missing'))),
+      );
     }
   }
 

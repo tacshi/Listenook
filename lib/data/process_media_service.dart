@@ -290,7 +290,7 @@ class ProcessMediaService implements MediaService {
     }
     final safeKey = _safeCacheKey(cacheKey);
     final output = File(
-      p.join(paths.temporary.path, '$safeKey-waveform-v2.png'),
+      p.join(paths.temporary.path, '$safeKey-waveform-v3.png'),
     );
     if (await output.exists() &&
         (await output.lastModified()).isAfter(await source.lastModified())) {
@@ -544,6 +544,7 @@ class ProcessMediaService implements MediaService {
       '.m4a',
       '-extract.wav',
       '-waveform.wav',
+      '-waveform-v3.png',
       '-waveform-v2.png',
       '-waveform.png',
     ]) {
@@ -666,6 +667,7 @@ String _safeCacheKey(String cacheKey) =>
 
 String? generatedMediaCacheKey(String filename) {
   for (final suffix in const [
+    '-waveform-v3.png',
     '-waveform-v2.png',
     '-waveform.png',
     '-waveform.wav',

@@ -10,6 +10,7 @@ import 'package:meow_stt/data/podcast/http_podcast_gateway.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
 import 'package:meow_stt/state/app_controller.dart';
 import 'package:meow_stt/state/podcast_controller.dart';
+import 'package:meow_stt/state/podcast_player.dart';
 
 void main() {
   test('search, follow, and enqueue a podcast episode into Inbox', () async {
@@ -316,6 +317,45 @@ void main() {
       'Show notes from the RSS feed.',
     );
   });
+
+  test(
+    'downloaded playback keeps the feed duration for ad detection',
+    () async {
+      final feedEpisode = PodcastEpisode(
+        id: 'https://feeds.example/show\nguid-ad',
+        feedUrl: 'https://feeds.example/show',
+        title: 'Episode with an inserted ad',
+        enclosureUrl: 'https://cdn.example/ad.mp3',
+        mediaExtension: 'mp3',
+        durationMs: 395000,
+      );
+      final feed = PodcastFeed(
+        feedUrl: feedEpisode.feedUrl,
+        title: 'The Show',
+        episodes: [feedEpisode],
+      );
+      final player = _RecordingPodcastPlayer();
+      final podcast = PodcastController(
+        gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
+        repository: _MemoryPodcastRepository(),
+        player: player,
+      );
+      await podcast.initialize();
+      await podcast.openFeed(feed.feedUrl);
+      final downloadedEpisode = PodcastEpisode(
+        id: feedEpisode.id,
+        feedUrl: feedEpisode.feedUrl,
+        title: feedEpisode.title,
+        enclosureUrl: feedEpisode.enclosureUrl,
+        mediaExtension: feedEpisode.mediaExtension,
+        durationMs: 434233,
+      );
+
+      await podcast.playEpisode(downloadedEpisode, feed);
+
+      expect(player.feedDurationMs, 395000);
+    },
+  );
 
   test(
     'opening a followed show uses the cached feed if refresh fails',
@@ -772,6 +812,21 @@ class _MemoryPodcastRepository implements PodcastRepository {
   Future<void> savePlaybackProgress(
     Map<String, PodcastListenProgress> progress,
   ) async => playback = Map.of(progress);
+}
+
+class _RecordingPodcastPlayer extends PodcastPlayer {
+  int? feedDurationMs;
+
+  @override
+  Future<void> play(
+    PodcastEpisode episode,
+    PodcastFeed feed, {
+    TranscriptDocument? document,
+    String? localPath,
+    int? feedDurationMs,
+  }) async {
+    this.feedDurationMs = feedDurationMs;
+  }
 }
 
 class _Jobs implements JobRepository {

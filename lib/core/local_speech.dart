@@ -157,7 +157,7 @@ abstract final class LocalSpeechModels {
 
   static const qwen3ForcedAlignerCoreMlInt8 = LocalModelDescriptor(
     id: 'qwen3-forced-aligner-0.6b-coreml-int8',
-    displayName: 'Qwen3 word alignment',
+    displayName: 'Qwen3 word alignment — INT8',
     repository: 'aufklarer/Qwen3-ForcedAligner-0.6B-CoreML-INT8',
     revision: 'ac27c13a9dae935e7d478b996d89d94ff617e3ca',
     files: [
@@ -242,7 +242,113 @@ abstract final class LocalSpeechModels {
     ],
   );
 
-  static const all = [mossDiarizeCoreMlInt8, qwen3ForcedAlignerCoreMlInt8];
+  static const qwen3ForcedAlignerCoreMlFp16 = LocalModelDescriptor(
+    id: 'qwen3-forced-aligner-0.6b-coreml-fp16',
+    displayName: 'Qwen3 word alignment — FP16',
+    repository: 'aufklarer/Qwen3-ForcedAligner-0.6B-CoreML-FP16',
+    revision: '04ca8c28f641b9e32a0ac8d1edd3cdec83f22159',
+    files: [
+      LocalModelFile(
+        path: 'config.json',
+        sizeBytes: 236,
+        sha256:
+            'fe0bcf6b20f2f24bd43868447ff12289260b668ad50cabcdafc74dbd8a4d0bf5',
+      ),
+      LocalModelFile(
+        path: 'audio_encoder.mlmodelc/metadata.json',
+        sizeBytes: 2673,
+        sha256:
+            '12eb3e1b047e9d0371b8f8044a339b826558e26890a96cd96f4f90abd6f226e6',
+      ),
+      LocalModelFile(
+        path: 'audio_encoder.mlmodelc/model.mil',
+        sizeBytes: 1345241,
+        sha256:
+            'fdc48cc61713681cea0e9d0cbe28f35a54f6a7fb1d47919e714c0439c69f3594',
+      ),
+      LocalModelFile(
+        path: 'audio_encoder.mlmodelc/coremldata.bin',
+        sizeBytes: 376,
+        sha256:
+            'd310aae19a7b4bb18c5a9dbbeca9a4afc44062b3b28ef2df72bc3c273b39597e',
+      ),
+      LocalModelFile(
+        path: 'audio_encoder.mlmodelc/weights/weight.bin',
+        sizeBytes: 633519616,
+        sha256:
+            '8a462623acd5c5112b509ed16fcff9444d3082e968f5a5f683ce6c1c5aa72255',
+      ),
+      LocalModelFile(
+        path: 'embed_tokens.fp16.bin',
+        sizeBytes: 311427072,
+        sha256:
+            'a6968a6f3a6520111cf9288239a09e766cdebba9067c43e59ef06c6aac8e0512',
+      ),
+      LocalModelFile(
+        path: 'text_decoder.mlmodelc/metadata.json',
+        sizeBytes: 1958,
+        sha256:
+            'd99f2802468256474eedcafcb97886f682ba5e4e51d20b55ec84f702edc7309c',
+      ),
+      LocalModelFile(
+        path: 'text_decoder.mlmodelc/model.mil',
+        sizeBytes: 720032,
+        sha256:
+            'fe12a4439c74cee3062452a82d8540adb1b9fe8016734a4e2233defbaf4bf2e1',
+      ),
+      LocalModelFile(
+        path: 'text_decoder.mlmodelc/coremldata.bin',
+        sizeBytes: 323,
+        sha256:
+            'c96efde9c62815e6636dade55c11676d246080776f8ca005c993680752a81d4e',
+      ),
+      LocalModelFile(
+        path: 'text_decoder.mlmodelc/weights/weight.bin',
+        sizeBytes: 892593808,
+        sha256:
+            '7b76d348eeade1d225514012c3b727fce16d2379b92b0fbf1df3e175f852619f',
+      ),
+      LocalModelFile(
+        path: 'vocab.json',
+        sizeBytes: 2776833,
+        sha256:
+            'ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910',
+      ),
+      LocalModelFile(
+        path: 'merges.txt',
+        sizeBytes: 1671853,
+        sha256:
+            '8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5',
+      ),
+      LocalModelFile(
+        path: 'tokenizer_config.json',
+        sizeBytes: 12666,
+        sha256:
+            '3ab80063f8511deb9566e6ad438d17b7a6277fcffd52d92854112f19d36bd81c',
+      ),
+    ],
+  );
+
+  static const forcedAligners = <ForcedAlignmentModel, LocalModelDescriptor>{
+    ForcedAlignmentModel.qwen3CoreMlInt8: qwen3ForcedAlignerCoreMlInt8,
+    ForcedAlignmentModel.qwen3CoreMlFp16: qwen3ForcedAlignerCoreMlFp16,
+  };
+
+  static LocalModelDescriptor forcedAligner(ForcedAlignmentModel model) =>
+      forcedAligners[model]!;
+
+  static LocalModelDescriptor? forcedAlignerById(String? modelId) {
+    for (final descriptor in forcedAligners.values) {
+      if (descriptor.id == modelId) return descriptor;
+    }
+    return null;
+  }
+
+  static const all = [
+    mossDiarizeCoreMlInt8,
+    qwen3ForcedAlignerCoreMlInt8,
+    qwen3ForcedAlignerCoreMlFp16,
+  ];
 }
 
 enum LocalModelAvailability { missing, partial, ready, corrupt }
@@ -338,11 +444,13 @@ class ForcedAlignmentRequest {
   const ForcedAlignmentRequest({
     required this.sourcePath,
     required this.document,
+    required this.model,
     this.languageHints = const [],
   });
 
   final String sourcePath;
   final TranscriptDocument document;
+  final LocalModelDescriptor model;
   final List<String> languageHints;
 }
 
