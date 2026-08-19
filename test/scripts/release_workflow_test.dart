@@ -39,4 +39,15 @@ void main() {
     expect(windowsRelease, contains(r'commit = $Commit'));
     expect(windowsRelease, contains(r'architecture = $Arch'));
   });
+
+  test('Windows build entry points share the common build implementation', () {
+    final debug = File('scripts/win-debug.ps1').readAsStringSync();
+    final release = File('scripts/win-release.ps1').readAsStringSync();
+
+    expect(debug, contains('build-windows.ps1'));
+    expect(debug, contains('-Mode debug'));
+    expect(release, contains('build-windows.ps1'));
+    expect(File('scripts/build-debug.ps1').existsSync(), isFalse);
+    expect(File('scripts/build-release.ps1').existsSync(), isFalse);
+  });
 }

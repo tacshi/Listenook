@@ -149,12 +149,13 @@ Set `MEOWSTT_MAC_DEBUG_SIGN_IDENTITY=-` to force that fallback.
 Windows (Windows 10 22H2+, matching native host):
 
 ```powershell
-scripts\build-debug.ps1 -Arch x64
-scripts\build-release.ps1 -Arch arm64
+scripts\win-debug.ps1 -Arch x64
+scripts\win-release.ps1 -Arch arm64
 ```
 
-The `.cmd` wrappers accept the same arguments. Debug builds produce an
-uncompressed portable directory. Release builds produce a portable ZIP and an
+Pass a version such as `scripts\win-release.ps1 1.2.3` to produce the provenance
+sidecar required by the cross-platform publishing workflow. Debug builds produce
+an uncompressed portable directory. Release builds produce a portable ZIP and an
 Inno Setup installer. Install Inno
 Setup 6 or 7, or set `MEOWSTT_ISCC` to `ISCC.exe`. For production code signing,
 set `MEOWSTT_WINDOWS_PFX`, optionally `MEOWSTT_WINDOWS_PFX_PASSWORD`,
