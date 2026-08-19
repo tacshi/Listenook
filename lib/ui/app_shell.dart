@@ -276,6 +276,13 @@ class _AppShellState extends State<AppShell>
   }
 
   @override
+  void onTrayIconRightMouseDown() {
+    if (Platform.isWindows) {
+      unawaited(tray.trayManager.popUpContextMenu());
+    }
+  }
+
+  @override
   void onTrayMenuItemClick(tray.MenuItem menuItem) {
     switch (menuItem.key) {
       case 'open-inbox':
@@ -433,7 +440,6 @@ class _AppShellState extends State<AppShell>
     _updates?.shutdown();
     try {
       await _fullscreenController.exit();
-      await _fullscreenController.shutdownMedia();
       if (_trayReady) {
         try {
           await tray.trayManager.destroy();
@@ -441,8 +447,11 @@ class _AppShellState extends State<AppShell>
           // Desktop plugins are intentionally unavailable in widget tests.
         }
       }
-      await _podcastController(listen: false)?.shutdown();
-      await _controller.shutdown();
+      await Future.wait([
+        _fullscreenController.shutdownMedia(),
+        _podcastController(listen: false)?.shutdown() ?? Future<void>.value(),
+        _controller.shutdown(),
+      ]);
       await windowManager.setPreventClose(false);
       await windowManager.destroy();
     } on Object {

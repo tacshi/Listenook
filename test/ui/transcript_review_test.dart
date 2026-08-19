@@ -3472,7 +3472,7 @@ void main() {
   });
 
   testWidgets(
-    'window close waits for review media before allowing native close',
+    'window close runs cleanup concurrently before allowing native close',
     (tester) async {
       const windowChannel = MethodChannel('window_manager');
       final messenger =
@@ -3545,14 +3545,14 @@ void main() {
       final dynamic appShellState = tester.state(find.byType(AppShell));
       final close = appShellState.onWindowClose() as Future<void>;
       await tester.pump();
-      expect(events, ['media-start']);
+      expect(events, ['media-start', 'podcast-save']);
 
       mediaReleased.complete();
       await close;
       expect(events, [
         'media-start',
-        'media-done',
         'podcast-save',
+        'media-done',
         'prevent:false',
         'destroy',
       ]);
@@ -3560,8 +3560,8 @@ void main() {
       await appShellState.onWindowClose();
       expect(events, [
         'media-start',
-        'media-done',
         'podcast-save',
+        'media-done',
         'prevent:false',
         'destroy',
       ]);
@@ -3632,6 +3632,17 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pumpAndSettle();
       expect(events, contains('tray:setIcon'));
+      events.clear();
+
+      await messenger.handlePlatformMessage(
+        'tray_manager',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('onTrayIconRightMouseDown'),
+        ),
+        null,
+      );
+      await tester.pump();
+      expect(events, contains('tray:popUpContextMenu'));
       events.clear();
 
       final dynamic appShellState = tester.state(find.byType(AppShell));
