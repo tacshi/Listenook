@@ -502,310 +502,303 @@ class _TranscriptReviewState extends State<TranscriptReview>
             pinnedSegmentId: _repeatingSegmentId,
           )
         : null;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          _UnifiedReviewToolbar(
-            role: _ReviewToolbarRole.global,
-            job: job,
-            viewMode: _viewMode,
-            showAiBrief: _showAiBrief,
-            search: _search,
-            searchVisible: _searchVisible,
-            onTabChanged: (value) {
-              if (value && _searchVisible) {
-                _search.clear();
-                _queueFocusCurrent(force: true);
-              }
-              setState(() {
-                _showAiBrief = value;
-                if (value) _searchVisible = false;
-              });
-            },
-            onViewModeChanged: (value) => setState(() => _viewMode = value),
-            onOpenSearch: () => setState(() => _searchVisible = true),
-            onCloseSearch: _closeTranscriptSearch,
-            onSearch: () {
-              setState(() {});
-              if (_search.text.trim().isEmpty) {
-                _queueFocusCurrent(force: true);
-              }
-            },
-            onFocusCurrentSentence: document.segments.isEmpty
-                ? null
-                : _focusCurrentSentence,
-            onGenerateAiBrief: () => _showAiBriefDialog(job),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final hasVideo = job.metadata?.hasVideo ?? false;
-                final canSwitchMediaMode = _supportsMediaModeSwitch(job);
-                final audioMode =
-                    canSwitchMediaMode && _mediaMode == _ReviewMediaMode.audio;
-                final transcriptPane = _buildTranscriptPane(
-                  controller: controller,
-                  job: job,
-                  document: document,
-                  query: query,
-                  segments: segments,
-                  currentIndex: currentIndex,
-                  showFilename: !hasVideo || audioMode,
-                );
-                final aiBriefPane = _buildAiBriefPane(
-                  job: job,
-                  document: document,
-                );
-                final companionAvailable =
-                    constraints.maxWidth >=
-                    (_minimumCompanionPaneWidth * 2 + _reviewDividerWidth);
-                final companionActive = _showAiBrief && companionAvailable;
-                final audioCompanion =
-                    companionAvailable && (!hasVideo || audioMode);
-                _companionLayoutActive = companionActive || audioCompanion;
+    return Column(
+      key: const Key('transcript-review-surface'),
+      children: [
+        _UnifiedReviewToolbar(
+          role: _ReviewToolbarRole.global,
+          job: job,
+          viewMode: _viewMode,
+          showAiBrief: _showAiBrief,
+          search: _search,
+          searchVisible: _searchVisible,
+          onTabChanged: (value) {
+            if (value && _searchVisible) {
+              _search.clear();
+              _queueFocusCurrent(force: true);
+            }
+            setState(() {
+              _showAiBrief = value;
+              if (value) _searchVisible = false;
+            });
+          },
+          onViewModeChanged: (value) => setState(() => _viewMode = value),
+          onOpenSearch: () => setState(() => _searchVisible = true),
+          onCloseSearch: _closeTranscriptSearch,
+          onSearch: () {
+            setState(() {});
+            if (_search.text.trim().isEmpty) {
+              _queueFocusCurrent(force: true);
+            }
+          },
+          onFocusCurrentSentence: document.segments.isEmpty
+              ? null
+              : _focusCurrentSentence,
+          onGenerateAiBrief: () => _showAiBriefDialog(job),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final hasVideo = job.metadata?.hasVideo ?? false;
+              final canSwitchMediaMode = _supportsMediaModeSwitch(job);
+              final audioMode =
+                  canSwitchMediaMode && _mediaMode == _ReviewMediaMode.audio;
+              final transcriptPane = _buildTranscriptPane(
+                controller: controller,
+                job: job,
+                document: document,
+                query: query,
+                segments: segments,
+                currentIndex: currentIndex,
+                showFilename: !hasVideo || audioMode,
+              );
+              final aiBriefPane = _buildAiBriefPane(
+                job: job,
+                document: document,
+              );
+              final companionAvailable =
+                  constraints.maxWidth >=
+                  (_minimumCompanionPaneWidth * 2 + _reviewDividerWidth);
+              final companionActive = _showAiBrief && companionAvailable;
+              final audioCompanion =
+                  companionAvailable && (!hasVideo || audioMode);
+              _companionLayoutActive = companionActive || audioCompanion;
 
-                if (audioCompanion) {
-                  return Column(
-                    key: const Key('audio-review-companion'),
-                    children: [
-                      KeyedSubtree(
-                        key: const Key('audio-review-media'),
-                        child: _buildMediaArea(
-                          job,
-                          presentation: _ReviewMediaMode.audio,
-                          fillHeight: false,
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: _buildCompanionSplit(
-                          width: constraints.maxWidth,
-                          left: transcriptPane,
-                          right: aiBriefPane,
-                          showRight: _showAiBrief,
-                        ),
-                      ),
-                    ],
-                  );
-                }
-
-                if (companionActive) {
-                  return _buildVideoCompanion(
-                    constraints: constraints,
-                    job: job,
-                    transcriptPane: transcriptPane,
-                    aiBriefPane: aiBriefPane,
-                  );
-                }
-
-                final selectedPane = IndexedStack(
-                  key: const Key('review-tabbed-content'),
-                  index: _showAiBrief ? 1 : 0,
-                  sizing: StackFit.expand,
-                  children: [transcriptPane, aiBriefPane],
-                );
-                if (!hasVideo) {
-                  return Column(
-                    key: const Key('video-review-stacked'),
-                    children: [
-                      _buildMediaArea(
+              if (audioCompanion) {
+                return Column(
+                  key: const Key('audio-review-companion'),
+                  children: [
+                    KeyedSubtree(
+                      key: const Key('audio-review-media'),
+                      child: _buildMediaArea(
                         job,
                         presentation: _ReviewMediaMode.audio,
                         fillHeight: false,
                       ),
-                      const Divider(height: 1),
-                      Expanded(child: selectedPane),
-                    ],
-                  );
-                }
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: _buildCompanionSplit(
+                        width: constraints.maxWidth,
+                        left: transcriptPane,
+                        right: aiBriefPane,
+                        showRight: _showAiBrief,
+                      ),
+                    ),
+                  ],
+                );
+              }
 
-                final sideBySide = constraints.maxWidth >= 840;
-                final availableWidth =
-                    constraints.maxWidth - _reviewDividerWidth;
-                final maximumPaneWidth =
-                    availableWidth - _minimumReviewPaneWidth;
-                final preferredTranscriptWidth =
-                    _transcriptPaneWidth ?? availableWidth * .45;
-                final transcriptWidth = sideBySide
-                    ? preferredTranscriptWidth
-                          .clamp(_minimumReviewPaneWidth, maximumPaneWidth)
-                          .toDouble()
-                    : constraints.maxWidth;
-                if (sideBySide && _transcriptPaneWidth == null) {
-                  _transcriptPaneWidth = transcriptWidth;
-                }
-                final videoWidth = sideBySide
-                    ? availableWidth - transcriptWidth
-                    : constraints.maxWidth;
-                final stackedVideoHeight = (constraints.maxHeight * .4)
-                    .clamp(180.0, 300.0)
-                    .toDouble();
-                final stackedMediaHeight =
-                    _videoTitleHeaderHeight +
-                    1 +
-                    stackedVideoHeight +
-                    VideoTransport.height;
-                final videoMediaRect = sideBySide
-                    ? Rect.fromLTWH(0, 0, videoWidth, constraints.maxHeight)
-                    : Rect.fromLTWH(
-                        0,
-                        0,
-                        constraints.maxWidth,
-                        stackedMediaHeight,
-                      );
-                final videoTranscriptTop = sideBySide
-                    ? 0.0
-                    : stackedMediaHeight + 1;
-                final videoTranscriptRect = Rect.fromLTWH(
-                  sideBySide ? videoWidth + _reviewDividerWidth : 0,
-                  videoTranscriptTop,
-                  sideBySide ? transcriptWidth : constraints.maxWidth,
-                  (constraints.maxHeight - videoTranscriptTop)
-                      .clamp(0.0, constraints.maxHeight)
-                      .toDouble(),
+              if (companionActive) {
+                return _buildVideoCompanion(
+                  constraints: constraints,
+                  job: job,
+                  transcriptPane: transcriptPane,
+                  aiBriefPane: aiBriefPane,
                 );
-                final audioMediaHeight = File(job.sourcePath).existsSync()
-                    ? AudioTransport.height
-                    : _missingSourceAudioHeight;
-                final audioMediaRect = Rect.fromLTWH(
-                  0,
-                  0,
-                  constraints.maxWidth,
-                  audioMediaHeight,
-                );
-                final audioTranscriptRect = Rect.fromLTWH(
-                  0,
-                  audioMediaHeight + 1,
-                  constraints.maxWidth,
-                  (constraints.maxHeight - audioMediaHeight - 1)
-                      .clamp(0.0, constraints.maxHeight)
-                      .toDouble(),
-                );
-                final media = _buildMediaArea(
-                  job,
-                  presentation: audioMode
-                      ? _ReviewMediaMode.audio
-                      : _ReviewMediaMode.video,
-                  fillHeight: !audioMode && sideBySide,
-                  videoHeight: sideBySide ? null : stackedVideoHeight,
-                );
-                final layoutMarkerKey = audioMode
-                    ? const Key('audio-review-layout')
-                    : sideBySide
-                    ? const Key('video-review-split')
-                    : const Key('video-review-stacked');
+              }
 
-                return TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0.0, end: audioMode ? 1.0 : 0.0),
-                  duration: _mediaModeTransitionDuration,
-                  curve: Curves.easeInOutCubic,
-                  builder: (context, progress, _) {
-                    final mediaRect = Rect.lerp(
-                      videoMediaRect,
-                      audioMediaRect,
-                      progress,
-                    )!;
-                    final transcriptRect = Rect.lerp(
-                      videoTranscriptRect,
-                      audioTranscriptRect,
-                      progress,
-                    )!;
-                    return Stack(
-                      clipBehavior: Clip.hardEdge,
-                      children: [
-                        Positioned.fill(
-                          key: const ValueKey('review-layout-marker-slot'),
-                          child: IgnorePointer(
-                            child: SizedBox.expand(key: layoutMarkerKey),
-                          ),
+              final selectedPane = IndexedStack(
+                key: const Key('review-tabbed-content'),
+                index: _showAiBrief ? 1 : 0,
+                sizing: StackFit.expand,
+                children: [transcriptPane, aiBriefPane],
+              );
+              if (!hasVideo) {
+                return Column(
+                  key: const Key('video-review-stacked'),
+                  children: [
+                    _buildMediaArea(
+                      job,
+                      presentation: _ReviewMediaMode.audio,
+                      fillHeight: false,
+                    ),
+                    const Divider(height: 1),
+                    Expanded(child: selectedPane),
+                  ],
+                );
+              }
+
+              final sideBySide = constraints.maxWidth >= 840;
+              final availableWidth = constraints.maxWidth - _reviewDividerWidth;
+              final maximumPaneWidth = availableWidth - _minimumReviewPaneWidth;
+              final preferredTranscriptWidth =
+                  _transcriptPaneWidth ?? availableWidth * .45;
+              final transcriptWidth = sideBySide
+                  ? preferredTranscriptWidth
+                        .clamp(_minimumReviewPaneWidth, maximumPaneWidth)
+                        .toDouble()
+                  : constraints.maxWidth;
+              if (sideBySide && _transcriptPaneWidth == null) {
+                _transcriptPaneWidth = transcriptWidth;
+              }
+              final videoWidth = sideBySide
+                  ? availableWidth - transcriptWidth
+                  : constraints.maxWidth;
+              final stackedVideoHeight = (constraints.maxHeight * .4)
+                  .clamp(180.0, 300.0)
+                  .toDouble();
+              final stackedMediaHeight =
+                  _videoTitleHeaderHeight +
+                  1 +
+                  stackedVideoHeight +
+                  VideoTransport.height;
+              final videoMediaRect = sideBySide
+                  ? Rect.fromLTWH(0, 0, videoWidth, constraints.maxHeight)
+                  : Rect.fromLTWH(
+                      0,
+                      0,
+                      constraints.maxWidth,
+                      stackedMediaHeight,
+                    );
+              final videoTranscriptTop = sideBySide
+                  ? 0.0
+                  : stackedMediaHeight + 1;
+              final videoTranscriptRect = Rect.fromLTWH(
+                sideBySide ? videoWidth + _reviewDividerWidth : 0,
+                videoTranscriptTop,
+                sideBySide ? transcriptWidth : constraints.maxWidth,
+                (constraints.maxHeight - videoTranscriptTop)
+                    .clamp(0.0, constraints.maxHeight)
+                    .toDouble(),
+              );
+              final audioMediaHeight = File(job.sourcePath).existsSync()
+                  ? AudioTransport.height
+                  : _missingSourceAudioHeight;
+              final audioMediaRect = Rect.fromLTWH(
+                0,
+                0,
+                constraints.maxWidth,
+                audioMediaHeight,
+              );
+              final audioTranscriptRect = Rect.fromLTWH(
+                0,
+                audioMediaHeight + 1,
+                constraints.maxWidth,
+                (constraints.maxHeight - audioMediaHeight - 1)
+                    .clamp(0.0, constraints.maxHeight)
+                    .toDouble(),
+              );
+              final media = _buildMediaArea(
+                job,
+                presentation: audioMode
+                    ? _ReviewMediaMode.audio
+                    : _ReviewMediaMode.video,
+                fillHeight: !audioMode && sideBySide,
+                videoHeight: sideBySide ? null : stackedVideoHeight,
+              );
+              final layoutMarkerKey = audioMode
+                  ? const Key('audio-review-layout')
+                  : sideBySide
+                  ? const Key('video-review-split')
+                  : const Key('video-review-stacked');
+
+              return TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0.0, end: audioMode ? 1.0 : 0.0),
+                duration: _mediaModeTransitionDuration,
+                curve: Curves.easeInOutCubic,
+                builder: (context, progress, _) {
+                  final mediaRect = Rect.lerp(
+                    videoMediaRect,
+                    audioMediaRect,
+                    progress,
+                  )!;
+                  final transcriptRect = Rect.lerp(
+                    videoTranscriptRect,
+                    audioTranscriptRect,
+                    progress,
+                  )!;
+                  return Stack(
+                    clipBehavior: Clip.hardEdge,
+                    children: [
+                      Positioned.fill(
+                        key: const ValueKey('review-layout-marker-slot'),
+                        child: IgnorePointer(
+                          child: SizedBox.expand(key: layoutMarkerKey),
                         ),
-                        Positioned.fromRect(
-                          key: const ValueKey(
-                            'video-mode-switcher-marker-slot',
-                          ),
-                          rect: videoMediaRect,
-                          child: IgnorePointer(
-                            child: audioMode
-                                ? const SizedBox.shrink()
-                                : const SizedBox.expand(
-                                    key: Key('video-audio-mode-switcher'),
-                                  ),
-                          ),
-                        ),
-                        Positioned.fromRect(
-                          key: const ValueKey('animated-media-slot'),
-                          rect: mediaRect,
-                          child: SizedBox.expand(
-                            key: const Key('video-review-media-pane'),
-                            child: ClipRect(
-                              child: KeyedSubtree(
-                                key: ValueKey(
-                                  audioMode
-                                      ? 'video-audio-mode-audio'
-                                      : 'video-audio-mode-video',
+                      ),
+                      Positioned.fromRect(
+                        key: const ValueKey('video-mode-switcher-marker-slot'),
+                        rect: videoMediaRect,
+                        child: IgnorePointer(
+                          child: audioMode
+                              ? const SizedBox.shrink()
+                              : const SizedBox.expand(
+                                  key: Key('video-audio-mode-switcher'),
                                 ),
-                                child: media,
+                        ),
+                      ),
+                      Positioned.fromRect(
+                        key: const ValueKey('animated-media-slot'),
+                        rect: mediaRect,
+                        child: SizedBox.expand(
+                          key: const Key('video-review-media-pane'),
+                          child: ClipRect(
+                            child: KeyedSubtree(
+                              key: ValueKey(
+                                audioMode
+                                    ? 'video-audio-mode-audio'
+                                    : 'video-audio-mode-video',
                               ),
+                              child: media,
                             ),
                           ),
                         ),
-                        Positioned.fromRect(
-                          key: const ValueKey('animated-transcript-slot'),
-                          rect: transcriptRect,
-                          child: SizedBox.expand(
-                            key: const Key('video-review-transcript-pane'),
-                            child: selectedPane,
-                          ),
+                      ),
+                      Positioned.fromRect(
+                        key: const ValueKey('animated-transcript-slot'),
+                        rect: transcriptRect,
+                        child: SizedBox.expand(
+                          key: const Key('video-review-transcript-pane'),
+                          child: selectedPane,
                         ),
-                        Positioned(
-                          key: const ValueKey('vertical-divider-slot'),
-                          left: videoWidth * (1 - progress),
-                          top: 0,
-                          width: _reviewDividerWidth,
-                          height: constraints.maxHeight,
-                          child: sideBySide
-                              ? IgnorePointer(
-                                  ignoring: progress > 0,
-                                  child: Opacity(
-                                    opacity: 1 - progress,
-                                    child: _ReviewSplitDivider(
-                                      onDragUpdate: (delta) =>
-                                          _resizeReviewPanes(
-                                            delta,
-                                            availableWidth,
-                                          ),
+                      ),
+                      Positioned(
+                        key: const ValueKey('vertical-divider-slot'),
+                        left: videoWidth * (1 - progress),
+                        top: 0,
+                        width: _reviewDividerWidth,
+                        height: constraints.maxHeight,
+                        child: sideBySide
+                            ? IgnorePointer(
+                                ignoring: progress > 0,
+                                child: Opacity(
+                                  opacity: 1 - progress,
+                                  child: _ReviewSplitDivider(
+                                    onDragUpdate: (delta) => _resizeReviewPanes(
+                                      delta,
+                                      availableWidth,
                                     ),
                                   ),
-                                )
-                              : const SizedBox.shrink(),
-                        ),
-                        Positioned(
-                          key: const ValueKey('horizontal-divider-slot'),
-                          left: 0,
-                          top: transcriptRect.top - 1,
-                          width: constraints.maxWidth,
-                          height: 1,
-                          child: IgnorePointer(
-                            child: Opacity(
-                              opacity: sideBySide ? progress : 1,
-                              child: Divider(
-                                height: 1,
-                                color: Theme.of(context).dividerColor,
-                              ),
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                      Positioned(
+                        key: const ValueKey('horizontal-divider-slot'),
+                        left: 0,
+                        top: transcriptRect.top - 1,
+                        width: constraints.maxWidth,
+                        height: 1,
+                        child: IgnorePointer(
+                          child: Opacity(
+                            opacity: sideBySide ? progress : 1,
+                            child: Divider(
+                              height: 1,
+                              color: Theme.of(context).dividerColor,
                             ),
                           ),
                         ),
-                      ],
-                    );
-                  },
-                );
-              },
-            ),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 

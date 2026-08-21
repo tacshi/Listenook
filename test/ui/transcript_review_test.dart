@@ -4140,6 +4140,35 @@ void main() {
     expect(find.byType(TranscriptReview), findsOneWidget);
   });
 
+  testWidgets('active workspace review fills the page without an outer card', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(_simpleDocument());
+    addTearDown(controller.dispose);
+    controller.openInWorkspace('job');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: WorkspacePage()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final workspace = find.byType(WorkspacePage);
+    final review = find.byType(TranscriptReview);
+    expect(tester.getRect(review), tester.getRect(workspace));
+    expect(
+      find.ancestor(of: review, matching: find.byType(Card)),
+      findsNothing,
+    );
+  });
+
   testWidgets('legacy MOSS transcripts expose manual local alignment', (
     tester,
   ) async {

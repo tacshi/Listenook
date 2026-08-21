@@ -37,46 +37,41 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final job = context.watch<AppController>().activeWorkspaceJob;
     final showAlignmentNotice = _shouldShowAlignmentNotice(job);
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
-        child: job == null
-            ? const _EmptyWorkspace()
-            : Stack(
-                children: [
-                  Positioned.fill(
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: TranscriptReview(
-                            key: ValueKey('workspace-review-${job.id}'),
-                            jobId: job.id,
-                            fullscreenController: _fullscreenController,
-                          ),
-                        ),
-                      ],
-                    ),
+      child: job == null
+          ? const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 18),
+              child: _EmptyWorkspace(),
+            )
+          : Stack(
+              key: const Key('workspace-active-review'),
+              children: [
+                Positioned.fill(
+                  child: TranscriptReview(
+                    key: ValueKey('workspace-review-${job.id}'),
+                    jobId: job.id,
+                    fullscreenController: _fullscreenController,
                   ),
-                  if (showAlignmentNotice)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: Align(
-                        alignment: Alignment.bottomCenter,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 760),
-                          child: _MossTimingBar(
-                            job: job,
-                            onDismiss: () => setState(
-                              () => _visibleAlignmentNotices.remove(job.id),
-                            ),
+                ),
+                if (showAlignmentNotice)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 760),
+                        child: _MossTimingBar(
+                          job: job,
+                          onDismiss: () => setState(
+                            () => _visibleAlignmentNotices.remove(job.id),
                           ),
                         ),
                       ),
                     ),
-                ],
-              ),
-      ),
+                  ),
+              ],
+            ),
     );
   }
 
