@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 11;
+const int manifestVersion = 12;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 const Set<String> supportedMonitoredMediaExtensions = {
@@ -193,18 +193,39 @@ enum CleanupState { none, pending, complete }
 
 enum JobSourceOrigin { manual, monitoredFolder, podcast }
 
-enum TranscriptionProvider { soniox, mossPro, mossLocal }
+enum TranscriptionProvider { soniox, mossPro, mossLocal, qwen3Local }
 
 enum ForcedAlignmentModel { qwen3CoreMlInt8, qwen3CoreMlFp16 }
 
-enum TranscriptAcquisitionMode { soniox, mossPro, mossLocal, publisherCaptions }
+enum TranscriptAcquisitionMode {
+  soniox,
+  mossPro,
+  mossLocal,
+  publisherCaptions,
+  qwen3Local,
+}
 
 extension TranscriptAcquisitionModeX on TranscriptAcquisitionMode {
   bool get usesPublisherTranscript =>
       this == TranscriptAcquisitionMode.publisherCaptions;
 }
 
-enum TranscriptSource { soniox, mossPro, mossLocal, publisher }
+enum TranscriptSource { soniox, mossPro, mossLocal, publisher, qwen3Local }
+
+class TranscriptionModelReference {
+  const TranscriptionModelReference({required this.id, required this.revision});
+
+  final String id;
+  final String revision;
+
+  Map<String, dynamic> toJson() => {'id': id, 'revision': revision};
+
+  factory TranscriptionModelReference.fromJson(Map<String, dynamic> json) =>
+      TranscriptionModelReference(
+        id: json['id'] as String? ?? '',
+        revision: json['revision'] as String? ?? '',
+      );
+}
 
 enum ForcedAlignmentStatus {
   notRequested,
@@ -1598,7 +1619,7 @@ class AppSettings {
     this.sonioxTranslation = const SonioxTranslationOptions(),
     this.defaultTranscriptionProvider = TranscriptionProvider.soniox,
     this.defaultForcedAlignmentModel,
-    this.autoAlignMoss = true,
+    this.automaticWordTiming = true,
     this.autoTranscribeLocal = false,
     this.lastContentDestination = AppContentDestination.podcast,
     this.lastWorkspaceJobId,
@@ -1618,7 +1639,7 @@ class AppSettings {
   final SonioxTranslationOptions sonioxTranslation;
   final TranscriptionProvider defaultTranscriptionProvider;
   final ForcedAlignmentModel? defaultForcedAlignmentModel;
-  final bool autoAlignMoss;
+  final bool automaticWordTiming;
   final bool autoTranscribeLocal;
   final AppContentDestination lastContentDestination;
   final String? lastWorkspaceJobId;
@@ -1647,7 +1668,7 @@ class AppSettings {
     SonioxTranslationOptions? sonioxTranslation,
     TranscriptionProvider? defaultTranscriptionProvider,
     ForcedAlignmentModel? defaultForcedAlignmentModel,
-    bool? autoAlignMoss,
+    bool? automaticWordTiming,
     bool? autoTranscribeLocal,
     AppContentDestination? lastContentDestination,
     String? lastWorkspaceJobId,
@@ -1672,7 +1693,7 @@ class AppSettings {
         defaultTranscriptionProvider ?? this.defaultTranscriptionProvider,
     defaultForcedAlignmentModel:
         defaultForcedAlignmentModel ?? this.defaultForcedAlignmentModel,
-    autoAlignMoss: autoAlignMoss ?? this.autoAlignMoss,
+    automaticWordTiming: automaticWordTiming ?? this.automaticWordTiming,
     autoTranscribeLocal: autoTranscribeLocal ?? this.autoTranscribeLocal,
     lastContentDestination:
         lastContentDestination ?? this.lastContentDestination,
@@ -1695,7 +1716,7 @@ class AppSettings {
     'default_transcription_provider': defaultTranscriptionProvider.name,
     if (defaultForcedAlignmentModel case final value?)
       'default_forced_alignment_model': value.name,
-    'auto_align_moss': autoAlignMoss,
+    'auto_align_transcripts': automaticWordTiming,
     'auto_transcribe_local': autoTranscribeLocal,
     'last_content_destination': lastContentDestination.name,
     if (lastWorkspaceJobId case final value?) 'last_workspace_job_id': value,
@@ -1743,7 +1764,10 @@ class AppSettings {
         ForcedAlignmentModel.values,
         json['default_forced_alignment_model'],
       ),
-      autoAlignMoss: json['auto_align_moss'] as bool? ?? true,
+      automaticWordTiming:
+          json['auto_align_transcripts'] as bool? ??
+          json['auto_align_moss'] as bool? ??
+          true,
       autoTranscribeLocal: json['auto_transcribe_local'] as bool? ?? false,
       lastContentDestination:
           _enumByName(
@@ -2025,6 +2049,7 @@ class TranscriptionJob {
     this.transcriptionProvider = TranscriptionProvider.soniox,
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
     this.transcriptSource,
+    this.transcriptionModel,
     this.forcedAlignment = const ForcedAlignmentState(),
   }) : transcriptAcquisitionMode =
            transcriptAcquisitionMode ??
@@ -2032,6 +2057,8 @@ class TranscriptionJob {
                ? TranscriptAcquisitionMode.mossPro
                : transcriptionProvider == TranscriptionProvider.mossLocal
                ? TranscriptAcquisitionMode.mossLocal
+               : transcriptionProvider == TranscriptionProvider.qwen3Local
+               ? TranscriptAcquisitionMode.qwen3Local
                : TranscriptAcquisitionMode.soniox);
 
   final String id;
@@ -2063,6 +2090,7 @@ class TranscriptionJob {
   final TranscriptAcquisitionMode transcriptAcquisitionMode;
   final TranscriptionProvider transcriptionProvider;
   final TranscriptSource? transcriptSource;
+  final TranscriptionModelReference? transcriptionModel;
   final ForcedAlignmentState forcedAlignment;
 
   bool get isBusy =>
@@ -2102,6 +2130,7 @@ class TranscriptionJob {
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
     TranscriptionProvider? transcriptionProvider,
     TranscriptSource? transcriptSource,
+    TranscriptionModelReference? transcriptionModel,
     ForcedAlignmentState? forcedAlignment,
     bool clearError = false,
     bool clearRemoteFileId = false,
@@ -2109,6 +2138,7 @@ class TranscriptionJob {
     bool clearAiBrief = false,
     bool clearDisplayTitle = false,
     bool clearGroupId = false,
+    bool clearTranscriptionModel = false,
   }) => TranscriptionJob(
     id: id,
     batchId: batchId,
@@ -2142,6 +2172,9 @@ class TranscriptionJob {
         transcriptAcquisitionMode ?? this.transcriptAcquisitionMode,
     transcriptionProvider: transcriptionProvider ?? this.transcriptionProvider,
     transcriptSource: transcriptSource ?? this.transcriptSource,
+    transcriptionModel: clearTranscriptionModel
+        ? null
+        : transcriptionModel ?? this.transcriptionModel,
     forcedAlignment: forcedAlignment ?? this.forcedAlignment,
   );
 
@@ -2179,6 +2212,8 @@ class TranscriptionJob {
     'transcript_acquisition_mode': transcriptAcquisitionMode.name,
     'transcription_provider': transcriptionProvider.name,
     if (transcriptSource case final value?) 'transcript_source': value.name,
+    if (transcriptionModel case final value?)
+      'transcription_model': value.toJson(),
     'forced_alignment': forcedAlignment.toJson(),
   };
 
@@ -2265,6 +2300,11 @@ class TranscriptionJob {
         TranscriptSource.values,
         json['transcript_source'],
       ),
+      transcriptionModel: json['transcription_model'] is Map
+          ? TranscriptionModelReference.fromJson(
+              (json['transcription_model'] as Map).cast<String, dynamic>(),
+            )
+          : null,
       forcedAlignment: ForcedAlignmentState.fromJson(
         (json['forced_alignment'] as Map?)?.cast<String, dynamic>(),
       ),
@@ -2342,6 +2382,7 @@ TranscriptionProvider _transcriptionProviderFromJson(
     switch (acquisitionMode) {
       'mossPro' => TranscriptionProvider.mossPro,
       'mossLocal' => TranscriptionProvider.mossLocal,
+      'qwen3Local' => TranscriptionProvider.qwen3Local,
       _ => TranscriptionProvider.soniox,
     };
 

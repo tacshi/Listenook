@@ -3296,7 +3296,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.settings);
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
-    await tester.tap(find.text('Providers'));
+    await tester.tap(find.text('Transcription'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('soniox-key-field')));
     await tester.pump();
@@ -7529,7 +7529,7 @@ class _SupportedLocalStt implements LocalSttService {
   bool get isSupported => true;
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
@@ -7543,13 +7543,19 @@ class _DropCountingLocalStt implements LocalSttService {
   bool get isSupported => true;
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
     calls++;
-    return _simpleDocument();
+    return LocalSttResult(
+      document: _simpleDocument(),
+      model: TranscriptionModelReference(
+        id: LocalSpeechModels.mossDiarizeCoreMlInt8.id,
+        revision: LocalSpeechModels.mossDiarizeCoreMlInt8.revision,
+      ),
+    );
   }
 }
 

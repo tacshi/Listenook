@@ -198,17 +198,293 @@ void main() {
       await _waitFor(
         () => controller.inboxJobs.single.status == JobStatus.ready,
       );
+      expect(
+        controller.inboxJobs.single.transcriptionModel?.id,
+        LocalSpeechModels.mossDiarizeCoreMlInt8.id,
+      );
       await controller.startReady();
 
       final job = controller.inboxJobs.single;
       expect(job.status, JobStatus.completed);
       expect(job.transcriptSource, TranscriptSource.mossLocal);
+      expect(
+        job.transcriptionModel?.id,
+        LocalSpeechModels.mossDiarizeCoreMlInt8.id,
+      );
       expect(job.document!.segments.single.text, 'Hello world');
       expect(job.document!.tokens.single.segmentId, 'moss-0');
       expect(job.forcedAlignment.status, ForcedAlignmentStatus.completed);
       expect(job.progress.stage, 'complete');
     },
   );
+
+  test(
+    'local transcription keeps the last numeric progress during retries',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.dispose);
+      final localStt = _IntermittentProgressLocalStt();
+      addTearDown(() {
+        if (!localStt.release.isCompleted) localStt.release.complete();
+      });
+      final controller = await fixture.controller(
+        settings: const AppSettings(
+          defaultTranscriptionProvider: TranscriptionProvider.mossLocal,
+          automaticWordTiming: false,
+        ),
+        localStt: localStt,
+        alignment: _Alignment(),
+      );
+
+      await controller.enqueueSources([fixture.audio.path]);
+      await _waitFor(
+        () => controller.inboxJobs.single.status == JobStatus.ready,
+      );
+
+      final running = controller.startReady();
+      await localStt.numericProgressEmitted.future;
+      await _waitFor(
+        () => controller.inboxJobs.single.progress.fraction == 0.44,
+      );
+
+      localStt.emitProgressWithoutFraction.complete();
+      await localStt.progressWithoutFractionEmitted.future;
+      await _waitFor(
+        () =>
+            controller.inboxJobs.single.progress.detail ==
+            'retrying-coreml-chunk',
+      );
+
+      expect(controller.inboxJobs.single.progress.fraction, 0.44);
+
+      localStt.release.complete();
+      await running;
+    },
+  );
+
+  test(
+    'Qwen Local persists model provenance and coarse no-speaker timing',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.dispose);
+      final localStt = _QwenLocalStt();
+      final alignment = _CountingAlignment();
+      final controller = await fixture.controller(
+        settings: const AppSettings(
+          defaultTranscriptionProvider: TranscriptionProvider.qwen3Local,
+          automaticWordTiming: false,
+        ),
+        localStt: localStt,
+        alignment: alignment,
+      );
+
+      await controller.enqueueSources([fixture.audio.path]);
+      await _waitFor(
+        () => controller.inboxJobs.single.status == JobStatus.ready,
+      );
+      expect(
+        controller.inboxJobs.single.transcriptionModel?.id,
+        LocalSpeechModels.qwen3AsrMlx8Bit.id,
+      );
+      await controller.setTranscriptAcquisitionMode(
+        controller.inboxJobs.single.id,
+        TranscriptAcquisitionMode.soniox,
+      );
+      expect(controller.inboxJobs.single.transcriptionModel, isNull);
+      await controller.setTranscriptAcquisitionMode(
+        controller.inboxJobs.single.id,
+        TranscriptAcquisitionMode.qwen3Local,
+      );
+      expect(
+        controller.inboxJobs.single.transcriptionModel?.revision,
+        LocalSpeechModels.qwen3AsrMlx8Bit.revision,
+      );
+      await controller.startReady();
+
+      final job = controller.inboxJobs.single;
+      expect(localStt.engines, [LocalSttEngine.qwen3Asr]);
+      expect(job.status, JobStatus.completed);
+      expect(job.transcriptSource, TranscriptSource.qwen3Local);
+      expect(
+        job.transcriptAcquisitionMode,
+        TranscriptAcquisitionMode.qwen3Local,
+      );
+      expect(job.transcriptionModel?.id, LocalSpeechModels.qwen3AsrMlx8Bit.id);
+      expect(
+        job.transcriptionModel?.revision,
+        LocalSpeechModels.qwen3AsrMlx8Bit.revision,
+      );
+      expect(job.document!.speakers, isEmpty);
+      expect(job.document!.segments.single.speaker, isNull);
+      expect(job.document!.tokens, isEmpty);
+      expect(alignment.calls, 0);
+    },
+  );
+
+  test(
+    'Qwen coarse timing completes with actionable unavailable alignment',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.dispose);
+      final alignment = _CountingAlignment();
+      final controller = await fixture.controller(
+        settings: const AppSettings(
+          defaultTranscriptionProvider: TranscriptionProvider.qwen3Local,
+        ),
+        localStt: _QwenLocalStt(),
+        alignment: alignment,
+        preserveUnselectedAlignmentModel: true,
+      );
+
+      await controller.enqueueSources([fixture.audio.path]);
+      await _waitFor(
+        () => controller.inboxJobs.single.status == JobStatus.ready,
+      );
+      await controller.startReady();
+
+      final job = controller.inboxJobs.single;
+      expect(job.status, JobStatus.completed);
+      expect(job.forcedAlignment.status, ForcedAlignmentStatus.unavailable);
+      expect(job.forcedAlignment.warningCode, 'alignment_model_not_selected');
+      expect(job.document!.segments.single.text, 'Higher quality text');
+      expect(alignment.calls, 0);
+    },
+  );
+
+  test('Qwen Local participates in local auto-start', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.dispose);
+    final localStt = _QwenLocalStt();
+    final controller = await fixture.controller(
+      settings: const AppSettings(
+        defaultTranscriptionProvider: TranscriptionProvider.qwen3Local,
+        automaticWordTiming: false,
+        autoTranscribeLocal: true,
+      ),
+      localStt: localStt,
+      alignment: _Alignment(),
+    );
+
+    await controller.enqueueSources([fixture.audio.path]);
+    await _waitFor(
+      () => controller.inboxJobs.single.status == JobStatus.completed,
+    );
+
+    expect(localStt.engines, [LocalSttEngine.qwen3Asr]);
+  });
+
+  test(
+    'Qwen bundle readiness is atomic and a partial install resumes',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.dispose);
+      final models = _QwenModels(failId: LocalSpeechModels.sileroVadCoreMl.id);
+      final controller = await fixture.controller(
+        settings: const AppSettings(),
+        localStt: _QwenLocalStt(),
+        alignment: _Alignment(),
+        localModelManager: models,
+      );
+      final aggregateProgress = <double>[];
+      controller.addListener(() {
+        final progress = controller.localModelDownloadProgress(
+          LocalSpeechModels.qwen3AsrBundle.id,
+        );
+        if (progress != null) aggregateProgress.add(progress);
+      });
+
+      expect(
+        controller.isTranscriptionProviderConfigured(
+          TranscriptionProvider.qwen3Local,
+        ),
+        isFalse,
+      );
+      await expectLater(
+        controller.downloadLocalModelBundle(LocalSpeechModels.qwen3AsrBundle),
+        throwsA(isA<LocalModelException>()),
+      );
+      expect(
+        controller.localModelBundleAvailability(
+          LocalSpeechModels.qwen3AsrBundle,
+        ),
+        LocalModelAvailability.partial,
+      );
+      expect(models.downloads, [
+        LocalSpeechModels.qwen3AsrMlx8Bit.id,
+        LocalSpeechModels.sileroVadCoreMl.id,
+      ]);
+
+      models.failId = null;
+      await controller.downloadLocalModelBundle(
+        LocalSpeechModels.qwen3AsrBundle,
+      );
+      expect(models.downloads.last, LocalSpeechModels.sileroVadCoreMl.id);
+      expect(
+        controller.isTranscriptionProviderConfigured(
+          TranscriptionProvider.qwen3Local,
+        ),
+        isTrue,
+      );
+      expect(
+        aggregateProgress,
+        contains(
+          closeTo(
+            LocalSpeechModels.qwen3AsrMlx8Bit.sizeBytes /
+                LocalSpeechModels.qwen3AsrBundle.sizeBytes,
+            0.000001,
+          ),
+        ),
+      );
+      expect(aggregateProgress.last, 1);
+      await controller.deleteLocalModelBundle(LocalSpeechModels.qwen3AsrBundle);
+      expect(models.installed, isEmpty);
+    },
+  );
+
+  test('restart returns an interrupted Qwen transcription to ready', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.dispose);
+    final now = DateTime.now().toUtc();
+    await LocalJobRepository(fixture.paths).save(
+      TranscriptionJob(
+        id: 'interrupted-qwen',
+        batchId: 'batch',
+        sourcePath: fixture.audio.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.processing,
+        metadata: _metadata,
+        transcriptionProvider: TranscriptionProvider.qwen3Local,
+        transcriptAcquisitionMode: TranscriptAcquisitionMode.qwen3Local,
+      ),
+    );
+
+    final controller = await fixture.controller(
+      settings: const AppSettings(
+        defaultTranscriptionProvider: TranscriptionProvider.qwen3Local,
+      ),
+      localStt: _QwenLocalStt(),
+      alignment: _Alignment(),
+    );
+    await _waitFor(
+      () => controller.jobById('interrupted-qwen')?.status == JobStatus.ready,
+    );
+    final persisted = Stopwatch()..start();
+    while (true) {
+      final jobs = await LocalJobRepository(fixture.paths).loadAll();
+      if (jobs.single.status == JobStatus.ready) break;
+      if (persisted.elapsed > const Duration(seconds: 3)) {
+        fail('Timed out waiting for recovered Qwen state to persist.');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    final recovered = controller.jobById('interrupted-qwen')!;
+    expect(recovered.progress.stage, 'ready');
+    expect(recovered.document, isNull);
+    expect(recovered.remoteFileId, isNull);
+    expect(recovered.remoteTranscriptionId, isNull);
+  });
 
   test('MOSS Local auto-transcription is opt-in', () async {
     final fixture = await _Fixture.create();
@@ -618,30 +894,38 @@ void main() {
     },
   );
 
-  test('cancelling local MOSS transcription cancels the whole task', () async {
-    final fixture = await _Fixture.create();
-    addTearDown(fixture.dispose);
-    final localStt = _CancellableLocalStt();
-    final controller = await fixture.controller(
-      settings: const AppSettings(
-        defaultTranscriptionProvider: TranscriptionProvider.mossLocal,
-      ),
-      localStt: localStt,
-      alignment: _Alignment(),
+  for (final provider in [
+    TranscriptionProvider.mossLocal,
+    TranscriptionProvider.qwen3Local,
+  ]) {
+    test(
+      'cancelling ${provider.name} transcription cancels the whole task',
+      () async {
+        final fixture = await _Fixture.create();
+        addTearDown(fixture.dispose);
+        final localStt = _CancellableLocalStt();
+        final controller = await fixture.controller(
+          settings: AppSettings(defaultTranscriptionProvider: provider),
+          localStt: localStt,
+          alignment: _Alignment(),
+        );
+
+        await controller.enqueueSources([fixture.audio.path]);
+        await _waitFor(
+          () => controller.inboxJobs.single.status == JobStatus.ready,
+        );
+        final running = controller.startReady();
+        await localStt.entered.future;
+        await controller.cancelJob(controller.inboxJobs.single.id);
+        await running;
+
+        final job = controller.inboxJobs.single;
+        expect(job.status, JobStatus.cancelled);
+        expect(job.document, isNull);
+        expect(job.forcedAlignment.status, ForcedAlignmentStatus.notRequested);
+      },
     );
-
-    await controller.enqueueSources([fixture.audio.path]);
-    await _waitFor(() => controller.inboxJobs.single.status == JobStatus.ready);
-    final running = controller.startReady();
-    await localStt.entered.future;
-    await controller.cancelJob(controller.inboxJobs.single.id);
-    await running;
-
-    final job = controller.inboxJobs.single;
-    expect(job.status, JobStatus.cancelled);
-    expect(job.document, isNull);
-    expect(job.forcedAlignment.status, ForcedAlignmentStatus.notRequested);
-  });
+  }
 
   test('local transcription and alignment share one model permit', () async {
     final fixture = await _Fixture.create();
@@ -1217,31 +1501,73 @@ class _LocalStt implements LocalSttService {
   bool get isSupported => true;
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
-  }) async => TranscriptDocument(
-    tokens: const [],
-    segments: const [
-      TranscriptSegment(
-        id: 'moss-0',
-        startMs: 0,
-        endMs: 2000,
-        text: 'Hello world',
-        speaker: 'S01',
-      ),
-    ],
-    speakers: const [SpeakerProfile(id: 'S01', name: 'Speaker 1')],
-    updatedAt: DateTime.now().toUtc(),
+  }) async => LocalSttResult(
+    document: TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'moss-0',
+          startMs: 0,
+          endMs: 2000,
+          text: 'Hello world',
+          speaker: 'S01',
+        ),
+      ],
+      speakers: const [SpeakerProfile(id: 'S01', name: 'Speaker 1')],
+      updatedAt: DateTime.now().toUtc(),
+    ),
+    model: TranscriptionModelReference(
+      id: LocalSpeechModels.mossDiarizeCoreMlInt8.id,
+      revision: LocalSpeechModels.mossDiarizeCoreMlInt8.revision,
+    ),
   );
+}
+
+class _QwenLocalStt implements LocalSttService {
+  final engines = <LocalSttEngine>[];
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<LocalSttResult> transcribe(
+    LocalSttRequest request, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    engines.add(request.engine);
+    return LocalSttResult(
+      document: TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'qwen3-0',
+            startMs: 100,
+            endMs: 1800,
+            text: 'Higher quality text',
+            language: 'en',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      model: TranscriptionModelReference(
+        id: LocalSpeechModels.qwen3AsrMlx8Bit.id,
+        revision: LocalSpeechModels.qwen3AsrMlx8Bit.revision,
+      ),
+    );
+  }
 }
 
 class _CountingLocalStt extends _LocalStt {
   int calls = 0;
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
@@ -1260,12 +1586,38 @@ class _GatedLocalStt extends _CountingLocalStt {
   final release = Completer<void>();
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
     if (!entered.isCompleted) entered.complete();
+    await release.future;
+    return super.transcribe(
+      request,
+      onProgress: onProgress,
+      shouldCancel: shouldCancel,
+    );
+  }
+}
+
+class _IntermittentProgressLocalStt extends _LocalStt {
+  final numericProgressEmitted = Completer<void>();
+  final emitProgressWithoutFraction = Completer<void>();
+  final progressWithoutFractionEmitted = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<LocalSttResult> transcribe(
+    LocalSttRequest request, {
+    ProgressCallback? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    onProgress?.call(0.44, 'transcribing-coreml');
+    numericProgressEmitted.complete();
+    await emitProgressWithoutFraction.future;
+    onProgress?.call(null, 'retrying-coreml-chunk');
+    progressWithoutFractionEmitted.complete();
     await release.future;
     return super.transcribe(
       request,
@@ -1346,6 +1698,55 @@ class _AlignmentModels implements LocalModelManager {
     bool verifyIntegrity = false,
   }) async {
     final descriptor = LocalSpeechModels.forcedAlignerById(modelId)!;
+    final ready = installed.contains(modelId);
+    return LocalModelStatus(
+      descriptor: descriptor,
+      availability: ready
+          ? LocalModelAvailability.ready
+          : LocalModelAvailability.missing,
+      downloadedBytes: ready ? descriptor.sizeBytes : 0,
+    );
+  }
+}
+
+class _QwenModels implements LocalModelManager {
+  _QwenModels({this.failId});
+
+  String? failId;
+  final installed = <String>{};
+  final downloads = <String>[];
+
+  @override
+  List<LocalModelDescriptor> get models =>
+      LocalSpeechModels.qwen3AsrBundle.artifacts;
+
+  @override
+  Future<void> delete(String modelId) async => installed.remove(modelId);
+
+  @override
+  Future<void> download(
+    String modelId, {
+    ModelDownloadProgress? onProgress,
+    CancelCheck? shouldCancel,
+  }) async {
+    downloads.add(modelId);
+    if (modelId == failId) {
+      throw const LocalModelException('model_checksum_mismatch');
+    }
+    installed.add(modelId);
+    final descriptor = models.singleWhere((model) => model.id == modelId);
+    onProgress?.call(descriptor.sizeBytes, descriptor.sizeBytes);
+  }
+
+  @override
+  String pathFor(String modelId) => '/models/$modelId';
+
+  @override
+  Future<LocalModelStatus> status(
+    String modelId, {
+    bool verifyIntegrity = false,
+  }) async {
+    final descriptor = models.singleWhere((model) => model.id == modelId);
     final ready = installed.contains(modelId);
     return LocalModelStatus(
       descriptor: descriptor,
@@ -1461,7 +1862,7 @@ class _CancellableLocalStt extends _LocalStt {
   final entered = Completer<void>();
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
@@ -1491,7 +1892,7 @@ class _TrackedLocalStt extends _LocalStt {
   final _ConcurrencyTracker tracker;
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,

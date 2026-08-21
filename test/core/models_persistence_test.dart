@@ -111,7 +111,7 @@ void main() {
   });
 
   test(
-    'transcription provider defaults to Soniox and round-trips both MOSS modes',
+    'transcription provider defaults to Soniox and round-trips local modes',
     () {
       final defaults = AppSettings.fromJson(const {});
       expect(
@@ -186,6 +186,32 @@ void main() {
       expect(local.forcedAlignment.status, ForcedAlignmentStatus.running);
       expect(local.forcedAlignment.alignedSegments, 2);
       expect(local.forcedAlignment.languageAutomaticallyDetermined, isTrue);
+
+      final qwen = TranscriptionJob.fromJson(
+        TranscriptionJob(
+          id: 'qwen-local-job',
+          batchId: 'batch',
+          sourcePath: '/multilingual.wav',
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.completed,
+          transcriptionProvider: TranscriptionProvider.qwen3Local,
+          transcriptSource: TranscriptSource.qwen3Local,
+          transcriptionModel: const TranscriptionModelReference(
+            id: 'qwen3-asr-1.7b-mlx-8bit',
+            revision: 'pinned-qwen-revision',
+          ),
+        ).toJson(),
+      );
+      expect(qwen.transcriptionProvider, TranscriptionProvider.qwen3Local);
+      expect(
+        qwen.transcriptAcquisitionMode,
+        TranscriptAcquisitionMode.qwen3Local,
+      );
+      expect(qwen.transcriptSource, TranscriptSource.qwen3Local);
+      expect(qwen.transcriptionModel?.id, 'qwen3-asr-1.7b-mlx-8bit');
+      expect(qwen.transcriptionModel?.revision, 'pinned-qwen-revision');
+      expect(local.transcriptionModel, isNull);
     },
   );
 
@@ -230,21 +256,22 @@ void main() {
     },
   );
 
-  test('automatic MOSS forced alignment defaults on and round-trips', () {
+  test('automatic word timing migrates the legacy MOSS setting', () {
     const defaults = AppSettings();
-    expect(defaults.autoAlignMoss, isTrue);
+    expect(defaults.automaticWordTiming, isTrue);
     expect(defaults.defaultForcedAlignmentModel, isNull);
 
     final disabled = AppSettings.fromJson(const {
       'auto_align_moss': false,
       'default_forced_alignment_model': 'qwen3CoreMlFp16',
     });
-    expect(disabled.autoAlignMoss, isFalse);
+    expect(disabled.automaticWordTiming, isFalse);
     expect(
       disabled.defaultForcedAlignmentModel,
       ForcedAlignmentModel.qwen3CoreMlFp16,
     );
-    expect(disabled.toJson()['auto_align_moss'], isFalse);
+    expect(disabled.toJson()['auto_align_transcripts'], isFalse);
+    expect(disabled.toJson(), isNot(contains('auto_align_moss')));
     expect(
       disabled.toJson()['default_forced_alignment_model'],
       'qwen3CoreMlFp16',
@@ -262,6 +289,13 @@ void main() {
         'default_forced_alignment_model': 'unknown',
       }).defaultForcedAlignmentModel,
       isNull,
+    );
+    expect(
+      AppSettings.fromJson(const {
+        'auto_align_transcripts': true,
+        'auto_align_moss': false,
+      }).automaticWordTiming,
+      isTrue,
     );
   });
 

@@ -13,10 +13,11 @@ application-managed cache. Inbox-folder copies are user files and are not
 deleted with the job; managed copies are removed when the job is deleted.
 Nothing is uploaded to a transcription provider until you press **Transcribe**, except a
 word-level publisher transcript that can complete without uploading media. When
-MOSS Local is selected, transcription and forced alignment run in separate local
-processes and the media is never uploaded. Installing any optional speech model
-connects to Hugging Face and stores the verified Core ML model bundle under
-Application Support.
+MOSS Local or Qwen3 Local is selected, transcription and forced alignment run
+in separate local processes and the media is never uploaded. Qwen3 Local uses
+Silero VAD for segment timing and does not identify speakers. Installing an
+optional speech model is the only time that model connects to Hugging Face;
+inference uses verified offline Core ML or MLX files under Application Support.
 
 Inbox folder monitoring is optional and entirely local. When configured,
 MeowSTT recursively reads directory metadata for supported audio and video
@@ -47,12 +48,12 @@ the task record follows MOSI's retention policy because its public API has no
 task-delete operation. Failed supported cleanup is marked locally and retried.
 The app never lists or deletes unrelated account resources.
 
-For MOSS Local and MOSS Pro transcripts, optional precise word timing is
-generated locally with Qwen3 ForcedAligner. A failed, cancelled, unavailable,
-or partially successful alignment never causes a cloud fallback and does not
-discard the speaker-level MOSS transcript. Users choose between independently
-downloaded INT8 and FP16 alignment variants; MeowSTT never substitutes one for
-the other when the selected variant is unavailable.
+For MOSS Local, MOSS Pro, and Qwen3 Local transcripts, optional precise word
+timing is generated locally with Qwen3 ForcedAligner. A failed, cancelled,
+unavailable, or partially successful alignment never causes a cloud fallback
+and does not discard the segment-timed transcript. Users choose between
+independently downloaded INT8 and FP16 alignment variants; MeowSTT never
+substitutes one model for another when the selected variant is unavailable.
 
 Translation is optional. When Soniox built-in translation is enabled, the
 selected target language is included in the original Soniox transcription

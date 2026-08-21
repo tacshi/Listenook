@@ -225,6 +225,7 @@ class ProcessLocalSpeechWorker implements LocalSpeechWorker {
 
   String _commandName(SpeechWorkerCommand command) => switch (command) {
     SpeechWorkerCommand.transcribeMoss => 'transcribe-moss',
+    SpeechWorkerCommand.transcribeQwen3 => 'transcribe-qwen3',
     SpeechWorkerCommand.alignQwen3 => 'align-qwen3',
   };
 

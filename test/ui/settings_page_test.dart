@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
@@ -103,7 +104,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Providers'));
+    await tester.tap(find.text('Transcription'));
     await tester.pumpAndSettle();
 
     final sonioxKeyField = tester.widget<TextField>(
@@ -116,13 +117,7 @@ void main() {
     expect(sonioxKeyField.decoration?.suffixIcon, isNull);
     expect(find.byKey(const Key('moss-key-field')), findsNothing);
 
-    await tester.tap(
-      find.descendant(
-        of: find.byKey(const Key('transcription-provider-tabs')),
-        matching: find.text('MOSS Pro'),
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _selectDefaultProvider(tester, 'MOSS Pro');
     expect(find.byKey(const Key('soniox-key-field')), findsNothing);
     final mossKeyFinder = find.byKey(const Key('moss-key-field'));
     final mossKeyField = tester.widget<TextField>(mossKeyFinder);
@@ -131,9 +126,10 @@ void main() {
     expect(mossKeyField.decoration?.hintText, '••••••••••••••••');
     expect(mossKeyField.decoration?.suffixIcon, isNull);
 
-    final translationKeyFinder = find.byKey(const Key('translation-key-field'));
-    await tester.ensureVisible(translationKeyFinder);
+    expect(find.byKey(const Key('translation-key-field')), findsNothing);
+    await tester.tap(find.text('AI'));
     await tester.pumpAndSettle();
+    final translationKeyFinder = find.byKey(const Key('translation-key-field'));
     final translationKeyField = tester.widget<TextField>(translationKeyFinder);
     expect(translationKeyField.obscureText, isTrue);
     expect(translationKeyField.controller?.text, isEmpty);
@@ -143,7 +139,7 @@ void main() {
   });
 
   testWidgets(
-    'provider tabs follow the default, stay independent, and retain drafts',
+    'provider dropdown changes the default and retains credential drafts',
     (tester) async {
       tester.view.physicalSize = const Size(1200, 1800);
       tester.view.devicePixelRatio = 1;
@@ -178,10 +174,21 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.text('Providers'));
+      await tester.tap(find.text('Transcription'));
       await tester.pumpAndSettle();
 
-      final providerTabs = find.byKey(const Key('transcription-provider-tabs'));
+      final providerDropdown = find.byKey(
+        const Key('default-transcription-provider'),
+      );
+      expect(providerDropdown, findsOneWidget);
+      expect(
+        tester
+            .widget<DropdownButtonFormField<TranscriptionProvider>>(
+              providerDropdown,
+            )
+            .initialValue,
+        TranscriptionProvider.mossPro,
+      );
       expect(find.byKey(const Key('moss-key-field')), findsOneWidget);
       expect(find.byKey(const Key('soniox-key-field')), findsNothing);
       expect(find.text('Soniox built-in translation'), findsNothing);
@@ -194,13 +201,10 @@ void main() {
         'moss-draft',
       );
 
-      await tester.tap(
-        find.descendant(of: providerTabs, matching: find.text('Soniox')),
-      );
-      await tester.pumpAndSettle();
+      await _selectDefaultProvider(tester, 'Soniox');
       expect(
         controller.settings.defaultTranscriptionProvider,
-        TranscriptionProvider.mossPro,
+        TranscriptionProvider.soniox,
       );
       expect(find.byKey(const Key('moss-key-field')), findsNothing);
       expect(find.byKey(const Key('soniox-key-field')), findsOneWidget);
@@ -209,11 +213,14 @@ void main() {
         find.byKey(const Key('soniox-key-field')),
         'soniox-draft',
       );
-
-      await tester.tap(
-        find.descendant(of: providerTabs, matching: find.text('MOSS Pro')),
+      expect(
+        settings.value.defaultTranscriptionProvider,
+        TranscriptionProvider.soniox,
       );
-      await tester.pumpAndSettle();
+      expect(find.text('Set as default'), findsNothing);
+      expect(find.byIcon(Icons.check_circle_outline_rounded), findsNothing);
+
+      await _selectDefaultProvider(tester, 'MOSS Pro');
       expect(
         tester
             .widget<TextField>(find.byKey(const Key('moss-key-field')))
@@ -221,15 +228,7 @@ void main() {
             ?.text,
         'moss-draft',
       );
-
-      await tester.tap(find.byKey(const Key('default-transcription-provider')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Soniox').last);
-      await tester.pumpAndSettle();
-      expect(
-        settings.value.defaultTranscriptionProvider,
-        TranscriptionProvider.soniox,
-      );
+      await _selectDefaultProvider(tester, 'Soniox');
       expect(find.byKey(const Key('moss-key-field')), findsNothing);
       expect(
         tester
@@ -239,14 +238,14 @@ void main() {
         'soniox-draft',
       );
 
-      final translationKey = find.byKey(const Key('translation-key-field'));
-      await tester.ensureVisible(translationKey);
+      expect(find.byKey(const Key('translation-key-field')), findsNothing);
+      await tester.tap(find.text('AI'));
       await tester.pumpAndSettle();
       expect(find.text('AI provider'), findsOneWidget);
     },
   );
 
-  testWidgets('Apple Silicon local speech exposes independent model cards', (
+  testWidgets('provider dropdown shows only relevant local model settings', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 2600);
@@ -278,16 +277,142 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Providers'));
+    final destinations = [
+      'General',
+      'Transcription',
+      'Word Timing',
+      'AI',
+      'Shortcuts',
+      'About',
+    ];
+    for (final destination in destinations) {
+      expect(find.text(destination), findsOneWidget);
+    }
+    for (var index = 1; index < destinations.length; index++) {
+      expect(
+        tester.getCenter(find.text(destinations[index - 1])).dx,
+        lessThan(tester.getCenter(find.text(destinations[index])).dx),
+      );
+    }
+    await tester.tap(find.text('Transcription'));
     await tester.pumpAndSettle();
 
-    expect(find.text('MOSS Local'), findsWidgets);
-    expect(find.textContaining('Beta'), findsNothing);
+    await tester.tap(find.byKey(const Key('default-transcription-provider')));
+    await tester.pumpAndSettle();
+    expect(find.text('MOSS Local'), findsOneWidget);
+    expect(find.text('Qwen3 Local (Beta)'), findsOneWidget);
+    expect(find.text('AI provider'), findsNothing);
+    expect(
+      find.byKey(
+        const Key('download-model-moss-transcribe-diarize-0.9b-coreml-int8'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('download-model-qwen3-asr-1.7b-mlx-8bit-bundle')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('automatic-word-timing-switch')), findsNothing);
+    final autoTranscribe = find.byKey(
+      const Key('auto-transcribe-local-switch'),
+    );
+    expect(autoTranscribe, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(autoTranscribe).value, isFalse);
+
+    await tester.tap(find.text('MOSS Local'));
+    await tester.pumpAndSettle();
+
     expect(
       find.byKey(
         const Key('download-model-moss-transcribe-diarize-0.9b-coreml-int8'),
       ),
       findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('download-model-qwen3-asr-1.7b-mlx-8bit-bundle')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(
+        const Key('download-model-qwen3-forced-aligner-0.6b-coreml-int8'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(
+        const Key('download-model-qwen3-forced-aligner-0.6b-coreml-fp16'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('default-forced-alignment-model')),
+      findsNothing,
+    );
+    expect(autoTranscribe, findsOneWidget);
+    expect(find.text('Auto-transcribe new items'), findsOneWidget);
+    expect(
+      find.textContaining('Files dropped into Inbox still require'),
+      findsOneWidget,
+    );
+
+    await _selectDefaultProvider(tester, 'Qwen3 Local (Beta)');
+    expect(
+      find.byKey(
+        const Key('download-model-moss-transcribe-diarize-0.9b-coreml-int8'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('download-model-qwen3-asr-1.7b-mlx-8bit-bundle')),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Higher-quality multilingual text'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Speaker identification is not available'),
+      findsOneWidget,
+    );
+
+    await tester.tap(autoTranscribe);
+    await tester.pumpAndSettle();
+
+    expect(controller.settings.autoTranscribeLocal, isTrue);
+    expect(settings.value.autoTranscribeLocal, isTrue);
+
+    await _selectDefaultProvider(tester, 'MOSS Pro');
+    expect(
+      find.byKey(
+        const Key('download-model-moss-transcribe-diarize-0.9b-coreml-int8'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('download-model-qwen3-asr-1.7b-mlx-8bit-bundle')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('auto-transcribe-local-switch')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Word Timing'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('default-transcription-provider')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('auto-transcribe-local-switch')), findsNothing);
+    expect(
+      find.byKey(
+        const Key('download-model-moss-transcribe-diarize-0.9b-coreml-int8'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('download-model-qwen3-asr-1.7b-mlx-8bit-bundle')),
+      findsNothing,
     );
     expect(
       find.byKey(
@@ -305,27 +430,106 @@ void main() {
       find.byKey(const Key('default-forced-alignment-model')),
       findsOneWidget,
     );
-    expect(
-      find.byKey(const Key('install-local-quality-package')),
-      findsNothing,
+    final automaticTiming = find.byKey(
+      const Key('automatic-word-timing-switch'),
     );
-    expect(find.byKey(const Key('auto-align-moss-switch')), findsOneWidget);
-    final autoTranscribe = find.byKey(
-      const Key('auto-transcribe-local-switch'),
-    );
-    expect(autoTranscribe, findsOneWidget);
-    expect(tester.widget<SwitchListTile>(autoTranscribe).value, isFalse);
-    expect(find.text('Auto-transcribe new items'), findsOneWidget);
+    expect(automaticTiming, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(automaticTiming).value, isTrue);
     expect(
-      find.textContaining('Files dropped into Inbox still require'),
+      find.textContaining('Install an alignment model below'),
       findsOneWidget,
     );
+    await tester.tap(automaticTiming);
+    await tester.pumpAndSettle();
+    expect(controller.settings.automaticWordTiming, isFalse);
+    expect(settings.value.automaticWordTiming, isFalse);
 
-    await tester.tap(autoTranscribe);
+    await tester.tap(find.text('AI'));
+    await tester.pumpAndSettle();
+    expect(find.text('AI provider'), findsOneWidget);
+    expect(
+      find.byKey(const Key('default-forced-alignment-model')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('compact settings tabs scroll and support keyboard navigation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+      localSttService: _SupportedLocalStt(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: SettingsPage()),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
-    expect(controller.settings.autoTranscribeLocal, isTrue);
-    expect(settings.value.autoTranscribeLocal, isTrue);
+    expect(tester.takeException(), isNull);
+    final compactThemeSelector = find.byKey(
+      const Key('settings-theme-selector'),
+    );
+    final compactLanguageSelector = find.byKey(
+      const Key('settings-language-selector'),
+    );
+    expect(
+      tester.getTopLeft(compactThemeSelector).dy,
+      lessThan(tester.getTopLeft(compactLanguageSelector).dy),
+    );
+    expect(
+      tester.getSize(compactThemeSelector).width,
+      closeTo(tester.getSize(compactLanguageSelector).width, 0.1),
+    );
+    final transcriptionTab = find.byKey(
+      const Key('settings-tab-transcription'),
+    );
+    await tester.tap(transcriptionTab);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('default-transcription-provider')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+
+    final transcriptionTabFocus = Focus.of(tester.element(transcriptionTab));
+    transcriptionTabFocus.requestFocus();
+    await tester.pump();
+    expect(transcriptionTabFocus.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('automatic-word-timing-switch')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.ensureVisible(find.byKey(const Key('settings-tab-about')));
+    await tester.tap(find.byKey(const Key('settings-tab-about')));
+    await tester.pumpAndSettle();
+    expect(find.text('Privacy'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('an installed FP16 aligner can be selected and persisted', (
@@ -361,8 +565,12 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Providers'));
+    await tester.tap(find.text('Word Timing'));
     await tester.pumpAndSettle();
+    expect(
+      find.text('Choose an installed default alignment model below.'),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byKey(const Key('default-forced-alignment-model')));
     await tester.pumpAndSettle();
@@ -376,6 +584,10 @@ void main() {
     expect(
       settings.value.defaultForcedAlignmentModel,
       ForcedAlignmentModel.qwen3CoreMlFp16,
+    );
+    expect(
+      find.text('Choose an installed default alignment model below.'),
+      findsNothing,
     );
   });
 
@@ -432,17 +644,33 @@ void main() {
       Theme.of(tester.element(pageTitle)).textTheme.titleLarge?.fontSize,
     );
     expect(find.text('General'), findsOneWidget);
-    expect(find.text('Providers'), findsOneWidget);
+    expect(find.text('Transcription'), findsOneWidget);
+    expect(find.text('AI'), findsOneWidget);
+    expect(find.text('Word Timing'), findsNothing);
     expect(find.text('Appearance'), findsNothing);
     expect(find.text('Shortcuts'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
     expect(find.byIcon(Icons.tune_rounded), findsOneWidget);
-    expect(find.byIcon(Icons.hub_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.graphic_eq_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.smart_toy_outlined), findsOneWidget);
     expect(find.byIcon(Icons.palette_outlined), findsNothing);
     expect(find.byIcon(Icons.keyboard_outlined), findsOneWidget);
     expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
     expect(find.text('Theme').hitTestable(), findsOneWidget);
     expect(find.text('Language').hitTestable(), findsOneWidget);
+    final themeSelector = find.byKey(const Key('settings-theme-selector'));
+    final languageSelector = find.byKey(
+      const Key('settings-language-selector'),
+    );
+    expect(
+      tester.getTopLeft(themeSelector).dy,
+      closeTo(tester.getTopLeft(languageSelector).dy, 0.1),
+    );
+    expect(tester.getSize(themeSelector).width, greaterThan(300));
+    expect(
+      tester.getSize(themeSelector).width,
+      closeTo(tester.getSize(languageSelector).width, 0.1),
+    );
     expect(find.text('Batch options'), findsNothing);
     expect(find.text('Concurrent jobs'), findsNothing);
     expect(find.text('Inbox monitoring').hitTestable(), findsOneWidget);
@@ -507,20 +735,20 @@ void main() {
     expect(controller.inboxMonitorConfig.launchAtLogin, isTrue);
     expect(find.text('Privacy').hitTestable(), findsNothing);
 
-    await tester.tap(find.text('Providers'));
+    await tester.tap(find.text('Transcription'));
     await tester.pumpAndSettle();
 
     final createKeyLink = find.byKey(const Key('create-soniox-key-link'));
     expect(find.text('Create a Soniox API key'), findsOneWidget);
-    final sonioxTitle = find.text('Soniox API key');
+    final apiKeyTitle = find.text('API key');
     expect(
-      (tester.getCenter(createKeyLink).dy - tester.getCenter(sonioxTitle).dy)
+      (tester.getCenter(createKeyLink).dy - tester.getCenter(apiKeyTitle).dy)
           .abs(),
       lessThanOrEqualTo(1),
     );
     expect(
       tester.getCenter(createKeyLink).dx,
-      greaterThan(tester.getCenter(sonioxTitle).dx),
+      greaterThan(tester.getCenter(apiKeyTitle).dx),
     );
     expect(
       tester.getCenter(createKeyLink).dy,
@@ -557,10 +785,19 @@ void main() {
       tester.widget<DropdownButtonFormField<String>>(sonioxTarget).onChanged,
       isNotNull,
     );
-    await tester.ensureVisible(
+    expect(
       find.byKey(const Key('translation-provider-template-field')),
+      findsNothing,
     );
+    await tester.tap(find.text('AI'));
+    await tester.pumpAndSettle();
     expect(find.text('AI provider'), findsOneWidget);
+    expect(
+      find.textContaining('automatic translation, AI Briefs'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Transcription'));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const Key('soniox-key-field')));
     await tester.pumpAndSettle();
 
@@ -604,14 +841,13 @@ void main() {
     expect(controller.keyConfigured, isTrue);
     expect(find.text('Soniox key saved securely.'), findsOneWidget);
     expect(find.text('Securely stored on this device'), findsNothing);
-    final sonioxStatus = find.byKey(const Key('soniox-key-status'));
+    final sonioxStatus = find.byKey(const Key('provider-status-soniox'));
     expect(
-      tester.widget<Tooltip>(sonioxStatus).message,
-      'Securely stored on this device',
-    );
-    expect(
-      tester.getCenter(sonioxStatus).dx,
-      greaterThan(tester.getCenter(find.text('Soniox API key')).dx),
+      find.descendant(
+        of: sonioxStatus,
+        matching: find.text('Ready to transcribe'),
+      ),
+      findsOneWidget,
     );
 
     await tester.tap(find.text('Shortcuts'));
@@ -692,7 +928,9 @@ void main() {
     );
 
     expect(find.text('通用'), findsOneWidget);
-    expect(find.text('提供商'), findsOneWidget);
+    expect(find.text('转写'), findsOneWidget);
+    expect(find.text('AI'), findsOneWidget);
+    expect(find.text('词级时间'), findsNothing);
     await tester.tap(find.text('快捷键'));
     await tester.pumpAndSettle();
     expect(find.text('应用').hitTestable(), findsOneWidget);
@@ -752,7 +990,7 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.text('Providers'));
+      await tester.tap(find.text('AI'));
       await tester.pumpAndSettle();
 
       final baseUrl = find.byKey(const Key('translation-base-url-field'));
@@ -819,6 +1057,19 @@ void main() {
       expect(find.text('Custom'), findsOneWidget);
       await tester.enterText(key, 'candidate-secret');
       await tester.pump();
+      await tester.tap(find.text('Transcription'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('translation-base-url-field')), findsNothing);
+      await tester.tap(find.text('AI'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(baseUrl).controller?.text,
+        'https://example.test/v1/',
+      );
+      expect(
+        tester.widget<TextField>(key).controller?.text,
+        'candidate-secret',
+      );
       final testButton = find.byKey(const Key('test-translation-settings'));
       expect(tester.widget<OutlinedButton>(testButton).onPressed, isNotNull);
       await tester.ensureVisible(testButton);
@@ -870,6 +1121,16 @@ void main() {
   );
 }
 
+Future<void> _selectDefaultProvider(
+  WidgetTester tester,
+  String providerName,
+) async {
+  await tester.tap(find.byKey(const Key('default-transcription-provider')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(providerName).last);
+  await tester.pumpAndSettle();
+}
+
 class _Credentials implements CredentialStore {
   String? value;
 
@@ -888,7 +1149,7 @@ class _SupportedLocalStt implements LocalSttService {
   bool get isSupported => true;
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,

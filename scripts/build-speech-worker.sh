@@ -34,8 +34,43 @@ BINARY="$SCRATCH/arm64-apple-macosx/release/MeowSTTSpeechWorker"
   echo "The Core ML speech worker was not produced at $BINARY." >&2
   exit 1
 }
+SPEECH_SWIFT_CHECKOUT="$SCRATCH/checkouts/speech-swift"
+METAL_TOOLCHAIN_ID=""
+if ! xcrun metal --version >/dev/null 2>&1; then
+  METAL_COMPONENT_JSON="$(xcodebuild -showComponent MetalToolchain -json 2>/dev/null)" || {
+    echo "The Xcode Metal Toolchain is not installed." >&2
+    echo "Run: xcodebuild -downloadComponent MetalToolchain" >&2
+    exit 1
+  }
+  METAL_TOOLCHAIN_ID="$(
+    printf '%s' "$METAL_COMPONENT_JSON" |
+      plutil -extract toolchainIdentifier raw -o - - 2>/dev/null
+  )"
+  [[ -n "$METAL_TOOLCHAIN_ID" ]] || {
+    echo "Xcode did not report an installed Metal Toolchain identifier." >&2
+    exit 1
+  }
+  TOOLCHAINS="$METAL_TOOLCHAIN_ID" xcrun metal --version >/dev/null
+fi
+if [[ -n "$METAL_TOOLCHAIN_ID" ]]; then
+  BUILD_DIR="$SCRATCH" TOOLCHAINS="$METAL_TOOLCHAIN_ID" \
+    bash "$SPEECH_SWIFT_CHECKOUT/scripts/build_mlx_metallib.sh" release
+else
+  BUILD_DIR="$SCRATCH" \
+    bash "$SPEECH_SWIFT_CHECKOUT/scripts/build_mlx_metallib.sh" release
+fi
+METALLIB="$SCRATCH/arm64-apple-macosx/release/mlx.metallib"
+[[ -s "$METALLIB" ]] || {
+  echo "The pinned speech-swift MLX Metal library was not produced." >&2
+  exit 1
+}
+[[ "$(LC_ALL=C head -c 4 "$METALLIB")" == "MTLB" ]] || {
+  echo "The pinned speech-swift MLX Metal library is invalid." >&2
+  exit 1
+}
 mkdir -p "$(dirname "$OUTPUT")"
 cp "$BINARY" "$OUTPUT"
+cp "$METALLIB" "$(dirname "$OUTPUT")/mlx.metallib"
 chmod 755 "$OUTPUT"
 [[ "$(lipo -archs "$OUTPUT")" == "arm64" ]] || {
   echo "Speech worker is not arm64-only." >&2
@@ -46,3 +81,4 @@ otool -L "$OUTPUT" | rg --quiet 'CoreML.framework' || {
   exit 1
 }
 echo "Core ML speech worker: $OUTPUT"
+echo "MLX Metal library: $(dirname "$OUTPUT")/mlx.metallib"

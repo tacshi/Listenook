@@ -34,6 +34,16 @@ final class PCM16WaveFileTests: XCTestCase {
         XCTAssertEqual(samples[1], -1_000 / 32_768, accuracy: 0.000_001)
     }
 
+    func testAcceptsAnEmptyPCMStream() throws {
+        let fixture = try temporaryWave(samples: [], extensible: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        let wave = try PCM16WaveFile(path: fixture.path)
+
+        XCTAssertEqual(wave.sampleCount, 0)
+        XCTAssertEqual(try wave.readSamples(0..<0), [])
+    }
+
     func testReadsTheTailOfASparseFiveHourWave() throws {
         let sampleCount = 16_000 * 60 * 60 * 5
         let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(

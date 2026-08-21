@@ -55,6 +55,21 @@ class LocalModelDescriptor {
   );
 }
 
+class LocalModelInstallBundle {
+  const LocalModelInstallBundle({
+    required this.id,
+    required this.displayName,
+    required this.artifacts,
+  });
+
+  final String id;
+  final String displayName;
+  final List<LocalModelDescriptor> artifacts;
+
+  int get sizeBytes =>
+      artifacts.fold(0, (total, artifact) => total + artifact.sizeBytes);
+}
+
 abstract final class LocalSpeechModels {
   static const mossDiarizeCoreMlInt8 = LocalModelDescriptor(
     id: 'moss-transcribe-diarize-0.9b-coreml-int8',
@@ -153,6 +168,102 @@ abstract final class LocalSpeechModels {
             '61d04c96104177240688396655ae3f7cf38ce2ea036db867a1d2b6883e27c3d5',
       ),
     ],
+  );
+
+  static const qwen3AsrMlx8Bit = LocalModelDescriptor(
+    id: 'qwen3-asr-1.7b-mlx-8bit',
+    displayName: 'Qwen3 ASR 1.7B — 8-bit',
+    repository: 'aufklarer/Qwen3-ASR-1.7B-MLX-8bit',
+    revision: 'e5450a26d1fd417c45fc9c405651ddc3180a27a6',
+    files: [
+      LocalModelFile(
+        path: 'config.json',
+        sizeBytes: 7188,
+        sha256:
+            '1b76b3b6c655fc54595da025f7a96474ad9fa86363303fbdd61a7d8483ccfaf7',
+      ),
+      LocalModelFile(
+        path: 'merges.txt',
+        sizeBytes: 1671853,
+        sha256:
+            '8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5',
+      ),
+      LocalModelFile(
+        path: 'model.safetensors',
+        sizeBytes: 2463307541,
+        sha256:
+            'bf304b009cc7eca79283056f787b44c952d24ac22cec787b39732bba3c23c13c',
+      ),
+      LocalModelFile(
+        path: 'model.safetensors.index.json',
+        sizeBytes: 78968,
+        sha256:
+            '0a5d0ec11188602242ff81a9969883d0fdeb98cd5d85cd1413089d897c201af5',
+      ),
+      LocalModelFile(
+        path: 'tokenizer_config.json',
+        sizeBytes: 12487,
+        sha256:
+            '4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c',
+      ),
+      LocalModelFile(
+        path: 'vocab.json',
+        sizeBytes: 2776833,
+        sha256:
+            'ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910',
+      ),
+    ],
+  );
+
+  static const sileroVadCoreMl = LocalModelDescriptor(
+    id: 'silero-vad-v6.2.1-coreml',
+    displayName: 'Silero VAD v6.2.1 — Core ML',
+    repository: 'aufklarer/Silero-VAD-v6.2.1-CoreML',
+    revision: '523876545a57961474fee9df913e833e130560b8',
+    files: [
+      LocalModelFile(
+        path: 'config.json',
+        sizeBytes: 888,
+        sha256:
+            '459e764d58cdc13f3db6878adfdf8a29b5fd467ad1f4ef2161137cc115339c81',
+      ),
+      LocalModelFile(
+        path: 'silero_vad.mlmodelc/analytics/coremldata.bin',
+        sizeBytes: 243,
+        sha256:
+            'b777c3751d72b7430eac7f8544769a3d918faf77c15db184fec30e44c56007a3',
+      ),
+      LocalModelFile(
+        path: 'silero_vad.mlmodelc/coremldata.bin',
+        sizeBytes: 399,
+        sha256:
+            'f6fcd92c3132c9c718e5f54e0e770a8c8075beaa50a5b212a6287273b4ddae67',
+      ),
+      LocalModelFile(
+        path: 'silero_vad.mlmodelc/metadata.json',
+        sizeBytes: 3005,
+        sha256:
+            '1b953eb3818e7092deedd96e976c05354f77beb2ddc2976fe416af17e47f62d2',
+      ),
+      LocalModelFile(
+        path: 'silero_vad.mlmodelc/model.mil',
+        sizeBytes: 18203,
+        sha256:
+            'b0a1384c4a664697989d9eb9cfb166b4b85f151206aeefd1bfa391ef9e5ad08f',
+      ),
+      LocalModelFile(
+        path: 'silero_vad.mlmodelc/weights/weight.bin',
+        sizeBytes: 619136,
+        sha256:
+            '83210545de90c65195e8d6db1b349b7e5c31f989f48d0a908a8dc0e2f586e5f9',
+      ),
+    ],
+  );
+
+  static const qwen3AsrBundle = LocalModelInstallBundle(
+    id: 'qwen3-asr-1.7b-mlx-8bit-bundle',
+    displayName: 'Qwen3 ASR 1.7B — 8-bit',
+    artifacts: [qwen3AsrMlx8Bit, sileroVadCoreMl],
   );
 
   static const qwen3ForcedAlignerCoreMlInt8 = LocalModelDescriptor(
@@ -346,6 +457,8 @@ abstract final class LocalSpeechModels {
 
   static const all = [
     mossDiarizeCoreMlInt8,
+    qwen3AsrMlx8Bit,
+    sileroVadCoreMl,
     qwen3ForcedAlignerCoreMlInt8,
     qwen3ForcedAlignerCoreMlFp16,
   ];
@@ -407,7 +520,9 @@ abstract interface class LocalPcmPreparer {
   Future<void> release(PreparedLocalPcm pcm);
 }
 
-enum SpeechWorkerCommand { transcribeMoss, alignQwen3 }
+enum SpeechWorkerCommand { transcribeMoss, transcribeQwen3, alignQwen3 }
+
+enum LocalSttEngine { mossDiarize, qwen3Asr }
 
 abstract interface class LocalSpeechWorker {
   Future<Map<String, dynamic>> run(
@@ -423,17 +538,26 @@ class LocalSttRequest {
     required this.sourcePath,
     required this.durationMs,
     required this.options,
+    this.engine = LocalSttEngine.mossDiarize,
   });
 
   final String sourcePath;
   final int durationMs;
   final TranscriptionOptions options;
+  final LocalSttEngine engine;
+}
+
+class LocalSttResult {
+  const LocalSttResult({required this.document, required this.model});
+
+  final TranscriptDocument document;
+  final TranscriptionModelReference model;
 }
 
 abstract interface class LocalSttService {
   bool get isSupported;
 
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,

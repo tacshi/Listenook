@@ -83,8 +83,10 @@ class _WorkspacePageState extends State<WorkspacePage> {
   bool _showsAlignment(TranscriptionJob job) =>
       job.transcriptSource == TranscriptSource.mossPro ||
       job.transcriptSource == TranscriptSource.mossLocal ||
+      job.transcriptSource == TranscriptSource.qwen3Local ||
       job.transcriptionProvider == TranscriptionProvider.mossPro ||
-      job.transcriptionProvider == TranscriptionProvider.mossLocal;
+      job.transcriptionProvider == TranscriptionProvider.mossLocal ||
+      job.transcriptionProvider == TranscriptionProvider.qwen3Local;
 
   bool _shouldShowAlignmentNotice(TranscriptionJob? job) {
     final jobId = job?.id;
@@ -136,14 +138,30 @@ class _MossTimingBar extends StatelessWidget {
     final local =
         job.transcriptSource == TranscriptSource.mossLocal ||
         job.transcriptionProvider == TranscriptionProvider.mossLocal;
+    final qwen =
+        job.transcriptSource == TranscriptSource.qwen3Local ||
+        job.transcriptionProvider == TranscriptionProvider.qwen3Local;
     final labelKey = switch (alignment.status) {
       ForcedAlignmentStatus.completed =>
-        local ? 'moss_local_word_level' : 'moss_pro_local_alignment',
+        qwen
+            ? 'qwen_local_word_level'
+            : local
+            ? 'moss_local_word_level'
+            : 'moss_pro_local_alignment',
       ForcedAlignmentStatus.partial =>
-        local ? 'moss_local_word_level' : 'moss_pro_local_alignment',
+        qwen
+            ? 'qwen_local_word_level'
+            : local
+            ? 'moss_local_word_level'
+            : 'moss_pro_local_alignment',
       ForcedAlignmentStatus.queued ||
       ForcedAlignmentStatus.running => 'moss_alignment_running',
-      _ => local ? 'moss_local_segment_level' : 'moss_pro_segment_level',
+      _ =>
+        qwen
+            ? 'qwen_local_segment_level'
+            : local
+            ? 'moss_local_segment_level'
+            : 'moss_pro_segment_level',
     };
     final colors = Theme.of(context).colorScheme;
     final usefulPartial =

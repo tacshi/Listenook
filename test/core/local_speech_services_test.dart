@@ -119,7 +119,7 @@ void main() {
         platformSupported: true,
       );
 
-      final document = await service.transcribe(
+      final result = await service.transcribe(
         const LocalSttRequest(
           sourcePath: '/meeting.mp4',
           durationMs: 10 * 60 * 1000,
@@ -127,7 +127,12 @@ void main() {
         ),
       );
 
-      expect(document.segments.single.text, 'Hello local world');
+      expect(result.document.segments.single.text, 'Hello local world');
+      expect(result.model.id, LocalSpeechModels.mossDiarizeCoreMlInt8.id);
+      expect(
+        result.model.revision,
+        LocalSpeechModels.mossDiarizeCoreMlInt8.revision,
+      );
       expect(worker.command, SpeechWorkerCommand.transcribeMoss);
       expect(worker.request?['chunk_seconds'], 30);
       expect(worker.request?['parallel_chunks'], 2);
@@ -160,7 +165,7 @@ void main() {
         platformSupported: true,
       );
 
-      final document = await service.transcribe(
+      final result = await service.transcribe(
         const LocalSttRequest(
           sourcePath: '/five-hour-video.mp4',
           durationMs: maxMediaDurationMs,
@@ -168,8 +173,122 @@ void main() {
         ),
       );
 
-      expect(document.segments.single.endMs, maxMediaDurationMs);
+      expect(result.document.segments.single.endMs, maxMediaDurationMs);
       expect(worker.command, SpeechWorkerCommand.transcribeMoss);
+    },
+  );
+
+  test(
+    'Qwen uses its verified atomic bundle and returns monotonic VAD segments',
+    () async {
+      final worker = _Worker({
+        'text': 'Hello 世界',
+        'segments': [
+          {'start_ms': -20, 'end_ms': 900, 'text': 'Hello', 'language': 'en'},
+          {'start_ms': 800, 'end_ms': 5000, 'text': '世界', 'language': 'en'},
+        ],
+      });
+      final models = _Models(ready: true);
+      final service = ProcessLocalSttService(
+        models: models,
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.transcribe(
+        const LocalSttRequest(
+          sourcePath: '/mixed.wav',
+          durationMs: 3000,
+          options: TranscriptionOptions(
+            languageHints: ['en'],
+            contextTerms: ['MeowSTT', 'Qwen'],
+          ),
+          engine: LocalSttEngine.qwen3Asr,
+        ),
+      );
+
+      expect(worker.command, SpeechWorkerCommand.transcribeQwen3);
+      expect(worker.request?['max_segment_seconds'], 10);
+      expect(worker.request?['language_hints'], ['en']);
+      expect(worker.request?['context_terms'], ['MeowSTT', 'Qwen']);
+      expect(worker.request?['model_directory'], contains('qwen3-asr'));
+      expect(worker.request?['vad_model_directory'], contains('silero-vad'));
+      expect(models.statusRequests, [
+        LocalSpeechModels.qwen3AsrMlx8Bit.id,
+        LocalSpeechModels.sileroVadCoreMl.id,
+      ]);
+      expect(result.model.id, LocalSpeechModels.qwen3AsrMlx8Bit.id);
+      expect(result.document.speakers, isEmpty);
+      expect(result.document.segments, hasLength(2));
+      expect(result.document.segments.first.startMs, 0);
+      expect(result.document.segments.last.startMs, 900);
+      expect(result.document.segments.last.endMs, 3000);
+      expect(
+        result.document.segments.every((segment) => segment.speaker == null),
+        isTrue,
+      );
+      expect(
+        result.document.segments.every((segment) => segment.language == 'en'),
+        isTrue,
+      );
+    },
+  );
+
+  test('Qwen silence completes as an empty transcript', () async {
+    final service = ProcessLocalSttService(
+      models: _Models(ready: true),
+      pcm: _Pcm(),
+      worker: _Worker(const {'text': '', 'segments': []}),
+      platformSupported: true,
+    );
+
+    final result = await service.transcribe(
+      const LocalSttRequest(
+        sourcePath: '/silence.wav',
+        durationMs: 2000,
+        options: TranscriptionOptions(),
+        engine: LocalSttEngine.qwen3Asr,
+      ),
+    );
+
+    expect(result.document.segments, isEmpty);
+    expect(result.document.tokens, isEmpty);
+    expect(result.document.speakers, isEmpty);
+  });
+
+  test(
+    'Qwen refuses to infer when either bundle artifact is unavailable',
+    () async {
+      final worker = _Worker(const {});
+      final service = ProcessLocalSttService(
+        models: _Models(
+          ready: false,
+          readyIds: {LocalSpeechModels.qwen3AsrMlx8Bit.id},
+        ),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      await expectLater(
+        service.transcribe(
+          const LocalSttRequest(
+            sourcePath: '/meeting.wav',
+            durationMs: 1000,
+            options: TranscriptionOptions(),
+            engine: LocalSttEngine.qwen3Asr,
+          ),
+        ),
+        throwsA(
+          isA<LocalSpeechException>().having(
+            (error) => error.code,
+            'code',
+            'local_stt_model_missing',
+          ),
+        ),
+      );
+      expect(worker.command, isNull);
     },
   );
 

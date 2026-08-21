@@ -109,7 +109,6 @@ struct PCM16WaveFile: Sendable {
               bits == 16,
               let parsedDataOffset,
               let dataByteCount,
-              dataByteCount > 0,
               dataByteCount.isMultiple(of: 2)
         else {
             throw PCM16WaveFileError.invalid

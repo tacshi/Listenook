@@ -201,12 +201,21 @@ class AppController extends ChangeNotifier {
               _localModelStatuses[LocalSpeechModels.mossDiarizeCoreMlInt8.id]
                       ?.availability ==
                   LocalModelAvailability.ready),
+    TranscriptionProvider.qwen3Local =>
+      (_localSttService?.isSupported ?? false) &&
+          (_localModelManager == null ||
+              LocalSpeechModels.qwen3AsrBundle.artifacts.every(
+                (model) =>
+                    _localModelStatuses[model.id]?.availability ==
+                    LocalModelAvailability.ready,
+              )),
   };
   bool get localSpeechSupported => _localSttService?.isSupported ?? false;
   List<TranscriptionProvider> get availableTranscriptionProviders => [
     TranscriptionProvider.soniox,
     TranscriptionProvider.mossPro,
     if (localSpeechSupported) TranscriptionProvider.mossLocal,
+    if (localSpeechSupported) TranscriptionProvider.qwen3Local,
   ];
   LocalModelStatus? localModelStatus(String modelId) =>
       _localModelStatuses[modelId];
@@ -214,6 +223,26 @@ class AppController extends ChangeNotifier {
       _localModelDownloadProgress.containsKey(modelId);
   double? localModelDownloadProgress(String modelId) =>
       _localModelDownloadProgress[modelId];
+  LocalModelAvailability localModelBundleAvailability(
+    LocalModelInstallBundle bundle,
+  ) {
+    final states = bundle.artifacts
+        .map((model) => _localModelStatuses[model.id]?.availability)
+        .toList(growable: false);
+    if (states.every((state) => state == LocalModelAvailability.ready)) {
+      return LocalModelAvailability.ready;
+    }
+    if (states.any((state) => state == LocalModelAvailability.corrupt)) {
+      return LocalModelAvailability.corrupt;
+    }
+    if (states.every(
+      (state) => state == null || state == LocalModelAvailability.missing,
+    )) {
+      return LocalModelAvailability.missing;
+    }
+    return LocalModelAvailability.partial;
+  }
+
   bool get translationKeyConfigured => _translationKeyConfigured;
   bool get translationConfigured => _settings.translationSettings.isConfigured(
     hasApiKey: _translationKeyConfigured,
@@ -543,10 +572,57 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<void> downloadLocalModelBundle(LocalModelInstallBundle bundle) async {
+    final manager = _localModelManager;
+    if (manager == null || localModelDownloading(bundle.id)) return;
+    final totalBytes = bundle.sizeBytes;
+    var completedBytes = 0;
+    _localModelDownloadProgress[bundle.id] = 0;
+    _localModelDownloadCancelled.remove(bundle.id);
+    notifyListeners();
+    try {
+      for (final model in bundle.artifacts) {
+        final existing = await manager.status(model.id, verifyIntegrity: true);
+        _localModelStatuses[model.id] = existing;
+        if (existing.availability == LocalModelAvailability.ready) {
+          completedBytes += model.sizeBytes;
+          _localModelDownloadProgress[bundle.id] = totalBytes == 0
+              ? null
+              : completedBytes / totalBytes;
+          notifyListeners();
+          continue;
+        }
+        await manager.download(
+          model.id,
+          onProgress: (downloaded, _) {
+            _localModelDownloadProgress[bundle.id] = totalBytes == 0
+                ? null
+                : (completedBytes + downloaded) / totalBytes;
+            notifyListeners();
+          },
+          shouldCancel: () => _localModelDownloadCancelled.contains(bundle.id),
+        );
+        completedBytes += model.sizeBytes;
+      }
+    } finally {
+      _localModelDownloadCancelled.remove(bundle.id);
+      _localModelDownloadProgress.remove(bundle.id);
+      for (final model in bundle.artifacts) {
+        _localModelStatuses[model.id] = await manager.status(model.id);
+      }
+      notifyListeners();
+      _scheduleLocalAutoStart();
+    }
+  }
+
   void cancelLocalModelDownload(String modelId) {
     if (localModelDownloading(modelId)) {
       _localModelDownloadCancelled.add(modelId);
     }
+  }
+
+  void cancelLocalModelBundleDownload(LocalModelInstallBundle bundle) {
+    cancelLocalModelDownload(bundle.id);
   }
 
   Future<void> deleteLocalModel(String modelId) async {
@@ -554,6 +630,16 @@ class AppController extends ChangeNotifier {
     if (manager == null || localModelDownloading(modelId)) return;
     await manager.delete(modelId);
     _localModelStatuses[modelId] = await manager.status(modelId);
+    notifyListeners();
+  }
+
+  Future<void> deleteLocalModelBundle(LocalModelInstallBundle bundle) async {
+    final manager = _localModelManager;
+    if (manager == null || localModelDownloading(bundle.id)) return;
+    for (final model in bundle.artifacts) {
+      await manager.delete(model.id);
+      _localModelStatuses[model.id] = await manager.status(model.id);
+    }
     notifyListeners();
   }
 
@@ -1147,16 +1233,20 @@ class AppController extends ChangeNotifier {
         job.status != JobStatus.cancelled) {
       return;
     }
+    final provider = switch (mode) {
+      TranscriptAcquisitionMode.mossPro => TranscriptionProvider.mossPro,
+      TranscriptAcquisitionMode.mossLocal => TranscriptionProvider.mossLocal,
+      TranscriptAcquisitionMode.qwen3Local => TranscriptionProvider.qwen3Local,
+      TranscriptAcquisitionMode.soniox => TranscriptionProvider.soniox,
+      TranscriptAcquisitionMode.publisherCaptions => job.transcriptionProvider,
+    };
+    final transcriptionModel = _localTranscriptionModelForMode(mode);
     await _transition(
       job,
       transcriptAcquisitionMode: mode,
-      transcriptionProvider: switch (mode) {
-        TranscriptAcquisitionMode.mossPro => TranscriptionProvider.mossPro,
-        TranscriptAcquisitionMode.mossLocal => TranscriptionProvider.mossLocal,
-        TranscriptAcquisitionMode.soniox => TranscriptionProvider.soniox,
-        TranscriptAcquisitionMode.publisherCaptions =>
-          job.transcriptionProvider,
-      },
+      transcriptionProvider: provider,
+      transcriptionModel: transcriptionModel,
+      clearTranscriptionModel: transcriptionModel == null,
     );
   }
 
@@ -1199,6 +1289,9 @@ class AppController extends ChangeNotifier {
       ..._sessionOptions.languageHints,
       if (_languageCode(feed?.language) case final language?) language,
     ];
+    final transcriptAcquisitionMode = episode.transcripts.isNotEmpty
+        ? TranscriptAcquisitionMode.publisherCaptions
+        : _providerAcquisitionMode(_sessionTranscriptionProvider);
     final job = TranscriptionJob(
       id: jobId,
       batchId: _batchId,
@@ -1215,9 +1308,10 @@ class AppController extends ChangeNotifier {
       displayTitle: provenance.displayName,
       podcastProvenance: provenance,
       transcriptionProvider: _sessionTranscriptionProvider,
-      transcriptAcquisitionMode: episode.transcripts.isNotEmpty
-          ? TranscriptAcquisitionMode.publisherCaptions
-          : _providerAcquisitionMode(_sessionTranscriptionProvider),
+      transcriptAcquisitionMode: transcriptAcquisitionMode,
+      transcriptionModel: _localTranscriptionModelForMode(
+        transcriptAcquisitionMode,
+      ),
     );
     _jobs[job.id] = job;
     _inboxIds.add(job.id);
@@ -1383,6 +1477,9 @@ class AppController extends ChangeNotifier {
   }) async {
     if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
     final now = DateTime.now().toUtc();
+    final transcriptAcquisitionMode = _providerAcquisitionMode(
+      _sessionTranscriptionProvider,
+    );
     final job = TranscriptionJob(
       id: _uuid.v4(),
       batchId: _batchId,
@@ -1402,8 +1499,9 @@ class AppController extends ChangeNotifier {
       podcastProvenance: podcastProvenance,
       displayTitle: displayTitle,
       transcriptionProvider: _sessionTranscriptionProvider,
-      transcriptAcquisitionMode: _providerAcquisitionMode(
-        _sessionTranscriptionProvider,
+      transcriptAcquisitionMode: transcriptAcquisitionMode,
+      transcriptionModel: _localTranscriptionModelForMode(
+        transcriptAcquisitionMode,
       ),
     );
     _jobs[job.id] = job;
@@ -1509,9 +1607,8 @@ class AppController extends ChangeNotifier {
       for (final id in _localAutoStartCandidates)
         if (_jobs[id] case final TranscriptionJob job
             when job.status.canTranscribe &&
-                job.transcriptionProvider == TranscriptionProvider.mossLocal &&
-                job.transcriptAcquisitionMode ==
-                    TranscriptAcquisitionMode.mossLocal &&
+                _isLocalProvider(job.transcriptionProvider) &&
+                _isLocalAcquisitionMode(job.transcriptAcquisitionMode) &&
                 _canStart(job))
           id,
     ];
@@ -1564,14 +1661,14 @@ class AppController extends ChangeNotifier {
         await _importPublisherTranscript(job);
         return;
       }
-      job = job.transcriptionProvider == TranscriptionProvider.mossLocal
-          ? await _localModelLane.withPermit(() => _acquireLocalMoss(job))
+      job = _isLocalProvider(job.transcriptionProvider)
+          ? await _localModelLane.withPermit(() => _acquireLocalTranscript(job))
           : await _remoteLane.withPermit(() => _acquireRemoteTranscript(job));
 
-      if (_isMossJob(job) &&
+      if (_supportsWordAlignment(job) &&
           job.document?.segments.isNotEmpty == true &&
-          _settings.autoAlignMoss) {
-        job = await _runMossAlignment(job);
+          _settings.automaticWordTiming) {
+        job = await _runForcedAlignment(job);
       } else if (job.status == JobStatus.aligning) {
         job = await _transition(
           job,
@@ -1634,7 +1731,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<TranscriptionJob> _acquireLocalMoss(TranscriptionJob job) async {
+  Future<TranscriptionJob> _acquireLocalTranscript(TranscriptionJob job) async {
     final service = _localSttService;
     if (service == null || !service.isSupported) {
       throw const LocalSpeechException('local_stt_unsupported');
@@ -1654,11 +1751,17 @@ class AppController extends ChangeNotifier {
       progress: const JobProgress(stage: 'converting', fraction: 0),
       clearError: true,
     );
-    final document = await service.transcribe(
+    final engine = switch (job.transcriptionProvider) {
+      TranscriptionProvider.mossLocal => LocalSttEngine.mossDiarize,
+      TranscriptionProvider.qwen3Local => LocalSttEngine.qwen3Asr,
+      _ => throw const LocalSpeechException('local_stt_unavailable'),
+    };
+    final result = await service.transcribe(
       LocalSttRequest(
         sourcePath: job.sourcePath,
         durationMs: metadata.durationMs,
         options: job.options,
+        engine: engine,
       ),
       onProgress: (fraction, detail) {
         final transcribing = detail != 'converting';
@@ -1675,7 +1778,9 @@ class AppController extends ChangeNotifier {
       shouldCancel: () => _cancelledIds.contains(job.id),
     );
     _checkCancelled(job.id);
-    final shouldAlign = document.segments.isNotEmpty && _settings.autoAlignMoss;
+    final document = result.document;
+    final shouldAlign =
+        document.segments.isNotEmpty && _settings.automaticWordTiming;
     return _transition(
       _jobs[job.id] ?? job,
       status: document.segments.isEmpty
@@ -1684,7 +1789,10 @@ class AppController extends ChangeNotifier {
           ? JobStatus.aligning
           : JobStatus.completed,
       document: document,
-      transcriptSource: TranscriptSource.mossLocal,
+      transcriptSource: engine == LocalSttEngine.qwen3Asr
+          ? TranscriptSource.qwen3Local
+          : TranscriptSource.mossLocal,
+      transcriptionModel: result.model,
       forcedAlignment: shouldAlign
           ? _queuedAlignmentState(
               document.segments.length,
@@ -1805,7 +1913,7 @@ class AppController extends ChangeNotifier {
       final shouldAlign =
           !usesSoniox &&
           document.segments.isNotEmpty &&
-          _settings.autoAlignMoss;
+          _settings.automaticWordTiming;
       job = await _transition(
         job,
         status: document.segments.isEmpty
@@ -1850,6 +1958,19 @@ class AppController extends ChangeNotifier {
       job.transcriptionProvider == TranscriptionProvider.mossPro ||
       job.transcriptionProvider == TranscriptionProvider.mossLocal;
 
+  bool _isLocalProvider(TranscriptionProvider provider) =>
+      provider == TranscriptionProvider.mossLocal ||
+      provider == TranscriptionProvider.qwen3Local;
+
+  bool _isLocalAcquisitionMode(TranscriptAcquisitionMode mode) =>
+      mode == TranscriptAcquisitionMode.mossLocal ||
+      mode == TranscriptAcquisitionMode.qwen3Local;
+
+  bool _supportsWordAlignment(TranscriptionJob job) =>
+      _isMossJob(job) ||
+      job.transcriptSource == TranscriptSource.qwen3Local ||
+      job.transcriptionProvider == TranscriptionProvider.qwen3Local;
+
   ForcedAlignmentState _queuedAlignmentState(
     int totalSegments, {
     required LocalModelDescriptor? model,
@@ -1862,7 +1983,7 @@ class AppController extends ChangeNotifier {
     languageAutomaticallyDetermined: languageAutomaticallyDetermined,
   );
 
-  Future<TranscriptionJob> _runMossAlignment(TranscriptionJob initial) async {
+  Future<TranscriptionJob> _runForcedAlignment(TranscriptionJob initial) async {
     var job = initial;
     final document = job.document;
     if (document == null || document.segments.isEmpty) return job;
@@ -1986,7 +2107,7 @@ class AppController extends ChangeNotifier {
   );
 
   Future<void> _cleanupIfRemote(TranscriptionJob job) async {
-    if (job.transcriptionProvider == TranscriptionProvider.mossLocal) return;
+    if (_isLocalProvider(job.transcriptionProvider)) return;
     await _cleanup(job);
   }
 
@@ -2062,7 +2183,22 @@ class AppController extends ChangeNotifier {
     TranscriptionProvider.soniox => TranscriptAcquisitionMode.soniox,
     TranscriptionProvider.mossPro => TranscriptAcquisitionMode.mossPro,
     TranscriptionProvider.mossLocal => TranscriptAcquisitionMode.mossLocal,
+    TranscriptionProvider.qwen3Local => TranscriptAcquisitionMode.qwen3Local,
   };
+
+  TranscriptionModelReference? _localTranscriptionModelForMode(
+    TranscriptAcquisitionMode mode,
+  ) {
+    final model = switch (mode) {
+      TranscriptAcquisitionMode.mossLocal =>
+        LocalSpeechModels.mossDiarizeCoreMlInt8,
+      TranscriptAcquisitionMode.qwen3Local => LocalSpeechModels.qwen3AsrMlx8Bit,
+      _ => null,
+    };
+    return model == null
+        ? null
+        : TranscriptionModelReference(id: model.id, revision: model.revision);
+  }
 
   TranscriptionClient _transcriptionClient(TranscriptionProvider provider) =>
       switch (provider) {
@@ -2074,6 +2210,9 @@ class AppController extends ChangeNotifier {
                 message: 'MOSS Pro transcription is unavailable.',
               )),
         TranscriptionProvider.mossLocal => throw const LocalSpeechException(
+          'local_stt_unavailable',
+        ),
+        TranscriptionProvider.qwen3Local => throw const LocalSpeechException(
           'local_stt_unavailable',
         ),
       };
@@ -2231,7 +2370,7 @@ class AppController extends ChangeNotifier {
     if (job == null ||
         job.document == null ||
         job.document!.segments.isEmpty ||
-        !_isMossJob(job) ||
+        !_supportsWordAlignment(job) ||
         job.status.isActive) {
       return;
     }
@@ -2247,7 +2386,7 @@ class AppController extends ChangeNotifier {
       progress: const JobProgress(stage: 'aligning', fraction: 0),
       clearError: true,
     );
-    await _runMossAlignment(queued);
+    await _runForcedAlignment(queued);
     _cancelledIds.remove(id);
   }
 
@@ -3802,7 +3941,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _cleanup(TranscriptionJob job) async {
-    if (job.transcriptionProvider == TranscriptionProvider.mossLocal) return;
+    if (_isLocalProvider(job.transcriptionProvider)) return;
     if (job.cleanupState == CleanupState.complete) return;
     final client = _transcriptionClient(job.transcriptionProvider);
     var success = true;
@@ -3835,10 +3974,17 @@ class AppController extends ChangeNotifier {
   }) async {
     final job = _jobs[id];
     if (job == null) throw StateError('Job not found.');
+    final effectiveFraction =
+        fraction ??
+        (job.progress.stage == stage ? job.progress.fraction : null);
     return _transition(
       job,
       status: status,
-      progress: JobProgress(stage: stage, fraction: fraction, detail: detail),
+      progress: JobProgress(
+        stage: stage,
+        fraction: effectiveFraction,
+        detail: detail,
+      ),
     );
   }
 
@@ -3918,12 +4064,14 @@ class AppController extends ChangeNotifier {
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
     TranscriptionProvider? transcriptionProvider,
     TranscriptSource? transcriptSource,
+    TranscriptionModelReference? transcriptionModel,
     ForcedAlignmentState? forcedAlignment,
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
     bool clearDisplayTitle = false,
     bool clearGroupId = false,
+    bool clearTranscriptionModel = false,
   }) async {
     final current = _jobs[job.id] ?? job;
     final updated = current.copyWith(
@@ -3951,12 +4099,14 @@ class AppController extends ChangeNotifier {
       transcriptAcquisitionMode: transcriptAcquisitionMode,
       transcriptionProvider: transcriptionProvider,
       transcriptSource: transcriptSource,
+      transcriptionModel: transcriptionModel,
       forcedAlignment: forcedAlignment,
       clearError: clearError,
       clearRemoteFileId: clearRemoteFileId,
       clearRemoteTranscriptionId: clearRemoteTranscriptionId,
       clearDisplayTitle: clearDisplayTitle,
       clearGroupId: clearGroupId,
+      clearTranscriptionModel: clearTranscriptionModel,
     );
     _jobs[job.id] = updated;
     if (updated.document != null || updated.status.isTerminal) {

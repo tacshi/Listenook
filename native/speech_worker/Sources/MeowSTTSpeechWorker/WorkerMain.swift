@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import MossTranscribe
 import Qwen3ASR
+import SpeechVAD
 
 private let protocolVersion = 1
 
@@ -16,6 +17,21 @@ private struct TranscriptSegmentJSON: Sendable {
     let endMs: Int
     let speaker: String?
     let text: String
+    let language: String?
+
+    init(
+        startMs: Int,
+        endMs: Int,
+        speaker: String?,
+        text: String,
+        language: String? = nil
+    ) {
+        self.startMs = startMs
+        self.endMs = endMs
+        self.speaker = speaker
+        self.text = text
+        self.language = language
+    }
 
     var dictionary: [String: Any] {
         var result: [String: Any] = [
@@ -24,6 +40,7 @@ private struct TranscriptSegmentJSON: Sendable {
             "text": text,
         ]
         if let speaker { result["speaker"] = speaker }
+        if let language { result["language"] = language }
         return result
     }
 }
@@ -83,6 +100,8 @@ private enum WorkerMain {
             switch arguments[1] {
             case "transcribe-moss":
                 result = try await transcribeMoss(request)
+            case "transcribe-qwen3":
+                result = try await transcribeQwen3(request)
             case "align-qwen3":
                 result = try alignQwen3(request)
             default:
@@ -126,6 +145,196 @@ private enum WorkerMain {
             Darwin.exit(6)
         }
     }
+}
+
+@available(macOS 15.0, *)
+private func transcribeQwen3(_ request: [String: Any]) async throws -> [String: Any] {
+    let modelDirectory = try requiredString(request, "model_directory")
+    let vadModelDirectory = try requiredString(request, "vad_model_directory")
+    let audioPath = try requiredString(request, "audio_path")
+    let wave = try openPCM16Wave(path: audioPath)
+    guard wave.sampleRate == 16_000 else {
+        throw WorkerFailure(
+            code: "local_audio_format",
+            message: "Expected 16 kHz mono signed 16-bit PCM.",
+            exitCode: 5
+        )
+    }
+
+    let modelURL = URL(fileURLWithPath: modelDirectory, isDirectory: true)
+    let vadModelURL = URL(fileURLWithPath: vadModelDirectory, isDirectory: true)
+    guard FileManager.default.fileExists(atPath: modelURL.path),
+          FileManager.default.fileExists(atPath: vadModelURL.path)
+    else {
+        throw WorkerFailure(
+            code: "local_stt_model_invalid",
+            message: "The Qwen3 ASR model bundle is incomplete.",
+            exitCode: 4
+        )
+    }
+
+    progress(0.01, "loading-qwen3-model")
+    let model: Qwen3ASRModel
+    do {
+        model = try await Qwen3ASRModel.fromPretrained(
+            modelId: Qwen3ASRModel.largeModelId,
+            cacheDir: modelURL,
+            offlineMode: true
+        ) { fraction, _ in
+            progress(0.01 + fraction * 0.09, "loading-qwen3-model")
+        }
+    } catch {
+        throw WorkerFailure(
+            code: "local_stt_model_invalid",
+            message: safeMessage(error.localizedDescription),
+            exitCode: 4
+        )
+    }
+
+    progress(0.10, "loading-silero-vad")
+    let vad: SileroVADModel
+    do {
+        vad = try await SileroVADModel.fromPretrained(
+            modelId: SileroVADModel.defaultCoreMLModelId,
+            engine: .coreml,
+            cacheDir: vadModelURL,
+            offlineMode: true
+        ) { fraction, _ in
+            progress(0.10 + fraction * 0.04, "loading-silero-vad")
+        }
+    } catch {
+        throw WorkerFailure(
+            code: "local_stt_model_invalid",
+            message: safeMessage(error.localizedDescription),
+            exitCode: 4
+        )
+    }
+
+    let languageHints = (request["language_hints"] as? [String] ?? [])
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    let language = languageHints.count == 1 ? languageHints[0] : nil
+    let contextTerms = (request["context_terms"] as? [String] ?? [])
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    let context = contextTerms.isEmpty ? nil : contextTerms.joined(separator: ", ")
+    let requestedMaximum =
+        (request["max_segment_seconds"] as? NSNumber)?.doubleValue ?? 10
+    let maximumSeconds = min(10, max(1, requestedMaximum))
+    let maximumSamples = max(1, Int(maximumSeconds * Double(wave.sampleRate)))
+    let processor = StreamingVADProcessor(model: vad, config: .sileroDefault)
+    let totalSamples = max(1, wave.sampleCount)
+    var activeStartSample: Int?
+    var segments: [TranscriptSegmentJSON] = []
+    var previousEndMs = 0
+
+    func appendFinalSpan(start: Int, end: Int) throws {
+        let clippedStart = min(max(0, start), wave.sampleCount)
+        let clippedEnd = min(max(clippedStart, end), wave.sampleCount)
+        guard clippedEnd > clippedStart else { return }
+        let samples: [Float]
+        do {
+            samples = try wave.readSamples(clippedStart..<clippedEnd)
+        } catch {
+            throw WorkerFailure(
+                code: "local_audio_format",
+                message: "The prepared PCM audio could not be read.",
+                exitCode: 5
+            )
+        }
+        let text = model.transcribe(
+            audio: samples,
+            sampleRate: wave.sampleRate,
+            language: language,
+            maxTokens: 448,
+            context: context
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let rawStartMs = Int(
+            (Double(clippedStart) * 1000 / Double(wave.sampleRate)).rounded()
+        )
+        let startMs = max(previousEndMs, rawStartMs)
+        let rawEndMs = Int(
+            (Double(clippedEnd) * 1000 / Double(wave.sampleRate)).rounded()
+        )
+        let endMs = max(startMs, rawEndMs)
+        guard endMs > startMs else { return }
+        segments.append(
+            TranscriptSegmentJSON(
+                startMs: startMs,
+                endMs: endMs,
+                speaker: nil,
+                text: text,
+                language: language
+            )
+        )
+        previousEndMs = endMs
+    }
+
+    func handle(_ events: [VADEvent]) throws {
+        for event in events {
+            switch event {
+            case .speechStarted(let time):
+                if activeStartSample == nil {
+                    activeStartSample = max(0, Int(Double(time) * Double(wave.sampleRate)))
+                }
+            case .speechEnded(let speech):
+                if let start = activeStartSample {
+                    let end = min(
+                        wave.sampleCount,
+                        Int(Double(speech.endTime) * Double(wave.sampleRate))
+                    )
+                    try appendFinalSpan(start: start, end: end)
+                    activeStartSample = nil
+                }
+            }
+        }
+    }
+
+    progress(0.14, "detecting-speech")
+    var offset = 0
+    while offset < wave.sampleCount {
+        let end = min(offset + SileroVADModel.chunkSize, wave.sampleCount)
+        let samples: [Float]
+        do {
+            samples = try wave.readSamples(offset..<end)
+        } catch {
+            throw WorkerFailure(
+                code: "local_audio_format",
+                message: "The prepared PCM audio could not be read.",
+                exitCode: 5
+            )
+        }
+        try handle(processor.process(samples: samples))
+        if let start = activeStartSample {
+            let current = min(
+                wave.sampleCount,
+                Int(Double(processor.currentTime) * Double(wave.sampleRate))
+            )
+            for span in forcedQwenSpans(
+                startSample: start,
+                currentSample: current,
+                maximumSamples: maximumSamples
+            ) {
+                progress(nil, "transcribing-qwen3-span")
+                try appendFinalSpan(start: span.lowerBound, end: span.upperBound)
+                activeStartSample = span.upperBound
+            }
+        }
+        offset = end
+        progress(
+            0.14 + Double(offset) / Double(totalSamples) * 0.86,
+            "transcribing-qwen3"
+        )
+    }
+    try handle(processor.flush())
+    let text = segments.map(\.text).joined(separator: " ")
+    progress(1, "transcribing-qwen3")
+    return [
+        "text": text,
+        "segments": segments.map(\.dictionary),
+        "engine": "mlx-qwen3-silero-coreml",
+    ]
 }
 
 @available(macOS 15.0, *)
