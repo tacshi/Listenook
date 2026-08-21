@@ -42,6 +42,11 @@ printf '{"protocol":1,"ok":true,"result":{"command":"%s","request_mode":"%s","ou
       expect(result['request_mode'], '600');
       expect(result['output_mode'], '600');
       expect(progress, 0.5);
+      final qwen = await ProcessLocalSpeechWorker(
+        temporaryDirectory: root,
+        executablePath: executable.path,
+      ).run(SpeechWorkerCommand.transcribeQwen3, const {'protocol': 1});
+      expect(qwen['command'], 'transcribe-qwen3');
       expect(root.listSync().whereType<File>().map((file) => file.path), [
         executable.path,
       ]);

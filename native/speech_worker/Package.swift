@@ -16,6 +16,7 @@ let package = Package(
             dependencies: [
                 .product(name: "MossTranscribe", package: "speech-swift"),
                 .product(name: "Qwen3ASR", package: "speech-swift"),
+                .product(name: "SpeechVAD", package: "speech-swift"),
             ],
             linkerSettings: [
                 .linkedFramework("Accelerate"),

@@ -183,6 +183,50 @@ class MossTaggedTranscriptParser {
   }
 }
 
+class QwenStructuredTranscriptParser {
+  const QwenStructuredTranscriptParser();
+
+  TranscriptDocument parse(
+    List<dynamic> rawSegments, {
+    required int durationMs,
+  }) {
+    final segments = <TranscriptSegment>[];
+    var previousEndMs = 0;
+    for (final value in rawSegments) {
+      if (value is! Map) continue;
+      final raw = value.cast<Object?, Object?>();
+      final text = raw['text']?.toString().trim() ?? '';
+      final rawStart = (raw['start_ms'] as num?)?.toInt();
+      final rawEnd = (raw['end_ms'] as num?)?.toInt();
+      if (text.isEmpty || rawStart == null || rawEnd == null) continue;
+      final startMs = rawStart
+          .clamp(previousEndMs, max(previousEndMs, durationMs))
+          .toInt();
+      final endMs = rawEnd.clamp(startMs, max(startMs, durationMs)).toInt();
+      if (endMs <= startMs) continue;
+      final languageValue = raw['language']?.toString().trim();
+      segments.add(
+        TranscriptSegment(
+          id: 'qwen3-${segments.length}',
+          startMs: startMs,
+          endMs: endMs,
+          text: text,
+          language: languageValue == null || languageValue.isEmpty
+              ? null
+              : languageValue,
+        ),
+      );
+      previousEndMs = endMs;
+    }
+    return TranscriptDocument(
+      tokens: const [],
+      segments: List.unmodifiable(segments),
+      speakers: const [],
+      updatedAt: DateTime.now().toUtc(),
+    );
+  }
+}
+
 class QwenAlignmentUnitizer {
   const QwenAlignmentUnitizer();
 
@@ -273,23 +317,27 @@ class ProcessLocalSttService implements LocalSttService {
     required LocalSpeechWorker worker,
     required bool platformSupported,
     MossTaggedTranscriptParser parser = const MossTaggedTranscriptParser(),
+    QwenStructuredTranscriptParser qwenParser =
+        const QwenStructuredTranscriptParser(),
   }) : _models = models,
        _pcm = pcm,
        _worker = worker,
        _platformSupported = platformSupported,
-       _parser = parser;
+       _parser = parser,
+       _qwenParser = qwenParser;
 
   final LocalModelManager _models;
   final LocalPcmPreparer _pcm;
   final LocalSpeechWorker _worker;
   final bool _platformSupported;
   final MossTaggedTranscriptParser _parser;
+  final QwenStructuredTranscriptParser _qwenParser;
 
   @override
   bool get isSupported => _platformSupported;
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
@@ -298,10 +346,26 @@ class ProcessLocalSttService implements LocalSttService {
     if (request.durationMs > maxMediaDurationMs) {
       throw const LocalSpeechException('duration_limit');
     }
-    final model = LocalSpeechModels.mossDiarizeCoreMlInt8;
-    final modelStatus = await _models.status(model.id, verifyIntegrity: true);
-    if (modelStatus.availability != LocalModelAvailability.ready) {
-      throw const LocalSpeechException('local_stt_model_missing');
+    final (model, requiredModels, command) = switch (request.engine) {
+      LocalSttEngine.mossDiarize => (
+        LocalSpeechModels.mossDiarizeCoreMlInt8,
+        [LocalSpeechModels.mossDiarizeCoreMlInt8],
+        SpeechWorkerCommand.transcribeMoss,
+      ),
+      LocalSttEngine.qwen3Asr => (
+        LocalSpeechModels.qwen3AsrMlx8Bit,
+        LocalSpeechModels.qwen3AsrBundle.artifacts,
+        SpeechWorkerCommand.transcribeQwen3,
+      ),
+    };
+    for (final requiredModel in requiredModels) {
+      final modelStatus = await _models.status(
+        requiredModel.id,
+        verifyIntegrity: true,
+      );
+      if (modelStatus.availability != LocalModelAvailability.ready) {
+        throw const LocalSpeechException('local_stt_model_missing');
+      }
     }
     final prepared = await _pcm.prepare(
       request.sourcePath,
@@ -312,33 +376,53 @@ class ProcessLocalSttService implements LocalSttService {
     try {
       onProgress?.call(0, 'transcribing');
       final output = await _worker.run(
-        SpeechWorkerCommand.transcribeMoss,
+        command,
         {
           'protocol': 1,
           'model_directory': _models.pathFor(model.id),
           'audio_path': prepared.path,
-          'chunk_seconds': 30,
-          'parallel_chunks': 2,
-          'max_new_tokens_per_chunk': 640,
-          'hotwords': request.options.contextTerms,
+          if (request.engine == LocalSttEngine.mossDiarize) ...{
+            'chunk_seconds': 30,
+            'parallel_chunks': 2,
+            'max_new_tokens_per_chunk': 640,
+            'hotwords': request.options.contextTerms,
+          } else ...{
+            'vad_model_directory': _models.pathFor(
+              LocalSpeechModels.sileroVadCoreMl.id,
+            ),
+            'max_segment_seconds': 10,
+            'language_hints': request.options.languageHints,
+            'context_terms': request.options.contextTerms,
+          },
         },
         onProgress: (fraction, detail) =>
             onProgress?.call(fraction, detail ?? 'transcribing'),
         shouldCancel: shouldCancel,
       );
-      final segments = output['segments'];
-      if (segments is List) {
-        return _parser.parseStructured(
-          segments,
-          durationMs: request.durationMs,
-          plainText: output['text']?.toString(),
-        );
+      final rawSegments = output['segments'];
+      TranscriptDocument document;
+      if (rawSegments is List) {
+        document = request.engine == LocalSttEngine.qwen3Asr
+            ? _qwenParser.parse(rawSegments, durationMs: request.durationMs)
+            : _parser.parseStructured(
+                rawSegments,
+                durationMs: request.durationMs,
+                plainText: output['text']?.toString(),
+              );
+      } else {
+        final raw = output['raw_transcript'] as String?;
+        if (raw == null || request.engine == LocalSttEngine.qwen3Asr) {
+          throw const LocalSpeechException('local_stt_invalid_output');
+        }
+        document = _parser.parse(raw, durationMs: request.durationMs);
       }
-      final raw = output['raw_transcript'] as String?;
-      if (raw == null) {
-        throw const LocalSpeechException('local_stt_invalid_output');
-      }
-      return _parser.parse(raw, durationMs: request.durationMs);
+      return LocalSttResult(
+        document: document,
+        model: TranscriptionModelReference(
+          id: model.id,
+          revision: model.revision,
+        ),
+      );
     } finally {
       await _pcm.release(prepared);
     }

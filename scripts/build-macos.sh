@@ -103,8 +103,13 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
     mkdir -p "$APP/Contents/Helpers"
     bash "$ROOT/scripts/build-speech-worker.sh" \
       "$APP/Contents/Helpers/MeowSTTSpeechWorker"
+    [[ -s "$APP/Contents/Helpers/mlx.metallib" ]] || {
+      echo "Missing packaged MLX Metal library." >&2
+      exit 1
+    }
   else
     rm -f "$APP/Contents/Helpers/MeowSTTSpeechWorker"
+    rm -f "$APP/Contents/Helpers/mlx.metallib"
   fi
 
   [[ -x /usr/bin/afconvert ]] || { echo "Missing macOS afconvert." >&2; exit 1; }

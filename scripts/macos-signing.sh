@@ -84,6 +84,7 @@ meowstt_sign_app_bundle() {
       \( -type d -name '*.framework' -o -type d -name '*.appex' \
       -o -type d -name '*.xpc' -o -type d -name '*.app' \
       -o -type f -name '*.dylib' \
+      -o -type f -name '*.metallib' \
       -o -type f -name 'MeowSTTSpeechWorker' \) -print0
   )
 

@@ -22,7 +22,8 @@ double? inboxJobProgressValue(TranscriptionJob job) {
 
 String? inboxJobProgressPercentage(TranscriptionJob job) {
   if (!job.status.isActive ||
-      job.transcriptionProvider != TranscriptionProvider.mossLocal ||
+      (job.transcriptionProvider != TranscriptionProvider.mossLocal &&
+          job.transcriptionProvider != TranscriptionProvider.qwen3Local) ||
       job.progress.stage != 'local_transcribing' ||
       job.progress.fraction == null) {
     return null;
@@ -544,9 +545,15 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
                   ? context.strings.t('soniox_key')
                   : provider == TranscriptionProvider.mossPro
                   ? context.strings.t('moss_key')
-                  : context.strings.t('local_moss_model'),
+                  : context.strings.t(
+                      provider == TranscriptionProvider.qwen3Local
+                          ? 'local_qwen_model'
+                          : 'local_moss_model',
+                    ),
               value: context.strings.t(
-                provider == TranscriptionProvider.mossLocal
+                provider == TranscriptionProvider.qwen3Local
+                    ? 'local_qwen_model_missing'
+                    : provider == TranscriptionProvider.mossLocal
                     ? 'local_model_missing'
                     : 'provider_key_missing',
               ),

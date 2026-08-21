@@ -42,10 +42,12 @@ The package name is `meow_stt`. Its permanent desktop identity is
   recovery, speaker-labelled segments, server-directed polling, 512 MB upload
   validation, owned-file cleanup, and compact 16 kHz mono AAC preparation on
   macOS for video, lossless audio, or high-bitrate input.
-- Optional Apple Silicon/macOS 15+ `MOSS Local` transcription with
-  diarization through a pinned Core ML INT8 model, plus fail-open local Qwen3
-  ForcedAligner timing with independently downloadable INT8 and FP16 Core ML
-  variants for MOSS Local and MOSS Pro.
+- Optional Apple Silicon/macOS 15+ local transcription: `MOSS Local` provides
+  diarization through a pinned Core ML INT8 model, while `Qwen3 Local (Beta)`
+  prioritizes multilingual text quality through pinned Qwen3 ASR 1.7B MLX
+  8-bit weights and Silero Core ML VAD. Qwen provides segment timing without
+  speaker labels. Both can optionally add fail-open word timing with the
+  independently downloadable Qwen3 ForcedAligner INT8 or FP16 Core ML model.
 - Optional one-way Soniox translation in the original async transcription job,
   with provider-native language targets and no separate translation pass.
 - A local, searchable library; source relinking; editable segments and speaker
@@ -94,8 +96,9 @@ See [PRIVACY.md](PRIVACY.md).
 ## Development
 
 Requirements: Flutter stable with macOS and/or Windows desktop enabled. Building
-the Apple Silicon local speech worker also requires Xcode command-line tools;
-its Core ML model bundles are verified downloads and are never bundled. The
+the Apple Silicon local speech worker also requires Xcode and its Metal
+toolchain; its Core ML and MLX model bundles are verified downloads and are
+never bundled. The
 existing `media_kit_libs_video` dependency supplies libmpv. Windows packaging
 fetches the pinned FLAC 1.5.0 encoder described in
 `packaging/flac/manifest.json`; macOS uses its built-in `afconvert` encoder.
@@ -114,6 +117,16 @@ host). Packaging scripts do this automatically.
 Set `SONIOX_API_KEY` or `MOSS_API_KEY` only to opt into the corresponding
 billable live smoke test. Normal tests use fake local services and never consume
 provider credit.
+
+The real Qwen/Silero test is opt-in. Set `MEOWSTT_TEST_QWEN_PCM`,
+`MEOWSTT_TEST_QWEN_MLX_DIRECTORY`, `MEOWSTT_TEST_SILERO_COREML_DIRECTORY`, and
+`MEOWSTT_TEST_SPEECH_WORKER`; optionally set
+`MEOWSTT_TEST_ALIGNMENT_COREML_DIRECTORY`. For the two-hour M1 Pro gate, run
+`dart run scripts/benchmark_local_qwen.dart` with `--worker`,
+`--model-directory`, `--vad-directory`, and `--audio`. It fails at RTF `>= 0.7`,
+worker RSS `>= 8 GiB`, or invalid/non-monotonic timestamps. Qwen remains beta
+until the same curated corpus beats MOSS on English WER, Chinese CER, and
+mixed-language MER.
 
 The complete keyboard shortcut reference is available in
 **Settings → Shortcuts**. All primary actions remain reachable without a mouse.
@@ -212,6 +225,6 @@ Distribution artifacts retain the libmpv already supplied by
 Windows adds the compact FLAC encoder and its corresponding source archive.
 Provenance, SHA-256 checksums, and license texts live in `packaging/flac/` and
 `assets/third_party/`. The optional arm64 local speech worker uses pinned
-speech-swift/Core ML code; MOSS and Qwen3 model bundles are downloaded
+speech-swift/Core ML/MLX code; MOSS, Qwen3, and Silero model bundles are downloaded
 separately, verified, and covered by the included notices. Soniox and MOSI are separate third-party transcription
 services and each requires a user-owned account and API key when selected.

@@ -29,15 +29,34 @@ void main() {
     expect(manifest, contains('.macOS("15.0")'));
     expect(manifest, contains('MossTranscribe'));
     expect(manifest, contains('Qwen3ASR'));
+    expect(manifest, contains('SpeechVAD'));
     expect(manifest, contains('revision:'));
     expect(package, contains(r'$APP/Contents/Helpers/MeowSTTSpeechWorker'));
+    expect(package, contains(r'$APP/Contents/Helpers/mlx.metallib'));
     expect(signing, contains("-name 'MeowSTTSpeechWorker'"));
+    expect(signing, contains("-name '*.metallib'"));
     expect(verification, contains(r'lipo -archs "$SPEECH_WORKER"'));
     expect(
       verification,
       contains(r'codesign --verify --strict "$SPEECH_WORKER"'),
     );
+    expect(build, contains('build_mlx_metallib.sh'));
+    expect(build, contains('-showComponent MetalToolchain -json'));
+    expect(build, contains('toolchainIdentifier'));
+    expect(build, contains(r'TOOLCHAINS="$METAL_TOOLCHAIN_ID"'));
+    expect(build, contains('== "MTLB"'));
+    expect(verification, contains(r'[[ ! -s "$MLX_METALLIB" ]]'));
+    expect(verification, contains('!= "MTLB"'));
+    expect(
+      verification,
+      contains(r'codesign --verify --strict "$MLX_METALLIB"'),
+    );
     expect(worker, contains('MossTranscribeModel.fromDirectory'));
+    expect(worker, contains('case "transcribe-qwen3"'));
+    expect(worker, contains('offlineMode: true'));
+    expect(worker, contains('StreamingVADProcessor'));
+    expect(worker, contains('let maximumSeconds = min(10'));
+    expect(worker, isNot(contains('transcribeBatch(')));
     expect(worker, contains('transcribeDetailed('));
     expect(worker, contains('result.segments'));
     expect(worker, contains('result.metrics.stopReason'));
@@ -123,6 +142,39 @@ void main() {
     expect(result.exitCode, 4);
     final envelope = jsonDecode(await output.readAsString()) as Map;
     expect((envelope['error'] as Map)['code'], 'alignment_model_head_invalid');
+  }, skip: executable == null || !Platform.isMacOS);
+
+  test('native Qwen worker rejects an incomplete offline bundle', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'meow-native-qwen-model-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final audio = File('${root.path}/audio.wav');
+    final request = File('${root.path}/request.json');
+    final output = File('${root.path}/output.json');
+    await audio.writeAsBytes(_extensiblePcm16MonoWav());
+    await request.writeAsString(
+      jsonEncode({
+        'protocol': 1,
+        'parent_pid': pid,
+        'audio_path': audio.path,
+        'model_directory': '${root.path}/missing-qwen',
+        'vad_model_directory': '${root.path}/missing-silero',
+      }),
+    );
+    await output.create();
+
+    final result = await Process.run(executable!, [
+      'transcribe-qwen3',
+      '--request',
+      request.path,
+      '--output',
+      output.path,
+    ]);
+
+    expect(result.exitCode, 4);
+    final envelope = jsonDecode(await output.readAsString()) as Map;
+    expect((envelope['error'] as Map)['code'], 'local_stt_model_invalid');
   }, skip: executable == null || !Platform.isMacOS);
 }
 

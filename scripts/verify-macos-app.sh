@@ -21,6 +21,7 @@ fi
 
 APP_ARCHS="$(lipo -archs "$EXECUTABLE")"
 SPEECH_WORKER="$APP/Contents/Helpers/MeowSTTSpeechWorker"
+MLX_METALLIB="$APP/Contents/Helpers/mlx.metallib"
 if [[ " $APP_ARCHS " == *" arm64 "* ]]; then
   if [[ ! -x "$SPEECH_WORKER" ]]; then
     echo "Apple Silicon bundle is missing its speech worker: $SPEECH_WORKER" >&2
@@ -31,8 +32,17 @@ if [[ " $APP_ARCHS " == *" arm64 "* ]]; then
     exit 1
   fi
   codesign --verify --strict "$SPEECH_WORKER"
-elif [[ -e "$SPEECH_WORKER" ]]; then
-  echo "Intel bundle must not contain the arm64-only speech worker." >&2
+  if [[ ! -s "$MLX_METALLIB" ]]; then
+    echo "Apple Silicon bundle is missing its MLX Metal library: $MLX_METALLIB" >&2
+    exit 1
+  fi
+  if [[ "$(LC_ALL=C head -c 4 "$MLX_METALLIB")" != "MTLB" ]]; then
+    echo "Apple Silicon bundle contains an invalid MLX Metal library." >&2
+    exit 1
+  fi
+  codesign --verify --strict "$MLX_METALLIB"
+elif [[ -e "$SPEECH_WORKER" || -e "$MLX_METALLIB" ]]; then
+  echo "Intel bundle must not contain the arm64-only speech worker or MLX library." >&2
   exit 1
 fi
 

@@ -3596,8 +3596,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     final supportsLocalAlignment =
         job.transcriptSource == TranscriptSource.mossPro ||
         job.transcriptSource == TranscriptSource.mossLocal ||
+        job.transcriptSource == TranscriptSource.qwen3Local ||
         job.transcriptionProvider == TranscriptionProvider.mossPro ||
-        job.transcriptionProvider == TranscriptionProvider.mossLocal;
+        job.transcriptionProvider == TranscriptionProvider.mossLocal ||
+        job.transcriptionProvider == TranscriptionProvider.qwen3Local;
     final entries = <PopupMenuEntry<_TranscriptMoreAction>>[];
     void addSection(List<PopupMenuEntry<_TranscriptMoreAction>> section) {
       if (section.isEmpty) return;

@@ -78,9 +78,8 @@ class _PodcastPageState extends State<PodcastPage> {
                   ButtonSegment(
                     value: PodcastPane.following,
                     label: Text(
-                      podcast.unseenCount == 0
-                          ? strings.t('podcast_following')
-                          : '${strings.t('podcast_following')} (${podcast.unseenCount})',
+                      '${strings.t('podcast_following')} '
+                      '(${podcast.followed.length})',
                     ),
                     icon: const Icon(Icons.bookmark_rounded),
                   ),

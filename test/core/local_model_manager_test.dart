@@ -38,6 +38,8 @@ void main() {
 
   test('production Core ML speech bundles stay pinned to immutable files', () {
     final moss = LocalSpeechModels.mossDiarizeCoreMlInt8;
+    final qwen = LocalSpeechModels.qwen3AsrMlx8Bit;
+    final vad = LocalSpeechModels.sileroVadCoreMl;
     final aligner = LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8;
     final fp16Aligner = LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16;
 
@@ -45,6 +47,14 @@ void main() {
     expect(moss.sizeBytes, 1271160422);
     expect(moss.repository, contains('CoreML-INT8'));
     expect(moss.files, hasLength(15));
+    expect(qwen.revision, 'e5450a26d1fd417c45fc9c405651ddc3180a27a6');
+    expect(qwen.sizeBytes, 2467854870);
+    expect(qwen.files, hasLength(6));
+    expect(vad.revision, '523876545a57961474fee9df913e833e130560b8');
+    expect(vad.sizeBytes, 641874);
+    expect(vad.files, hasLength(6));
+    expect(LocalSpeechModels.qwen3AsrBundle.artifacts, [qwen, vad]);
+    expect(LocalSpeechModels.qwen3AsrBundle.sizeBytes, 2468496744);
     expect(aligner.revision, 'ac27c13a9dae935e7d478b996d89d94ff617e3ca');
     expect(aligner.sizeBytes, 1081578155);
     expect(aligner.repository, contains('CoreML-INT8'));

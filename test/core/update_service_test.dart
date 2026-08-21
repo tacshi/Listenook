@@ -102,7 +102,12 @@ void main() {
       addTearDown(service.dispose);
 
       await service.start();
-      await Future<void>.delayed(const Duration(milliseconds: 30));
+      final timeout = Stopwatch()..start();
+      while ((service.phase != UpdatePhase.failed ||
+              service.scheduledDelay != const Duration(hours: 1)) &&
+          timeout.elapsed < const Duration(seconds: 2)) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
 
       expect(service.phase, UpdatePhase.failed);
       expect(service.scheduledDelay, const Duration(hours: 1));

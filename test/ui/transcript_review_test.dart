@@ -28,6 +28,7 @@ import 'package:meow_stt/ui/transcript_review.dart';
 import 'package:meow_stt/ui/workspace_page.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import 'package:tray_manager/tray_manager.dart' as tray;
 
 void main() {
   testWidgets('podcast shortcuts toggle playback and seek five seconds', (
@@ -3295,7 +3296,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.destination, AppDestination.settings);
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
-    await tester.tap(find.text('Providers'));
+    await tester.tap(find.text('Transcription'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('soniox-key-field')));
     await tester.pump();
@@ -3568,6 +3569,57 @@ void main() {
     },
   );
 
+  testWidgets('Open Main Window tray action opens Podcast', (tester) async {
+    const windowChannel = MethodChannel('window_manager');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      windowChannel,
+      (call) async => switch (call.method) {
+        'isFullScreen' => false,
+        'isVisible' => true,
+        _ => null,
+      },
+    );
+    addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([]),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.updateSettings(
+      controller.settings.copyWith(onboardingComplete: true),
+    );
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: AppShell(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    controller.setDestination(AppDestination.library);
+
+    final dynamic appShellState = tester.state(find.byType(AppShell));
+    appShellState.onTrayMenuItemClick(
+      tray.MenuItem(key: 'open-main-window', label: 'Open Main Window'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(controller.destination, AppDestination.podcast);
+  });
+
   testWidgets(
     'menu bar item and close-to-menu-bar work without an Inbox folder',
     (tester) async {
@@ -3634,16 +3686,18 @@ void main() {
       expect(events, contains('tray:setIcon'));
       events.clear();
 
-      await messenger.handlePlatformMessage(
-        'tray_manager',
-        const StandardMethodCodec().encodeMethodCall(
-          const MethodCall('onTrayIconRightMouseDown'),
-        ),
-        null,
-      );
-      await tester.pump();
-      expect(events, contains('tray:popUpContextMenu'));
-      events.clear();
+      if (Platform.isWindows) {
+        await messenger.handlePlatformMessage(
+          'tray_manager',
+          const StandardMethodCodec().encodeMethodCall(
+            const MethodCall('onTrayIconRightMouseDown'),
+          ),
+          null,
+        );
+        await tester.pump();
+        expect(events, contains('tray:popUpContextMenu'));
+        events.clear();
+      }
 
       final dynamic appShellState = tester.state(find.byType(AppShell));
       await appShellState.onWindowClose();
@@ -4027,6 +4081,11 @@ void main() {
 
     expect(find.byKey(const Key('workspace-page-title')), findsNothing);
     expect(find.byKey(const Key('workspace-empty-title')), findsOneWidget);
+    final emptyCard = find.ancestor(
+      of: find.byKey(const Key('workspace-empty-title')),
+      matching: find.byType(ConstrainedBox),
+    );
+    expect(tester.getSize(emptyCard.first).width, 760);
     expect(
       find.text('Open a completed transcript from Library.'),
       findsOneWidget,
@@ -7470,7 +7529,7 @@ class _SupportedLocalStt implements LocalSttService {
   bool get isSupported => true;
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
@@ -7484,13 +7543,19 @@ class _DropCountingLocalStt implements LocalSttService {
   bool get isSupported => true;
 
   @override
-  Future<TranscriptDocument> transcribe(
+  Future<LocalSttResult> transcribe(
     LocalSttRequest request, {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
     calls++;
-    return _simpleDocument();
+    return LocalSttResult(
+      document: _simpleDocument(),
+      model: TranscriptionModelReference(
+        id: LocalSpeechModels.mossDiarizeCoreMlInt8.id,
+        revision: LocalSpeechModels.mossDiarizeCoreMlInt8.revision,
+      ),
+    );
   }
 }
 
