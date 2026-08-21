@@ -5,6 +5,7 @@ import 'package:archive/archive_io.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/core/transcript_parser.dart';
+import 'package:meow_stt/core/transcript_structure_editor.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
 
 void main() {
@@ -296,6 +297,57 @@ void main() {
     );
     expect(vtt, startsWith('WEBVTT'));
     expect(vtt, contains('00:00:03.000 --> 00:00:04.200'));
+  });
+
+  test('subtitle exports immediately use manually split cue boundaries', () {
+    final source = TranscriptDocument(
+      tokens: const [
+        TranscriptToken(
+          text: 'First',
+          startMs: 100,
+          endMs: 500,
+          segmentId: 'cue',
+        ),
+        TranscriptToken(
+          text: ' second',
+          startMs: 700,
+          endMs: 1100,
+          segmentId: 'cue',
+        ),
+      ],
+      segments: const [
+        TranscriptSegment(
+          id: 'cue',
+          startMs: 0,
+          endMs: 1200,
+          text: 'First. Second.',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+    );
+    final split =
+        TranscriptStructureEditor(idGenerator: () => 'right').apply(
+              source,
+              const SplitAtTokenBoundary('cue', rightTokenIndex: 1),
+            )
+            as TranscriptStructureEditResult;
+
+    final srt = exporter.render(
+      split.document,
+      const ExportOptions(format: ExportFormat.srt, showSpeakers: false),
+      title: 'Split',
+    );
+    final vtt = exporter.render(
+      split.document,
+      const ExportOptions(format: ExportFormat.webVtt, showSpeakers: false),
+      title: 'Split',
+    );
+
+    expect(srt, contains('00:00:00,000 --> 00:00:00,500'));
+    expect(srt, contains('00:00:00,700 --> 00:00:01,200'));
+    expect(vtt, contains('00:00:00.000 --> 00:00:00.500'));
+    expect(vtt, contains('00:00:00.700 --> 00:00:01.200'));
   });
 
   test('translated and bilingual exports fall back safely when partial', () {

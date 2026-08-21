@@ -1191,6 +1191,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('more-toggle-speakers')), findsOneWidget);
     expect(find.byKey(const Key('more-toggle-timestamps')), findsOneWidget);
+    expect(
+      find.byKey(const Key('more-toggle-transcript-structure')),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('copy-transcript-menu')), findsOneWidget);
     expect(find.byKey(const Key('export-transcript-menu')), findsOneWidget);
     expect(find.text('Retranslate all with LLM'), findsOneWidget);
@@ -2579,6 +2583,250 @@ void main() {
 
     await pump(1800);
     expect(_backgroundTexts(tester), isEmpty);
+  });
+
+  testWidgets('Structure mode previews, commits, and undoes a snapped split', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    late _ReviewFakePlatformPlayer platform;
+    debugTranscriptReviewPlayerFactory = () =>
+        Player(platformPlayer: platform = _ReviewFakePlatformPlayer());
+    debugTranscriptReviewSourceExists = (_) async => true;
+    addTearDown(() {
+      debugTranscriptReviewPlayerFactory = null;
+      debugTranscriptReviewSourceExists = null;
+    });
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [
+          TranscriptToken(
+            text: 'Hello',
+            startMs: 100,
+            endMs: 400,
+            segmentId: 'segment',
+          ),
+          TranscriptToken(
+            text: ' world.',
+            startMs: 600,
+            endMs: 900,
+            segmentId: 'segment',
+          ),
+        ],
+        segments: const [
+          TranscriptSegment(
+            id: 'segment',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Hello world.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      sourcePath: '/fake/structure.mp4',
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('toggle-transcript-structure')));
+    await tester.pump();
+    final splitSurface = find.byKey(const ValueKey('structure-split-segment'));
+    expect(splitSurface, findsOneWidget);
+
+    final pointer = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await pointer.addPointer(location: tester.getCenter(splitSurface));
+    await pointer.moveTo(tester.getCenter(splitSurface));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('structure-split-preview-segment')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('segment-edit-segment')));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('segment-editor-segment')),
+      findsOneWidget,
+    );
+    expect(splitSurface, findsNothing);
+    await tester.tap(find.byKey(const ValueKey('segment-cancel-segment')));
+    await tester.pump();
+    expect(splitSurface, findsOneWidget);
+
+    await pointer.moveTo(tester.getCenter(splitSurface));
+    await tester.pump();
+
+    await pointer.down(tester.getCenter(splitSurface));
+    await pointer.up();
+    await tester.pumpAndSettle();
+    expect(controller.jobById('job')!.document!.segments, hasLength(2));
+    expect(
+      controller.jobById('job')!.document!.segments.last.preserveBoundaryBefore,
+      isTrue,
+    );
+    final notice = find.byKey(const ValueKey('transcript-structure-notice'));
+    expect(notice, findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+    final transcriptPane = find.byKey(const Key('transcript-pane'));
+    expect(
+      tester.getBottomRight(notice).dx,
+      lessThanOrEqualTo(tester.getBottomRight(transcriptPane).dx),
+    );
+    expect(
+      tester.getBottomRight(notice).dy,
+      lessThan(tester.getBottomRight(transcriptPane).dy),
+    );
+    expect(platform.pauseCalls, greaterThanOrEqualTo(1));
+    expect(platform.seekDurations, contains(const Duration(milliseconds: 600)));
+
+    await tester.tap(find.byKey(const Key('transcript-structure-notice-undo')));
+    await tester.pumpAndSettle();
+    expect(controller.jobById('job')!.document!.segments, hasLength(1));
+    expect(notice, findsNothing);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(controller.jobById('job')!.document!.segments, hasLength(2));
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(controller.jobById('job')!.document!.segments, hasLength(1));
+
+    await pointer.moveTo(tester.getCenter(splitSurface));
+    await tester.pump();
+    await pointer.down(tester.getCenter(splitSurface));
+    await pointer.up();
+    await tester.pumpAndSettle();
+    expect(controller.jobById('job')!.document!.segments, hasLength(2));
+    expect(notice, findsOneWidget);
+    await tester.tap(
+      find.byKey(const Key('dismiss-transcript-structure-notice')),
+    );
+    await tester.pumpAndSettle();
+    expect(notice, findsNothing);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(controller.jobById('job')!.document!.segments, hasLength(1));
+
+    await pointer.moveTo(tester.getCenter(splitSurface));
+    await tester.pump();
+    await pointer.down(tester.getCenter(splitSurface));
+    await pointer.up();
+    await tester.pumpAndSettle();
+    expect(notice, findsOneWidget);
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(notice, findsNothing);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(controller.jobById('job')!.document!.segments, hasLength(1));
+
+    await tester.tap(find.byKey(const Key('open-transcript-search')));
+    await tester.pump();
+    expect(find.byKey(const Key('transcript-search-field')), findsOneWidget);
+    expect(splitSurface, findsNothing);
+  });
+
+  testWidgets('Structure mode exposes valid and forbidden merge gaps', (
+    tester,
+  ) async {
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'first',
+            startMs: 0,
+            endMs: 500,
+            text: 'First.',
+            speaker: 'one',
+          ),
+          TranscriptSegment(
+            id: 'second',
+            startMs: 600,
+            endMs: 1000,
+            text: 'Second.',
+            speaker: 'two',
+          ),
+          TranscriptSegment(
+            id: 'third',
+            startMs: 1100,
+            endMs: 1500,
+            text: 'Third.',
+            speaker: 'two',
+          ),
+        ],
+        speakers: const [
+          SpeakerProfile(id: 'one', name: 'One'),
+          SpeakerProfile(id: 'two', name: 'Two'),
+        ],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('toggle-transcript-structure')));
+    await tester.pump();
+
+    final forbidden = find.byKey(const ValueKey('structure-merge-first'));
+    final valid = find.byKey(const ValueKey('structure-merge-second'));
+    expect(forbidden, findsOneWidget);
+    expect(valid, findsOneWidget);
+    expect(
+      tester
+          .widget<MouseRegion>(
+            find.descendant(of: forbidden, matching: find.byType(MouseRegion)),
+          )
+          .cursor,
+      SystemMouseCursors.forbidden,
+    );
+
+    await tester.tap(forbidden);
+    await tester.pump();
+    expect(controller.jobById('job')!.document!.segments, hasLength(3));
+    await tester.tap(valid);
+    await tester.pumpAndSettle();
+    expect(controller.jobById('job')!.document!.segments, hasLength(2));
+    expect(
+      controller.jobById('job')!.document!.segments.last.text,
+      'Second. Third.',
+    );
   });
 
   testWidgets('sub-word timing highlights the enclosing whole word', (
@@ -7350,18 +7598,24 @@ class _ReviewFakePlatformPlayer extends PlatformPlayer {
 
   int openCalls = 0;
   int playOrPauseCalls = 0;
+  int pauseCalls = 0;
+  final List<Duration> seekDurations = [];
 
   @override
   Future<void> play() async {}
 
   @override
-  Future<void> pause() async {}
+  Future<void> pause() async {
+    pauseCalls++;
+  }
 
   @override
   Future<void> playOrPause() async => playOrPauseCalls++;
 
   @override
-  Future<void> seek(Duration duration) async {}
+  Future<void> seek(Duration duration) async {
+    seekDurations.add(duration);
+  }
 }
 
 class _Credentials implements CredentialStore {

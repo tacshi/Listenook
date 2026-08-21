@@ -21,6 +21,10 @@ class AppDelegate: FlutterAppDelegate {
       object: nil,
       suspensionBehavior: .deliverImmediately
     )
+    if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+      super.applicationWillFinishLaunching(notification)
+      return
+    }
     guard claimInstanceLock() else {
       notifyPrimaryInstance()
       NSApp.terminate(nil)

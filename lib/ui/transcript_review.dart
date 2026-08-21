@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/models.dart';
+import '../core/transcript_structure_editor.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
@@ -20,6 +22,7 @@ import 'job_actions.dart';
 import 'keyboard_shortcuts.dart';
 import 'review_fullscreen_controller.dart';
 import 'transcript_export_dialog.dart';
+import 'transcript_structure_cursor.dart';
 
 class TranscriptReview extends StatefulWidget {
   const TranscriptReview({
@@ -57,6 +60,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   static const _videoTitleHeaderHeight = 52.0;
   static const _mediaModeTransitionDuration = Duration(milliseconds: 320);
   static const _missingSourceAudioHeight = 112.0;
+  static const _structureNoticeDuration = Duration(seconds: 4);
 
   Player? _player;
   LatestSeekDispatcher? _seekDispatcher;
@@ -90,6 +94,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
   bool _focusFrameQueued = false;
   bool _forceFocusQueued = false;
   bool _searchVisible = false;
+  bool _structureMode = false;
+  String? _structureNoticeMessageKey;
+  Timer? _structureNoticeTimer;
+  int _structureNoticeGeneration = 0;
   bool _showAiBrief = false;
   TranslationViewMode _viewMode = TranslationViewMode.original;
   int _programmaticScrolls = 0;
@@ -109,6 +117,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   int _sourceRequest = 0;
   late final VideoControlsBuilder _videoControls;
   final _playbackTick = _ReviewPlaybackTick();
+  final _structureEditor = TranscriptStructureEditor();
 
   ReviewFullscreenController get _fullscreenController =>
       widget.fullscreenController ?? _localFullscreenController;
@@ -144,7 +153,16 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   @override
-  void onWindowBlur() => _endSentenceRepeatHold();
+  void onWindowBlur() {
+    _endSentenceRepeatHold();
+    unawaited(TranscriptStructureCursors.deactivateAll());
+  }
+
+  @override
+  void onWindowFocus() {
+    TranscriptStructureCursors.beginNewGeneration();
+    if (mounted) setState(() {});
+  }
 
   @override
   void onWindowLeaveFullScreen() {
@@ -193,6 +211,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
   void didUpdateWidget(covariant TranscriptReview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.jobId != widget.jobId) {
+      unawaited(TranscriptStructureCursors.deactivateAll());
+      _resetStructureNotice();
       _rememberPlaybackPosition(oldWidget.jobId);
       _sourceRequest++;
       _search.clear();
@@ -206,6 +226,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _repeatRestartQueuedResume = false;
       _followPlayback = true;
       _searchVisible = false;
+      _structureMode = false;
       _showAiBrief = false;
       _editingSegmentId = null;
       _editingTranslationSegmentId = null;
@@ -416,7 +437,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
     windowManager.removeListener(this);
     _search.dispose();
     _aiBriefScroll.dispose();
+    _structureNoticeTimer?.cancel();
     unawaited(_shutdownMedia());
+    unawaited(TranscriptStructureCursors.deactivateAll());
     super.dispose();
     _playbackTick.dispose();
   }
@@ -517,9 +540,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
               _search.clear();
               _queueFocusCurrent(force: true);
             }
+            if (value && _structureMode) {
+              unawaited(TranscriptStructureCursors.deactivateAll());
+            }
             setState(() {
               _showAiBrief = value;
               if (value) _searchVisible = false;
+              if (value) _structureMode = false;
             });
           },
           onViewModeChanged: (value) => setState(() => _viewMode = value),
@@ -620,7 +647,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
                 );
               }
 
-              final sideBySide = constraints.maxWidth >= 840;
+              // Structure adds another persistent transcript action. Keep the
+              // minimum workspace width stacked so neither pane is cramped.
+              final sideBySide = constraints.maxWidth >= 880;
               final availableWidth = constraints.maxWidth - _reviewDividerWidth;
               final maximumPaneWidth = availableWidth - _minimumReviewPaneWidth;
               final preferredTranscriptWidth =
@@ -1051,6 +1080,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
     required int? currentIndex,
     required bool showFilename,
   }) {
+    final structureEnabled = _structureEditingAvailable(job, document);
+    final structureInteractionsActive =
+        _structureMode &&
+        _editingSegmentId == null &&
+        _editingTranslationSegmentId == null;
     final transcript = Column(
       children: [
         if (job.translationState.status != TranslationStatus.idle &&
@@ -1083,7 +1117,18 @@ class _TranscriptReviewState extends State<TranscriptReview>
                   scrollDirection: Axis.vertical,
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
                   itemCount: segments.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  separatorBuilder: (_, index) {
+                    if (!structureInteractionsActive) {
+                      return const SizedBox(height: 8);
+                    }
+                    return _TranscriptMergeBoundary(
+                      key: ValueKey('structure-merge-${segments[index].id}'),
+                      enabled: _structureMergeAllowed(document, index),
+                      onMerge: () => _applyStructureEdit(
+                        MergeWithNext(segments[index].id),
+                      ),
+                    );
+                  },
                   itemBuilder: (context, index) {
                     final segment = segments[index];
                     return _TranscriptSegmentGroup(
@@ -1106,6 +1151,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
                       isEditingOriginal: _editingSegmentId == segment.id,
                       isEditingTranslation:
                           _editingTranslationSegmentId == segment.id,
+                      structureMode: structureInteractionsActive,
+                      splitTargets: structureInteractionsActive
+                          ? _structureEditor.splitTargets(document, segment.id)
+                          : const [],
                       isRepeating: _repeatingSegmentId == segment.id,
                       onToggleRepeat: _canRepeat(segment)
                           ? () => _toggleSentenceRepeat(segment)
@@ -1119,6 +1168,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
                       onEditOriginal: () => _startEditing(segment.id),
                       onCancelOriginal: () => _cancelEditing(segment.id),
                       onSaveOriginal: (text) => _saveSegment(segment.id, text),
+                      onSplit: (rightTokenIndex) => _applyStructureEdit(
+                        SplitAtTokenBoundary(
+                          segment.id,
+                          rightTokenIndex: rightTokenIndex,
+                        ),
+                      ),
                       onSpeakerChanged: (speakerId) =>
                           _saveSegmentSpeaker(segment.id, speakerId),
                       onEditTranslation: () =>
@@ -1154,8 +1209,16 @@ class _TranscriptReviewState extends State<TranscriptReview>
           search: _search,
           searchVisible: _searchVisible,
           onTabChanged: (_) {},
-          onViewModeChanged: (value) => setState(() => _viewMode = value),
-          onOpenSearch: () => setState(() => _searchVisible = true),
+          onViewModeChanged: (value) {
+            if (_structureMode && value != TranslationViewMode.original) {
+              _toggleStructureMode();
+            }
+            setState(() => _viewMode = value);
+          },
+          onOpenSearch: () {
+            if (_structureMode) _toggleStructureMode();
+            setState(() => _searchVisible = true);
+          },
           onCloseSearch: _closeTranscriptSearch,
           onSearch: () {
             setState(() {});
@@ -1168,9 +1231,52 @@ class _TranscriptReviewState extends State<TranscriptReview>
               : _focusCurrentSentence,
           onGenerateAiBrief: () => _showAiBriefDialog(job),
           showFilename: showFilename,
+          structureMode: _structureMode,
+          structureEnabled: structureEnabled,
+          onToggleStructure: _toggleStructureMode,
         ),
         const Divider(height: 1),
-        Expanded(child: transcript),
+        Expanded(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              transcript,
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 16,
+                child: Align(
+                  alignment: Alignment.bottomRight,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    reverseDuration: const Duration(milliseconds: 120),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: ScaleTransition(
+                        scale: Tween(begin: .96, end: 1.0).animate(animation),
+                        alignment: Alignment.bottomRight,
+                        child: child,
+                      ),
+                    ),
+                    child: _structureNoticeMessageKey == null
+                        ? const SizedBox.shrink()
+                        : _TranscriptStructureEditNotice(
+                            key: const ValueKey('transcript-structure-notice'),
+                            message: context.strings.t(
+                              _structureNoticeMessageKey!,
+                            ),
+                            undoLabel: context.strings.t('undo'),
+                            onUndo: () => unawaited(_undoStructureEdit()),
+                            onDismiss: _dismissStructureNotice,
+                          ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -1378,6 +1484,31 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   bool _handleReviewShortcut(KeyEvent event) {
     if (_fullscreenController.isActive) return false;
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape &&
+        _structureMode) {
+      _toggleStructureMode();
+      return true;
+    }
+    if (event is KeyDownEvent &&
+        !primaryFocusIsEditable() &&
+        (HardwareKeyboard.instance.isMetaPressed ||
+            HardwareKeyboard.instance.isControlPressed)) {
+      final redo =
+          (event.logicalKey == LogicalKeyboardKey.keyZ &&
+              HardwareKeyboard.instance.isShiftPressed) ||
+          (event.logicalKey == LogicalKeyboardKey.keyY &&
+              HardwareKeyboard.instance.isControlPressed);
+      if (redo && _appController.canRedoTranscriptStructureEdit(widget.jobId)) {
+        unawaited(_redoStructureEdit());
+        return true;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.keyZ &&
+          _appController.canUndoTranscriptStructureEdit(widget.jobId)) {
+        unawaited(_undoStructureEdit());
+        return true;
+      }
+    }
     if (event.logicalKey == LogicalKeyboardKey.space) {
       return _handlePlayPauseShortcut(event);
     }
@@ -1611,7 +1742,122 @@ class _TranscriptReviewState extends State<TranscriptReview>
     }
   }
 
+  bool _structureEditingAvailable(
+    TranscriptionJob job,
+    TranscriptDocument document,
+  ) {
+    if (job.status.isActive ||
+        job.translationState.status.isActive ||
+        job.aiGenerationState.status.isActive ||
+        _editingSegmentId != null ||
+        _editingTranslationSegmentId != null) {
+      return false;
+    }
+    for (final segment in document.segments) {
+      if (_structureEditor.splitTargets(document, segment.id).isNotEmpty) {
+        return true;
+      }
+    }
+    for (var index = 0; index + 1 < document.segments.length; index++) {
+      if (_structureMergeAllowed(document, index)) return true;
+    }
+    return false;
+  }
+
+  bool _structureMergeAllowed(TranscriptDocument document, int leftIndex) =>
+      _structureEditor.apply(
+            document,
+            MergeWithNext(document.segments[leftIndex].id),
+          )
+          is TranscriptStructureEditResult;
+
+  void _toggleStructureMode() {
+    setState(() {
+      _structureMode = !_structureMode;
+      if (_structureMode) {
+        _viewMode = TranslationViewMode.original;
+        _search.clear();
+        _searchVisible = false;
+        _followPlayback = false;
+      }
+    });
+    if (!_structureMode) {
+      unawaited(TranscriptStructureCursors.deactivateAll());
+    }
+  }
+
+  Future<void> _applyStructureEdit(TranscriptStructureEdit edit) async {
+    final outcome = await context
+        .read<AppController>()
+        .applyTranscriptStructureEdit(widget.jobId, edit);
+    if (!mounted || outcome is! TranscriptStructureEditResult) return;
+    final currentIds = outcome.document.segments
+        .map((segment) => segment.id)
+        .toSet();
+    if (_manualRepeatingSegmentId != null &&
+        !currentIds.contains(_manualRepeatingSegmentId)) {
+      _manualRepeatingSegmentId = null;
+    }
+    if (_heldRepeatingSegmentId != null &&
+        !currentIds.contains(_heldRepeatingSegmentId)) {
+      _heldRepeatingSegmentId = null;
+    }
+    await _player?.pause();
+    final position = Duration(milliseconds: outcome.focusMs);
+    if (_seekDispatcher == null) {
+      setState(() => _position = position);
+      _appController.rememberPlaybackPosition(widget.jobId, position);
+    } else {
+      await _seek(position, reason: TranscriptSeekReason.sentenceClick);
+    }
+    if (!mounted) return;
+    final operationKey = edit is SplitAtTokenBoundary
+        ? 'transcript_split_complete'
+        : 'transcript_merge_complete';
+    _showStructureNotice(operationKey);
+  }
+
+  Future<void> _undoStructureEdit() async {
+    _dismissStructureNotice();
+    await context.read<AppController>().undoTranscriptStructureEdit(
+      widget.jobId,
+    );
+  }
+
+  Future<void> _redoStructureEdit() async {
+    _dismissStructureNotice();
+    await context.read<AppController>().redoTranscriptStructureEdit(
+      widget.jobId,
+    );
+  }
+
+  void _showStructureNotice(String messageKey) {
+    _structureNoticeTimer?.cancel();
+    final generation = ++_structureNoticeGeneration;
+    setState(() => _structureNoticeMessageKey = messageKey);
+    _structureNoticeTimer = Timer(_structureNoticeDuration, () {
+      if (!mounted || generation != _structureNoticeGeneration) return;
+      setState(() => _structureNoticeMessageKey = null);
+      _structureNoticeTimer = null;
+    });
+  }
+
+  void _dismissStructureNotice() {
+    _resetStructureNotice();
+    if (mounted) setState(() {});
+  }
+
+  void _resetStructureNotice() {
+    _structureNoticeGeneration++;
+    _structureNoticeTimer?.cancel();
+    _structureNoticeTimer = null;
+    _structureNoticeMessageKey = null;
+  }
+
   void _startEditing(String segmentId) {
+    if (_structureMode) {
+      unawaited(TranscriptStructureCursors.deactivateAll());
+    }
     setState(() {
       _editingSegmentId = segmentId;
       _editingTranslationSegmentId = null;
@@ -1659,6 +1905,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   void _startTranslationEditing(String segmentId) {
+    if (_structureMode) {
+      unawaited(TranscriptStructureCursors.deactivateAll());
+    }
     setState(() {
       _editingSegmentId = null;
       _editingTranslationSegmentId = segmentId;
@@ -3250,6 +3499,7 @@ String _languageNoteKindLabel(BuildContext context, AiLanguageNoteKind kind) =>
     context.strings.t('ai_language_note_kind_${kind.name}');
 
 enum _TranscriptMoreAction {
+  toggleStructure,
   toggleSpeakers,
   toggleTimestamps,
   original,
@@ -3280,6 +3530,9 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     required this.onFocusCurrentSentence,
     required this.onGenerateAiBrief,
     this.showFilename = true,
+    this.structureMode = false,
+    this.structureEnabled = false,
+    this.onToggleStructure,
   });
 
   static const _fullBreakpoint = 900.0;
@@ -3302,6 +3555,9 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   final VoidCallback? onFocusCurrentSentence;
   final VoidCallback onGenerateAiBrief;
   final bool showFilename;
+  final bool structureMode;
+  final bool structureEnabled;
+  final VoidCallback? onToggleStructure;
 
   bool get _translationStarted =>
       job.translationState.status != TranslationStatus.idle ||
@@ -3489,6 +3745,23 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.search_rounded),
         ),
+        if (onToggleStructure != null && showDirectActions)
+          IconButton(
+            key: const Key('toggle-transcript-structure'),
+            tooltip: context.strings.t(
+              structureEnabled || structureMode
+                  ? 'edit_subtitle_structure'
+                  : 'edit_subtitle_structure_unavailable',
+            ),
+            isSelected: structureMode,
+            onPressed: structureEnabled || structureMode
+                ? onToggleStructure
+                : null,
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.call_split_rounded),
+            selectedIcon: const Icon(Icons.call_split_rounded),
+          ),
         if (showDirectActions) ...[
           IconButton(
             key: const Key('toggle-speaker-labels'),
@@ -3551,6 +3824,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         _transcriptMoreMenu(
           context,
           controller,
+          includeStructureToggle: !showDirectActions,
           includeViewToggles: !showDirectActions,
           includeViewMode: !medium,
           includeDocumentActions: !showDirectActions,
@@ -3571,6 +3845,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   Widget _transcriptMoreMenu(
     BuildContext context,
     AppController controller, {
+    required bool includeStructureToggle,
     required bool includeViewToggles,
     required bool includeViewMode,
     required bool includeDocumentActions,
@@ -3598,6 +3873,24 @@ class _UnifiedReviewToolbar extends StatelessWidget {
       if (section.isEmpty) return;
       if (entries.isNotEmpty) entries.add(const PopupMenuDivider());
       entries.addAll(section);
+    }
+
+    if (includeStructureToggle && onToggleStructure != null) {
+      addSection(<PopupMenuEntry<_TranscriptMoreAction>>[
+        CheckedPopupMenuItem(
+          key: const Key('more-toggle-transcript-structure'),
+          value: _TranscriptMoreAction.toggleStructure,
+          checked: structureMode,
+          enabled: structureEnabled || structureMode,
+          child: Text(
+            context.strings.t(
+              structureEnabled || structureMode
+                  ? 'edit_subtitle_structure'
+                  : 'edit_subtitle_structure_unavailable',
+            ),
+          ),
+        ),
+      ]);
     }
 
     if (includeViewToggles) {
@@ -3737,6 +4030,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     _TranscriptMoreAction action,
   ) {
     switch (action) {
+      case _TranscriptMoreAction.toggleStructure:
+        onToggleStructure?.call();
       case _TranscriptMoreAction.toggleSpeakers:
         unawaited(
           controller.updateSettings(
@@ -4249,12 +4544,15 @@ class _TranscriptSegmentGroup extends StatefulWidget {
     required this.highlightTranslated,
     required this.isEditingOriginal,
     required this.isEditingTranslation,
+    required this.structureMode,
+    required this.splitTargets,
     required this.isRepeating,
     required this.onToggleRepeat,
     required this.onSeek,
     required this.onEditOriginal,
     required this.onCancelOriginal,
     required this.onSaveOriginal,
+    required this.onSplit,
     required this.onSpeakerChanged,
     required this.onEditTranslation,
     required this.onCancelTranslation,
@@ -4275,12 +4573,15 @@ class _TranscriptSegmentGroup extends StatefulWidget {
   final bool highlightTranslated;
   final bool isEditingOriginal;
   final bool isEditingTranslation;
+  final bool structureMode;
+  final List<TranscriptSplitTarget> splitTargets;
   final bool isRepeating;
   final VoidCallback? onToggleRepeat;
   final TranscriptSegmentSeekCallback onSeek;
   final VoidCallback onEditOriginal;
   final VoidCallback onCancelOriginal;
   final Future<void> Function(String) onSaveOriginal;
+  final Future<void> Function(int rightTokenIndex) onSplit;
   final Future<void> Function(String) onSpeakerChanged;
   final VoidCallback onEditTranslation;
   final VoidCallback onCancelTranslation;
@@ -4342,6 +4643,8 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
                 showSpeaker: false,
                 showTimestamp: false,
                 isEditing: widget.isEditingOriginal,
+                structureMode: widget.structureMode,
+                splitTargets: widget.splitTargets,
                 isRepeating: widget.isRepeating,
                 embedded: true,
                 groupHovered: _hovered,
@@ -4350,6 +4653,7 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
                 onEdit: widget.onEditOriginal,
                 onCancel: widget.onCancelOriginal,
                 onSave: widget.onSaveOriginal,
+                onSplit: widget.onSplit,
               ),
             if (showOriginal && showTranslation) const SizedBox(height: 6),
             if (showTranslation)
@@ -6136,6 +6440,8 @@ class TranscriptSegmentEditor extends StatefulWidget {
     required this.showTimestamp,
     this.highlightTranslated = false,
     required this.isEditing,
+    this.structureMode = false,
+    this.splitTargets = const [],
     this.isRepeating = false,
     this.embedded = false,
     this.groupHovered = false,
@@ -6144,6 +6450,7 @@ class TranscriptSegmentEditor extends StatefulWidget {
     required this.onEdit,
     required this.onCancel,
     required this.onSave,
+    this.onSplit,
   });
 
   final TranscriptSegment segment;
@@ -6156,6 +6463,8 @@ class TranscriptSegmentEditor extends StatefulWidget {
   final bool showTimestamp;
   final bool highlightTranslated;
   final bool isEditing;
+  final bool structureMode;
+  final List<TranscriptSplitTarget> splitTargets;
   final bool isRepeating;
   final bool embedded;
   final bool groupHovered;
@@ -6164,6 +6473,7 @@ class TranscriptSegmentEditor extends StatefulWidget {
   final VoidCallback onEdit;
   final VoidCallback onCancel;
   final Future<void> Function(String text) onSave;
+  final Future<void> Function(int rightTokenIndex)? onSplit;
 
   @override
   State<TranscriptSegmentEditor> createState() =>
@@ -6300,6 +6610,19 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
             ),
           ),
         )
+      else if (widget.structureMode)
+        _TranscriptStructureSplitText(
+          key: ValueKey('structure-split-${widget.segment.id}'),
+          segmentId: widget.segment.id,
+          text: widget.segment.text,
+          targets: widget.splitTargets,
+          tokens: widget.tokens,
+          positionMs: widget.positionMs,
+          segmentStartMs: widget.segment.startMs,
+          segmentEndMs: widget.segment.endMs,
+          isCurrent: widget.isCurrent,
+          onSplit: widget.onSplit,
+        )
       else
         InkWell(
           key: ValueKey('segment-text-${widget.segment.id}'),
@@ -6401,6 +6724,345 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
       ),
     );
   }
+}
+
+class _TranscriptStructureEditNotice extends StatelessWidget {
+  const _TranscriptStructureEditNotice({
+    super.key,
+    required this.message,
+    required this.undoLabel,
+    required this.onUndo,
+    required this.onDismiss,
+  });
+
+  final String message;
+  final String undoLabel;
+  final VoidCallback onUndo;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Semantics(
+      liveRegion: true,
+      container: true,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Material(
+          elevation: 6,
+          color: colors.inverseSurface,
+          shadowColor: Colors.black.withValues(alpha: .22),
+          borderRadius: BorderRadius.circular(12),
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.check_circle_outline_rounded,
+                  size: 18,
+                  color: colors.onInverseSurface,
+                ),
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Text(
+                    message,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: colors.onInverseSurface,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  key: const Key('transcript-structure-notice-undo'),
+                  onPressed: onUndo,
+                  style: TextButton.styleFrom(
+                    foregroundColor: colors.inversePrimary,
+                    minimumSize: const Size(0, 32),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(undoLabel),
+                ),
+                IconButton(
+                  key: const Key('dismiss-transcript-structure-notice'),
+                  onPressed: onDismiss,
+                  tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
+                  color: colors.onInverseSurface.withValues(alpha: .76),
+                  iconSize: 18,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 32,
+                    height: 32,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TranscriptStructureSplitText extends StatefulWidget {
+  const _TranscriptStructureSplitText({
+    super.key,
+    required this.segmentId,
+    required this.text,
+    required this.targets,
+    required this.tokens,
+    required this.positionMs,
+    required this.segmentStartMs,
+    required this.segmentEndMs,
+    required this.isCurrent,
+    required this.onSplit,
+  });
+
+  final String segmentId;
+  final String text;
+  final List<TranscriptSplitTarget> targets;
+  final List<TranscriptToken> tokens;
+  final int positionMs;
+  final int segmentStartMs;
+  final int segmentEndMs;
+  final bool isCurrent;
+  final Future<void> Function(int rightTokenIndex)? onSplit;
+
+  @override
+  State<_TranscriptStructureSplitText> createState() =>
+      _TranscriptStructureSplitTextState();
+}
+
+class _TranscriptStructureSplitTextState
+    extends State<_TranscriptStructureSplitText> {
+  TranscriptSplitTarget? _hoveredTarget;
+
+  @override
+  void didUpdateWidget(covariant _TranscriptStructureSplitText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.targets.contains(_hoveredTarget)) _hoveredTarget = null;
+  }
+
+  TranscriptSplitTarget? _nearestTarget(
+    BuildContext context,
+    Offset localPosition,
+    double width,
+    TextStyle? style,
+  ) {
+    if (widget.targets.isEmpty || width <= 0) return null;
+    final painter = TextPainter(
+      text: TextSpan(text: widget.text, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      locale: Localizations.localeOf(context),
+    )..layout(maxWidth: width);
+    final position = painter.getPositionForOffset(localPosition).offset;
+    return widget.targets.reduce(
+      (best, candidate) =>
+          (candidate.textOffset - position).abs() <
+              (best.textOffset - position).abs()
+          ? candidate
+          : best,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodyLarge;
+    return LayoutBuilder(
+      builder: (context, constraints) => MouseRegion(
+        cursor: _hoveredTarget == null
+            ? SystemMouseCursors.basic
+            : TranscriptStructureCursors.split,
+        onHover: (event) {
+          final target = _nearestTarget(
+            context,
+            event.localPosition,
+            constraints.maxWidth,
+            style,
+          );
+          if (target != _hoveredTarget) {
+            setState(() => _hoveredTarget = target);
+          }
+        },
+        onExit: (_) => setState(() => _hoveredTarget = null),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapUp: (details) {
+            final target = _nearestTarget(
+              context,
+              details.localPosition,
+              constraints.maxWidth,
+              style,
+            );
+            if (target != null && widget.onSplit != null) {
+              unawaited(widget.onSplit!(target.rightTokenIndex));
+            }
+          },
+          child: Stack(
+            children: [
+              PlaybackHighlightedText(
+                text: widget.text,
+                tokens: widget.tokens,
+                positionMs: widget.positionMs,
+                segmentStartMs: widget.segmentStartMs,
+                segmentEndMs: widget.segmentEndMs,
+                enabled: widget.isCurrent,
+                style: style,
+              ),
+              if (_hoveredTarget case final target?)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      key: ValueKey(
+                        'structure-split-preview-${widget.segmentId}',
+                      ),
+                      painter: _TranscriptSplitPreviewPainter(
+                        text: widget.text,
+                        textOffset: target.textOffset,
+                        style: style,
+                        textDirection: Directionality.of(context),
+                        textScaler: MediaQuery.textScalerOf(context),
+                        locale: Localizations.localeOf(context),
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TranscriptSplitPreviewPainter extends CustomPainter {
+  const _TranscriptSplitPreviewPainter({
+    required this.text,
+    required this.textOffset,
+    required this.style,
+    required this.textDirection,
+    required this.textScaler,
+    required this.locale,
+    required this.color,
+  });
+
+  final String text;
+  final int textOffset;
+  final TextStyle? style;
+  final TextDirection textDirection;
+  final TextScaler textScaler;
+  final Locale locale;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: textDirection,
+      textScaler: textScaler,
+      locale: locale,
+    )..layout(maxWidth: size.width);
+    final caret = painter.getOffsetForCaret(
+      TextPosition(offset: textOffset),
+      Rect.zero,
+    );
+    final height = painter.getFullHeightForCaret(
+      TextPosition(offset: textOffset),
+      Rect.zero,
+    );
+    canvas.drawLine(
+      caret.translate(0, 1),
+      caret.translate(0, max(2, height - 1)),
+      Paint()
+        ..color = color
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _TranscriptSplitPreviewPainter oldDelegate) =>
+      oldDelegate.text != text ||
+      oldDelegate.textOffset != textOffset ||
+      oldDelegate.style != style ||
+      oldDelegate.textDirection != textDirection ||
+      oldDelegate.textScaler != textScaler ||
+      oldDelegate.locale != locale ||
+      oldDelegate.color != color;
+}
+
+class _TranscriptMergeBoundary extends StatefulWidget {
+  const _TranscriptMergeBoundary({
+    super.key,
+    required this.enabled,
+    required this.onMerge,
+  });
+
+  final bool enabled;
+  final Future<void> Function() onMerge;
+
+  @override
+  State<_TranscriptMergeBoundary> createState() =>
+      _TranscriptMergeBoundaryState();
+}
+
+class _TranscriptMergeBoundaryState extends State<_TranscriptMergeBoundary> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    cursor: widget.enabled
+        ? TranscriptStructureCursors.merge
+        : SystemMouseCursors.forbidden,
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.enabled ? () => unawaited(widget.onMerge()) : null,
+      child: SizedBox(
+        height: 14,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 100),
+          opacity: _hovered ? 1 : 0,
+          child: Row(
+            children: [
+              Expanded(
+                child: Divider(
+                  color: widget.enabled
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.error,
+                ),
+              ),
+              const SizedBox(width: 3),
+              Icon(
+                widget.enabled ? Icons.compress_rounded : Icons.block_rounded,
+                size: 14,
+                color: widget.enabled
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.error,
+              ),
+              const SizedBox(width: 3),
+              Expanded(
+                child: Divider(
+                  color: widget.enabled
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class PlaybackHighlightedText extends StatelessWidget {
