@@ -1499,8 +1499,9 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const Key('podcast-library-empty')), findsOneWidget);
+    expect(find.text('已关注 (1)'), findsOneWidget);
 
-    await tester.tap(find.text('已关注'));
+    await tester.tap(find.text('已关注 (1)'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 

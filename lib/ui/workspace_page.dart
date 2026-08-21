@@ -210,45 +210,48 @@ class _EmptyWorkspace extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Center(
     child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 44, vertical: 48),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.edit_note_rounded,
-                size: 68,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(height: 20),
-              Text(
-                context.strings.t('no_transcript_open'),
-                key: const Key('workspace-empty-title'),
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
+      constraints: const BoxConstraints(maxWidth: 760),
+      child: SizedBox(
+        width: double.infinity,
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 44, vertical: 48),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.edit_note_rounded,
+                  size: 68,
+                  color: Theme.of(context).colorScheme.primary,
                 ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                context.strings.t('open_transcript_hint'),
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                const SizedBox(height: 20),
+                Text(
+                  context.strings.t('no_transcript_open'),
+                  key: const Key('workspace-empty-title'),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 22),
-              OutlinedButton.icon(
-                key: const Key('workspace-go-to-library'),
-                onPressed: () => context.read<AppController>().setDestination(
-                  AppDestination.library,
+                const SizedBox(height: 10),
+                Text(
+                  context.strings.t('open_transcript_hint'),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
-                icon: const Icon(Icons.library_books_outlined),
-                label: Text(context.strings.t('browse_library')),
-              ),
-            ],
+                const SizedBox(height: 22),
+                OutlinedButton.icon(
+                  key: const Key('workspace-go-to-library'),
+                  onPressed: () => context.read<AppController>().setDestination(
+                    AppDestination.library,
+                  ),
+                  icon: const Icon(Icons.library_books_outlined),
+                  label: Text(context.strings.t('browse_library')),
+                ),
+              ],
+            ),
           ),
         ),
       ),

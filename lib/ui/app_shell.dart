@@ -227,7 +227,7 @@ class _AppShellState extends State<AppShell>
             ),
             tray.MenuItem.separator(),
             tray.MenuItem(
-              key: 'open-inbox',
+              key: 'open-main-window',
               label: strings.t('tray_open_main_window'),
             ),
             if (configured)
@@ -269,7 +269,7 @@ class _AppShellState extends State<AppShell>
   @override
   void onTrayIconMouseDown() {
     if (Platform.isWindows) {
-      unawaited(_restoreInbox());
+      unawaited(_restoreMainWindow());
     } else {
       unawaited(tray.trayManager.popUpContextMenu());
     }
@@ -285,8 +285,8 @@ class _AppShellState extends State<AppShell>
   @override
   void onTrayMenuItemClick(tray.MenuItem menuItem) {
     switch (menuItem.key) {
-      case 'open-inbox':
-        unawaited(_restoreInbox());
+      case 'open-main-window':
+        unawaited(_restoreMainWindow());
         return;
       case 'toggle-monitor':
         unawaited(
@@ -378,6 +378,8 @@ class _AppShellState extends State<AppShell>
   }
 
   Future<void> _restoreInbox() => _restoreWindow(AppDestination.inbox);
+
+  Future<void> _restoreMainWindow() => _restoreWindow(AppDestination.podcast);
 
   Future<void> _restoreWindow(AppDestination destination) async {
     await _setDestination(destination);
