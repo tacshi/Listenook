@@ -4511,7 +4511,7 @@ void main() {
     );
   });
 
-  testWidgets('workspace notifies only after local alignment yields', (
+  testWidgets('workspace shows local alignment processing and result states', (
     tester,
   ) async {
     final root = await tester.runAsync(
@@ -4520,15 +4520,36 @@ void main() {
     addTearDown(() => root!.delete(recursive: true));
     final source = File('${root!.path}/source.wav');
     await tester.runAsync(() => source.writeAsBytes(const [1]));
-    final alignment = _BlockingAlignmentService();
+    final alignment = _BlockingAlignmentService(
+      alignedSegments: 1,
+      totalSegments: 2,
+    );
     addTearDown(() {
       if (!alignment.release.isCompleted) alignment.release.complete();
     });
     final controller = await _controllerForDocument(
-      _simpleDocument(),
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'first',
+            startMs: 0,
+            endMs: 1000,
+            text: 'First',
+          ),
+          TranscriptSegment(
+            id: 'second',
+            startMs: 1000,
+            endMs: 2000,
+            text: 'Second',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime(2026),
+      ),
       sourcePath: source.path,
-      transcriptAcquisitionMode: TranscriptAcquisitionMode.mossPro,
-      transcriptSource: TranscriptSource.mossPro,
+      transcriptAcquisitionMode: TranscriptAcquisitionMode.qwen3Local,
+      transcriptSource: TranscriptSource.qwen3Local,
       forcedAlignmentService: alignment,
       settings: const AppSettings(
         defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlInt8,
@@ -4560,14 +4581,36 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byKey(const Key('workspace-moss-timing-status')), findsNothing);
+    final notification = find.byKey(const Key('workspace-moss-timing-status'));
+    expect(notification, findsOneWidget);
+    expect(
+      find.descendant(
+        of: notification,
+        matching: find.byKey(const Key('workspace-alignment-processing')),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Generating precise word timing locally…'),
+      findsOneWidget,
+    );
 
     alignment.release.complete();
     await tester.runAsync(() => retry);
     await tester.pump();
 
-    final notification = find.byKey(const Key('workspace-moss-timing-status'));
+    expect(controller.jobById('job')!.forcedAlignment.alignedSegments, 1);
+    expect(controller.jobById('job')!.forcedAlignment.totalSegments, 2);
     expect(notification, findsOneWidget);
+    expect(
+      find.byKey(const Key('workspace-alignment-processing')),
+      findsNothing,
+    );
+    expect(
+      find.textContaining('Qwen3 Local · partially aligned'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('1/2 segments'), findsOneWidget);
     expect(
       tester.getCenter(notification).dy,
       greaterThan(tester.getCenter(find.byType(TranscriptReview)).dy),
@@ -7426,6 +7469,10 @@ Future<AppController> _controllerForDocument(
 }
 
 class _BlockingAlignmentService implements ForcedAlignmentService {
+  _BlockingAlignmentService({this.alignedSegments = 0, this.totalSegments});
+
+  final int alignedSegments;
+  final int? totalSegments;
   final release = Completer<void>();
 
   @override
@@ -7442,8 +7489,8 @@ class _BlockingAlignmentService implements ForcedAlignmentService {
     return AlignmentResult(
       tokens: const [],
       status: ForcedAlignmentStatus.partial,
-      alignedSegments: 0,
-      totalSegments: request.document.segments.length,
+      alignedSegments: alignedSegments,
+      totalSegments: totalSegments ?? request.document.segments.length,
       warningCode: 'alignment_partial',
     );
   }
