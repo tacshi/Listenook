@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/core/transcript_structure_editor.dart';
 import 'package:meow_stt/data/inbox_folder_monitor.dart';
 import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/openai_translation_service.dart';
@@ -1513,6 +1514,237 @@ void main() {
     expect(updated.aiBrief!.isStaleFor(updated.document!), isTrue);
   });
 
+  test(
+    'structure edits persist related state and support guarded undo',
+    () async {
+      final now = DateTime.utc(2026, 8, 12);
+      final document = TranscriptDocument(
+        tokens: const [
+          TranscriptToken(
+            text: 'Hello',
+            startMs: 100,
+            endMs: 400,
+            segmentId: 'segment',
+          ),
+          TranscriptToken(
+            text: ' world.',
+            startMs: 500,
+            endMs: 900,
+            segmentId: 'segment',
+          ),
+        ],
+        segments: const [
+          TranscriptSegment(
+            id: 'segment',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Hello world.',
+            translatedText: 'Hola mundo.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: now,
+      );
+      final brief = AiBrief(
+        overview: 'Overview',
+        overviewEvidenceSegmentIds: const ['segment'],
+        chapters: const [
+          AiChapter(
+            id: 'chapter',
+            title: 'Chapter',
+            summary: 'Summary',
+            evidenceSegmentIds: ['segment'],
+          ),
+        ],
+        insights: const [
+          AiInsight(
+            id: 'insight',
+            type: AiInsightType.keyIdea,
+            text: 'Idea',
+            evidenceSegmentIds: ['segment'],
+          ),
+        ],
+        languageNotes: const [
+          AiLanguageNote(
+            id: 'note',
+            kind: AiLanguageNoteKind.vocabulary,
+            term: 'Hello',
+            explanation: 'Greeting',
+            sourceExcerpt: 'Hello',
+            evidenceSegmentIds: ['segment'],
+          ),
+        ],
+        outputLanguage: 'en',
+        model: 'brief-model',
+        selectedSections: const {AiBriefSection.overview},
+        generatedAt: now,
+        sourceTranscriptUpdatedAt: now,
+      );
+      final job = TranscriptionJob(
+        id: 'job',
+        batchId: 'batch',
+        sourcePath: '/video.mp4',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        document: document,
+        translationState: const TranslationState(
+          status: TranslationStatus.completed,
+          completedSegments: 1,
+          totalSegments: 1,
+        ),
+        aiBrief: brief,
+        forcedAlignment: const ForcedAlignmentState(
+          status: ForcedAlignmentStatus.completed,
+          alignedSegments: 1,
+          totalSegments: 1,
+        ),
+      );
+      final jobs = _Jobs([job]);
+      final controller = _controller(
+        jobs: jobs,
+        soniox: _Soniox(),
+        structureEditor: TranscriptStructureEditor(idGenerator: () => 'right'),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      final outcome = await controller.applyTranscriptStructureEdit(
+        'job',
+        const SplitAtTokenBoundary('segment', rightTokenIndex: 1),
+      );
+
+      expect(outcome, isA<TranscriptStructureEditResult>());
+      var updated = controller.jobById('job')!;
+      expect(updated.document!.segments.map((segment) => segment.id), [
+        'segment',
+        'right',
+      ]);
+      expect(updated.translationState.status, TranslationStatus.partial);
+      expect(updated.translationState.completedSegments, 0);
+      expect(updated.translationState.totalSegments, 2);
+      expect(updated.forcedAlignment.status, ForcedAlignmentStatus.completed);
+      expect(updated.forcedAlignment.alignedSegments, 2);
+      expect(updated.forcedAlignment.totalSegments, 2);
+      expect(updated.aiBrief!.overviewEvidenceSegmentIds, ['segment', 'right']);
+      expect(updated.aiBrief!.chapters.single.evidenceSegmentIds, [
+        'segment',
+        'right',
+      ]);
+      expect(updated.aiBrief!.insights.single.evidenceSegmentIds, [
+        'segment',
+        'right',
+      ]);
+      expect(updated.aiBrief!.languageNotes.single.evidenceSegmentIds, [
+        'segment',
+        'right',
+      ]);
+      expect(updated.aiBrief!.isStaleFor(updated.document!), isTrue);
+      expect(jobs.saved['job']!.document!.segments, hasLength(2));
+      expect(controller.canUndoTranscriptStructureEdit('job'), isTrue);
+
+      expect(await controller.undoTranscriptStructureEdit('job'), isTrue);
+      updated = controller.jobById('job')!;
+      expect(updated.document!.toJson(), document.toJson());
+      expect(updated.translationState.status, TranslationStatus.completed);
+      expect(updated.forcedAlignment.totalSegments, 1);
+      expect(updated.aiBrief!.overviewEvidenceSegmentIds, ['segment']);
+      expect(controller.canRedoTranscriptStructureEdit('job'), isTrue);
+
+      expect(await controller.redoTranscriptStructureEdit('job'), isTrue);
+      expect(controller.jobById('job')!.document!.segments, hasLength(2));
+
+      expect(
+        await controller.applyTranscriptStructureEdit(
+          'job',
+          const MergeWithNext('segment'),
+        ),
+        isA<TranscriptStructureEditResult>(),
+      );
+      updated = controller.jobById('job')!;
+      expect(updated.document!.segments, hasLength(1));
+      expect(updated.aiBrief!.overviewEvidenceSegmentIds, ['segment']);
+      expect(updated.aiBrief!.chapters.single.evidenceSegmentIds, ['segment']);
+      expect(updated.aiBrief!.insights.single.evidenceSegmentIds, ['segment']);
+      expect(updated.aiBrief!.languageNotes.single.evidenceSegmentIds, [
+        'segment',
+      ]);
+
+      await controller.updateSegment('job', 'segment', 'Edited later');
+      expect(controller.canUndoTranscriptStructureEdit('job'), isFalse);
+      expect(controller.canRedoTranscriptStructureEdit('job'), isFalse);
+    },
+  );
+
+  test('structure history caps at 50 and a new edit clears redo', () async {
+    final now = DateTime.utc(2026, 8, 12);
+    final job = TranscriptionJob(
+      id: 'history',
+      batchId: 'batch',
+      sourcePath: '/history.wav',
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.completed,
+      document: TranscriptDocument(
+        tokens: const [
+          TranscriptToken(
+            text: 'One',
+            startMs: 100,
+            endMs: 300,
+            segmentId: 'left',
+          ),
+          TranscriptToken(
+            text: ' two',
+            startMs: 400,
+            endMs: 700,
+            segmentId: 'left',
+          ),
+        ],
+        segments: const [
+          TranscriptSegment(
+            id: 'left',
+            startMs: 0,
+            endMs: 800,
+            text: 'One two.',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: now,
+      ),
+    );
+    final controller = _controller(
+      jobs: _Jobs([job]),
+      soniox: _Soniox(),
+      structureEditor: TranscriptStructureEditor(idGenerator: () => 'right'),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    for (var index = 0; index < 51; index++) {
+      final edit = index.isEven
+          ? const SplitAtTokenBoundary('left', rightTokenIndex: 1)
+          : const MergeWithNext('left');
+      expect(
+        await controller.applyTranscriptStructureEdit('history', edit),
+        isA<TranscriptStructureEditResult>(),
+      );
+    }
+    for (var index = 0; index < 50; index++) {
+      expect(await controller.undoTranscriptStructureEdit('history'), isTrue);
+    }
+    expect(await controller.undoTranscriptStructureEdit('history'), isFalse);
+    expect(controller.canRedoTranscriptStructureEdit('history'), isTrue);
+
+    expect(
+      await controller.applyTranscriptStructureEdit(
+        'history',
+        const MergeWithNext('left'),
+      ),
+      isA<TranscriptStructureEditResult>(),
+    );
+    expect(controller.canRedoTranscriptStructureEdit('history'), isFalse);
+  });
+
   test('translation changes keep an existing AI Brief current', () async {
     final now = DateTime.utc(2026, 8, 12);
     final document = TranscriptDocument(
@@ -1933,6 +2165,7 @@ AppController _controller({
   InboxFolderMonitor? inboxMonitor,
   TranscriptionClient? moss,
   CredentialStore? mossCredentials,
+  TranscriptStructureEditor? structureEditor,
 }) => AppController(
   credentialStore: credentials ?? _Credentials(),
   settingsRepository: settings ?? _Settings(),
@@ -1948,6 +2181,7 @@ AppController _controller({
   aiBriefService: aiBriefService,
   inboxMonitorRepository: inboxMonitorRepository,
   inboxFolderMonitor: inboxMonitor,
+  transcriptStructureEditor: structureEditor,
 );
 
 class _RecordingExporter implements TranscriptExporter {

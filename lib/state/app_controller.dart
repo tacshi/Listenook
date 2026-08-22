@@ -11,6 +11,7 @@ import '../core/local_speech.dart';
 import '../core/models.dart';
 import '../core/podcast_models.dart';
 import '../core/transcript_parser.dart';
+import '../core/transcript_structure_editor.dart';
 import '../data/openai_translation_service.dart';
 import '../data/moss_api_client.dart';
 import '../data/inbox_folder_monitor.dart';
@@ -49,6 +50,7 @@ class AppController extends ChangeNotifier {
     PublisherTranscriptParser publisherTranscriptParser =
         const PublisherTranscriptParser(),
     PodcastDownloadLocator downloadLocator = const PodcastDownloadLocator(),
+    TranscriptStructureEditor? transcriptStructureEditor,
     Uuid uuid = const Uuid(),
   }) : _credentials = credentialStore,
        _settingsRepository = settingsRepository,
@@ -73,6 +75,8 @@ class AppController extends ChangeNotifier {
        _parser = parser,
        _publisherTranscriptParser = publisherTranscriptParser,
        _downloadLocator = downloadLocator,
+       _transcriptStructureEditor =
+           transcriptStructureEditor ?? TranscriptStructureEditor(),
        _uuid = uuid;
 
   final CredentialStore _credentials;
@@ -98,11 +102,13 @@ class AppController extends ChangeNotifier {
   final TranscriptParser _parser;
   final PublisherTranscriptParser _publisherTranscriptParser;
   final PodcastDownloadLocator _downloadLocator;
+  final TranscriptStructureEditor _transcriptStructureEditor;
   final Uuid _uuid;
   final Set<String> _downloadCancelledIds = {};
   int _activePodcastDownloads = 0;
   final Map<String, TranscriptionJob> _jobs = {};
   final Map<String, Duration> _playbackPositions = {};
+  final Map<String, _TranscriptStructureHistory> _structureHistories = {};
   final List<String> _inboxIds = [];
   final Set<String> _cancelledIds = {};
   final Set<String> _translationCancelledIds = {};
@@ -2612,6 +2618,178 @@ class AppController extends ChangeNotifier {
     unawaited(_saveNavigationState());
   }
 
+  bool canUndoTranscriptStructureEdit(String jobId) =>
+      !(_jobs[jobId]?.isBusy ?? true) &&
+      (_structureHistories[jobId]?.undo.isNotEmpty ?? false);
+
+  bool canRedoTranscriptStructureEdit(String jobId) =>
+      !(_jobs[jobId]?.isBusy ?? true) &&
+      (_structureHistories[jobId]?.redo.isNotEmpty ?? false);
+
+  Future<TranscriptStructureEditOutcome> applyTranscriptStructureEdit(
+    String jobId,
+    TranscriptStructureEdit edit,
+  ) async {
+    final job = _jobs[jobId];
+    final document = job?.document;
+    if (job == null || document == null) {
+      return const TranscriptStructureEditFailure(
+        TranscriptStructureFailureReason.segmentNotFound,
+      );
+    }
+    if (job.isBusy) {
+      return const TranscriptStructureEditFailure(
+        TranscriptStructureFailureReason.busy,
+      );
+    }
+    final outcome = _transcriptStructureEditor.apply(document, edit);
+    if (outcome is! TranscriptStructureEditResult) return outcome;
+
+    final before = _TranscriptStructureSnapshot.fromJob(job);
+    final progress = _translationProgress(outcome.document.segments);
+    final hadTranslationState =
+        job.translationState.status != TranslationStatus.idle ||
+        document.segments.any((segment) => segment.hasTranslation);
+    final translationState = hadTranslationState
+        ? job.translationState.copyWith(
+            status: progress.completed == progress.total
+                ? TranslationStatus.completed
+                : TranslationStatus.partial,
+            completedSegments: progress.completed,
+            totalSegments: progress.total,
+            clearError: true,
+          )
+        : job.translationState;
+    final updated = await _transition(
+      job,
+      document: outcome.document,
+      translationState: translationState,
+      forcedAlignment: _structureAlignmentState(
+        job.forcedAlignment,
+        outcome.document,
+      ),
+      aiBrief: _remapAiBriefEvidence(
+        job.aiBrief,
+        outcome.segmentIdReplacements,
+      ),
+      preserveTranscriptStructureHistory: true,
+    );
+    final history = _structureHistories.putIfAbsent(
+      jobId,
+      _TranscriptStructureHistory.new,
+    );
+    history.record(
+      _TranscriptStructureHistoryEntry(
+        before: before,
+        after: _TranscriptStructureSnapshot.fromJob(updated),
+      ),
+    );
+    return outcome;
+  }
+
+  Future<bool> undoTranscriptStructureEdit(String jobId) async {
+    final history = _structureHistories[jobId];
+    final job = _jobs[jobId];
+    if (history == null || history.undo.isEmpty || job == null || job.isBusy) {
+      return false;
+    }
+    final entry = history.undo.removeLast();
+    await _restoreTranscriptStructureSnapshot(job, entry.before);
+    history.redo.add(entry);
+    return true;
+  }
+
+  Future<bool> redoTranscriptStructureEdit(String jobId) async {
+    final history = _structureHistories[jobId];
+    final job = _jobs[jobId];
+    if (history == null || history.redo.isEmpty || job == null || job.isBusy) {
+      return false;
+    }
+    final entry = history.redo.removeLast();
+    await _restoreTranscriptStructureSnapshot(job, entry.after);
+    history.undo.add(entry);
+    return true;
+  }
+
+  Future<void> _restoreTranscriptStructureSnapshot(
+    TranscriptionJob job,
+    _TranscriptStructureSnapshot snapshot,
+  ) => _transition(
+    job,
+    document: snapshot.document,
+    translationState: snapshot.translationState,
+    forcedAlignment: snapshot.forcedAlignment,
+    aiBrief: snapshot.aiBrief,
+    clearAiBrief: snapshot.aiBrief == null,
+    preserveTranscriptStructureHistory: true,
+  );
+
+  ForcedAlignmentState _structureAlignmentState(
+    ForcedAlignmentState state,
+    TranscriptDocument document,
+  ) {
+    if (!state.hasWordTiming) return state;
+    final aligned = document.segments.where((segment) {
+      return document.tokens.any(
+        (token) =>
+            (token.startMs != 0 || token.endMs != 0) &&
+            (token.segmentId == segment.id ||
+                (token.segmentId == null &&
+                    token.startMs >= segment.startMs &&
+                    token.startMs <= segment.endMs)),
+      );
+    }).length;
+    return ForcedAlignmentState(
+      status: aligned == document.segments.length
+          ? ForcedAlignmentStatus.completed
+          : ForcedAlignmentStatus.partial,
+      modelId: state.modelId,
+      modelRevision: state.modelRevision,
+      alignedSegments: aligned,
+      totalSegments: document.segments.length,
+      languageAutomaticallyDetermined: state.languageAutomaticallyDetermined,
+      warningCode: state.warningCode,
+      warningMessage: state.warningMessage,
+    );
+  }
+
+  AiBrief? _remapAiBriefEvidence(
+    AiBrief? brief,
+    Map<String, List<String>> replacements,
+  ) {
+    if (brief == null || replacements.isEmpty) return brief;
+    List<String> remap(List<String> ids) {
+      final result = <String>[];
+      final seen = <String>{};
+      for (final id in ids) {
+        for (final replacement in replacements[id] ?? [id]) {
+          if (seen.add(replacement)) result.add(replacement);
+        }
+      }
+      return result;
+    }
+
+    return brief.copyWith(
+      overviewEvidenceSegmentIds: remap(brief.overviewEvidenceSegmentIds),
+      chapters: [
+        for (final chapter in brief.chapters)
+          chapter.copyWith(
+            evidenceSegmentIds: remap(chapter.evidenceSegmentIds),
+          ),
+      ],
+      insights: [
+        for (final insight in brief.insights)
+          insight.copyWith(
+            evidenceSegmentIds: remap(insight.evidenceSegmentIds),
+          ),
+      ],
+      languageNotes: [
+        for (final note in brief.languageNotes)
+          note.copyWith(evidenceSegmentIds: remap(note.evidenceSegmentIds)),
+      ],
+    );
+  }
+
   Future<void> updateSegment(
     String jobId,
     String segmentId,
@@ -4069,11 +4247,18 @@ class AppController extends ChangeNotifier {
     bool clearError = false,
     bool clearRemoteFileId = false,
     bool clearRemoteTranscriptionId = false,
+    bool clearAiBrief = false,
     bool clearDisplayTitle = false,
     bool clearGroupId = false,
     bool clearTranscriptionModel = false,
+    bool preserveTranscriptStructureHistory = false,
   }) async {
     final current = _jobs[job.id] ?? job;
+    if (!preserveTranscriptStructureHistory &&
+        document != null &&
+        !identical(document, current.document)) {
+      _structureHistories.remove(job.id);
+    }
     final updated = current.copyWith(
       sourcePath: sourcePath,
       status: status,
@@ -4104,6 +4289,7 @@ class AppController extends ChangeNotifier {
       clearError: clearError,
       clearRemoteFileId: clearRemoteFileId,
       clearRemoteTranscriptionId: clearRemoteTranscriptionId,
+      clearAiBrief: clearAiBrief,
       clearDisplayTitle: clearDisplayTitle,
       clearGroupId: clearGroupId,
       clearTranscriptionModel: clearTranscriptionModel,
@@ -4144,6 +4330,51 @@ class AppController extends ChangeNotifier {
   void dispose() {
     unawaited(shutdown());
     super.dispose();
+  }
+}
+
+class _TranscriptStructureSnapshot {
+  const _TranscriptStructureSnapshot({
+    required this.document,
+    required this.translationState,
+    required this.forcedAlignment,
+    required this.aiBrief,
+  });
+
+  factory _TranscriptStructureSnapshot.fromJob(TranscriptionJob job) =>
+      _TranscriptStructureSnapshot(
+        document: job.document!,
+        translationState: job.translationState,
+        forcedAlignment: job.forcedAlignment,
+        aiBrief: job.aiBrief,
+      );
+
+  final TranscriptDocument document;
+  final TranslationState translationState;
+  final ForcedAlignmentState forcedAlignment;
+  final AiBrief? aiBrief;
+}
+
+class _TranscriptStructureHistoryEntry {
+  const _TranscriptStructureHistoryEntry({
+    required this.before,
+    required this.after,
+  });
+
+  final _TranscriptStructureSnapshot before;
+  final _TranscriptStructureSnapshot after;
+}
+
+class _TranscriptStructureHistory {
+  static const _limit = 50;
+
+  final List<_TranscriptStructureHistoryEntry> undo = [];
+  final List<_TranscriptStructureHistoryEntry> redo = [];
+
+  void record(_TranscriptStructureHistoryEntry entry) {
+    undo.add(entry);
+    if (undo.length > _limit) undo.removeAt(0);
+    redo.clear();
   }
 }
 

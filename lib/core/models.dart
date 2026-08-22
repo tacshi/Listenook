@@ -578,6 +578,7 @@ class TranscriptSegment {
     this.speaker,
     this.language,
     this.translatedText,
+    this.preserveBoundaryBefore = false,
   });
 
   final String id;
@@ -587,6 +588,7 @@ class TranscriptSegment {
   final String? speaker;
   final String? language;
   final String? translatedText;
+  final bool preserveBoundaryBefore;
 
   bool get hasTranslation => translatedText?.trim().isNotEmpty ?? false;
 
@@ -596,6 +598,7 @@ class TranscriptSegment {
     String? language,
     String? translatedText,
     bool clearTranslatedText = false,
+    bool? preserveBoundaryBefore,
   }) => TranscriptSegment(
     id: id,
     startMs: startMs,
@@ -606,6 +609,8 @@ class TranscriptSegment {
     translatedText: clearTranslatedText
         ? null
         : translatedText ?? this.translatedText,
+    preserveBoundaryBefore:
+        preserveBoundaryBefore ?? this.preserveBoundaryBefore,
   );
 
   Map<String, dynamic> toJson() => {
@@ -616,6 +621,7 @@ class TranscriptSegment {
     if (speaker case final value?) 'speaker': value,
     if (language case final value?) 'language': value,
     if (translatedText case final value?) 'translated_text': value,
+    if (preserveBoundaryBefore) 'preserve_boundary_before': true,
   };
 
   factory TranscriptSegment.fromJson(Map<String, dynamic> json) =>
@@ -627,6 +633,8 @@ class TranscriptSegment {
         speaker: json['speaker']?.toString(),
         language: json['language'] as String?,
         translatedText: json['translated_text'] as String?,
+        preserveBoundaryBefore:
+            json['preserve_boundary_before'] as bool? ?? false,
       );
 }
 

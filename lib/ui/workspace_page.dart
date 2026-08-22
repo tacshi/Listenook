@@ -37,46 +37,41 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final job = context.watch<AppController>().activeWorkspaceJob;
     final showAlignmentNotice = _shouldShowAlignmentNotice(job);
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
-        child: job == null
-            ? const _EmptyWorkspace()
-            : Stack(
-                children: [
-                  Positioned.fill(
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: TranscriptReview(
-                            key: ValueKey('workspace-review-${job.id}'),
-                            jobId: job.id,
-                            fullscreenController: _fullscreenController,
-                          ),
-                        ),
-                      ],
-                    ),
+      child: job == null
+          ? const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 18),
+              child: _EmptyWorkspace(),
+            )
+          : Stack(
+              key: const Key('workspace-active-review'),
+              children: [
+                Positioned.fill(
+                  child: TranscriptReview(
+                    key: ValueKey('workspace-review-${job.id}'),
+                    jobId: job.id,
+                    fullscreenController: _fullscreenController,
                   ),
-                  if (showAlignmentNotice)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: Align(
-                        alignment: Alignment.bottomCenter,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 760),
-                          child: _MossTimingBar(
-                            job: job,
-                            onDismiss: () => setState(
-                              () => _visibleAlignmentNotices.remove(job.id),
-                            ),
+                ),
+                if (showAlignmentNotice)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 760),
+                        child: _MossTimingBar(
+                          job: job,
+                          onDismiss: () => setState(
+                            () => _visibleAlignmentNotices.remove(job.id),
                           ),
                         ),
                       ),
                     ),
-                ],
-              ),
-      ),
+                  ),
+              ],
+            ),
     );
   }
 
@@ -102,7 +97,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final previous = _observedAlignmentStatuses[job.id];
     _observedAlignmentStatuses[job.id] = current;
     if (_isAlignmentActive(current)) {
-      _visibleAlignmentNotices.remove(job.id);
+      _visibleAlignmentNotices.add(job.id);
     } else if (previous != null &&
         _isAlignmentActive(previous) &&
         _isAlignmentResult(current)) {
@@ -135,6 +130,9 @@ class _MossTimingBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final alignment = job.forcedAlignment;
+    final active =
+        alignment.status == ForcedAlignmentStatus.queued ||
+        alignment.status == ForcedAlignmentStatus.running;
     final local =
         job.transcriptSource == TranscriptSource.mossLocal ||
         job.transcriptionProvider == TranscriptionProvider.mossLocal;
@@ -150,10 +148,10 @@ class _MossTimingBar extends StatelessWidget {
             : 'moss_pro_local_alignment',
       ForcedAlignmentStatus.partial =>
         qwen
-            ? 'qwen_local_word_level'
+            ? 'qwen_local_partial_alignment'
             : local
-            ? 'moss_local_word_level'
-            : 'moss_pro_local_alignment',
+            ? 'moss_local_partial_alignment'
+            : 'moss_pro_partial_alignment',
       ForcedAlignmentStatus.queued ||
       ForcedAlignmentStatus.running => 'moss_alignment_running',
       _ =>
@@ -174,7 +172,7 @@ class _MossTimingBar extends StatelessWidget {
               .replaceFirst('{aligned}', '${alignment.alignedSegments}')
               .replaceFirst('{total}', '${alignment.totalSegments}')
         : null;
-    final visibleWarning = usefulPartial ? null : alignment.warningCode;
+    final visibleWarning = alignment.warningCode;
     return Material(
       key: const Key('workspace-moss-timing-status'),
       color: colors.surfaceContainerHigh,
@@ -185,13 +183,23 @@ class _MossTimingBar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           children: [
-            Icon(
-              alignment.hasWordTiming
-                  ? Icons.graphic_eq_rounded
-                  : Icons.segment_rounded,
-              size: 18,
-              color: colors.primary,
-            ),
+            if (active)
+              SizedBox.square(
+                key: const Key('workspace-alignment-processing'),
+                dimension: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: colors.primary,
+                ),
+              )
+            else
+              Icon(
+                alignment.hasWordTiming
+                    ? Icons.graphic_eq_rounded
+                    : Icons.segment_rounded,
+                size: 18,
+                color: colors.primary,
+              ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -208,13 +216,15 @@ class _MossTimingBar extends StatelessWidget {
                     alignment.warningMessage ?? context.strings.error(warning),
                 child: const Icon(Icons.warning_amber_rounded, size: 18),
               ),
-            const SizedBox(width: 4),
-            IconButton(
-              key: const Key('dismiss-alignment-notification'),
-              tooltip: context.strings.t('close'),
-              onPressed: onDismiss,
-              icon: const Icon(Icons.close_rounded, size: 18),
-            ),
+            if (!active) ...[
+              const SizedBox(width: 4),
+              IconButton(
+                key: const Key('dismiss-alignment-notification'),
+                tooltip: context.strings.t('close'),
+                onPressed: onDismiss,
+                icon: const Icon(Icons.close_rounded, size: 18),
+              ),
+            ],
           ],
         ),
       ),

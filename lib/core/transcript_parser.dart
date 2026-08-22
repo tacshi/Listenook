@@ -83,6 +83,10 @@ class TranscriptParser {
       }
 
       var previous = normalized.last;
+      if (segment.preserveBoundaryBefore) {
+        normalized.add(segment);
+        continue;
+      }
       final closingQuote = _takeDetachedClosingQuote(
         previous.text,
         segment.text,
@@ -105,6 +109,7 @@ class TranscriptParser {
               ? previous.translatedText
               : '${previous.translatedText!.trimRight()}'
                     '${translatedQuote.quote}',
+          preserveBoundaryBefore: previous.preserveBoundaryBefore,
         );
         normalized[normalized.length - 1] = previous;
         segment = TranscriptSegment(
@@ -117,6 +122,7 @@ class TranscriptParser {
           translatedText: translatedQuote == null
               ? segment.translatedText
               : translatedQuote.remainder,
+          preserveBoundaryBefore: segment.preserveBoundaryBefore,
         );
         changed = true;
         if (segment.text.trim().isEmpty) {
@@ -151,6 +157,7 @@ class TranscriptParser {
             previous.translatedText,
             segment.translatedText,
           ),
+          preserveBoundaryBefore: previous.preserveBoundaryBefore,
         );
         changed = true;
       } else {
