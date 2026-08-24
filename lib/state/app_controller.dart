@@ -25,6 +25,8 @@ import '../data/transcript_exporter.dart';
 enum AppDestination { inbox, podcast, workspace, library, settings }
 
 class AppController extends ChangeNotifier {
+  static const _playbackHistorySaveInterval = Duration(seconds: 2);
+
   AppController({
     required CredentialStore credentialStore,
     required SettingsRepository settingsRepository,
@@ -132,6 +134,8 @@ class AppController extends ChangeNotifier {
   AppDestination _destination = AppDestination.podcast;
   String? _activeWorkspaceJobId;
   Future<void> _settingsSaveTail = Future<void>.value();
+  DateTime? _lastPlaybackHistorySaveAt;
+  bool _playbackHistoryDirty = false;
   AppSettings _settings = const AppSettings();
   LibraryCatalog _libraryCatalog = const LibraryCatalog();
   TranscriptionOptions _sessionOptions = const TranscriptionOptions();
@@ -285,10 +289,54 @@ class AppController extends ChangeNotifier {
 
   void rememberPlaybackPosition(String jobId, Duration position) {
     if (position <= Duration.zero) {
-      _playbackPositions.remove(jobId);
+      if (_playbackPositions.remove(jobId) == null) return;
+      if (_jobs.containsKey(jobId)) _markPlaybackHistoryDirty();
       return;
     }
-    _playbackPositions[jobId] = position;
+    final normalized = Duration(milliseconds: position.inMilliseconds);
+    if (_playbackPositions[jobId] == normalized) return;
+    _playbackPositions[jobId] = normalized;
+    if (_jobs.containsKey(jobId)) _markPlaybackHistoryDirty();
+  }
+
+  void _forgetPlaybackPosition(String jobId) {
+    final removed = _playbackPositions.remove(jobId) != null;
+    if (!removed && !_settings.playbackPositionsMs.containsKey(jobId)) return;
+    _markPlaybackHistoryDirty();
+  }
+
+  void _markPlaybackHistoryDirty() {
+    _settings = _settings.copyWith(
+      playbackPositionsMs: {
+        for (final entry in _playbackPositions.entries)
+          if (_jobs.containsKey(entry.key))
+            entry.key: entry.value.inMilliseconds,
+      },
+    );
+    _playbackHistoryDirty = true;
+    final now = DateTime.now();
+    final lastSavedAt = _lastPlaybackHistorySaveAt;
+    if (lastSavedAt != null &&
+        now.difference(lastSavedAt) < _playbackHistorySaveInterval) {
+      return;
+    }
+    _lastPlaybackHistorySaveAt = now;
+    unawaited(
+      _savePlaybackHistory().catchError((Object error) {
+        debugPrint('Unable to save playback history: $error');
+      }),
+    );
+  }
+
+  Future<void> _savePlaybackHistory() async {
+    if (!_playbackHistoryDirty) return;
+    _playbackHistoryDirty = false;
+    try {
+      await _queueSettingsSave(_settings);
+    } on Object {
+      _playbackHistoryDirty = true;
+      rethrow;
+    }
   }
 
   int get readyCount =>
@@ -434,6 +482,20 @@ class AppController extends ChangeNotifier {
       if (!identical(job, original)) {
         await _jobsRepository.save(job);
       }
+    }
+    for (final entry in _settings.playbackPositionsMs.entries) {
+      if (_jobs.containsKey(entry.key) && entry.value > 0) {
+        _playbackPositions[entry.key] = Duration(milliseconds: entry.value);
+      }
+    }
+    if (_playbackPositions.length != _settings.playbackPositionsMs.length) {
+      _settings = _settings.copyWith(
+        playbackPositionsMs: {
+          for (final entry in _playbackPositions.entries)
+            entry.key: entry.value.inMilliseconds,
+        },
+      );
+      settingsChanged = true;
     }
     _keyConfigured = await _credentialIsAvailable(
       _credentials,
@@ -775,7 +837,7 @@ class AppController extends ChangeNotifier {
     for (final job in removedJobs) {
       _inboxIds.remove(job.id);
       _jobs.remove(job.id);
-      _playbackPositions.remove(job.id);
+      _forgetPlaybackPosition(job.id);
       await _media.deleteGeneratedMedia(job.id);
       await _jobsRepository.delete(job.id);
     }
@@ -2516,7 +2578,7 @@ class AppController extends ChangeNotifier {
       }
       await _deleteManagedPodcastAudio(job);
       _jobs.remove(id);
-      _playbackPositions.remove(id);
+      _forgetPlaybackPosition(id);
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
@@ -2540,7 +2602,7 @@ class AppController extends ChangeNotifier {
       }
       if (discarded != null) await _deleteManagedPodcastAudio(discarded);
       _jobs.remove(id);
-      _playbackPositions.remove(id);
+      _forgetPlaybackPosition(id);
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
@@ -2559,7 +2621,7 @@ class AppController extends ChangeNotifier {
     if (job == null || job.isBusy) return;
     _jobs.remove(id);
     _localAutoStartCandidates.remove(id);
-    _playbackPositions.remove(id);
+    _forgetPlaybackPosition(id);
     _inboxIds.remove(id);
     if (_activeWorkspaceJobId == id) _activeWorkspaceJobId = null;
     _forgetWorkspaceJob(id);
@@ -2582,7 +2644,7 @@ class AppController extends ChangeNotifier {
       await _jobsRepository.delete(id);
       _jobs.remove(id);
       _localAutoStartCandidates.remove(id);
-      _playbackPositions.remove(id);
+      _forgetPlaybackPosition(id);
       _inboxIds.remove(id);
     }
     await _media.clearGeneratedMediaExcept(_jobs.keys.toSet());
@@ -2869,9 +2931,11 @@ class AppController extends ChangeNotifier {
   Future<void> updateSettings(AppSettings value) async {
     final disableLocalAutoStart =
         _settings.autoTranscribeLocal && !value.autoTranscribeLocal;
-    _settings = value;
+    _settings = value.copyWith(
+      playbackPositionsMs: _settings.playbackPositionsMs,
+    );
     if (disableLocalAutoStart) _localAutoStartCandidates.clear();
-    await _queueSettingsSave(value);
+    await _queueSettingsSave(_settings);
     notifyListeners();
     _scheduleLocalAutoStart();
   }
@@ -4322,6 +4386,11 @@ class AppController extends ChangeNotifier {
     if (!_monitorShutDown) {
       _monitorShutDown = true;
       await _inboxFolderMonitor?.dispose();
+    }
+    try {
+      await _savePlaybackHistory();
+    } on Object catch (error) {
+      debugPrint('Unable to save playback history during shutdown: $error');
     }
     await _settingsSaveTail;
   }

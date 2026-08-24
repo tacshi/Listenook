@@ -304,22 +304,26 @@ void main() {
     expect(defaults.autoTranscribeLocal, isFalse);
     expect(defaults.lastContentDestination, AppContentDestination.podcast);
     expect(defaults.lastWorkspaceJobId, isNull);
+    expect(defaults.playbackPositionsMs, isEmpty);
 
     final restored = AppSettings.fromJson(
       const AppSettings(
         autoTranscribeLocal: true,
         lastContentDestination: AppContentDestination.workspace,
         lastWorkspaceJobId: 'workspace-job',
+        playbackPositionsMs: {'workspace-job': 4449000},
       ).toJson(),
     );
     expect(restored.autoTranscribeLocal, isTrue);
     expect(restored.lastContentDestination, AppContentDestination.workspace);
     expect(restored.lastWorkspaceJobId, 'workspace-job');
+    expect(restored.playbackPositionsMs, {'workspace-job': 4449000});
     expect(restored.toJson()['manifest_version'], manifestVersion);
 
     final legacy = AppSettings.fromJson(const {});
     expect(legacy.autoTranscribeLocal, isFalse);
     expect(legacy.lastContentDestination, AppContentDestination.podcast);
+    expect(legacy.playbackPositionsMs, isEmpty);
     expect(
       restored.copyWith(clearLastWorkspaceJobId: true).lastWorkspaceJobId,
       isNull,

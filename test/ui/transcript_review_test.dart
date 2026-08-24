@@ -4055,7 +4055,7 @@ void main() {
     );
   });
 
-  testWidgets('cold restored video schedules native media initialization', (
+  testWidgets('cold restored video seeks native player to saved position', (
     tester,
   ) async {
     final directory = (await tester.runAsync(
@@ -4065,8 +4065,11 @@ void main() {
     final source = File('${directory.path}/restored.mp4');
     await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
     late _ReviewFakePlatformPlayer platform;
-    debugTranscriptReviewPlayerFactory = () =>
-        Player(platformPlayer: platform = _ReviewFakePlatformPlayer());
+    debugTranscriptReviewPlayerFactory = () => Player(
+      platformPlayer: platform = _ReviewFakePlatformPlayer(
+        emitPositionResetOnOpen: true,
+      ),
+    );
     debugTranscriptReviewSourceExists = (_) async => true;
     final originalDebugPrint = debugPrint;
     debugPrint = (message, {wrapWidth}) {};
@@ -4082,10 +4085,11 @@ void main() {
       _simpleDocument(),
       metadata: _videoMetadata,
       sourcePath: source.path,
+      settings: const AppSettings(playbackPositionsMs: {'job': 500}),
     );
     addTearDown(controller.dispose);
-    controller.rememberPlaybackPosition(
-      'job',
+    expect(
+      controller.playbackPositionFor('job'),
       const Duration(milliseconds: 500),
     );
 
@@ -4108,6 +4112,19 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(platform.openCalls, 1);
+    expect(platform.seekDurations, contains(const Duration(milliseconds: 500)));
+    platform.emitPosition(Duration.zero);
+    await tester.pump();
+    expect(
+      controller.playbackPositionFor('job'),
+      const Duration(milliseconds: 500),
+    );
+    expect(
+      platform.seekDurations.where(
+        (position) => position == const Duration(milliseconds: 500),
+      ),
+      hasLength(2),
+    );
     expect(find.byType(Video), findsOneWidget);
     expect(
       find.descendant(
@@ -7630,10 +7647,12 @@ Future<AppController> _pumpSpeakerStrip(WidgetTester tester) async {
 }
 
 class _ReviewFakePlatformPlayer extends PlatformPlayer {
-  _ReviewFakePlatformPlayer()
+  _ReviewFakePlatformPlayer({this.emitPositionResetOnOpen = false})
     : super(configuration: const PlayerConfiguration()) {
     completer.complete();
   }
+
+  final bool emitPositionResetOnOpen;
 
   @override
   Future<int> get handle async => 0;
@@ -7641,6 +7660,7 @@ class _ReviewFakePlatformPlayer extends PlatformPlayer {
   @override
   Future<void> open(Playable playable, {bool play = true}) async {
     openCalls++;
+    if (emitPositionResetOnOpen) emitPosition(Duration.zero);
   }
 
   int openCalls = 0;
@@ -7662,6 +7682,12 @@ class _ReviewFakePlatformPlayer extends PlatformPlayer {
   @override
   Future<void> seek(Duration duration) async {
     seekDurations.add(duration);
+    if (emitPositionResetOnOpen) emitPosition(duration);
+  }
+
+  void emitPosition(Duration duration) {
+    state = state.copyWith(position: duration);
+    positionController.add(duration);
   }
 }
 

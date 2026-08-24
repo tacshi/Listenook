@@ -1631,6 +1631,7 @@ class AppSettings {
     this.autoTranscribeLocal = false,
     this.lastContentDestination = AppContentDestination.podcast,
     this.lastWorkspaceJobId,
+    this.playbackPositionsMs = const {},
   }) : _llmProviderSettings = llmProviderSettings,
        _translationPreferences = translationPreferences,
        _legacyTranslationSettings = translationSettings;
@@ -1651,6 +1652,7 @@ class AppSettings {
   final bool autoTranscribeLocal;
   final AppContentDestination lastContentDestination;
   final String? lastWorkspaceJobId;
+  final Map<String, int> playbackPositionsMs;
 
   LlmProviderSettings get llmProviderSettings =>
       _legacyTranslationSettings?.providerSettings ?? _llmProviderSettings;
@@ -1681,6 +1683,7 @@ class AppSettings {
     AppContentDestination? lastContentDestination,
     String? lastWorkspaceJobId,
     bool clearLastWorkspaceJobId = false,
+    Map<String, int>? playbackPositionsMs,
   }) => AppSettings(
     themeMode: themeMode ?? this.themeMode,
     localeMode: localeMode ?? this.localeMode,
@@ -1708,6 +1711,7 @@ class AppSettings {
     lastWorkspaceJobId: clearLastWorkspaceJobId
         ? null
         : lastWorkspaceJobId ?? this.lastWorkspaceJobId,
+    playbackPositionsMs: playbackPositionsMs ?? this.playbackPositionsMs,
   );
 
   Map<String, dynamic> toJson() => {
@@ -1728,6 +1732,8 @@ class AppSettings {
     'auto_transcribe_local': autoTranscribeLocal,
     'last_content_destination': lastContentDestination.name,
     if (lastWorkspaceJobId case final value?) 'last_workspace_job_id': value,
+    if (playbackPositionsMs.isNotEmpty)
+      'playback_positions_ms': playbackPositionsMs,
   };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
@@ -1784,8 +1790,23 @@ class AppSettings {
           ) ??
           AppContentDestination.podcast,
       lastWorkspaceJobId: json['last_workspace_job_id'] as String?,
+      playbackPositionsMs: _playbackPositionsFromJson(
+        json['playback_positions_ms'],
+      ),
     );
   }
+}
+
+Map<String, int> _playbackPositionsFromJson(Object? value) {
+  if (value is! Map) return const {};
+  final maximum = const Duration(days: 365).inMilliseconds;
+  return {
+    for (final entry in value.entries)
+      if (entry.key is String && entry.value is num)
+        if ((entry.value as num).toInt() case final milliseconds
+            when milliseconds > 0 && milliseconds <= maximum)
+          entry.key as String: milliseconds,
+  };
 }
 
 class LibraryGroup {

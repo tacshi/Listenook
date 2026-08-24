@@ -82,6 +82,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
   NavigatorState? _rootNavigator;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  Duration? _pendingPlaybackRestore;
+  int? _pendingPlaybackRestoreRequest;
+  bool _playbackRestoreReady = false;
+  bool _playbackRestoreSeekInFlight = false;
   double _videoAspectRatio = 16 / 9;
   double _playbackRate = 1;
   bool _playing = false;
@@ -215,6 +219,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _resetStructureNotice();
       _rememberPlaybackPosition(oldWidget.jobId);
       _sourceRequest++;
+      _clearPendingPlaybackRestore();
       _search.clear();
       _position = _appController.playbackPositionFor(widget.jobId);
       _duration = Duration.zero;
@@ -248,6 +253,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   void _handlePosition(Duration value) {
     if (!mounted || (_seekDispatcher?.isBusy ?? false)) return;
+    if (_consumePlaybackRestoreReset(value)) return;
     final document = _document;
     final previousIndex = document == null
         ? null
@@ -281,6 +287,58 @@ class _TranscriptReviewState extends State<TranscriptReview>
     )) {
       _queueFocusCurrent();
     }
+  }
+
+  bool _consumePlaybackRestoreReset(Duration value) {
+    final target = _pendingPlaybackRestore;
+    final request = _pendingPlaybackRestoreRequest;
+    if (target == null || request == null) return false;
+    if (request != _sourceRequest) {
+      _clearPendingPlaybackRestore();
+      return false;
+    }
+    final targetMs = target.inMilliseconds;
+    final toleranceMs = min(500, max(1, targetMs ~/ 4));
+    final isStartupReset =
+        value <= Duration.zero || value.inMilliseconds + toleranceMs < targetMs;
+    if (isStartupReset) {
+      if (_playbackRestoreReady) {
+        unawaited(_reassertPendingPlaybackRestore(target, request));
+      }
+      return true;
+    }
+    if (_playing) _clearPendingPlaybackRestore();
+    return false;
+  }
+
+  Future<void> _reassertPendingPlaybackRestore(
+    Duration target,
+    int request,
+  ) async {
+    final seekDispatcher = _seekDispatcher;
+    if (seekDispatcher == null ||
+        _playbackRestoreSeekInFlight ||
+        request != _sourceRequest ||
+        _pendingPlaybackRestore != target) {
+      return;
+    }
+    _playbackRestoreSeekInFlight = true;
+    try {
+      await seekDispatcher.seek(target);
+    } on Object {
+      // A later native position event can retry while restoration is pending.
+    } finally {
+      if (_pendingPlaybackRestoreRequest == request) {
+        _playbackRestoreSeekInFlight = false;
+      }
+    }
+  }
+
+  void _clearPendingPlaybackRestore() {
+    _pendingPlaybackRestore = null;
+    _pendingPlaybackRestoreRequest = null;
+    _playbackRestoreReady = false;
+    _playbackRestoreSeekInFlight = false;
   }
 
   void _handlePlaying(bool value) {
@@ -376,6 +434,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
         unawaited(_loadWaveform(job));
       }
       final resumePosition = _appController.playbackPositionFor(job.id);
+      _pendingPlaybackRestore = resumePosition > Duration.zero
+          ? resumePosition
+          : null;
+      _pendingPlaybackRestoreRequest = resumePosition > Duration.zero
+          ? request
+          : null;
+      _playbackRestoreReady = false;
+      _playbackRestoreSeekInFlight = false;
       final player = _player!;
       await player.open(Media(job.sourcePath), play: false);
       if (!mounted || request != _sourceRequest || widget.jobId != job.id) {
@@ -387,7 +453,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
           ? duration
           : resumePosition;
       if (restoredPosition > Duration.zero) {
-        await player.seek(restoredPosition);
+        _pendingPlaybackRestore = restoredPosition;
+        await _seekDispatcher!.seek(restoredPosition);
+        _playbackRestoreReady = true;
+      } else {
+        _clearPendingPlaybackRestore();
       }
       if (mounted && request == _sourceRequest && widget.jobId == job.id) {
         _appController.rememberPlaybackPosition(job.id, restoredPosition);
@@ -456,6 +526,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   Future<void> _disposeMediaResources() async {
     _sourceRequest++;
+    _clearPendingPlaybackRestore();
     final player = _player;
     _player = null;
     final seekDispatcher = _seekDispatcher;
@@ -1454,6 +1525,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }) async {
     final seekDispatcher = _seekDispatcher;
     if (seekDispatcher == null) return;
+    _clearPendingPlaybackRestore();
     setState(() {
       _position = position;
       _followPlayback = true;
