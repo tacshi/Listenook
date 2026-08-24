@@ -6614,11 +6614,30 @@ void main() {
     expect(find.text('Regenerate section'), findsOneWidget);
   });
 
-  testWidgets('creating an AI Brief starts directly and renders output', (
+  testWidgets('creating an AI Brief waits for dismissal and renders output', (
     tester,
   ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-ai-brief-video-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/clip.mp4');
+    await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+    debugTranscriptReviewPlayerFactory = () =>
+        Player(platformPlayer: _ReviewFakePlatformPlayer());
+    addTearDown(() => debugTranscriptReviewPlayerFactory = null);
+    final originalDebugPrint = debugPrint;
+    debugPrint = (message, {wrapWidth}) {};
+    addTearDown(() => debugPrint = originalDebugPrint);
+    final service = _PendingAiBrief();
+    addTearDown(() {
+      if (!service.release.isCompleted) service.release.complete();
+    });
     final controller = await _controllerForDocument(
       _simpleDocument(),
+      metadata: _videoMetadata,
+      sourcePath: source.path,
       settings: const AppSettings(
         translationSettings: TranslationSettings(
           baseUrl: 'https://llm.example/v1',
@@ -6626,36 +6645,61 @@ void main() {
         ),
       ),
       translationCredentials: _LlmCredentials(),
-      aiBriefService: _ImmediateAiBrief(),
+      aiBriefService: service,
     );
     addTearDown(controller.dispose);
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
         value: controller,
-        child: MaterialApp(
-          locale: const Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: const [AppStrings.delegate],
-          home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+        child: Consumer<AppController>(
+          builder: (context, _, _) => MaterialApp(
+            theme: ThemeData.light(),
+            darkTheme: ThemeData.dark(),
+            locale: const Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: const [
+              AppStrings.delegate,
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+          ),
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    expect(find.byType(Video), findsOneWidget);
 
     await tester.tap(find.text('AI Brief').first);
-    await tester.pumpAndSettle();
+    await tester.pump();
     expect(find.byKey(const Key('copy-ai-brief-toolbar')), findsNothing);
     expect(find.byKey(const Key('export-ai-brief-toolbar')), findsNothing);
     expect(find.byKey(const Key('refresh-ai-brief-toolbar')), findsNothing);
     expect(find.byKey(const Key('ai-brief-toolbar-more')), findsNothing);
     expect(find.byKey(const Key('cancel-ai-brief-toolbar')), findsNothing);
     await tester.tap(find.byKey(const Key('ai-brief-empty-action')));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
     expect(find.text('Provider model: brief-model'), findsOneWidget);
     await tester.tap(find.byKey(const Key('confirm-create-ai-brief')));
-    await tester.pumpAndSettle();
-    expect(find.text('Evidence-backed overview'), findsOneWidget);
+    await tester.pump();
+    expect(service.started.isCompleted, isFalse);
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 250));
+    await service.started.future;
+    expect(find.byType(AlertDialog), findsNothing);
+    service.release.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(tester.takeException(), isNull);
+    expect(find.text('Finished overview'), findsOneWidget);
     expect(find.byKey(const Key('ai-evidence-segment')), findsOneWidget);
+    debugPrint = originalDebugPrint;
   });
 
   testWidgets('Language notes are opt-in and preserve learner settings', (
@@ -6829,12 +6873,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Estimated AI requests'), findsNothing);
     await tester.tap(find.byKey(const Key('confirm-create-ai-brief')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
     await service.started.future;
     await tester.pump();
 
     expect(find.text('Analyzing the transcript…'), findsOneWidget);
     expect(find.textContaining('0/1'), findsNothing);
-    expect(find.byKey(const Key('cancel-ai-brief-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('cancel-ai-brief-toolbar')), findsNothing);
+    expect(find.byKey(const Key('cancel-ai-brief-progress')), findsOneWidget);
     expect(find.byKey(const Key('refresh-ai-brief-toolbar')), findsNothing);
     expect(find.byKey(const Key('ai-brief-toolbar-more')), findsNothing);
     expect(tester.getSize(find.byKey(const Key('review-header'))).height, 64);

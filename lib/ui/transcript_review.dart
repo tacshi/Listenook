@@ -1399,7 +1399,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final result = await _showAiBriefGenerationDialog(context, job);
     if (result == null || !mounted) return;
     if (job.aiBrief?.edited ?? false) {
-      final replace = await showDialog<bool>(
+      final replace = await _showDialogAfterDismissal<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: Text(context.strings.t('ai_brief_edited_refresh_title')),
@@ -2134,6 +2134,23 @@ class _AiBriefDialogResult {
   final AiLearningLevel learningLevel;
 }
 
+Future<T?> _showDialogAfterDismissal<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+}) async {
+  TransitionRoute<T>? dialogRoute;
+  final result = await showDialog<T>(
+    context: context,
+    builder: (context) {
+      final route = ModalRoute.of<T>(context);
+      if (route is TransitionRoute<T>) dialogRoute = route;
+      return builder(context);
+    },
+  );
+  await dialogRoute?.completed;
+  return result;
+}
+
 Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
   BuildContext context,
   TranscriptionJob job,
@@ -2162,7 +2179,7 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
   if (!supportedTranslationLanguageCodes.contains(outputLanguage)) {
     outputLanguage = 'en';
   }
-  return showDialog<_AiBriefDialogResult>(
+  return _showDialogAfterDismissal<_AiBriefDialogResult>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setDialogState) {
@@ -2662,6 +2679,7 @@ class _AiBriefProgress extends StatelessWidget {
           children: [
             Expanded(child: Text(text)),
             TextButton.icon(
+              key: const Key('cancel-ai-brief-progress'),
               onPressed: () =>
                   context.read<AppController>().cancelAiBrief(job.id),
               icon: const Icon(Icons.stop_circle_outlined),
@@ -4183,16 +4201,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
 
   Widget _buildAiBriefActions(BuildContext context, AppController controller) {
     final active = job.aiGenerationState.status.isActive;
-    if (active) {
-      return IconButton(
-        key: const Key('cancel-ai-brief-toolbar'),
-        tooltip: context.strings.t('cancel'),
-        onPressed: () => controller.cancelAiBrief(job.id),
-        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-        padding: EdgeInsets.zero,
-        icon: const Icon(Icons.stop_circle_outlined),
-      );
-    }
+    if (active) return const SizedBox.shrink();
     if (job.aiBrief == null) return const SizedBox.shrink();
     return Row(
       mainAxisSize: MainAxisSize.min,
