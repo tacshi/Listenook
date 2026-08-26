@@ -29,12 +29,23 @@ swift build \
   --product MeowSTTSpeechWorker \
   --disable-sandbox
 
-BINARY="$SCRATCH/arm64-apple-macosx/release/MeowSTTSpeechWorker"
+BIN_DIR="$(
+  swift build \
+    --package-path "$PACKAGE" \
+    --scratch-path "$SCRATCH" \
+    --configuration release \
+    --show-bin-path
+)"
+BINARY="$BIN_DIR/MeowSTTSpeechWorker"
 [[ -x "$BINARY" ]] || {
   echo "The Core ML speech worker was not produced at $BINARY." >&2
   exit 1
 }
 SPEECH_SWIFT_CHECKOUT="$SCRATCH/checkouts/speech-swift"
+METAL_BUILD_ROOT="$SCRATCH/meowstt-metal-build"
+mkdir -p "$METAL_BUILD_ROOT"
+ln -sfn "$SCRATCH/checkouts" "$METAL_BUILD_ROOT/checkouts"
+ln -sfn "$BIN_DIR" "$METAL_BUILD_ROOT/release"
 METAL_TOOLCHAIN_ID=""
 if ! xcrun metal --version >/dev/null 2>&1; then
   METAL_COMPONENT_JSON="$(xcodebuild -showComponent MetalToolchain -json 2>/dev/null)" || {
@@ -53,13 +64,13 @@ if ! xcrun metal --version >/dev/null 2>&1; then
   TOOLCHAINS="$METAL_TOOLCHAIN_ID" xcrun metal --version >/dev/null
 fi
 if [[ -n "$METAL_TOOLCHAIN_ID" ]]; then
-  BUILD_DIR="$SCRATCH" TOOLCHAINS="$METAL_TOOLCHAIN_ID" \
+  BUILD_DIR="$METAL_BUILD_ROOT" TOOLCHAINS="$METAL_TOOLCHAIN_ID" \
     bash "$SPEECH_SWIFT_CHECKOUT/scripts/build_mlx_metallib.sh" release
 else
-  BUILD_DIR="$SCRATCH" \
+  BUILD_DIR="$METAL_BUILD_ROOT" \
     bash "$SPEECH_SWIFT_CHECKOUT/scripts/build_mlx_metallib.sh" release
 fi
-METALLIB="$SCRATCH/arm64-apple-macosx/release/mlx.metallib"
+METALLIB="$BIN_DIR/mlx.metallib"
 [[ -s "$METALLIB" ]] || {
   echo "The pinned speech-swift MLX Metal library was not produced." >&2
   exit 1
