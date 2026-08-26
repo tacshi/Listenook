@@ -82,6 +82,37 @@ class TranscriptStructureEditor {
     MergeWithNext() => _merge(document, edit),
   };
 
+  bool hasAvailableEdit(TranscriptDocument document) {
+    for (var index = 0; index + 1 < document.segments.length; index++) {
+      if (canMergeWithNext(document, index)) return true;
+    }
+    if (document.tokens.length < 2) return false;
+    final tokensBySegment = _groupOwnedTokens(document);
+    for (final segment in document.segments) {
+      if (_splitTargetsFor(
+        segment,
+        tokensBySegment[segment.id] ?? const [],
+      ).isNotEmpty) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool canMergeWithNext(TranscriptDocument document, int leftIndex) {
+    if (leftIndex < 0 || leftIndex + 1 >= document.segments.length) {
+      return false;
+    }
+    final left = document.segments[leftIndex];
+    final right = document.segments[leftIndex + 1];
+    return (left.speaker == null ||
+            right.speaker == null ||
+            left.speaker == right.speaker) &&
+        (left.language == null ||
+            right.language == null ||
+            left.language == right.language);
+  }
+
   List<TranscriptSplitTarget> splitTargets(
     TranscriptDocument document,
     String segmentId,
@@ -92,6 +123,13 @@ class TranscriptStructureEditor {
     if (segmentIndex < 0) return const [];
     final segment = document.segments[segmentIndex];
     final owned = _ownedTokens(document, segment, segmentIndex);
+    return _splitTargetsFor(segment, owned);
+  }
+
+  List<TranscriptSplitTarget> _splitTargetsFor(
+    TranscriptSegment segment,
+    List<_OwnedToken> owned,
+  ) {
     if (owned.length < 2) return const [];
     final ranges = alignTranscriptTokenRanges(
       segment.text,
@@ -172,6 +210,10 @@ class TranscriptStructureEditor {
       speaker: segment.speaker,
       language: segment.language,
       preserveBoundaryBefore: segment.preserveBoundaryBefore,
+      alignmentWindowStartMs: segment.alignmentWindowStartMs ?? segment.startMs,
+      alignmentWindowEndMs: timing.$1,
+      alignmentIncomplete: segment.alignmentIncomplete,
+      alignmentManuallyResolved: segment.alignmentManuallyResolved,
     );
     final right = TranscriptSegment(
       id: newId,
@@ -181,6 +223,10 @@ class TranscriptStructureEditor {
       speaker: segment.speaker,
       language: segment.language,
       preserveBoundaryBefore: true,
+      alignmentWindowStartMs: timing.$2,
+      alignmentWindowEndMs: segment.alignmentWindowEndMs ?? segment.endMs,
+      alignmentIncomplete: segment.alignmentIncomplete,
+      alignmentManuallyResolved: segment.alignmentManuallyResolved,
     );
     final rightTokenIndexes = {
       for (final item in owned.skip(edit.rightTokenIndex)) item.documentIndex,
@@ -257,6 +303,18 @@ class TranscriptStructureEditor {
       language: left.language ?? right.language,
       translatedText: translated,
       preserveBoundaryBefore: left.preserveBoundaryBefore,
+      alignmentWindowStartMs: min(
+        left.alignmentWindowStartMs ?? left.startMs,
+        right.alignmentWindowStartMs ?? right.startMs,
+      ),
+      alignmentWindowEndMs: max(
+        left.alignmentWindowEndMs ?? left.endMs,
+        right.alignmentWindowEndMs ?? right.endMs,
+      ),
+      alignmentIncomplete:
+          left.alignmentIncomplete || right.alignmentIncomplete,
+      alignmentManuallyResolved:
+          left.alignmentManuallyResolved && right.alignmentManuallyResolved,
     );
     final rightTokenIndexes = {
       for (final item in _ownedTokens(document, right, leftIndex + 1))
@@ -316,6 +374,50 @@ List<_OwnedToken> _ownedTokens(
       if (_tokenBelongsToSegment(document.tokens[index], segment, nextStart))
         _OwnedToken(index, document.tokens[index]),
   ];
+}
+
+Map<String, List<_OwnedToken>> _groupOwnedTokens(TranscriptDocument document) {
+  final result = <String, List<_OwnedToken>>{
+    for (final segment in document.segments) segment.id: <_OwnedToken>[],
+  };
+  for (var tokenIndex = 0; tokenIndex < document.tokens.length; tokenIndex++) {
+    final token = document.tokens[tokenIndex];
+    if (token.translationStatus == 'translation') continue;
+    final segmentId = token.segmentId;
+    if (segmentId != null && result.containsKey(segmentId)) {
+      result[segmentId]!.add(_OwnedToken(tokenIndex, token));
+      continue;
+    }
+    if (token.startMs == 0 && token.endMs == 0) continue;
+    final segmentIndex = _segmentIndexAtOrBefore(
+      document.segments,
+      token.startMs,
+    );
+    if (segmentIndex == null) continue;
+    final segment = document.segments[segmentIndex];
+    final nextStart = segmentIndex + 1 < document.segments.length
+        ? document.segments[segmentIndex + 1].startMs
+        : null;
+    if (_tokenBelongsToSegment(token, segment, nextStart)) {
+      result[segment.id]!.add(_OwnedToken(tokenIndex, token));
+    }
+  }
+  return result;
+}
+
+int? _segmentIndexAtOrBefore(List<TranscriptSegment> segments, int positionMs) {
+  if (segments.isEmpty || positionMs < segments.first.startMs) return null;
+  var low = 0;
+  var high = segments.length - 1;
+  while (low <= high) {
+    final middle = (low + high) >> 1;
+    if (segments[middle].startMs <= positionMs) {
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return high;
 }
 
 bool _tokenBelongsToSegment(

@@ -137,6 +137,159 @@ void main() {
     debugPrint = originalDebugPrint;
   });
 
+  testWidgets('video review suppresses the source subtitle track', (
+    tester,
+  ) async {
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-video-subtitles-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/subtitled.mkv');
+    await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+    late _ReviewFakePlatformPlayer platform;
+    debugTranscriptReviewPlayerFactory = () =>
+        Player(platformPlayer: platform = _ReviewFakePlatformPlayer());
+    debugTranscriptReviewSourceExists = (_) async => true;
+    final originalDebugPrint = debugPrint;
+    debugPrint = (message, {wrapWidth}) {};
+    addTearDown(() {
+      debugTranscriptReviewPlayerFactory = null;
+      debugTranscriptReviewSourceExists = null;
+      debugPrint = originalDebugPrint;
+    });
+    final controller = await _controllerForDocument(
+      _simpleDocument(),
+      metadata: _videoMetadata,
+      sourcePath: source.path,
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(platform.openCalls, 1);
+    expect(platform.subtitleTrackSelections, [
+      const SubtitleTrack('no', null, null),
+    ]);
+    debugPrint = originalDebugPrint;
+  });
+
+  testWidgets('sentence repeat prefers the native A-B loop', (tester) async {
+    _setTestWindow(tester, const Size(1200, 820));
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-repeat-boundary-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/repeat.mp4');
+    await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+    late _ReviewFakePlatformPlayer platform;
+    debugTranscriptReviewPlayerFactory = () => Player(
+      platformPlayer: platform = _ReviewFakePlatformPlayer(
+        updatePlayingStateOnControls: true,
+      ),
+    );
+    final nativeLoop = _RecordingSentenceRepeatLoopController();
+    debugTranscriptReviewSentenceRepeatLoopFactory = (_) => nativeLoop;
+    debugTranscriptReviewSourceExists = (_) async => true;
+    final originalDebugPrint = debugPrint;
+    debugPrint = (message, {wrapWidth}) {};
+    addTearDown(() {
+      debugTranscriptReviewPlayerFactory = null;
+      debugTranscriptReviewSentenceRepeatLoopFactory = null;
+      debugTranscriptReviewSourceExists = null;
+      debugPrint = originalDebugPrint;
+    });
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'current',
+            startMs: 90989,
+            endMs: 96398,
+            text:
+                "Political protection is the thing that's going to slow progress.",
+          ),
+          TranscriptSegment(
+            id: 'next',
+            startMs: 94478,
+            endMs: 102719,
+            text: "Most people's Tuesdays will probably feel like this week.",
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.utc(2026, 8, 25),
+      ),
+      metadata: const MediaMetadata(
+        sizeBytes: 1,
+        durationMs: 103000,
+        hasAudio: true,
+        hasVideo: true,
+        formatName: 'mp4',
+      ),
+      sourcePath: source.path,
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    platform.emitPosition(const Duration(milliseconds: 93000));
+    platform.emitPlaying(true);
+    await tester.pump();
+    nativeLoop.events.clear();
+    platform.operations.clear();
+    final repeat = find.byKey(const ValueKey('segment-repeat-current'));
+    expect(repeat, findsOneWidget);
+    final repeatButton = tester.widget<IconButton>(repeat);
+    expect(repeatButton.onPressed, isNotNull);
+    repeatButton.onPressed!();
+    await tester.pump();
+    await tester.pump();
+
+    expect(nativeLoop.events, const ['range:90639:94478']);
+    expect(platform.operations, const ['seek:90639']);
+    platform.operations.clear();
+
+    platform.emitPosition(const Duration(milliseconds: 94478));
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      platform.operations,
+      isEmpty,
+      reason: 'mpv owns the active A-B boundary; Flutter must not seek again.',
+    );
+
+    tester.widget<IconButton>(repeat).onPressed!();
+    await tester.pump();
+    await tester.pump();
+    expect(nativeLoop.events, const ['range:90639:94478', 'clear']);
+    debugPrint = originalDebugPrint;
+  });
+
   test('wide video viewport derives its height from the available width', () {
     expect(
       videoViewportHeight(
@@ -297,6 +450,55 @@ void main() {
     expect(shouldRestartRepeatedSentence(segment, 1899), isFalse);
     expect(shouldRestartRepeatedSentence(segment, 1900), isTrue);
   });
+
+  test('sentence repeat stops before the next overlapping sentence', () {
+    const current = TranscriptSegment(
+      id: 'imported-sentence-19',
+      startMs: 90989,
+      endMs: 96398,
+      text: "Political protection is the thing that's going to slow progress.",
+    );
+    const next = TranscriptSegment(
+      id: 'imported-sentence-20',
+      startMs: 94478,
+      endMs: 102719,
+      text:
+          "Most people's Tuesdays will probably feel for better or worse a whole lot like Tuesday this week.",
+    );
+
+    expect(
+      shouldRestartRepeatedSentence(current, 94357, nextSegment: next),
+      isFalse,
+    );
+    expect(
+      shouldRestartRepeatedSentence(current, 94358, nextSegment: next),
+      isTrue,
+      reason:
+          'The repeat seek needs 120 ms to stop playback before "Most" starts.',
+    );
+  });
+
+  test(
+    'mpv A-B repeat uses exact millisecond boundaries and clears them',
+    () async {
+      final properties = <String>[];
+      final loop = MpvSentenceRepeatLoopController((property, value) async {
+        properties.add('$property=$value');
+      });
+
+      await loop.setRange(startMs: 90989, endMs: 94478);
+      await loop.clear();
+
+      expect(properties, const [
+        'ab-loop-b=no',
+        'ab-loop-count=inf',
+        'ab-loop-a=90.989',
+        'ab-loop-b=94.478',
+        'ab-loop-b=no',
+        'ab-loop-a=no',
+      ]);
+    },
+  );
 
   test('sentence repeat does not follow a transient next sentence', () {
     expect(
@@ -485,6 +687,299 @@ void main() {
       firstSegmentTop,
     );
   });
+
+  testWidgets('partial imported alignment highlights cues kept unchanged', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(800, 700));
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [
+          TranscriptToken(
+            text: 'Aligned',
+            startMs: 120,
+            endMs: 820,
+            segmentId: 'aligned',
+          ),
+        ],
+        segments: const [
+          TranscriptSegment(
+            id: 'aligned',
+            startMs: 120,
+            endMs: 820,
+            text: 'Aligned cue',
+            alignmentWindowStartMs: 100,
+            alignmentWindowEndMs: 900,
+          ),
+          TranscriptSegment(
+            id: 'failed',
+            startMs: 1000,
+            endMs: 1900,
+            text: 'Cue with original timing',
+            alignmentWindowStartMs: 1000,
+            alignmentWindowEndMs: 1900,
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+      transcriptSource: TranscriptSource.importedSubtitle,
+      forcedAlignment: const ForcedAlignmentState(
+        status: ForcedAlignmentStatus.partial,
+        alignedSegments: 1,
+        totalSegments: 2,
+        warningCode: 'alignment_partial',
+      ),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('segment-alignment-failed-failed')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('segment-alignment-failed-aligned')),
+      findsNothing,
+    );
+
+    final resolve = find.byKey(
+      const ValueKey('mark-alignment-resolved-failed'),
+    );
+    expect(resolve, findsOneWidget);
+    await tester.tap(resolve);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('segment-alignment-failed-failed')),
+      findsNothing,
+    );
+    expect(
+      controller.allJobs.single.document!.segments
+          .singleWhere((segment) => segment.id == 'failed')
+          .alignmentManuallyResolved,
+      isTrue,
+    );
+    expect(find.text('Marked as resolved'), findsOneWidget);
+    final noticeRect = tester.getRect(find.byKey(const Key('app-notice')));
+    expect(noticeRect.width, lessThan(520));
+    expect(noticeRect.bottom, lessThan(700));
+
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('segment-alignment-failed-failed')),
+      findsOneWidget,
+    );
+    expect(
+      controller.allJobs.single.document!.segments
+          .singleWhere((segment) => segment.id == 'failed')
+          .alignmentManuallyResolved,
+      isFalse,
+    );
+  });
+
+  testWidgets('imported subtitle cues read as complete sentences', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(800, 700));
+    final source = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'cue-1',
+          startMs: 0,
+          endMs: 900,
+          text: "To get us started, I'm going to try",
+        ),
+        TranscriptSegment(
+          id: 'cue-2',
+          startMs: 1000,
+          endMs: 1900,
+          text: "something. >> So, I'm going to ask ChatGPT [noise]",
+        ),
+        TranscriptSegment(
+          id: 'cue-3',
+          startMs: 2000,
+          endMs: 2900,
+          text: 'what it truly believes.',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+    );
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [
+          TranscriptToken(
+            text: 'To',
+            startMs: 0,
+            endMs: 100,
+            segmentId: 'cue-1',
+          ),
+          TranscriptToken(
+            text: 'try',
+            startMs: 700,
+            endMs: 850,
+            segmentId: 'cue-1',
+          ),
+          TranscriptToken(
+            text: 'something',
+            startMs: 1000,
+            endMs: 1200,
+            segmentId: 'cue-2',
+          ),
+          TranscriptToken(
+            text: 'So',
+            startMs: 1250,
+            endMs: 1350,
+            segmentId: 'cue-2',
+          ),
+          TranscriptToken(
+            text: 'ChatGPT',
+            startMs: 1700,
+            endMs: 1850,
+            segmentId: 'cue-2',
+          ),
+          TranscriptToken(
+            text: 'what',
+            startMs: 2000,
+            endMs: 2100,
+            segmentId: 'cue-3',
+          ),
+          TranscriptToken(
+            text: 'believes',
+            startMs: 2700,
+            endMs: 2850,
+            segmentId: 'cue-3',
+          ),
+        ],
+        segments: source.segments,
+        speakers: const [],
+        updatedAt: DateTime.now().toUtc(),
+      ),
+      transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+      transcriptSource: TranscriptSource.importedSubtitle,
+      importedSubtitleProvenance: ImportedSubtitleProvenance(
+        sourcePath: '/missing/subtitle.srt',
+        displayName: 'subtitle.srt',
+        format: SubtitleFormat.srt,
+        importedAt: DateTime.fromMillisecondsSinceEpoch(0),
+        sourceDocumentSnapshot: source,
+      ),
+      forcedAlignment: const ForcedAlignmentState(
+        status: ForcedAlignmentStatus.completed,
+        alignedSegments: 3,
+        totalSegments: 3,
+      ),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: TranscriptReview(jobId: 'job')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text("To get us started, I'm going to try something."),
+      findsOneWidget,
+    );
+    expect(
+      find.text("So, I'm going to ask ChatGPT what it truly believes."),
+      findsOneWidget,
+    );
+    expect(controller.allJobs.single.document!.segments, hasLength(2));
+    expect(
+      controller
+          .allJobs
+          .single
+          .importedSubtitleProvenance!
+          .sourceDocumentSnapshot!
+          .segments[1]
+          .text,
+      "something. So, I'm going to ask ChatGPT",
+    );
+  });
+
+  testWidgets(
+    'large Workspace transcript opens and scrolls without a UI stall',
+    (tester) async {
+      _setTestWindow(tester, const Size(800, 700));
+      final controller = await _controllerForDocument(
+        TranscriptDocument(
+          tokens: const [],
+          segments: List.generate(
+            4695,
+            (index) => TranscriptSegment(
+              id: 'large-$index',
+              startMs: index * 1000,
+              endMs: index * 1000 + 900,
+              text: 'Subtitle cue $index',
+            ),
+          ),
+          speakers: const [],
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
+      addTearDown(controller.dispose);
+
+      final stopwatch = Stopwatch()..start();
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: TranscriptReview(jobId: 'job')),
+          ),
+        ),
+      );
+      stopwatch.stop();
+
+      expect(
+        stopwatch.elapsed,
+        lessThan(const Duration(milliseconds: 150)),
+        reason: 'Large transcript setup must not block the UI.',
+      );
+
+      stopwatch
+        ..reset()
+        ..start();
+      await tester.drag(
+        find.byKey(const Key('transcript-scroll')),
+        const Offset(0, -500),
+      );
+      await tester.pump();
+      stopwatch.stop();
+      expect(
+        stopwatch.elapsed,
+        lessThan(const Duration(milliseconds: 150)),
+        reason: 'Large transcript scrolling must reuse cached eligibility.',
+      );
+    },
+  );
 
   group('fullscreen transcript subtitles', () {
     const timedSegments = [
@@ -4055,7 +4550,7 @@ void main() {
     );
   });
 
-  testWidgets('cold restored video schedules native media initialization', (
+  testWidgets('cold restored video seeks native player to saved position', (
     tester,
   ) async {
     final directory = (await tester.runAsync(
@@ -4065,8 +4560,11 @@ void main() {
     final source = File('${directory.path}/restored.mp4');
     await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
     late _ReviewFakePlatformPlayer platform;
-    debugTranscriptReviewPlayerFactory = () =>
-        Player(platformPlayer: platform = _ReviewFakePlatformPlayer());
+    debugTranscriptReviewPlayerFactory = () => Player(
+      platformPlayer: platform = _ReviewFakePlatformPlayer(
+        emitPositionResetOnOpen: true,
+      ),
+    );
     debugTranscriptReviewSourceExists = (_) async => true;
     final originalDebugPrint = debugPrint;
     debugPrint = (message, {wrapWidth}) {};
@@ -4082,10 +4580,11 @@ void main() {
       _simpleDocument(),
       metadata: _videoMetadata,
       sourcePath: source.path,
+      settings: const AppSettings(playbackPositionsMs: {'job': 500}),
     );
     addTearDown(controller.dispose);
-    controller.rememberPlaybackPosition(
-      'job',
+    expect(
+      controller.playbackPositionFor('job'),
       const Duration(milliseconds: 500),
     );
 
@@ -4108,6 +4607,19 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(platform.openCalls, 1);
+    expect(platform.seekDurations, contains(const Duration(milliseconds: 500)));
+    platform.emitPosition(Duration.zero);
+    await tester.pump();
+    expect(
+      controller.playbackPositionFor('job'),
+      const Duration(milliseconds: 500),
+    );
+    expect(
+      platform.seekDurations.where(
+        (position) => position == const Duration(milliseconds: 500),
+      ),
+      hasLength(2),
+    );
     expect(find.byType(Video), findsOneWidget);
     expect(
       find.descendant(
@@ -6597,11 +7109,30 @@ void main() {
     expect(find.text('Regenerate section'), findsOneWidget);
   });
 
-  testWidgets('creating an AI Brief starts directly and renders output', (
+  testWidgets('creating an AI Brief waits for dismissal and renders output', (
     tester,
   ) async {
+    _setTestWindow(tester, const Size(1240, 820));
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-ai-brief-video-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/clip.mp4');
+    await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+    debugTranscriptReviewPlayerFactory = () =>
+        Player(platformPlayer: _ReviewFakePlatformPlayer());
+    addTearDown(() => debugTranscriptReviewPlayerFactory = null);
+    final originalDebugPrint = debugPrint;
+    debugPrint = (message, {wrapWidth}) {};
+    addTearDown(() => debugPrint = originalDebugPrint);
+    final service = _PendingAiBrief();
+    addTearDown(() {
+      if (!service.release.isCompleted) service.release.complete();
+    });
     final controller = await _controllerForDocument(
       _simpleDocument(),
+      metadata: _videoMetadata,
+      sourcePath: source.path,
       settings: const AppSettings(
         translationSettings: TranslationSettings(
           baseUrl: 'https://llm.example/v1',
@@ -6609,36 +7140,61 @@ void main() {
         ),
       ),
       translationCredentials: _LlmCredentials(),
-      aiBriefService: _ImmediateAiBrief(),
+      aiBriefService: service,
     );
     addTearDown(controller.dispose);
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
         value: controller,
-        child: MaterialApp(
-          locale: const Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: const [AppStrings.delegate],
-          home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+        child: Consumer<AppController>(
+          builder: (context, _, _) => MaterialApp(
+            theme: ThemeData.light(),
+            darkTheme: ThemeData.dark(),
+            locale: const Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: const [
+              AppStrings.delegate,
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+          ),
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    expect(find.byType(Video), findsOneWidget);
 
     await tester.tap(find.text('AI Brief').first);
-    await tester.pumpAndSettle();
+    await tester.pump();
     expect(find.byKey(const Key('copy-ai-brief-toolbar')), findsNothing);
     expect(find.byKey(const Key('export-ai-brief-toolbar')), findsNothing);
     expect(find.byKey(const Key('refresh-ai-brief-toolbar')), findsNothing);
     expect(find.byKey(const Key('ai-brief-toolbar-more')), findsNothing);
     expect(find.byKey(const Key('cancel-ai-brief-toolbar')), findsNothing);
     await tester.tap(find.byKey(const Key('ai-brief-empty-action')));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
     expect(find.text('Provider model: brief-model'), findsOneWidget);
     await tester.tap(find.byKey(const Key('confirm-create-ai-brief')));
-    await tester.pumpAndSettle();
-    expect(find.text('Evidence-backed overview'), findsOneWidget);
+    await tester.pump();
+    expect(service.started.isCompleted, isFalse);
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 250));
+    await service.started.future;
+    expect(find.byType(AlertDialog), findsNothing);
+    service.release.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(tester.takeException(), isNull);
+    expect(find.text('Finished overview'), findsOneWidget);
     expect(find.byKey(const Key('ai-evidence-segment')), findsOneWidget);
+    debugPrint = originalDebugPrint;
   });
 
   testWidgets('Language notes are opt-in and preserve learner settings', (
@@ -6812,12 +7368,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Estimated AI requests'), findsNothing);
     await tester.tap(find.byKey(const Key('confirm-create-ai-brief')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
     await service.started.future;
     await tester.pump();
 
     expect(find.text('Analyzing the transcript…'), findsOneWidget);
     expect(find.textContaining('0/1'), findsNothing);
-    expect(find.byKey(const Key('cancel-ai-brief-toolbar')), findsOneWidget);
+    expect(find.byKey(const Key('cancel-ai-brief-toolbar')), findsNothing);
+    expect(find.byKey(const Key('cancel-ai-brief-progress')), findsOneWidget);
     expect(find.byKey(const Key('refresh-ai-brief-toolbar')), findsNothing);
     expect(find.byKey(const Key('ai-brief-toolbar-more')), findsNothing);
     expect(tester.getSize(find.byKey(const Key('review-header'))).height, 64);
@@ -7428,6 +7987,7 @@ Future<AppController> _controllerForDocument(
   TranscriptAcquisitionMode transcriptAcquisitionMode =
       TranscriptAcquisitionMode.soniox,
   TranscriptSource? transcriptSource,
+  ImportedSubtitleProvenance? importedSubtitleProvenance,
   ForcedAlignmentService? forcedAlignmentService,
   ForcedAlignmentState forcedAlignment = const ForcedAlignmentState(),
 }) async {
@@ -7452,6 +8012,7 @@ Future<AppController> _controllerForDocument(
         podcastProvenance: podcastProvenance,
         transcriptAcquisitionMode: transcriptAcquisitionMode,
         transcriptSource: transcriptSource,
+        importedSubtitleProvenance: importedSubtitleProvenance,
         forcedAlignment: forcedAlignment,
       ),
     ]),
@@ -7630,10 +8191,15 @@ Future<AppController> _pumpSpeakerStrip(WidgetTester tester) async {
 }
 
 class _ReviewFakePlatformPlayer extends PlatformPlayer {
-  _ReviewFakePlatformPlayer()
-    : super(configuration: const PlayerConfiguration()) {
+  _ReviewFakePlatformPlayer({
+    this.emitPositionResetOnOpen = false,
+    this.updatePlayingStateOnControls = false,
+  }) : super(configuration: const PlayerConfiguration()) {
     completer.complete();
   }
+
+  final bool emitPositionResetOnOpen;
+  final bool updatePlayingStateOnControls;
 
   @override
   Future<int> get handle async => 0;
@@ -7641,19 +8207,27 @@ class _ReviewFakePlatformPlayer extends PlatformPlayer {
   @override
   Future<void> open(Playable playable, {bool play = true}) async {
     openCalls++;
+    if (emitPositionResetOnOpen) emitPosition(Duration.zero);
   }
 
   int openCalls = 0;
   int playOrPauseCalls = 0;
   int pauseCalls = 0;
+  final List<String> operations = [];
   final List<Duration> seekDurations = [];
+  final List<SubtitleTrack> subtitleTrackSelections = [];
 
   @override
-  Future<void> play() async {}
+  Future<void> play() async {
+    operations.add('play');
+    if (updatePlayingStateOnControls) emitPlaying(true);
+  }
 
   @override
   Future<void> pause() async {
     pauseCalls++;
+    operations.add('pause');
+    if (updatePlayingStateOnControls) emitPlaying(false);
   }
 
   @override
@@ -7662,6 +8236,36 @@ class _ReviewFakePlatformPlayer extends PlatformPlayer {
   @override
   Future<void> seek(Duration duration) async {
     seekDurations.add(duration);
+    operations.add('seek:${duration.inMilliseconds}');
+    if (emitPositionResetOnOpen) emitPosition(duration);
+  }
+
+  @override
+  Future<void> setSubtitleTrack(SubtitleTrack track) async {
+    subtitleTrackSelections.add(track);
+  }
+
+  void emitPosition(Duration duration) {
+    state = state.copyWith(position: duration);
+    positionController.add(duration);
+  }
+
+  void emitPlaying(bool playing) {
+    state = state.copyWith(playing: playing);
+    playingController.add(playing);
+  }
+}
+
+class _RecordingSentenceRepeatLoopController
+    implements SentenceRepeatLoopController {
+  final List<String> events = [];
+
+  @override
+  Future<void> clear() async => events.add('clear');
+
+  @override
+  Future<void> setRange({required int startMs, required int endMs}) async {
+    events.add('range:$startMs:$endMs');
   }
 }
 

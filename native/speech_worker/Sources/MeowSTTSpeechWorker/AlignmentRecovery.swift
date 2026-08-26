@@ -1,5 +1,46 @@
 import Foundation
 
+func orderedAlignmentSplitBounds(
+    startMs: Int,
+    endMs: Int,
+    leftSegments: [[String: Any]],
+    rightSegments: [[String: Any]],
+    paddingMs: Int
+) -> [(startMs: Int, endMs: Int)]? {
+    let segments = leftSegments + rightSegments
+    guard endMs - startMs > 1,
+          !leftSegments.isEmpty,
+          !rightSegments.isEmpty,
+          let leftEnd = leftSegments.compactMap({
+              ($0["end_ms"] as? NSNumber)?.intValue
+          }).max(),
+          let rightStart = rightSegments.compactMap({
+              ($0["start_ms"] as? NSNumber)?.intValue
+          }).min(),
+          segments.allSatisfy({
+              $0["allow_outside_segment_bounds"] as? Bool == true
+          })
+    else { return nil }
+    let paddedLeftEnd = min(endMs, leftEnd + max(0, paddingMs))
+    let paddedRightStart = max(startMs, rightStart - max(0, paddingMs))
+    guard paddedLeftEnd > startMs, endMs > paddedRightStart else { return nil }
+    return [
+        (startMs: startMs, endMs: paddedLeftEnd),
+        (startMs: paddedRightStart, endMs: endMs),
+    ]
+}
+
+func alignmentBoundaryRetryBounds(
+    segment: [String: Any]
+) -> (startMs: Int, endMs: Int)? {
+    guard let startMs = (segment["start_ms"] as? NSNumber)?.intValue,
+          let endMs = (segment["end_ms"] as? NSNumber)?.intValue,
+          startMs >= 0,
+          endMs > startMs
+    else { return nil }
+    return (startMs, endMs)
+}
+
 /// Returns owners whose aligned timestamps would be rejected by the Dart
 /// boundary validator after clamping them to their authoritative MOSS segment.
 func alignmentOwnersNeedingBoundaryRetry(
@@ -8,6 +49,9 @@ func alignmentOwnersNeedingBoundaryRetry(
 ) -> Set<String> {
     var rejected: Set<String> = []
     for segment in segments {
+        if segment["allow_outside_segment_bounds"] as? Bool == true {
+            continue
+        }
         guard let owner = segment["id"] as? String,
               let segmentStart = (segment["start_ms"] as? NSNumber)?.intValue,
               let segmentEnd = (segment["end_ms"] as? NSNumber)?.intValue,

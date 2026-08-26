@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../core/models.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
+import 'app_notice.dart';
 
 Future<void> exportDownloadedPodcastMedia(
   BuildContext context,
@@ -99,13 +100,17 @@ Future<void> completePodcastMediaExport(
   try {
     await export();
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(context.strings.t('podcast_media_exported'))),
+    showAppNotice(
+      context,
+      message: context.strings.t('podcast_media_exported'),
+      tone: AppNoticeTone.success,
     );
   } on Object {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(context.strings.t('podcast_media_export_failed'))),
+    showAppNotice(
+      context,
+      message: context.strings.t('podcast_media_export_failed'),
+      tone: AppNoticeTone.error,
     );
   }
 }
@@ -118,21 +123,19 @@ Future<void> completePodcastMediaBatchExport(
   try {
     final count = await export();
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          context.strings
-              .t('podcast_media_batch_exported')
-              .replaceFirst('{count}', '$count'),
-        ),
-      ),
+    showAppNotice(
+      context,
+      message: context.strings
+          .t('podcast_media_batch_exported')
+          .replaceFirst('{count}', '$count'),
+      tone: AppNoticeTone.success,
     );
   } on Object {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(context.strings.t('podcast_media_batch_export_failed')),
-      ),
+    showAppNotice(
+      context,
+      message: context.strings.t('podcast_media_batch_export_failed'),
+      tone: AppNoticeTone.error,
     );
   }
 }

@@ -25,6 +25,11 @@ void main() {
     expect(build, contains('13643ab4361da8f33c8002026c9d357ded0b6896'));
     expect(build, contains('swift build'));
     expect(build, contains('--configuration release'));
+    expect(build, contains('--show-bin-path'));
+    expect(
+      build,
+      isNot(contains(r'BINARY="$SCRATCH/arm64-apple-macosx/release')),
+    );
     expect(build, contains('CoreML.framework'));
     expect(manifest, contains('.macOS("15.0")'));
     expect(manifest, contains('MossTranscribe'));

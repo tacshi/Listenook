@@ -1,4 +1,8 @@
+import 'dart:math';
+
 import 'models.dart';
+import 'subtitle_text.dart';
+import 'transcript_structure_editor.dart';
 
 final _mossSpeakerControlTag = RegExp(r'\[S\d+\]', caseSensitive: false);
 final _mossStructuralControlTag = RegExp(
@@ -13,6 +17,260 @@ bool isMossControlOnlyTranscriptText(String text) {
 
 class TranscriptParser {
   const TranscriptParser();
+
+  TranscriptDocument removeImportedSubtitleCaptionArtifacts(
+    TranscriptDocument source,
+  ) {
+    var changed = false;
+    final segments = <TranscriptSegment>[];
+    final retainedSegmentIds = <String>{};
+    for (final segment in source.segments) {
+      final text = cleanSubtitleCaptionArtifacts(
+        segment.text,
+        preserveLineBreaks: false,
+      );
+      final translatedText = segment.translatedText == null
+          ? null
+          : cleanSubtitleCaptionArtifacts(
+              segment.translatedText!,
+              preserveLineBreaks: false,
+            );
+      if (text.isEmpty) {
+        changed = true;
+        continue;
+      }
+      retainedSegmentIds.add(segment.id);
+      if (text == segment.text && translatedText == segment.translatedText) {
+        segments.add(segment);
+        continue;
+      }
+      changed = true;
+      segments.add(
+        segment.copyWith(
+          text: text,
+          translatedText: translatedText,
+          clearTranslatedText:
+              segment.translatedText != null && translatedText!.isEmpty,
+        ),
+      );
+    }
+    final tokens = <TranscriptToken>[];
+    for (final token in source.tokens) {
+      if (token.segmentId case final owner?
+          when !retainedSegmentIds.contains(owner)) {
+        changed = true;
+        continue;
+      }
+      final text = cleanSubtitleCaptionArtifacts(
+        token.text,
+        preserveLineBreaks: false,
+      );
+      if (text.isEmpty) {
+        changed = true;
+        continue;
+      }
+      if (text == token.text) {
+        tokens.add(token);
+        continue;
+      }
+      changed = true;
+      tokens.add(
+        TranscriptToken(
+          text: text,
+          startMs: token.startMs,
+          endMs: token.endMs,
+          segmentId: token.segmentId,
+          speaker: token.speaker,
+          language: token.language,
+          confidence: token.confidence,
+          translationStatus: token.translationStatus,
+          sourceLanguage: token.sourceLanguage,
+        ),
+      );
+    }
+    if (!changed) return source;
+    return TranscriptDocument(
+      tokens: List.unmodifiable(tokens),
+      segments: List.unmodifiable(segments),
+      speakers: source.speakers,
+      updatedAt: DateTime.now().toUtc(),
+    );
+  }
+
+  TranscriptDocument resegmentAlignedSubtitles(
+    TranscriptDocument source,
+    List<TranscriptToken> alignedTokens,
+  ) {
+    source = removeImportedSubtitleCaptionArtifacts(source);
+    const maximumSentenceDurationMs = 24000;
+    const maximumSentenceCharacters = 280;
+    final tokensBySegment = <String, List<TranscriptToken>>{};
+    for (final token in alignedTokens) {
+      final owner = token.segmentId;
+      if (owner == null) continue;
+      tokensBySegment.putIfAbsent(owner, () => []).add(token);
+    }
+    final units = <_AlignedSubtitleUnit>[];
+    for (final segment in source.segments) {
+      final text = segment.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (text.isEmpty) continue;
+      final owned = tokensBySegment[segment.id] ?? const [];
+      final ranges = alignTranscriptTokenRanges(text, owned);
+      final hasReliableRanges =
+          owned.isNotEmpty &&
+          ranges.length == owned.length &&
+          ranges.every((range) => range != null);
+      if (hasReliableRanges) {
+        for (var index = 0; index < owned.length; index++) {
+          final range = ranges[index]!;
+          final start = index == 0 ? 0 : range.start;
+          final end = index + 1 < ranges.length
+              ? ranges[index + 1]!.start
+              : text.length;
+          var unitText = text.substring(start, end);
+          if (index == 0 && units.isNotEmpty) {
+            unitText = _subtitleBoundaryText(units.last.text, unitText);
+          }
+          final token = owned[index];
+          units.add(
+            _AlignedSubtitleUnit(
+              text: unitText,
+              startMs: token.startMs,
+              endMs: token.endMs,
+              alignmentWindowStartMs:
+                  segment.alignmentWindowStartMs ?? segment.startMs,
+              alignmentWindowEndMs:
+                  segment.alignmentWindowEndMs ?? segment.endMs,
+              speaker: segment.speaker,
+              language: segment.language,
+              token: token,
+            ),
+          );
+        }
+        continue;
+      }
+      final chunks = _subtitleSentenceChunks(text);
+      final duration = max(0, segment.endMs - segment.startMs);
+      var offset = 0;
+      for (var index = 0; index < chunks.length; index++) {
+        final chunk = chunks[index];
+        final chunkStart = text.indexOf(chunk, offset);
+        final safeStart = chunkStart < 0 ? offset : chunkStart;
+        final safeEnd = min(text.length, safeStart + chunk.length);
+        offset = safeEnd;
+        var unitText = chunk;
+        if (index == 0 && units.isNotEmpty) {
+          unitText = _subtitleBoundaryText(units.last.text, unitText);
+        }
+        units.add(
+          _AlignedSubtitleUnit(
+            text: unitText,
+            startMs:
+                segment.startMs +
+                (duration * safeStart / max(1, text.length)).round(),
+            endMs:
+                segment.startMs +
+                (duration * safeEnd / max(1, text.length)).round(),
+            alignmentWindowStartMs:
+                segment.alignmentWindowStartMs ?? segment.startMs,
+            alignmentWindowEndMs: segment.alignmentWindowEndMs ?? segment.endMs,
+            speaker: segment.speaker,
+            language: segment.language,
+          ),
+        );
+      }
+    }
+
+    final segments = <TranscriptSegment>[];
+    final tokens = <TranscriptToken>[];
+    var sentence = <_AlignedSubtitleUnit>[];
+    var sentenceCharacters = 0;
+
+    void flush() {
+      if (sentence.isEmpty) return;
+      final text = sentence.map((unit) => unit.text).join().trim();
+      if (text.isEmpty) {
+        sentence = <_AlignedSubtitleUnit>[];
+        sentenceCharacters = 0;
+        return;
+      }
+      final id = 'imported-sentence-${segments.length + 1}';
+      final startMs = sentence
+          .map((unit) => unit.startMs)
+          .reduce((left, right) => min(left, right));
+      final endMs = sentence
+          .map((unit) => unit.endMs)
+          .reduce((left, right) => max(left, right));
+      segments.add(
+        TranscriptSegment(
+          id: id,
+          startMs: startMs,
+          endMs: max(startMs, endMs),
+          text: text,
+          speaker: sentence
+              .map((unit) => unit.speaker)
+              .whereType<String>()
+              .firstOrNull,
+          language: sentence
+              .map((unit) => unit.language)
+              .whereType<String>()
+              .firstOrNull,
+          alignmentWindowStartMs: sentence
+              .map((unit) => unit.alignmentWindowStartMs)
+              .reduce((left, right) => min(left, right)),
+          alignmentWindowEndMs: sentence
+              .map((unit) => unit.alignmentWindowEndMs)
+              .reduce((left, right) => max(left, right)),
+          alignmentIncomplete: sentence.any((unit) => unit.token == null),
+        ),
+      );
+      for (final unit in sentence) {
+        final token = unit.token;
+        if (token == null) continue;
+        tokens.add(
+          TranscriptToken(
+            text: unit.text,
+            startMs: token.startMs,
+            endMs: token.endMs,
+            segmentId: id,
+            speaker: token.speaker,
+            language: token.language,
+            confidence: token.confidence,
+            translationStatus: token.translationStatus,
+            sourceLanguage: token.sourceLanguage,
+          ),
+        );
+      }
+      sentence = <_AlignedSubtitleUnit>[];
+      sentenceCharacters = 0;
+    }
+
+    for (final unit in units) {
+      if (sentence.isNotEmpty) {
+        final previous = sentence.last;
+        final speakerChanged =
+            previous.speaker != null &&
+            unit.speaker != null &&
+            previous.speaker != unit.speaker;
+        final pause = unit.startMs - previous.endMs > 1500;
+        final tooLong =
+            unit.endMs - sentence.first.startMs > maximumSentenceDurationMs;
+        final tooLarge =
+            sentenceCharacters + unit.text.length > maximumSentenceCharacters;
+        if (speakerChanged || pause || tooLong || tooLarge) flush();
+      }
+      sentence.add(unit);
+      sentenceCharacters += unit.text.length;
+      if (_endsSentence(unit.text)) flush();
+    }
+    flush();
+    return TranscriptDocument(
+      tokens: List.unmodifiable(tokens),
+      segments: List.unmodifiable(segments),
+      speakers: source.speakers,
+      updatedAt: DateTime.now().toUtc(),
+    );
+  }
 
   TranscriptDocument parse(
     Map<String, dynamic> payload, {
@@ -409,6 +667,49 @@ class TranscriptParser {
     if (second == null || second.trim().isEmpty) return first;
     return _joinSegmentText(first, second);
   }
+}
+
+class _AlignedSubtitleUnit {
+  const _AlignedSubtitleUnit({
+    required this.text,
+    required this.startMs,
+    required this.endMs,
+    required this.alignmentWindowStartMs,
+    required this.alignmentWindowEndMs,
+    this.speaker,
+    this.language,
+    this.token,
+  });
+
+  final String text;
+  final int startMs;
+  final int endMs;
+  final int alignmentWindowStartMs;
+  final int alignmentWindowEndMs;
+  final String? speaker;
+  final String? language;
+  final TranscriptToken? token;
+}
+
+List<String> _subtitleSentenceChunks(String text) {
+  final matches = RegExp(
+    r'''.*?[.!?。！？]+["'”’)]?(?:\s+|$)|.+$''',
+    dotAll: true,
+  ).allMatches(text);
+  final result = [
+    for (final match in matches) match.group(0) ?? '',
+  ].where((chunk) => chunk.isNotEmpty).toList(growable: false);
+  return result.isEmpty ? [text] : result;
+}
+
+String _subtitleBoundaryText(String previous, String current) {
+  final right = current.trimLeft();
+  if (right.isEmpty) return right;
+  final left = previous.trimRight();
+  final needsSpace =
+      RegExp(r'[A-Za-z0-9,;:]$').hasMatch(left) &&
+      RegExp(r'^[A-Za-z0-9]').hasMatch(right);
+  return needsSpace ? ' $right' : right;
 }
 
 extension _FirstOrNull<T> on Iterable<T> {

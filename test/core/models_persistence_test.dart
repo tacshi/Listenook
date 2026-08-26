@@ -256,6 +256,103 @@ void main() {
     },
   );
 
+  test('imported subtitle snapshot provenance and cue windows round-trip', () {
+    final now = DateTime.utc(2026, 8, 24, 9, 30);
+    final fingerprint = SourceFingerprint(
+      identity: '/media/movie.en.srt',
+      path: '/media/movie.en.srt',
+      sizeBytes: 128,
+      modifiedAt: now,
+    );
+    final snapshot = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'subtitle-cue-1',
+          startMs: 1000,
+          endMs: 3000,
+          text: 'Unchanged subtitle text',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: now,
+    );
+    final restored = TranscriptionJob.fromJson(
+      TranscriptionJob(
+        id: 'imported-subtitles',
+        batchId: 'batch',
+        sourcePath: '/media/movie.mp4',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.ready,
+        transcriptionProvider: TranscriptionProvider.soniox,
+        transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+        transcriptSource: TranscriptSource.importedSubtitle,
+        importedSubtitleProvenance: ImportedSubtitleProvenance(
+          sourcePath: fingerprint.path,
+          displayName: 'movie.en.srt',
+          format: SubtitleFormat.srt,
+          importedAt: now,
+          sourceFingerprint: fingerprint,
+          sourceDocumentSnapshot: snapshot,
+          sentenceBreaksNormalized: true,
+        ),
+        document: TranscriptDocument(
+          tokens: const [],
+          segments: const [
+            TranscriptSegment(
+              id: 'subtitle-cue-1',
+              startMs: 1250,
+              endMs: 2800,
+              alignmentWindowStartMs: 1000,
+              alignmentWindowEndMs: 3000,
+              text: 'Unchanged subtitle text',
+              alignmentIncomplete: true,
+              alignmentManuallyResolved: true,
+            ),
+          ],
+          speakers: const [],
+          updatedAt: now,
+        ),
+      ).toJson(),
+    );
+
+    expect(
+      restored.transcriptAcquisitionMode,
+      TranscriptAcquisitionMode.importedSubtitles,
+    );
+    expect(restored.transcriptSource, TranscriptSource.importedSubtitle);
+    expect(restored.transcriptionProvider, TranscriptionProvider.soniox);
+    expect(restored.importedSubtitleProvenance!.format, SubtitleFormat.srt);
+    expect(
+      restored
+          .importedSubtitleProvenance!
+          .sourceDocumentSnapshot!
+          .segments
+          .single
+          .text,
+      'Unchanged subtitle text',
+    );
+    expect(
+      restored.importedSubtitleProvenance!.sentenceBreaksNormalized,
+      isTrue,
+    );
+    expect(restored.document!.segments.single.alignmentIncomplete, isTrue);
+    expect(
+      restored.document!.segments.single.alignmentManuallyResolved,
+      isTrue,
+    );
+    expect(
+      restored.importedSubtitleProvenance!.sourceFingerprint!.sameVersion(
+        fingerprint,
+      ),
+      isTrue,
+    );
+    expect(restored.document!.segments.single.alignmentWindowStartMs, 1000);
+    expect(restored.document!.segments.single.alignmentWindowEndMs, 3000);
+    expect(restored.toJson()['manifest_version'], manifestVersion);
+  });
+
   test('automatic word timing migrates the legacy MOSS setting', () {
     const defaults = AppSettings();
     expect(defaults.automaticWordTiming, isTrue);
@@ -304,22 +401,26 @@ void main() {
     expect(defaults.autoTranscribeLocal, isFalse);
     expect(defaults.lastContentDestination, AppContentDestination.podcast);
     expect(defaults.lastWorkspaceJobId, isNull);
+    expect(defaults.playbackPositionsMs, isEmpty);
 
     final restored = AppSettings.fromJson(
       const AppSettings(
         autoTranscribeLocal: true,
         lastContentDestination: AppContentDestination.workspace,
         lastWorkspaceJobId: 'workspace-job',
+        playbackPositionsMs: {'workspace-job': 4449000},
       ).toJson(),
     );
     expect(restored.autoTranscribeLocal, isTrue);
     expect(restored.lastContentDestination, AppContentDestination.workspace);
     expect(restored.lastWorkspaceJobId, 'workspace-job');
+    expect(restored.playbackPositionsMs, {'workspace-job': 4449000});
     expect(restored.toJson()['manifest_version'], manifestVersion);
 
     final legacy = AppSettings.fromJson(const {});
     expect(legacy.autoTranscribeLocal, isFalse);
     expect(legacy.lastContentDestination, AppContentDestination.podcast);
+    expect(legacy.playbackPositionsMs, isEmpty);
     expect(
       restored.copyWith(clearLastWorkspaceJobId: true).lastWorkspaceJobId,
       isNull,

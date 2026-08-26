@@ -39,6 +39,48 @@ void main() {
     },
   );
 
+  test('playback position survives an app controller restart', () async {
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'transcript',
+        batchId: 'batch',
+        sourcePath: '/recording.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        document: _document(now),
+      ),
+    ]);
+    final settings = _Settings();
+    final first = _controller(
+      jobs: jobs,
+      soniox: _Soniox(),
+      settings: settings,
+    );
+    addTearDown(first.dispose);
+    await first.initialize();
+
+    first.rememberPlaybackPosition(
+      'transcript',
+      const Duration(hours: 1, minutes: 14, seconds: 9),
+    );
+    await first.shutdown();
+
+    final restored = _controller(
+      jobs: jobs,
+      soniox: _Soniox(),
+      settings: settings,
+    );
+    addTearDown(restored.dispose);
+    await restored.initialize();
+
+    expect(
+      restored.playbackPositionFor('transcript'),
+      const Duration(hours: 1, minutes: 14, seconds: 9),
+    );
+  });
+
   test(
     'startup restores Podcast and Library but ignores transient views',
     () async {

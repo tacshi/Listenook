@@ -154,6 +154,60 @@ void main() {
     expect(brief.overview, 'Recovered.');
   });
 
+  test('extracts the final JSON object after provider reasoning', () async {
+    final valid = jsonEncode({
+      'overview': 'Recovered from a noisy response.',
+      'overview_evidence': ['s1'],
+      'chapters': <Object>[],
+      'insights': <Object>[],
+    });
+    final client = _LlmClient([
+      '<think>{"approach":"summarize with evidence"}</think>\n$valid',
+      '<think>{"approach":"summarize with evidence"}</think>\n$valid',
+    ]);
+
+    final brief = await DefaultAiBriefService(client).generate(
+      settings: settings,
+      document: _document(),
+      sections: const {AiBriefSection.overview},
+      outputLanguage: 'en',
+    );
+
+    expect(client.prompts, hasLength(1));
+    expect(brief.overview, 'Recovered from a noisy response.');
+  });
+
+  test('retries semantically empty structured output once', () async {
+    final client = _LlmClient([
+      jsonEncode({
+        'overview': '',
+        'overview_evidence': <String>[],
+        'chapters': <Object>[],
+        'insights': <Object>[],
+      }),
+      jsonEncode({
+        'overview': 'Recovered after validation.',
+        'overview_evidence': ['s1'],
+        'chapters': <Object>[],
+        'insights': <Object>[],
+      }),
+    ]);
+
+    final brief = await DefaultAiBriefService(client).generate(
+      settings: settings,
+      document: _document(),
+      sections: const {AiBriefSection.overview},
+      outputLanguage: 'en',
+    );
+
+    expect(client.prompts, hasLength(2));
+    expect(
+      client.prompts.last,
+      contains('previous response was valid JSON but did not contain usable'),
+    );
+    expect(brief.overview, 'Recovered after validation.');
+  });
+
   test(
     'creates level-aware language notes and rejects ungrounded examples',
     () async {

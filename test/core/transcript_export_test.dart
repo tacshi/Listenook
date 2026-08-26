@@ -74,6 +74,163 @@ void main() {
     );
   });
 
+  test('aligned subtitle cues are rebuilt at sentence boundaries', () {
+    final source = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'cue-1',
+          startMs: 0,
+          endMs: 900,
+          text: "To get us started, I'm going to try",
+          alignmentWindowStartMs: 0,
+          alignmentWindowEndMs: 900,
+        ),
+        TranscriptSegment(
+          id: 'cue-2',
+          startMs: 1000,
+          endMs: 1900,
+          text: "something. So, I'm going to ask ChatGPT",
+          alignmentWindowStartMs: 1000,
+          alignmentWindowEndMs: 1900,
+        ),
+        TranscriptSegment(
+          id: 'cue-3',
+          startMs: 2000,
+          endMs: 2900,
+          text: 'what it truly believes.',
+          alignmentWindowStartMs: 2000,
+          alignmentWindowEndMs: 2900,
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+    );
+    const words = [
+      ['cue-1', 'To'],
+      ['cue-1', 'get'],
+      ['cue-1', 'us'],
+      ['cue-1', 'started'],
+      ['cue-1', "I'm"],
+      ['cue-1', 'going'],
+      ['cue-1', 'to'],
+      ['cue-1', 'try'],
+      ['cue-2', 'something'],
+      ['cue-2', 'So'],
+      ['cue-2', "I'm"],
+      ['cue-2', 'going'],
+      ['cue-2', 'to'],
+      ['cue-2', 'ask'],
+      ['cue-2', 'ChatGPT'],
+      ['cue-3', 'what'],
+      ['cue-3', 'it'],
+      ['cue-3', 'truly'],
+      ['cue-3', 'believes'],
+    ];
+    final aligned = <TranscriptToken>[];
+    for (var index = 0; index < words.length; index++) {
+      aligned.add(
+        TranscriptToken(
+          text: words[index][1],
+          startMs: index * 120,
+          endMs: index * 120 + 100,
+          segmentId: words[index][0],
+        ),
+      );
+    }
+
+    final result = parser.resegmentAlignedSubtitles(source, aligned);
+
+    expect(result.segments.map((segment) => segment.text), [
+      "To get us started, I'm going to try something.",
+      "So, I'm going to ask ChatGPT what it truly believes.",
+    ]);
+    expect(
+      result.segments.every((segment) => !segment.alignmentIncomplete),
+      isTrue,
+    );
+    expect(result.tokens.map((token) => token.segmentId).toSet(), {
+      'imported-sentence-1',
+      'imported-sentence-2',
+    });
+    expect(
+      result.tokens.map((token) => token.text).join(),
+      "To get us started, I'm going to try something. So, I'm going to ask ChatGPT what it truly believes.",
+    );
+  });
+
+  test('unaligned subtitle text survives sentence rebuilding', () {
+    final source = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(
+          id: 'cue',
+          startMs: 0,
+          endMs: 2000,
+          text: 'One sentence. Another sentence.',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+    );
+
+    final result = parser.resegmentAlignedSubtitles(source, const []);
+
+    expect(result.segments.map((segment) => segment.text), [
+      'One sentence.',
+      'Another sentence.',
+    ]);
+    expect(
+      result.segments.every((segment) => segment.alignmentIncomplete),
+      isTrue,
+    );
+    expect(result.tokens, isEmpty);
+  });
+
+  test(
+    'existing imported documents lose caption artifacts without timing loss',
+    () {
+      final now = DateTime.utc(2026, 8, 25);
+      final cleaned = const TranscriptParser()
+          .removeImportedSubtitleCaptionArtifacts(
+            TranscriptDocument(
+              tokens: const [
+                TranscriptToken(
+                  text: '>> Hello ',
+                  startMs: 120,
+                  endMs: 700,
+                  segmentId: 'cue-1',
+                ),
+                TranscriptToken(
+                  text: '[noise]',
+                  startMs: 710,
+                  endMs: 800,
+                  segmentId: 'cue-1',
+                ),
+              ],
+              segments: const [
+                TranscriptSegment(
+                  id: 'cue-1',
+                  startMs: 100,
+                  endMs: 900,
+                  text: '>> Hello [noise]',
+                  alignmentWindowStartMs: 0,
+                  alignmentWindowEndMs: 1000,
+                ),
+              ],
+              speakers: const [],
+              updatedAt: now,
+            ),
+          );
+
+      expect(cleaned.segments.single.text, 'Hello');
+      expect(cleaned.tokens.single.text, 'Hello');
+      expect(cleaned.tokens.single.startMs, 120);
+      expect(cleaned.segments.single.alignmentWindowStartMs, 0);
+      expect(cleaned.segments.single.alignmentWindowEndMs, 1000);
+    },
+  );
+
   test('parser moves a detached closing quote to the previous sentence', () {
     final parsed = parser.parse({
       'tokens': [

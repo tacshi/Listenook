@@ -16,6 +16,7 @@ import '../data/update_service.dart';
 import '../state/app_controller.dart';
 import '../state/podcast_controller.dart';
 import '../state/podcast_player.dart';
+import 'app_notice.dart';
 import 'inbox_page.dart';
 import 'keyboard_shortcuts.dart';
 import 'library_page.dart';
@@ -23,6 +24,7 @@ import 'podcast_mini_bar.dart';
 import 'podcast_page.dart';
 import 'review_fullscreen_controller.dart';
 import 'settings_page.dart';
+import 'subtitle_import_review_dialog.dart';
 import 'workspace_page.dart';
 
 class AppShell extends StatefulWidget {
@@ -489,10 +491,10 @@ class _AppShellState extends State<AppShell>
       await _destroyWindow();
     } on Object catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${context.strings.t('update_restart_failed')} $error'),
-        ),
+      showAppNotice(
+        context,
+        message: '${context.strings.t('update_restart_failed')} $error',
+        tone: AppNoticeTone.error,
       );
     }
   }
@@ -518,13 +520,24 @@ class _AppShellState extends State<AppShell>
 
   Future<void> _addFiles() async {
     final media = XTypeGroup(
-      label: context.strings.t('audio_video'),
-      extensions: const ['mp3', 'wav', 'm4a', 'ogg', 'mp4', 'mkv', 'avi'],
+      label: context.strings.t('audio_video_subtitles'),
+      extensions: const [
+        'mp3',
+        'wav',
+        'm4a',
+        'ogg',
+        'mp4',
+        'mkv',
+        'avi',
+        'srt',
+        'vtt',
+      ],
     );
     final files = await openFiles(acceptedTypeGroups: [media]);
     if (files.isNotEmpty && mounted) {
+      await reviewAndEnqueueSources(context, files.map((file) => file.path));
+      if (!mounted) return;
       final controller = context.read<AppController>();
-      await controller.enqueueSources(files.map((file) => file.path));
       if (mounted) controller.setDestination(AppDestination.inbox);
     }
   }
@@ -532,8 +545,9 @@ class _AppShellState extends State<AppShell>
   Future<void> _importFolder() async {
     final directory = await getDirectoryPath();
     if (directory != null && mounted) {
+      await reviewAndEnqueueSources(context, [directory]);
+      if (!mounted) return;
       final controller = context.read<AppController>();
-      await controller.enqueueSources([directory]);
       if (mounted) controller.setDestination(AppDestination.inbox);
     }
   }

@@ -19,6 +19,16 @@ Silero VAD for segment timing and does not identify speakers. Installing an
 optional speech model is the only time that model connects to Hugging Face;
 inference uses verified offline Core ML or MLX files under Application Support.
 
+When you pair an existing SRT or WebVTT file with media, MeowSTT stores an
+immutable parsed snapshot of its timed cues and sends that snapshot directly to
+the local Qwen3 ForcedAligner. It does not call a transcription provider,
+upload media, or fall back to cloud transcription. Successful cues receive
+locally generated word timing and tighter cue boundaries; unsuccessful cues
+keep their imported timing. The original subtitle file is never modified or
+silently re-read on retry. Replacing it is an explicit action. Optional LLM
+translation remains separate and sends subtitle text—not media—to the configured
+text endpoint when enabled.
+
 Inbox folder monitoring is optional and entirely local. When configured,
 MeowSTT recursively reads directory metadata for supported audio and video
 files and stores the selected folder, selected extensions, pause/login

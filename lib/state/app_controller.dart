@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 import '../core/contracts.dart';
+import '../core/imported_subtitle_alignment.dart';
 import '../core/local_speech.dart';
 import '../core/models.dart';
 import '../core/podcast_models.dart';
@@ -21,10 +22,13 @@ import '../data/podcast/publisher_transcript.dart';
 import '../data/process_media_service.dart';
 import '../data/soniox_api_client.dart';
 import '../data/transcript_exporter.dart';
+import '../data/timed_subtitle_import.dart';
 
 enum AppDestination { inbox, podcast, workspace, library, settings }
 
 class AppController extends ChangeNotifier {
+  static const _playbackHistorySaveInterval = Duration(seconds: 2);
+
   AppController({
     required CredentialStore credentialStore,
     required SettingsRepository settingsRepository,
@@ -49,6 +53,8 @@ class AppController extends ChangeNotifier {
     TranscriptParser parser = const TranscriptParser(),
     PublisherTranscriptParser publisherTranscriptParser =
         const PublisherTranscriptParser(),
+    TimedSubtitleImportService timedSubtitleImportService =
+        const TimedSubtitleImportService(),
     PodcastDownloadLocator downloadLocator = const PodcastDownloadLocator(),
     TranscriptStructureEditor? transcriptStructureEditor,
     Uuid uuid = const Uuid(),
@@ -74,6 +80,7 @@ class AppController extends ChangeNotifier {
        _podcastManagedRoot = podcastManagedRoot,
        _parser = parser,
        _publisherTranscriptParser = publisherTranscriptParser,
+       _timedSubtitleImportService = timedSubtitleImportService,
        _downloadLocator = downloadLocator,
        _transcriptStructureEditor =
            transcriptStructureEditor ?? TranscriptStructureEditor(),
@@ -101,6 +108,7 @@ class AppController extends ChangeNotifier {
   final String? _podcastManagedRoot;
   final TranscriptParser _parser;
   final PublisherTranscriptParser _publisherTranscriptParser;
+  final TimedSubtitleImportService _timedSubtitleImportService;
   final PodcastDownloadLocator _downloadLocator;
   final TranscriptStructureEditor _transcriptStructureEditor;
   final Uuid _uuid;
@@ -132,6 +140,8 @@ class AppController extends ChangeNotifier {
   AppDestination _destination = AppDestination.podcast;
   String? _activeWorkspaceJobId;
   Future<void> _settingsSaveTail = Future<void>.value();
+  DateTime? _lastPlaybackHistorySaveAt;
+  bool _playbackHistoryDirty = false;
   AppSettings _settings = const AppSettings();
   LibraryCatalog _libraryCatalog = const LibraryCatalog();
   TranscriptionOptions _sessionOptions = const TranscriptionOptions();
@@ -217,6 +227,18 @@ class AppController extends ChangeNotifier {
               )),
   };
   bool get localSpeechSupported => _localSttService?.isSupported ?? false;
+  bool get localForcedAlignmentSupported =>
+      _forcedAlignmentService?.isSupported ?? false;
+  LocalModelDescriptor? get defaultForcedAligner => _defaultForcedAligner;
+  bool get defaultForcedAlignerReady {
+    final model = _defaultForcedAligner;
+    return localForcedAlignmentSupported &&
+        model != null &&
+        (_localModelManager == null ||
+            _localModelStatuses[model.id]?.availability ==
+                LocalModelAvailability.ready);
+  }
+
   List<TranscriptionProvider> get availableTranscriptionProviders => [
     TranscriptionProvider.soniox,
     TranscriptionProvider.mossPro,
@@ -285,10 +307,54 @@ class AppController extends ChangeNotifier {
 
   void rememberPlaybackPosition(String jobId, Duration position) {
     if (position <= Duration.zero) {
-      _playbackPositions.remove(jobId);
+      if (_playbackPositions.remove(jobId) == null) return;
+      if (_jobs.containsKey(jobId)) _markPlaybackHistoryDirty();
       return;
     }
-    _playbackPositions[jobId] = position;
+    final normalized = Duration(milliseconds: position.inMilliseconds);
+    if (_playbackPositions[jobId] == normalized) return;
+    _playbackPositions[jobId] = normalized;
+    if (_jobs.containsKey(jobId)) _markPlaybackHistoryDirty();
+  }
+
+  void _forgetPlaybackPosition(String jobId) {
+    final removed = _playbackPositions.remove(jobId) != null;
+    if (!removed && !_settings.playbackPositionsMs.containsKey(jobId)) return;
+    _markPlaybackHistoryDirty();
+  }
+
+  void _markPlaybackHistoryDirty() {
+    _settings = _settings.copyWith(
+      playbackPositionsMs: {
+        for (final entry in _playbackPositions.entries)
+          if (_jobs.containsKey(entry.key))
+            entry.key: entry.value.inMilliseconds,
+      },
+    );
+    _playbackHistoryDirty = true;
+    final now = DateTime.now();
+    final lastSavedAt = _lastPlaybackHistorySaveAt;
+    if (lastSavedAt != null &&
+        now.difference(lastSavedAt) < _playbackHistorySaveInterval) {
+      return;
+    }
+    _lastPlaybackHistorySaveAt = now;
+    unawaited(
+      _savePlaybackHistory().catchError((Object error) {
+        debugPrint('Unable to save playback history: $error');
+      }),
+    );
+  }
+
+  Future<void> _savePlaybackHistory() async {
+    if (!_playbackHistoryDirty) return;
+    _playbackHistoryDirty = false;
+    try {
+      await _queueSettingsSave(_settings);
+    } on Object {
+      _playbackHistoryDirty = true;
+      rethrow;
+    }
   }
 
   int get readyCount =>
@@ -349,12 +415,50 @@ class AppController extends ChangeNotifier {
       if (normalized != null && _isMossJob(original)) {
         normalized = _parser.removeMossControlOnlySegments(normalized);
       }
-      if (normalized != null && !original.forcedAlignment.hasWordTiming) {
+      var importedProvenance = original.importedSubtitleProvenance;
+      if (normalized != null &&
+          importedProvenance != null &&
+          original.transcriptAcquisitionMode ==
+              TranscriptAcquisitionMode.importedSubtitles) {
+        final storedSnapshot = importedProvenance.sourceDocumentSnapshot;
+        final snapshot = _parser.removeImportedSubtitleCaptionArtifacts(
+          storedSnapshot ?? normalized,
+        );
+        normalized = _parser.removeImportedSubtitleCaptionArtifacts(normalized);
+        if (original.forcedAlignment.hasWordTiming &&
+            !importedProvenance.sentenceBreaksNormalized) {
+          normalized = _parser.resegmentAlignedSubtitles(
+            snapshot,
+            normalized.tokens,
+          );
+          importedProvenance = importedProvenance.copyWith(
+            sourceDocumentSnapshot: snapshot,
+            sentenceBreaksNormalized: true,
+          );
+        } else if (storedSnapshot == null) {
+          importedProvenance = importedProvenance.copyWith(
+            sourceDocumentSnapshot: snapshot,
+          );
+        }
+      }
+      if (normalized != null &&
+          !original.forcedAlignment.hasWordTiming &&
+          original.transcriptAcquisitionMode !=
+              TranscriptAcquisitionMode.importedSubtitles) {
         normalized = _parser.normalizeSegments(normalized);
       }
-      var job = normalized == null || identical(normalized, document)
-          ? original
-          : original.copyWith(document: normalized);
+      final documentChanged =
+          normalized != null && !identical(normalized, document);
+      final provenanceChanged = !identical(
+        importedProvenance,
+        original.importedSubtitleProvenance,
+      );
+      var job = documentChanged || provenanceChanged
+          ? original.copyWith(
+              document: normalized,
+              importedSubtitleProvenance: importedProvenance,
+            )
+          : original;
       if (!identical(job, original) &&
           job.status == JobStatus.completed &&
           job.document?.segments.isEmpty == true) {
@@ -434,6 +538,20 @@ class AppController extends ChangeNotifier {
       if (!identical(job, original)) {
         await _jobsRepository.save(job);
       }
+    }
+    for (final entry in _settings.playbackPositionsMs.entries) {
+      if (_jobs.containsKey(entry.key) && entry.value > 0) {
+        _playbackPositions[entry.key] = Duration(milliseconds: entry.value);
+      }
+    }
+    if (_playbackPositions.length != _settings.playbackPositionsMs.length) {
+      _settings = _settings.copyWith(
+        playbackPositionsMs: {
+          for (final entry in _playbackPositions.entries)
+            entry.key: entry.value.inMilliseconds,
+        },
+      );
+      settingsChanged = true;
     }
     _keyConfigured = await _credentialIsAvailable(
       _credentials,
@@ -775,7 +893,7 @@ class AppController extends ChangeNotifier {
     for (final job in removedJobs) {
       _inboxIds.remove(job.id);
       _jobs.remove(job.id);
-      _playbackPositions.remove(job.id);
+      _forgetPlaybackPosition(job.id);
       await _media.deleteGeneratedMedia(job.id);
       await _jobsRepository.delete(job.id);
     }
@@ -1245,6 +1363,7 @@ class AppController extends ChangeNotifier {
       TranscriptAcquisitionMode.qwen3Local => TranscriptionProvider.qwen3Local,
       TranscriptAcquisitionMode.soniox => TranscriptionProvider.soniox,
       TranscriptAcquisitionMode.publisherCaptions => job.transcriptionProvider,
+      TranscriptAcquisitionMode.importedSubtitles => job.transcriptionProvider,
     };
     final transcriptionModel = _localTranscriptionModelForMode(mode);
     await _transition(
@@ -1444,12 +1563,25 @@ class AppController extends ChangeNotifier {
     return (provenance, TranscriptAcquisitionMode.publisherCaptions);
   }
 
-  bool get canStartReady =>
-      !_processing &&
-      inboxJobs.any((job) => job.status.canTranscribe && _canStart(job));
+  bool get canStartReady => !_processing && inboxJobs.any(canProcessInboxJob);
+
+  bool canProcessInboxJob(TranscriptionJob job) {
+    if (job.status.canTranscribe) return _canStart(job);
+    return job.transcriptAcquisitionMode ==
+            TranscriptAcquisitionMode.importedSubtitles &&
+        !job.status.isActive &&
+        job.document?.segments.isNotEmpty == true &&
+        job.forcedAlignment.canRequest &&
+        defaultForcedAlignerReady;
+  }
 
   bool _canStart(TranscriptionJob job) {
     if (job.transcriptAcquisitionMode.usesPublisherTranscript) return true;
+    if (job.transcriptAcquisitionMode ==
+        TranscriptAcquisitionMode.importedSubtitles) {
+      return job.document?.segments.isNotEmpty == true &&
+          defaultForcedAlignerReady;
+    }
     return isTranscriptionProviderConfigured(job.transcriptionProvider);
   }
 
@@ -1463,6 +1595,11 @@ class AppController extends ChangeNotifier {
     };
     final sources = await _sourceResolver.resolve(paths);
     for (final source in sources) {
+      final extension = p
+          .extension(source.path)
+          .replaceFirst('.', '')
+          .toLowerCase();
+      if (!supportedMonitoredMediaExtensions.contains(extension)) continue;
       if (!existing.add(source.identity)) continue;
       await _enqueueResolvedSource(
         source,
@@ -1470,6 +1607,198 @@ class AppController extends ChangeNotifier {
         fingerprint: await fingerprintMonitoredFile(source.path),
         allowLocalAutoStart: allowLocalAutoStart,
       );
+    }
+  }
+
+  Future<SubtitleImportReview?> previewSourceImports(
+    Iterable<String> paths,
+  ) async {
+    final review = await _timedSubtitleImportService.preview(
+      paths,
+      resolver: _sourceResolver,
+    );
+    if (review == null) return null;
+    final matches = <MediaSubtitleMatch>[];
+    for (final match in review.media) {
+      final metadata = await _media.inspect(match.media.path);
+      final candidates = <SubtitleFileCandidate>[];
+      for (final candidate in match.candidates) {
+        final source = candidate.parseResult;
+        if (source == null) {
+          candidates.add(candidate);
+          continue;
+        }
+        final parsed = _timedSubtitleImportService.constrainToDuration(
+          source,
+          metadata.durationMs,
+        );
+        candidates.add(
+          SubtitleFileCandidate(
+            path: candidate.path,
+            displayName: candidate.displayName,
+            format: candidate.format,
+            parseResult: parsed,
+            languageCode: candidate.languageCode,
+            errorCode: parsed.document.segments.isEmpty
+                ? 'subtitle_no_valid_cues'
+                : candidate.errorCode,
+          ),
+        );
+      }
+      matches.add(
+        MediaSubtitleMatch(media: match.media, candidates: candidates),
+      );
+    }
+    return SubtitleImportReview(
+      media: List.unmodifiable(matches),
+      unmatchedSubtitles: review.unmatchedSubtitles,
+    );
+  }
+
+  Future<void> enqueueReviewedImports(
+    Iterable<SubtitleImportSelection> selections,
+  ) async {
+    if (_inboxIds.isEmpty && !_processing) _batchId = _uuid.v4();
+    final existing = <String>{
+      for (final job in inboxJobs) _sourceResolver.identityFor(job.sourcePath),
+    };
+    for (final selection in selections) {
+      if (!existing.add(selection.media.identity)) continue;
+      final subtitle = selection.subtitle;
+      if (subtitle == null) {
+        await _enqueueResolvedSource(
+          selection.media,
+          sourceOrigin: JobSourceOrigin.manual,
+          fingerprint: await fingerprintMonitoredFile(selection.media.path),
+          allowLocalAutoStart: false,
+        );
+        continue;
+      }
+      if (!subtitle.isValid) continue;
+      await _enqueueImportedSubtitle(selection);
+    }
+  }
+
+  Future<void> _enqueueImportedSubtitle(
+    SubtitleImportSelection selection,
+  ) async {
+    final subtitle = selection.subtitle!;
+    final metadata = await _media.inspect(selection.media.path);
+    final parsed = _timedSubtitleImportService.constrainToDuration(
+      subtitle.parseResult!,
+      metadata.durationMs,
+    );
+    if (parsed.document.segments.isEmpty) {
+      throw const TimedSubtitleImportException('subtitle_no_valid_cues');
+    }
+    final now = DateTime.now().toUtc();
+    final language = selection.languageCode?.trim().toLowerCase();
+    final job = TranscriptionJob(
+      id: _uuid.v4(),
+      batchId: _batchId,
+      sourcePath: selection.media.path,
+      createdAt: now,
+      updatedAt: now,
+      status: JobStatus.ready,
+      queueIndex: _inboxIds.length,
+      progress: const JobProgress(stage: 'ready', fraction: 0),
+      metadata: metadata,
+      options: _sessionOptions.copyWith(
+        languageHints: language == null || language.isEmpty
+            ? const []
+            : [language],
+      ),
+      document: parsed.document,
+      translationOptions: TranslationOptions.fromSettings(
+        _settings.translationSettings,
+      ),
+      sourceOrigin: JobSourceOrigin.manual,
+      sourceFingerprint: await fingerprintMonitoredFile(selection.media.path),
+      importedSubtitleProvenance: ImportedSubtitleProvenance(
+        sourcePath: subtitle.path,
+        displayName: subtitle.displayName,
+        format: subtitle.format,
+        importedAt: now,
+        sourceFingerprint: await fingerprintMonitoredFile(subtitle.path),
+        sourceDocumentSnapshot: parsed.document,
+      ),
+      transcriptionProvider: _sessionTranscriptionProvider,
+      transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+      transcriptSource: TranscriptSource.importedSubtitle,
+      forcedAlignment: ForcedAlignmentState(
+        totalSegments: parsed.document.segments.length,
+        languageAutomaticallyDetermined: language == null || language.isEmpty,
+      ),
+    );
+    _jobs[job.id] = job;
+    _inboxIds.add(job.id);
+    await _jobsRepository.save(job);
+    notifyListeners();
+  }
+
+  Future<String?> replaceImportedSubtitle(
+    String jobId,
+    String subtitlePath, {
+    String? languageCode,
+  }) async {
+    final job = _jobs[jobId];
+    if (job == null ||
+        job.transcriptAcquisitionMode !=
+            TranscriptAcquisitionMode.importedSubtitles ||
+        job.isBusy) {
+      return 'subtitle_replace_unavailable';
+    }
+    try {
+      final candidate = await _timedSubtitleImportService.parseCandidate(
+        subtitlePath,
+      );
+      if (!candidate.isValid) {
+        return candidate.errorCode ?? 'subtitle_no_valid_cues';
+      }
+      final metadata = job.metadata ?? await _media.inspect(job.sourcePath);
+      final parsed = _timedSubtitleImportService.constrainToDuration(
+        candidate.parseResult!,
+        metadata.durationMs,
+      );
+      if (parsed.document.segments.isEmpty) {
+        return 'subtitle_no_valid_cues';
+      }
+      final language = languageCode?.trim().toLowerCase();
+      await _transition(
+        job,
+        status: JobStatus.ready,
+        progress: const JobProgress(stage: 'ready', fraction: 0),
+        metadata: metadata,
+        options: job.options.copyWith(
+          languageHints: language == null || language.isEmpty
+              ? const []
+              : [language],
+        ),
+        document: parsed.document,
+        importedSubtitleProvenance: ImportedSubtitleProvenance(
+          sourcePath: candidate.path,
+          displayName: candidate.displayName,
+          format: candidate.format,
+          importedAt: DateTime.now().toUtc(),
+          sourceFingerprint: await fingerprintMonitoredFile(candidate.path),
+          sourceDocumentSnapshot: parsed.document,
+        ),
+        translationState: const TranslationState(),
+        aiGenerationState: const AiGenerationState(),
+        forcedAlignment: ForcedAlignmentState(
+          totalSegments: parsed.document.segments.length,
+          languageAutomaticallyDetermined: language == null || language.isEmpty,
+        ),
+        clearAiBrief: true,
+        clearError: true,
+      );
+      return null;
+    } on TimedSubtitleImportException catch (error) {
+      return error.code;
+    } on MediaException catch (error) {
+      return error.code;
+    } on Object {
+      return 'subtitle_read_failed';
     }
   }
 
@@ -1577,16 +1906,19 @@ class AppController extends ChangeNotifier {
 
   Future<void> startReady() async {
     if (_processing) return;
-    final queue = inboxJobs
-        .where((job) => job.status.canTranscribe && _canStart(job))
-        .map((job) => job.id)
-        .toList();
+    final queue = inboxJobs.where(canProcessInboxJob).toList(growable: false);
     if (queue.isEmpty) return;
-    _localAutoStartCandidates.removeAll(queue);
+    _localAutoStartCandidates.removeAll(queue.map((job) => job.id));
     _processing = true;
     notifyListeners();
     try {
-      await _runWorkerPool(queue);
+      await Future.wait([
+        for (final job in queue)
+          if (job.status.canTranscribe)
+            _runJob(job.id)
+          else
+            retryForcedAlignment(job.id),
+      ]);
     } finally {
       _processing = false;
       notifyListeners();
@@ -1667,23 +1999,53 @@ class AppController extends ChangeNotifier {
         await _importPublisherTranscript(job);
         return;
       }
-      job = _isLocalProvider(job.transcriptionProvider)
-          ? await _localModelLane.withPermit(() => _acquireLocalTranscript(job))
-          : await _remoteLane.withPermit(() => _acquireRemoteTranscript(job));
-
-      if (_supportsWordAlignment(job) &&
-          job.document?.segments.isNotEmpty == true &&
-          _settings.automaticWordTiming) {
-        job = await _runForcedAlignment(job);
-      } else if (job.status == JobStatus.aligning) {
+      final importedSubtitles =
+          job.transcriptAcquisitionMode ==
+          TranscriptAcquisitionMode.importedSubtitles;
+      if (importedSubtitles) {
+        final document = job.document;
+        if (document == null || document.segments.isEmpty) {
+          await _fail(
+            job,
+            'subtitle_no_valid_cues',
+            'The imported subtitle has no valid timed cues.',
+          );
+          return;
+        }
         job = await _transition(
           job,
-          status: JobStatus.completed,
-          progress: const JobProgress(stage: 'complete', fraction: 1),
+          status: JobStatus.aligning,
+          forcedAlignment: _queuedAlignmentState(
+            document.segments.length,
+            model: _defaultForcedAligner,
+            languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
+          ),
+          progress: const JobProgress(stage: 'aligning', fraction: 0),
+          clearError: true,
         );
+        job = await _runForcedAlignment(job);
+      } else {
+        job = _isLocalProvider(job.transcriptionProvider)
+            ? await _localModelLane.withPermit(
+                () => _acquireLocalTranscript(job),
+              )
+            : await _remoteLane.withPermit(() => _acquireRemoteTranscript(job));
+
+        if (_supportsWordAlignment(job) &&
+            job.document?.segments.isNotEmpty == true &&
+            _settings.automaticWordTiming) {
+          job = await _runForcedAlignment(job);
+        } else if (job.status == JobStatus.aligning) {
+          job = await _transition(
+            job,
+            status: JobStatus.completed,
+            progress: const JobProgress(stage: 'complete', fraction: 1),
+          );
+        }
       }
       job = _jobs[id] ?? job;
       final usesEmbeddedTranslation =
+          !importedSubtitles &&
           job.transcriptionProvider == TranscriptionProvider.soniox &&
           job.options.sonioxTranslation.enabled;
       if (job.status == JobStatus.completed &&
@@ -1973,6 +2335,9 @@ class AppController extends ChangeNotifier {
       mode == TranscriptAcquisitionMode.qwen3Local;
 
   bool _supportsWordAlignment(TranscriptionJob job) =>
+      job.transcriptAcquisitionMode ==
+          TranscriptAcquisitionMode.importedSubtitles ||
+      job.transcriptSource == TranscriptSource.importedSubtitle ||
       _isMossJob(job) ||
       job.transcriptSource == TranscriptSource.qwen3Local ||
       job.transcriptionProvider == TranscriptionProvider.qwen3Local;
@@ -1981,18 +2346,224 @@ class AppController extends ChangeNotifier {
     int totalSegments, {
     required LocalModelDescriptor? model,
     required bool languageAutomaticallyDetermined,
+    int alignedSegments = 0,
   }) => ForcedAlignmentState(
     status: ForcedAlignmentStatus.queued,
     modelId: model?.id,
     modelRevision: model?.revision,
+    alignedSegments: alignedSegments,
     totalSegments: totalSegments,
     languageAutomaticallyDetermined: languageAutomaticallyDetermined,
   );
 
+  int _alignedSegmentCount(TranscriptDocument document) {
+    final segmentIds = document.segments.map((segment) => segment.id).toSet();
+    return document.tokens
+        .map((token) => token.segmentId)
+        .whereType<String>()
+        .where(segmentIds.contains)
+        .toSet()
+        .length;
+  }
+
+  ({AlignmentResult result, Set<String> rejectedSegmentIds})
+  _validateImportedAlignmentTimeline(
+    TranscriptDocument document,
+    AlignmentResult result, {
+    required bool orderedText,
+  }) {
+    if (result.status != ForcedAlignmentStatus.completed &&
+        result.status != ForcedAlignmentStatus.partial) {
+      return (result: result, rejectedSegmentIds: const <String>{});
+    }
+    final segments = document.segments;
+    final segmentById = {for (final segment in segments) segment.id: segment};
+    final tokensBySegment = <String, List<TranscriptToken>>{};
+    var discardedUnownedTokens = false;
+    for (final token in result.tokens) {
+      final owner = token.segmentId;
+      if (owner == null || !segmentById.containsKey(owner)) {
+        discardedUnownedTokens = true;
+        continue;
+      }
+      tokensBySegment.putIfAbsent(owner, () => []).add(token);
+    }
+
+    final accepted = <String>{};
+    var discardedUnreliableSegment = false;
+    for (final segment in segments) {
+      final owned = tokensBySegment[segment.id];
+      if (owned == null || owned.isEmpty) continue;
+      if (_hasReliableImportedAlignment(
+        segment,
+        owned,
+        orderedText: orderedText,
+      )) {
+        accepted.add(segment.id);
+      } else {
+        discardedUnreliableSegment = true;
+      }
+    }
+
+    ({int startMs, int endMs}) intervalFor(TranscriptSegment segment) {
+      final owned = accepted.contains(segment.id)
+          ? tokensBySegment[segment.id]
+          : null;
+      if (owned == null || owned.isEmpty) {
+        return (startMs: segment.startMs, endMs: segment.endMs);
+      }
+      return (
+        startMs: owned
+            .map((token) => token.startMs)
+            .reduce((left, right) => min(left, right)),
+        endMs: owned
+            .map((token) => token.endMs)
+            .reduce((left, right) => max(left, right)),
+      );
+    }
+
+    var timelineConflict = false;
+    var changed = true;
+    while (changed) {
+      changed = false;
+      final comparable = orderedText
+          ? [
+              for (final segment in segments)
+                if (accepted.contains(segment.id)) segment,
+            ]
+          : segments;
+      for (var index = 0; index + 1 < comparable.length; index++) {
+        final left = comparable[index];
+        final right = comparable[index + 1];
+        if (intervalFor(left).endMs <= intervalFor(right).startMs) continue;
+        final removedLeft = accepted.remove(left.id);
+        final removedRight = accepted.remove(right.id);
+        if (!removedLeft && !removedRight) continue;
+        timelineConflict = true;
+        changed = true;
+      }
+    }
+
+    final tokens = <TranscriptToken>[
+      for (final token in result.tokens)
+        if (token.segmentId case final owner? when accepted.contains(owner))
+          token,
+    ];
+    final alignedSegments = accepted.length;
+    final totalSegments = segments.length;
+    final status = alignedSegments == totalSegments
+        ? ForcedAlignmentStatus.completed
+        : ForcedAlignmentStatus.partial;
+    final changedCoverage =
+        discardedUnownedTokens ||
+        discardedUnreliableSegment ||
+        timelineConflict ||
+        alignedSegments != result.alignedSegments ||
+        totalSegments != result.totalSegments;
+    final rejectedSegmentIds = <String>{
+      for (final owner in tokensBySegment.keys)
+        if (!accepted.contains(owner)) owner,
+    };
+    if (!changedCoverage && status == result.status) {
+      return (
+        result: result,
+        rejectedSegmentIds: Set.unmodifiable(rejectedSegmentIds),
+      );
+    }
+    return (
+      result: AlignmentResult(
+        tokens: List.unmodifiable(tokens),
+        status: status,
+        alignedSegments: alignedSegments,
+        totalSegments: totalSegments,
+        languageAutomaticallyDetermined: result.languageAutomaticallyDetermined,
+        warningCode: timelineConflict
+            ? 'alignment_timeline_conflict'
+            : status == ForcedAlignmentStatus.completed
+            ? null
+            : result.warningCode ?? 'alignment_partial',
+        warningMessage: timelineConflict ? null : result.warningMessage,
+      ),
+      rejectedSegmentIds: Set.unmodifiable(rejectedSegmentIds),
+    );
+  }
+
+  bool _hasReliableImportedAlignment(
+    TranscriptSegment segment,
+    List<TranscriptToken> tokens, {
+    required bool orderedText,
+  }) {
+    final text = segment.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final ranges = alignTranscriptTokenRanges(text, tokens);
+    if (text.isEmpty ||
+        ranges.length != tokens.length ||
+        ranges.any((range) => range == null)) {
+      return false;
+    }
+    final windowStart = segment.alignmentWindowStartMs ?? segment.startMs;
+    final windowEnd = segment.alignmentWindowEndMs ?? segment.endMs;
+    int? previousEnd;
+    for (final token in tokens) {
+      if ((!orderedText &&
+              (token.startMs < windowStart || token.endMs > windowEnd)) ||
+          token.endMs <= token.startMs ||
+          (previousEnd != null && token.startMs < previousEnd)) {
+        return false;
+      }
+      previousEnd = token.endMs;
+    }
+    return true;
+  }
+
   Future<TranscriptionJob> _runForcedAlignment(TranscriptionJob initial) async {
     var job = initial;
-    final document = job.document;
-    if (document == null || document.segments.isEmpty) return job;
+    final jobDocument = job.document;
+    if (jobDocument == null || jobDocument.segments.isEmpty) return job;
+    final importedSubtitles =
+        job.transcriptAcquisitionMode ==
+        TranscriptAcquisitionMode.importedSubtitles;
+    final importedProvenance = job.importedSubtitleProvenance;
+    final sourceDocument =
+        importedSubtitles &&
+            !(importedProvenance?.sentenceBreaksNormalized ?? false)
+        ? importedProvenance?.sourceDocumentSnapshot ?? jobDocument
+        : jobDocument;
+    final importedPlan = importedSubtitles
+        ? const ImportedSubtitleAlignmentPlanner().prepare(
+            sourceDocument,
+            sentenceBreaksNormalized:
+                importedProvenance?.sentenceBreaksNormalized ?? false,
+          )
+        : null;
+    var document = importedPlan?.document ?? sourceDocument;
+    final orderedText =
+        importedPlan?.timelineMode == ImportedSubtitleTimelineMode.orderedText;
+    final sourceSentenceBreaksNormalized =
+        importedPlan?.sentenceBreaksNormalized ?? false;
+    if (importedSubtitles && document.tokens.isNotEmpty) {
+      final existingAlignedSegments = _alignedSegmentCount(document);
+      final validation = _validateImportedAlignmentTimeline(
+        document,
+        AlignmentResult(
+          tokens: document.tokens,
+          status: existingAlignedSegments == document.segments.length
+              ? ForcedAlignmentStatus.completed
+              : ForcedAlignmentStatus.partial,
+          alignedSegments: existingAlignedSegments,
+          totalSegments: document.segments.length,
+        ),
+        orderedText: orderedText,
+      );
+      if (validation.rejectedSegmentIds.isNotEmpty) {
+        document = document.copyWith(
+          tokens: validation.result.tokens,
+          segments: _restoreRejectedImportedSubtitleTiming(
+            document,
+            validation.rejectedSegmentIds,
+          ),
+        );
+      }
+    }
     final service = _forcedAlignmentService;
     if (service == null || !service.isSupported) {
       return _completeWithoutAlignment(
@@ -2027,39 +2598,113 @@ class AppController extends ChangeNotifier {
         status: ForcedAlignmentStatus.running,
         modelId: model.id,
         modelRevision: model.revision,
+        alignedSegments: job.forcedAlignment.alignedSegments,
         totalSegments: document.segments.length,
         languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
       ),
       progress: const JobProgress(stage: 'aligning', fraction: 0),
     );
+    var checkpointTail = Future<void>.value();
+
+    void queueCheckpoint(AlignmentResult checkpoint) {
+      final validation = importedSubtitles
+          ? _validateImportedAlignmentTimeline(
+              document,
+              checkpoint,
+              orderedText: orderedText,
+            )
+          : (result: checkpoint, rejectedSegmentIds: const <String>{});
+      checkpointTail = checkpointTail.then(
+        (_) => _publishAlignmentCheckpoint(
+          jobId: job.id,
+          source: document,
+          result: validation.result,
+          resetOriginalTimingSegmentIds: validation.rejectedSegmentIds,
+          model: model,
+          sourceSentenceBreaksNormalized: sourceSentenceBreaksNormalized,
+        ),
+      );
+    }
+
+    Future<void> flushCheckpoints() async {
+      try {
+        await checkpointTail;
+      } on Object {
+        // The final or interrupted transition below retries persistence with
+        // the latest in-memory checkpoint.
+      }
+    }
+
     try {
-      final result = await _localModelLane.withPermit(
+      final rawResult = await _localModelLane.withPermit(
         () => service.align(
           ForcedAlignmentRequest(
             sourcePath: job.sourcePath,
             document: document,
             model: model,
             languageHints: job.options.languageHints,
+            onCheckpoint: queueCheckpoint,
+            timelineMode: orderedText
+                ? ForcedAlignmentTimelineMode.orderedText
+                : ForcedAlignmentTimelineMode.segmentBounded,
           ),
           onProgress: (fraction, detail) =>
               unawaited(_progress(job.id, 'aligning', fraction, detail)),
           shouldCancel: () => _cancelledIds.contains(job.id),
         ),
       );
+      final validation = importedSubtitles
+          ? _validateImportedAlignmentTimeline(
+              document,
+              rawResult,
+              orderedText: orderedText,
+            )
+          : (result: rawResult, rejectedSegmentIds: const <String>{});
+      final result = validation.result;
+      await flushCheckpoints();
       final publishTokens =
           result.status == ForcedAlignmentStatus.completed ||
           result.status == ForcedAlignmentStatus.partial;
+      var publishedProvenance = importedProvenance;
+      final publishedDocument = publishTokens
+          ? importedSubtitles
+                ? sourceSentenceBreaksNormalized
+                      ? document.copyWith(
+                          tokens: result.tokens,
+                          segments: _tightenImportedSubtitleCues(
+                            document,
+                            result.tokens,
+                            resetOriginalTimingSegmentIds:
+                                validation.rejectedSegmentIds,
+                          ),
+                        )
+                      : _parser.resegmentAlignedSubtitles(
+                          document,
+                          result.tokens,
+                        )
+                : document.copyWith(tokens: result.tokens)
+          : document;
+      if (publishTokens &&
+          importedSubtitles &&
+          publishedProvenance != null &&
+          !publishedProvenance.sentenceBreaksNormalized) {
+        publishedProvenance = publishedProvenance.copyWith(
+          sourceDocumentSnapshot:
+              publishedProvenance.sourceDocumentSnapshot ?? document,
+          sentenceBreaksNormalized: true,
+        );
+      }
       return await _transition(
         _jobs[job.id] ?? job,
         status: JobStatus.completed,
-        document: publishTokens
-            ? document.copyWith(tokens: result.tokens)
-            : document,
+        document: publishedDocument,
+        importedSubtitleProvenance: publishedProvenance,
         forcedAlignment: result.toState(model),
         progress: const JobProgress(stage: 'complete', fraction: 1),
         clearError: true,
       );
     } on OperationCancelledException {
+      await flushCheckpoints();
       final interrupted = _alignmentInterruptedIds.contains(job.id);
       return _completeWithoutAlignment(
         _jobs[job.id] ?? job,
@@ -2069,6 +2714,7 @@ class AppController extends ChangeNotifier {
         interrupted ? 'alignment_interrupted' : 'alignment_cancelled',
       );
     } on LocalSpeechException catch (error) {
+      await flushCheckpoints();
       return _completeWithoutAlignment(
         _jobs[job.id] ?? job,
         ForcedAlignmentStatus.failed,
@@ -2076,6 +2722,7 @@ class AppController extends ChangeNotifier {
         error.message,
       );
     } on Object catch (error) {
+      await flushCheckpoints();
       return _completeWithoutAlignment(
         _jobs[job.id] ?? job,
         ForcedAlignmentStatus.failed,
@@ -2084,6 +2731,115 @@ class AppController extends ChangeNotifier {
       );
     }
   }
+
+  Future<void> _publishAlignmentCheckpoint({
+    required String jobId,
+    required TranscriptDocument source,
+    required AlignmentResult result,
+    required LocalModelDescriptor model,
+    required bool sourceSentenceBreaksNormalized,
+    Set<String> resetOriginalTimingSegmentIds = const {},
+  }) async {
+    if (result.status != ForcedAlignmentStatus.completed &&
+        result.status != ForcedAlignmentStatus.partial) {
+      return;
+    }
+    final current = _jobs[jobId];
+    if (current == null || current.status != JobStatus.aligning) return;
+    final importedSubtitles =
+        current.transcriptAcquisitionMode ==
+        TranscriptAcquisitionMode.importedSubtitles;
+    var importedProvenance = current.importedSubtitleProvenance;
+    final document = importedSubtitles
+        ? sourceSentenceBreaksNormalized
+              ? source.copyWith(
+                  tokens: result.tokens,
+                  segments: _tightenImportedSubtitleCues(
+                    source,
+                    result.tokens,
+                    resetOriginalTimingSegmentIds:
+                        resetOriginalTimingSegmentIds,
+                  ),
+                )
+              : _parser.resegmentAlignedSubtitles(source, result.tokens)
+        : source.copyWith(tokens: result.tokens);
+    if (importedSubtitles &&
+        importedProvenance != null &&
+        !importedProvenance.sentenceBreaksNormalized) {
+      importedProvenance = importedProvenance.copyWith(
+        sourceDocumentSnapshot:
+            importedProvenance.sourceDocumentSnapshot ?? source,
+        sentenceBreaksNormalized: true,
+      );
+    }
+    await _transition(
+      current,
+      status: JobStatus.aligning,
+      document: document,
+      importedSubtitleProvenance: importedProvenance,
+      forcedAlignment: ForcedAlignmentState(
+        status: ForcedAlignmentStatus.running,
+        modelId: model.id,
+        modelRevision: model.revision,
+        alignedSegments: result.alignedSegments,
+        totalSegments: result.totalSegments,
+        languageAutomaticallyDetermined: result.languageAutomaticallyDetermined,
+      ),
+      progress: current.progress,
+    );
+  }
+
+  List<TranscriptSegment> _tightenImportedSubtitleCues(
+    TranscriptDocument document,
+    List<TranscriptToken> tokens, {
+    Set<String> resetOriginalTimingSegmentIds = const {},
+  }) {
+    final bySegment = <String, List<TranscriptToken>>{};
+    for (final token in tokens) {
+      final owner = token.segmentId;
+      if (owner == null) continue;
+      bySegment.putIfAbsent(owner, () => []).add(token);
+    }
+    return [
+      for (final segment in document.segments)
+        if (bySegment[segment.id] case final owned? when owned.isNotEmpty)
+          segment.copyWith(
+            startMs: owned
+                .map((token) => token.startMs)
+                .reduce((left, right) => left < right ? left : right),
+            endMs: owned
+                .map((token) => token.endMs)
+                .reduce((left, right) => left > right ? left : right),
+            alignmentIncomplete: false,
+            alignmentManuallyResolved: false,
+          )
+        else if (resetOriginalTimingSegmentIds.contains(segment.id) &&
+            !segment.alignmentManuallyResolved)
+          segment.copyWith(
+            startMs: segment.alignmentWindowStartMs ?? segment.startMs,
+            endMs: segment.alignmentWindowEndMs ?? segment.endMs,
+            alignmentIncomplete: true,
+          )
+        else
+          segment.copyWith(alignmentIncomplete: true),
+    ];
+  }
+
+  List<TranscriptSegment> _restoreRejectedImportedSubtitleTiming(
+    TranscriptDocument document,
+    Set<String> rejectedSegmentIds,
+  ) => [
+    for (final segment in document.segments)
+      if (rejectedSegmentIds.contains(segment.id) &&
+          !segment.alignmentManuallyResolved)
+        segment.copyWith(
+          startMs: segment.alignmentWindowStartMs ?? segment.startMs,
+          endMs: segment.alignmentWindowEndMs ?? segment.endMs,
+          alignmentIncomplete: true,
+        )
+      else
+        segment,
+  ];
 
   Future<TranscriptionJob> _completeWithoutAlignment(
     TranscriptionJob job,
@@ -2388,6 +3144,7 @@ class AppController extends ChangeNotifier {
         job.document!.segments.length,
         model: _defaultForcedAligner,
         languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
+        alignedSegments: _alignedSegmentCount(job.document!),
       ),
       progress: const JobProgress(stage: 'aligning', fraction: 0),
       clearError: true,
@@ -2516,7 +3273,7 @@ class AppController extends ChangeNotifier {
       }
       await _deleteManagedPodcastAudio(job);
       _jobs.remove(id);
-      _playbackPositions.remove(id);
+      _forgetPlaybackPosition(id);
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
@@ -2540,7 +3297,7 @@ class AppController extends ChangeNotifier {
       }
       if (discarded != null) await _deleteManagedPodcastAudio(discarded);
       _jobs.remove(id);
-      _playbackPositions.remove(id);
+      _forgetPlaybackPosition(id);
       await _media.deleteGeneratedMedia(id);
       await _jobsRepository.delete(id);
     }
@@ -2559,7 +3316,7 @@ class AppController extends ChangeNotifier {
     if (job == null || job.isBusy) return;
     _jobs.remove(id);
     _localAutoStartCandidates.remove(id);
-    _playbackPositions.remove(id);
+    _forgetPlaybackPosition(id);
     _inboxIds.remove(id);
     if (_activeWorkspaceJobId == id) _activeWorkspaceJobId = null;
     _forgetWorkspaceJob(id);
@@ -2582,7 +3339,7 @@ class AppController extends ChangeNotifier {
       await _jobsRepository.delete(id);
       _jobs.remove(id);
       _localAutoStartCandidates.remove(id);
-      _playbackPositions.remove(id);
+      _forgetPlaybackPosition(id);
       _inboxIds.remove(id);
     }
     await _media.clearGeneratedMediaExcept(_jobs.keys.toSet());
@@ -2825,6 +3582,33 @@ class AppController extends ChangeNotifier {
     );
   }
 
+  Future<void> setImportedSubtitleSegmentResolved(
+    String jobId,
+    String segmentId, {
+    required bool resolved,
+  }) async {
+    final job = _jobs[jobId];
+    final document = job?.document;
+    if (job == null || document == null) return;
+    final imported =
+        job.transcriptAcquisitionMode ==
+            TranscriptAcquisitionMode.importedSubtitles ||
+        job.transcriptSource == TranscriptSource.importedSubtitle;
+    if (!imported) return;
+    final target = document.segments
+        .where((segment) => segment.id == segmentId)
+        .firstOrNull;
+    if (target == null || target.alignmentManuallyResolved == resolved) return;
+    final segments = [
+      for (final segment in document.segments)
+        if (segment.id == segmentId)
+          segment.copyWith(alignmentManuallyResolved: resolved)
+        else
+          segment,
+    ];
+    await _transition(job, document: document.copyWith(segments: segments));
+  }
+
   Future<void> renameSpeaker(
     String jobId,
     String speakerId,
@@ -2869,9 +3653,11 @@ class AppController extends ChangeNotifier {
   Future<void> updateSettings(AppSettings value) async {
     final disableLocalAutoStart =
         _settings.autoTranscribeLocal && !value.autoTranscribeLocal;
-    _settings = value;
+    _settings = value.copyWith(
+      playbackPositionsMs: _settings.playbackPositionsMs,
+    );
     if (disableLocalAutoStart) _localAutoStartCandidates.clear();
-    await _queueSettingsSave(value);
+    await _queueSettingsSave(_settings);
     notifyListeners();
     _scheduleLocalAutoStart();
   }
@@ -2884,6 +3670,10 @@ class AppController extends ChangeNotifier {
           job.status == JobStatus.probing ||
           job.status.canTranscribe,
     )) {
+      if (job.transcriptAcquisitionMode ==
+          TranscriptAcquisitionMode.importedSubtitles) {
+        continue;
+      }
       await _transition(job, options: value);
     }
     notifyListeners();
@@ -2899,7 +3689,11 @@ class AppController extends ChangeNotifier {
           job.status == JobStatus.probing ||
           job.status.canTranscribe,
     )) {
-      if (job.transcriptAcquisitionMode.usesPublisherTranscript) continue;
+      if (job.transcriptAcquisitionMode.usesPublisherTranscript ||
+          job.transcriptAcquisitionMode ==
+              TranscriptAcquisitionMode.importedSubtitles) {
+        continue;
+      }
       await _transition(
         job,
         transcriptionProvider: provider,
@@ -4239,6 +5033,7 @@ class AppController extends ChangeNotifier {
     Set<String>? tagIds,
     SourceFingerprint? sourceFingerprint,
     PodcastEpisodeProvenance? podcastProvenance,
+    ImportedSubtitleProvenance? importedSubtitleProvenance,
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
     TranscriptionProvider? transcriptionProvider,
     TranscriptSource? transcriptSource,
@@ -4281,6 +5076,7 @@ class AppController extends ChangeNotifier {
       tagIds: tagIds,
       sourceFingerprint: sourceFingerprint,
       podcastProvenance: podcastProvenance,
+      importedSubtitleProvenance: importedSubtitleProvenance,
       transcriptAcquisitionMode: transcriptAcquisitionMode,
       transcriptionProvider: transcriptionProvider,
       transcriptSource: transcriptSource,
@@ -4322,6 +5118,11 @@ class AppController extends ChangeNotifier {
     if (!_monitorShutDown) {
       _monitorShutDown = true;
       await _inboxFolderMonitor?.dispose();
+    }
+    try {
+      await _savePlaybackHistory();
+    } on Object catch (error) {
+      debugPrint('Unable to save playback history during shutdown: $error');
     }
     await _settingsSaveTail;
   }

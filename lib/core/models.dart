@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const int manifestVersion = 12;
+const int manifestVersion = 15;
 const int maxMediaDurationMs = 300 * 60 * 1000;
 
 const Set<String> supportedMonitoredMediaExtensions = {
@@ -203,6 +203,7 @@ enum TranscriptAcquisitionMode {
   mossLocal,
   publisherCaptions,
   qwen3Local,
+  importedSubtitles,
 }
 
 extension TranscriptAcquisitionModeX on TranscriptAcquisitionMode {
@@ -210,7 +211,16 @@ extension TranscriptAcquisitionModeX on TranscriptAcquisitionMode {
       this == TranscriptAcquisitionMode.publisherCaptions;
 }
 
-enum TranscriptSource { soniox, mossPro, mossLocal, publisher, qwen3Local }
+enum TranscriptSource {
+  soniox,
+  mossPro,
+  mossLocal,
+  publisher,
+  qwen3Local,
+  importedSubtitle,
+}
+
+enum SubtitleFormat { srt, webVtt }
 
 class TranscriptionModelReference {
   const TranscriptionModelReference({required this.id, required this.revision});
@@ -265,6 +275,7 @@ class ForcedAlignmentState {
       status == ForcedAlignmentStatus.partial;
 
   bool get canRetry => switch (status) {
+    ForcedAlignmentStatus.partial ||
     ForcedAlignmentStatus.unavailable ||
     ForcedAlignmentStatus.failed ||
     ForcedAlignmentStatus.cancelled ||
@@ -447,6 +458,76 @@ class PodcastEpisodeProvenance {
   );
 }
 
+class ImportedSubtitleProvenance {
+  const ImportedSubtitleProvenance({
+    required this.sourcePath,
+    required this.displayName,
+    required this.format,
+    required this.importedAt,
+    this.sourceFingerprint,
+    this.sourceDocumentSnapshot,
+    this.sentenceBreaksNormalized = false,
+  });
+
+  final String sourcePath;
+  final String displayName;
+  final SubtitleFormat format;
+  final DateTime importedAt;
+  final SourceFingerprint? sourceFingerprint;
+  final TranscriptDocument? sourceDocumentSnapshot;
+  final bool sentenceBreaksNormalized;
+
+  ImportedSubtitleProvenance copyWith({
+    TranscriptDocument? sourceDocumentSnapshot,
+    bool? sentenceBreaksNormalized,
+  }) => ImportedSubtitleProvenance(
+    sourcePath: sourcePath,
+    displayName: displayName,
+    format: format,
+    importedAt: importedAt,
+    sourceFingerprint: sourceFingerprint,
+    sourceDocumentSnapshot:
+        sourceDocumentSnapshot ?? this.sourceDocumentSnapshot,
+    sentenceBreaksNormalized:
+        sentenceBreaksNormalized ?? this.sentenceBreaksNormalized,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'source_path': sourcePath,
+    'display_name': displayName,
+    'format': format.name,
+    'imported_at': importedAt.toUtc().toIso8601String(),
+    if (sourceFingerprint case final value?)
+      'source_fingerprint': value.toJson(),
+    if (sourceDocumentSnapshot case final value?)
+      'source_document_snapshot': value.toJson(),
+    if (sentenceBreaksNormalized) 'sentence_breaks_normalized': true,
+  };
+
+  factory ImportedSubtitleProvenance.fromJson(Map<String, dynamic> json) =>
+      ImportedSubtitleProvenance(
+        sourcePath: json['source_path'] as String? ?? '',
+        displayName: json['display_name'] as String? ?? '',
+        format:
+            _enumByName(SubtitleFormat.values, json['format']) ??
+            SubtitleFormat.srt,
+        importedAt: _date(json['imported_at']) ?? DateTime.now().toUtc(),
+        sourceFingerprint: json['source_fingerprint'] is Map
+            ? SourceFingerprint.fromJson(
+                (json['source_fingerprint'] as Map).cast<String, dynamic>(),
+              )
+            : null,
+        sourceDocumentSnapshot: json['source_document_snapshot'] is Map
+            ? TranscriptDocument.fromJson(
+                (json['source_document_snapshot'] as Map)
+                    .cast<String, dynamic>(),
+              )
+            : null,
+        sentenceBreaksNormalized:
+            json['sentence_breaks_normalized'] as bool? ?? false,
+      );
+}
+
 enum InboxMonitorStatus {
   unconfigured,
   scanning,
@@ -579,6 +660,10 @@ class TranscriptSegment {
     this.language,
     this.translatedText,
     this.preserveBoundaryBefore = false,
+    this.alignmentWindowStartMs,
+    this.alignmentWindowEndMs,
+    this.alignmentIncomplete = false,
+    this.alignmentManuallyResolved = false,
   });
 
   final String id;
@@ -589,20 +674,30 @@ class TranscriptSegment {
   final String? language;
   final String? translatedText;
   final bool preserveBoundaryBefore;
+  final int? alignmentWindowStartMs;
+  final int? alignmentWindowEndMs;
+  final bool alignmentIncomplete;
+  final bool alignmentManuallyResolved;
 
   bool get hasTranslation => translatedText?.trim().isNotEmpty ?? false;
 
   TranscriptSegment copyWith({
+    int? startMs,
+    int? endMs,
     String? text,
     String? speaker,
     String? language,
     String? translatedText,
     bool clearTranslatedText = false,
     bool? preserveBoundaryBefore,
+    int? alignmentWindowStartMs,
+    int? alignmentWindowEndMs,
+    bool? alignmentIncomplete,
+    bool? alignmentManuallyResolved,
   }) => TranscriptSegment(
     id: id,
-    startMs: startMs,
-    endMs: endMs,
+    startMs: startMs ?? this.startMs,
+    endMs: endMs ?? this.endMs,
     text: text ?? this.text,
     speaker: speaker ?? this.speaker,
     language: language ?? this.language,
@@ -611,6 +706,12 @@ class TranscriptSegment {
         : translatedText ?? this.translatedText,
     preserveBoundaryBefore:
         preserveBoundaryBefore ?? this.preserveBoundaryBefore,
+    alignmentWindowStartMs:
+        alignmentWindowStartMs ?? this.alignmentWindowStartMs,
+    alignmentWindowEndMs: alignmentWindowEndMs ?? this.alignmentWindowEndMs,
+    alignmentIncomplete: alignmentIncomplete ?? this.alignmentIncomplete,
+    alignmentManuallyResolved:
+        alignmentManuallyResolved ?? this.alignmentManuallyResolved,
   );
 
   Map<String, dynamic> toJson() => {
@@ -622,20 +723,32 @@ class TranscriptSegment {
     if (language case final value?) 'language': value,
     if (translatedText case final value?) 'translated_text': value,
     if (preserveBoundaryBefore) 'preserve_boundary_before': true,
+    if (alignmentWindowStartMs case final value?)
+      'alignment_window_start_ms': value,
+    if (alignmentWindowEndMs case final value?)
+      'alignment_window_end_ms': value,
+    if (alignmentIncomplete) 'alignment_incomplete': true,
+    if (alignmentManuallyResolved) 'alignment_manually_resolved': true,
   };
 
-  factory TranscriptSegment.fromJson(Map<String, dynamic> json) =>
-      TranscriptSegment(
-        id: json['id'] as String? ?? '${json['start_ms'] ?? 0}',
-        startMs: (json['start_ms'] as num?)?.toInt() ?? 0,
-        endMs: (json['end_ms'] as num?)?.toInt() ?? 0,
-        text: json['text'] as String? ?? '',
-        speaker: json['speaker']?.toString(),
-        language: json['language'] as String?,
-        translatedText: json['translated_text'] as String?,
-        preserveBoundaryBefore:
-            json['preserve_boundary_before'] as bool? ?? false,
-      );
+  factory TranscriptSegment.fromJson(
+    Map<String, dynamic> json,
+  ) => TranscriptSegment(
+    id: json['id'] as String? ?? '${json['start_ms'] ?? 0}',
+    startMs: (json['start_ms'] as num?)?.toInt() ?? 0,
+    endMs: (json['end_ms'] as num?)?.toInt() ?? 0,
+    text: json['text'] as String? ?? '',
+    speaker: json['speaker']?.toString(),
+    language: json['language'] as String?,
+    translatedText: json['translated_text'] as String?,
+    preserveBoundaryBefore: json['preserve_boundary_before'] as bool? ?? false,
+    alignmentWindowStartMs: (json['alignment_window_start_ms'] as num?)
+        ?.toInt(),
+    alignmentWindowEndMs: (json['alignment_window_end_ms'] as num?)?.toInt(),
+    alignmentIncomplete: json['alignment_incomplete'] as bool? ?? false,
+    alignmentManuallyResolved:
+        json['alignment_manually_resolved'] as bool? ?? false,
+  );
 }
 
 class SpeakerProfile {
@@ -1631,6 +1744,7 @@ class AppSettings {
     this.autoTranscribeLocal = false,
     this.lastContentDestination = AppContentDestination.podcast,
     this.lastWorkspaceJobId,
+    this.playbackPositionsMs = const {},
   }) : _llmProviderSettings = llmProviderSettings,
        _translationPreferences = translationPreferences,
        _legacyTranslationSettings = translationSettings;
@@ -1651,6 +1765,7 @@ class AppSettings {
   final bool autoTranscribeLocal;
   final AppContentDestination lastContentDestination;
   final String? lastWorkspaceJobId;
+  final Map<String, int> playbackPositionsMs;
 
   LlmProviderSettings get llmProviderSettings =>
       _legacyTranslationSettings?.providerSettings ?? _llmProviderSettings;
@@ -1681,6 +1796,7 @@ class AppSettings {
     AppContentDestination? lastContentDestination,
     String? lastWorkspaceJobId,
     bool clearLastWorkspaceJobId = false,
+    Map<String, int>? playbackPositionsMs,
   }) => AppSettings(
     themeMode: themeMode ?? this.themeMode,
     localeMode: localeMode ?? this.localeMode,
@@ -1708,6 +1824,7 @@ class AppSettings {
     lastWorkspaceJobId: clearLastWorkspaceJobId
         ? null
         : lastWorkspaceJobId ?? this.lastWorkspaceJobId,
+    playbackPositionsMs: playbackPositionsMs ?? this.playbackPositionsMs,
   );
 
   Map<String, dynamic> toJson() => {
@@ -1728,6 +1845,8 @@ class AppSettings {
     'auto_transcribe_local': autoTranscribeLocal,
     'last_content_destination': lastContentDestination.name,
     if (lastWorkspaceJobId case final value?) 'last_workspace_job_id': value,
+    if (playbackPositionsMs.isNotEmpty)
+      'playback_positions_ms': playbackPositionsMs,
   };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
@@ -1784,8 +1903,23 @@ class AppSettings {
           ) ??
           AppContentDestination.podcast,
       lastWorkspaceJobId: json['last_workspace_job_id'] as String?,
+      playbackPositionsMs: _playbackPositionsFromJson(
+        json['playback_positions_ms'],
+      ),
     );
   }
+}
+
+Map<String, int> _playbackPositionsFromJson(Object? value) {
+  if (value is! Map) return const {};
+  final maximum = const Duration(days: 365).inMilliseconds;
+  return {
+    for (final entry in value.entries)
+      if (entry.key is String && entry.value is num)
+        if ((entry.value as num).toInt() case final milliseconds
+            when milliseconds > 0 && milliseconds <= maximum)
+          entry.key as String: milliseconds,
+  };
 }
 
 class LibraryGroup {
@@ -2054,6 +2188,7 @@ class TranscriptionJob {
     this.sourceOrigin = JobSourceOrigin.manual,
     this.sourceFingerprint,
     this.podcastProvenance,
+    this.importedSubtitleProvenance,
     this.transcriptionProvider = TranscriptionProvider.soniox,
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
     this.transcriptSource,
@@ -2095,6 +2230,7 @@ class TranscriptionJob {
   final JobSourceOrigin sourceOrigin;
   final SourceFingerprint? sourceFingerprint;
   final PodcastEpisodeProvenance? podcastProvenance;
+  final ImportedSubtitleProvenance? importedSubtitleProvenance;
   final TranscriptAcquisitionMode transcriptAcquisitionMode;
   final TranscriptionProvider transcriptionProvider;
   final TranscriptSource? transcriptSource;
@@ -2135,6 +2271,7 @@ class TranscriptionJob {
     JobSourceOrigin? sourceOrigin,
     SourceFingerprint? sourceFingerprint,
     PodcastEpisodeProvenance? podcastProvenance,
+    ImportedSubtitleProvenance? importedSubtitleProvenance,
     TranscriptAcquisitionMode? transcriptAcquisitionMode,
     TranscriptionProvider? transcriptionProvider,
     TranscriptSource? transcriptSource,
@@ -2176,6 +2313,8 @@ class TranscriptionJob {
     sourceOrigin: sourceOrigin ?? this.sourceOrigin,
     sourceFingerprint: sourceFingerprint ?? this.sourceFingerprint,
     podcastProvenance: podcastProvenance ?? this.podcastProvenance,
+    importedSubtitleProvenance:
+        importedSubtitleProvenance ?? this.importedSubtitleProvenance,
     transcriptAcquisitionMode:
         transcriptAcquisitionMode ?? this.transcriptAcquisitionMode,
     transcriptionProvider: transcriptionProvider ?? this.transcriptionProvider,
@@ -2217,6 +2356,8 @@ class TranscriptionJob {
       'source_fingerprint': value.toJson(),
     if (podcastProvenance case final value?)
       'podcast_provenance': value.toJson(),
+    if (importedSubtitleProvenance case final value?)
+      'imported_subtitle_provenance': value.toJson(),
     'transcript_acquisition_mode': transcriptAcquisitionMode.name,
     'transcription_provider': transcriptionProvider.name,
     if (transcriptSource case final value?) 'transcript_source': value.name,
@@ -2295,6 +2436,12 @@ class TranscriptionJob {
       podcastProvenance: json['podcast_provenance'] is Map
           ? PodcastEpisodeProvenance.fromJson(
               (json['podcast_provenance'] as Map).cast<String, dynamic>(),
+            )
+          : null,
+      importedSubtitleProvenance: json['imported_subtitle_provenance'] is Map
+          ? ImportedSubtitleProvenance.fromJson(
+              (json['imported_subtitle_provenance'] as Map)
+                  .cast<String, dynamic>(),
             )
           : null,
       transcriptAcquisitionMode: _transcriptAcquisitionModeFromJson(

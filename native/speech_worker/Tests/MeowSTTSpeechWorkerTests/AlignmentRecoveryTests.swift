@@ -2,6 +2,45 @@ import XCTest
 @testable import MeowSTTSpeechWorker
 
 final class AlignmentRecoveryTests: XCTestCase {
+    func testOrderedTextRecursiveSplitRetainsOverlappingCueAudio() {
+        let bounds = orderedAlignmentSplitBounds(
+            startMs: 750,
+            endMs: 30_250,
+            leftSegments: [[
+                "id": "rolling-1",
+                "start_ms": 1_000,
+                "end_ms": 28_000,
+                "allow_outside_segment_bounds": true,
+            ]],
+            rightSegments: [[
+                "id": "rolling-2",
+                "start_ms": 25_000,
+                "end_ms": 30_000,
+                "allow_outside_segment_bounds": true,
+            ]],
+            paddingMs: 250
+        )
+
+        XCTAssertEqual(bounds?.count, 2)
+        XCTAssertEqual(bounds?[0].startMs, 750)
+        XCTAssertEqual(bounds?[0].endMs, 28_250)
+        XCTAssertEqual(bounds?[1].startMs, 24_750)
+        XCTAssertEqual(bounds?[1].endMs, 30_250)
+        XCTAssertGreaterThan(bounds?[0].endMs ?? 0, bounds?[1].startMs ?? 0)
+    }
+
+    func testBoundaryRetryUsesTheAuthoritativeCueWithoutPadding() {
+        let bounds = alignmentBoundaryRetryBounds(segment: [
+            "id": "subtitle-cue-4214",
+            "start_ms": 8_754_879,
+            "end_ms": 8_757_278,
+            "units": ["was"],
+        ])
+
+        XCTAssertEqual(bounds?.startMs, 8_754_879)
+        XCTAssertEqual(bounds?.endMs, 8_757_278)
+    }
+
     func testRequestsRetryWhenContextPushesEveryTokenPastSegmentEnd() {
         let segment: [[String: Any]] = [[
             "id": "moss-295",
@@ -40,6 +79,23 @@ final class AlignmentRecoveryTests: XCTestCase {
         XCTAssertTrue(
             alignmentOwnersNeedingBoundaryRetry(
                 tokens: tokens,
+                segments: segment
+            ).isEmpty
+        )
+    }
+
+    func testOrderedTextKeepsTokensOutsideDisplayCueBounds() {
+        let segment: [[String: Any]] = [[
+            "id": "rolling-2",
+            "start_ms": 2_000,
+            "end_ms": 7_000,
+            "units": ["Charlie"],
+            "allow_outside_segment_bounds": true,
+        ]]
+
+        XCTAssertTrue(
+            alignmentOwnersNeedingBoundaryRetry(
+                tokens: [token("rolling-2", 1_400, 1_900)],
                 segments: segment
             ).isEmpty
         )

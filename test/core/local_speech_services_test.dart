@@ -94,6 +94,10 @@ void main() {
         '스',
         '트',
       ]);
+      expect(
+        const QwenAlignmentUnitizer().canAutoAlign('£65,000 and 360°'),
+        isTrue,
+      );
       expect(const QwenAlignmentUnitizer().canAutoAlign('مرحبا'), isFalse);
     },
   );
@@ -397,6 +401,60 @@ void main() {
   );
 
   test(
+    'forced alignment retries use the immutable source cue window',
+    () async {
+      final worker = _Worker({
+        'tokens': [
+          {
+            'segment_id': 'cue',
+            'text': 'Hello',
+            'start_ms': 100,
+            'end_ms': 1900,
+          },
+        ],
+      });
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+      final document = TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'cue',
+            startMs: 250,
+            endMs: 1750,
+            alignmentWindowStartMs: 0,
+            alignmentWindowEndMs: 2000,
+            text: 'Hello',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.utc(2026, 8, 24),
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/meeting.wav',
+          document: document,
+          languageHints: const ['en'],
+        ),
+      );
+
+      final requested = (worker.request!['segments'] as List).single as Map;
+      expect(requested['start_ms'], 0);
+      expect(requested['end_ms'], 2000);
+      expect(result.tokens.single.startMs, 100);
+      expect(result.tokens.single.endMs, 1900);
+      expect(document.segments.single.startMs, 250);
+      expect(document.segments.single.endMs, 1750);
+    },
+  );
+
+  test(
     'alignment keeps reliable neighbors when one segment has a count mismatch',
     () async {
       final document = TranscriptDocument(
@@ -497,6 +555,220 @@ void main() {
       expect(result.alignedSegments, segments.length);
       expect(worker.rejectedWindows, isEmpty);
       expect(worker.request?['windows'], hasLength(greaterThan(1)));
+    },
+  );
+
+  test(
+    'long subtitle alignment recovers worker batches and keeps word timing',
+    () async {
+      final segments = <TranscriptSegment>[
+        for (var index = 0; index < 60; index++)
+          TranscriptSegment(
+            id: 'cue-$index',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Word$index',
+          ),
+      ];
+      final worker = _WindowLimitedAlignmentWorker(maxWindows: 8);
+      final checkpoints = <AlignmentResult>[];
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/long-subtitles.wav',
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: segments,
+            speakers: const [],
+            updatedAt: DateTime.utc(2026, 8, 25),
+          ),
+          languageHints: const ['en'],
+          onCheckpoint: checkpoints.add,
+        ),
+      );
+
+      expect(result.status, ForcedAlignmentStatus.completed);
+      expect(result.alignedSegments, segments.length);
+      expect(
+        result.tokens.map((token) => token.segmentId).toSet(),
+        hasLength(segments.length),
+      );
+      expect(worker.failedRuns, greaterThan(0));
+      expect(worker.successfulRuns, greaterThan(1));
+      expect(checkpoints, hasLength(2));
+      expect(checkpoints.first.alignedSegments, 48);
+      expect(checkpoints.last.alignedSegments, segments.length);
+    },
+  );
+
+  test(
+    'worker failure isolates one cue and publishes reliable neighbors',
+    () async {
+      final segments = <TranscriptSegment>[
+        for (var index = 0; index < 10; index++)
+          TranscriptSegment(
+            id: 'cue-$index',
+            startMs: 0,
+            endMs: 1000,
+            text: 'Cue',
+          ),
+      ];
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: _SelectiveFailureAlignmentWorker(failedSegmentId: 'cue-7'),
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/partial-subtitles.wav',
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: segments,
+            speakers: const [],
+            updatedAt: DateTime.utc(2026, 8, 25),
+          ),
+          languageHints: const ['en'],
+        ),
+      );
+
+      expect(result.status, ForcedAlignmentStatus.partial);
+      expect(result.alignedSegments, 9);
+      expect(
+        result.tokens.map((token) => token.segmentId).toSet(),
+        isNot(contains('cue-7')),
+      );
+      expect(result.warningCode, 'local_worker_failed');
+      expect(result.warningMessage, contains('terminated by signal 9'));
+    },
+  );
+
+  test(
+    'retry aligns only unresolved cues and keeps prior word timestamps',
+    () async {
+      final document = TranscriptDocument(
+        tokens: const [
+          TranscriptToken(
+            text: 'Alpha',
+            startMs: 100,
+            endMs: 700,
+            segmentId: 'cue-0',
+          ),
+          TranscriptToken(
+            text: 'Beta',
+            startMs: 1100,
+            endMs: 1700,
+            segmentId: 'cue-1',
+          ),
+        ],
+        segments: const [
+          TranscriptSegment(
+            id: 'cue-0',
+            startMs: 0,
+            endMs: 900,
+            alignmentWindowStartMs: 0,
+            alignmentWindowEndMs: 900,
+            text: 'Alpha',
+          ),
+          TranscriptSegment(
+            id: 'cue-1',
+            startMs: 1000,
+            endMs: 1900,
+            alignmentWindowStartMs: 1000,
+            alignmentWindowEndMs: 1900,
+            text: 'Beta',
+          ),
+          TranscriptSegment(
+            id: 'cue-2',
+            startMs: 2000,
+            endMs: 2900,
+            alignmentWindowStartMs: 2000,
+            alignmentWindowEndMs: 2900,
+            text: 'Gamma',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.utc(2026, 8, 25),
+      );
+      final worker = _ResumeAlignmentWorker();
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/resume.wav',
+          document: document,
+          languageHints: const ['en'],
+        ),
+      );
+
+      expect(worker.requestedSegmentIds, ['cue-2']);
+      expect(result.status, ForcedAlignmentStatus.completed);
+      expect(result.alignedSegments, 3);
+      expect(result.tokens, hasLength(3));
+      expect(result.tokens[0].startMs, 100);
+      expect(result.tokens[1].startMs, 1100);
+      expect(result.tokens[2].segmentId, 'cue-2');
+    },
+  );
+
+  test(
+    'retry realigns an edited cue instead of reusing stale tokens',
+    () async {
+      final worker = _ResumeAlignmentWorker();
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/edited-resume.wav',
+          document: TranscriptDocument(
+            tokens: const [
+              TranscriptToken(
+                text: 'Old',
+                startMs: 100,
+                endMs: 700,
+                segmentId: 'cue',
+              ),
+            ],
+            segments: const [
+              TranscriptSegment(
+                id: 'cue',
+                startMs: 0,
+                endMs: 900,
+                alignmentWindowStartMs: 0,
+                alignmentWindowEndMs: 900,
+                text: 'New',
+              ),
+            ],
+            speakers: const [],
+            updatedAt: DateTime.utc(2026, 8, 25),
+          ),
+          languageHints: const ['en'],
+        ),
+      );
+
+      expect(worker.requestedSegmentIds, ['cue']);
+      expect(result.tokens.single.text, 'New');
     },
   );
 
@@ -893,6 +1165,61 @@ void main() {
   );
 
   test(
+    'automatic alignment skips symbol-heavy cues without rejecting English',
+    () async {
+      final document = TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(
+            id: 'english',
+            startMs: 0,
+            endMs: 800,
+            text: 'Hello',
+          ),
+          TranscriptSegment(
+            id: 'symbol',
+            startMs: 900,
+            endMs: 1800,
+            text: 'A full 360° costs £65',
+          ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.utc(2026, 8, 25),
+      );
+      final worker = _Worker({
+        'tokens': [
+          {
+            'segment_id': 'english',
+            'text': 'Hello',
+            'start_ms': 100,
+            'end_ms': 700,
+          },
+        ],
+      });
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/meeting.wav',
+          document: document,
+        ),
+      );
+
+      expect(result.status, ForcedAlignmentStatus.partial);
+      expect(result.alignedSegments, 1);
+      expect(result.totalSegments, 2);
+      expect(result.tokens.single.segmentId, 'english');
+      expect(worker.command, SpeechWorkerCommand.alignQwen3);
+    },
+  );
+
+  test(
     'missing alignment model is an unavailable local post-process',
     () async {
       final worker = _Worker(const {});
@@ -1050,6 +1377,675 @@ void main() {
     },
   );
 
+  test(
+    'ordered subtitle text aligns an overlap chain in one shared window',
+    () async {
+      final document = TranscriptDocument(
+        tokens: const [],
+        segments: [
+          for (var index = 0; index < 8; index++)
+            TranscriptSegment(
+              id: 'rolling-$index',
+              startMs: index * 1000,
+              endMs: index * 1000 + 5000,
+              text: 'Word$index.',
+              alignmentWindowStartMs: index * 1000,
+              alignmentWindowEndMs: index * 1000 + 5000,
+            ),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.utc(2026, 8, 26),
+      );
+      final worker = _Worker(const {'tokens': []});
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/rolling.wav',
+          document: document,
+          languageHints: const ['en'],
+          timelineMode: ForcedAlignmentTimelineMode.orderedText,
+        ),
+      );
+
+      final windows = (worker.request!['windows'] as List).cast<Map>();
+      expect(windows, hasLength(1));
+      expect((windows.single['segments'] as List), hasLength(8));
+      expect(
+        (windows.single['segments'] as List).cast<Map>().every(
+          (segment) => segment['allow_outside_segment_bounds'] == true,
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'ordered subtitle words keep shared-window timing outside display cues',
+    () async {
+      const words = [
+        'Alpha',
+        'Bravo',
+        'Charlie',
+        'Delta',
+        'Echo',
+        'Foxtrot',
+        'Golf',
+        'Hotel',
+      ];
+      final segments = [
+        for (var index = 0; index < words.length; index++)
+          TranscriptSegment(
+            id: 'rolling-$index',
+            startMs: index * 1000,
+            endMs: index * 1000 + 5000,
+            text: words[index],
+            alignmentWindowStartMs: index * 1000,
+            alignmentWindowEndMs: index * 1000 + 5000,
+          ),
+      ];
+      final worker = _Worker({
+        'tokens': [
+          for (var index = 0; index < words.length; index++)
+            {
+              'segment_id': 'rolling-$index',
+              'text': words[index],
+              'start_ms': index * 700,
+              'end_ms': index * 700 + 600,
+            },
+        ],
+      });
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/rolling.wav',
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: segments,
+            speakers: const [],
+            updatedAt: DateTime.utc(2026, 8, 26),
+          ),
+          languageHints: const ['en'],
+          timelineMode: ForcedAlignmentTimelineMode.orderedText,
+        ),
+      );
+
+      expect(result.status, ForcedAlignmentStatus.completed);
+      expect(result.tokens, hasLength(words.length));
+      expect(result.tokens.map((token) => (token.startMs, token.endMs)), [
+        for (var index = 0; index < words.length; index++)
+          (index * 700, index * 700 + 600),
+      ]);
+    },
+  );
+
+  test('ordered subtitle repair keeps tied model timestamp classes', () async {
+    final worker = _Worker({
+      'tokens': const [
+        {'segment_id': 'rolling-1', 'text': 'To', 'start_ms': 0, 'end_ms': 0},
+        {
+          'segment_id': 'rolling-1',
+          'text': 'get',
+          'start_ms': 320,
+          'end_ms': 320,
+        },
+        {
+          'segment_id': 'rolling-1',
+          'text': 'us',
+          'start_ms': 320,
+          'end_ms': 480,
+        },
+        {
+          'segment_id': 'rolling-1',
+          'text': 'started',
+          'start_ms': 480,
+          'end_ms': 560,
+        },
+      ],
+    });
+    final service = ProcessForcedAlignmentService(
+      models: _Models(ready: true),
+      pcm: _Pcm(),
+      worker: worker,
+      platformSupported: true,
+    );
+
+    final result = await service.align(
+      ForcedAlignmentRequest(
+        model: alignmentModel,
+        sourcePath: '/rolling.wav',
+        document: TranscriptDocument(
+          tokens: const [],
+          segments: const [
+            TranscriptSegment(
+              id: 'rolling-1',
+              startMs: 160,
+              endMs: 3359,
+              text: 'To get us started',
+              alignmentWindowStartMs: 160,
+              alignmentWindowEndMs: 3359,
+            ),
+          ],
+          speakers: const [],
+          updatedAt: DateTime.utc(2026, 8, 26),
+        ),
+        languageHints: const ['en'],
+        timelineMode: ForcedAlignmentTimelineMode.orderedText,
+      ),
+    );
+
+    expect(result.status, ForcedAlignmentStatus.completed);
+    expect(result.tokens, hasLength(4));
+    expect(result.tokens.every((token) => token.endMs > token.startMs), isTrue);
+    for (var index = 0; index + 1 < result.tokens.length; index++) {
+      expect(
+        result.tokens[index].endMs,
+        lessThanOrEqualTo(result.tokens[index + 1].startMs),
+      );
+    }
+  });
+
+  test(
+    'ordered subtitle blocks keep audio through their final rolling cue',
+    () async {
+      const singleWords = [
+        'Alpha',
+        'Bravo',
+        'Charlie',
+        'Delta',
+        'Echo',
+        'Foxtrot',
+        'Golf',
+        'One two three four five',
+        'Hotel',
+      ];
+      final segments = [
+        for (var index = 0; index < singleWords.length; index++)
+          TranscriptSegment(
+            id: 'rolling-$index',
+            startMs: index * 3000,
+            endMs: index * 3000 + 6000,
+            text: singleWords[index],
+            alignmentWindowStartMs: index * 3000,
+            alignmentWindowEndMs: index * 3000 + 6000,
+          ),
+      ];
+      final worker = _Worker({
+        'tokens': [
+          for (var index = 0; index < 7; index++)
+            {
+              'segment_id': 'rolling-$index',
+              'text': singleWords[index],
+              'start_ms': index * 3000 + 500,
+              'end_ms': index * 3000 + 1000,
+            },
+          const {
+            'segment_id': 'rolling-7',
+            'text': 'One',
+            'start_ms': 23999,
+            'end_ms': 24000,
+          },
+          const {
+            'segment_id': 'rolling-7',
+            'text': 'two',
+            'start_ms': 25000,
+            'end_ms': 25200,
+          },
+          const {
+            'segment_id': 'rolling-7',
+            'text': 'three',
+            'start_ms': 25500,
+            'end_ms': 25700,
+          },
+          const {
+            'segment_id': 'rolling-7',
+            'text': 'four',
+            'start_ms': 26000,
+            'end_ms': 26200,
+          },
+          const {
+            'segment_id': 'rolling-7',
+            'text': 'five',
+            'start_ms': 26500,
+            'end_ms': 26900,
+          },
+          const {
+            'segment_id': 'rolling-8',
+            'text': 'Hotel',
+            'start_ms': 27500,
+            'end_ms': 28000,
+          },
+        ],
+      });
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/rolling.wav',
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: segments,
+            speakers: const [],
+            updatedAt: DateTime.utc(2026, 8, 26),
+          ),
+          languageHints: const ['en'],
+          timelineMode: ForcedAlignmentTimelineMode.orderedText,
+        ),
+      );
+
+      expect(result.status, ForcedAlignmentStatus.completed);
+      expect(result.alignedSegments, segments.length);
+      expect(
+        result.tokens.where((token) => token.segmentId == 'rolling-7').last,
+        isA<TranscriptToken>()
+            .having((token) => token.startMs, 'startMs', 26500)
+            .having((token) => token.endMs, 'endMs', 26900),
+      );
+    },
+  );
+
+  test('ordered subtitle conflicts are realigned across block seams', () async {
+    const words = [
+      'Alpha',
+      'Bravo',
+      'Charlie',
+      'Delta',
+      'Echo',
+      'Foxtrot',
+      'Golf',
+      'Hotel',
+      'India',
+    ];
+    final segments = [
+      for (var index = 0; index < words.length; index++)
+        TranscriptSegment(
+          id: 'rolling-$index',
+          startMs: index * 3000,
+          endMs: index * 3000 + 6000,
+          text: words[index],
+          alignmentWindowStartMs: index * 3000,
+          alignmentWindowEndMs: index * 3000 + 6000,
+        ),
+    ];
+    final worker = _SequenceWorker([
+      {
+        'tokens': [
+          for (var index = 0; index < 7; index++)
+            {
+              'segment_id': 'rolling-$index',
+              'text': words[index],
+              'start_ms': index * 3000 + 500,
+              'end_ms': index * 3000 + 1000,
+            },
+          const {
+            'segment_id': 'rolling-7',
+            'text': 'Hotel',
+            'start_ms': 26500,
+            'end_ms': 27000,
+          },
+          const {
+            'segment_id': 'rolling-8',
+            'text': 'India',
+            'start_ms': 25500,
+            'end_ms': 26000,
+          },
+        ],
+      },
+      {
+        'tokens': const [
+          {
+            'segment_id': 'rolling-6',
+            'text': 'Golf',
+            'start_ms': 18000,
+            'end_ms': 18200,
+          },
+          {
+            'segment_id': 'rolling-7',
+            'text': 'Hotel',
+            'start_ms': 26000,
+            'end_ms': 26500,
+          },
+          {
+            'segment_id': 'rolling-8',
+            'text': 'India',
+            'start_ms': 27000,
+            'end_ms': 27500,
+          },
+        ],
+      },
+    ]);
+    final service = ProcessForcedAlignmentService(
+      models: _Models(ready: true),
+      pcm: _Pcm(),
+      worker: worker,
+      platformSupported: true,
+    );
+
+    final result = await service.align(
+      ForcedAlignmentRequest(
+        model: alignmentModel,
+        sourcePath: '/rolling.wav',
+        document: TranscriptDocument(
+          tokens: const [],
+          segments: segments,
+          speakers: const [],
+          updatedAt: DateTime.utc(2026, 8, 26),
+        ),
+        languageHints: const ['en'],
+        timelineMode: ForcedAlignmentTimelineMode.orderedText,
+      ),
+    );
+
+    expect(worker.requests, hasLength(2));
+    final repairSegments =
+        ((worker.requests.last['windows'] as List).single as Map)['segments']
+            as List;
+    expect(repairSegments.map((segment) => (segment as Map)['id']), [
+      'rolling-6',
+      'rolling-7',
+      'rolling-8',
+    ]);
+    expect(result.status, ForcedAlignmentStatus.completed);
+    final preservedContext = result.tokens.singleWhere(
+      (token) => token.segmentId == 'rolling-6',
+    );
+    expect((preservedContext.startMs, preservedContext.endMs), (18500, 19000));
+    for (var index = 0; index + 1 < result.tokens.length; index++) {
+      expect(
+        result.tokens[index].endMs,
+        lessThanOrEqualTo(result.tokens[index + 1].startMs),
+      );
+    }
+  });
+
+  test(
+    'ordered subtitle seam fallback keeps coverage when realignment fails',
+    () async {
+      const words = [
+        'Alpha',
+        'Bravo',
+        'Charlie',
+        'Delta',
+        'Echo',
+        'Foxtrot',
+        'Golf',
+        'Hotel',
+        'India',
+      ];
+      final segments = [
+        for (var index = 0; index < words.length; index++)
+          TranscriptSegment(
+            id: 'rolling-$index',
+            startMs: index * 3000,
+            endMs: index * 3000 + 6000,
+            text: words[index],
+            alignmentWindowStartMs: index * 3000,
+            alignmentWindowEndMs: index * 3000 + 6000,
+          ),
+      ];
+      final worker = _SequenceWorker([
+        {
+          'tokens': [
+            for (var index = 0; index < 7; index++)
+              {
+                'segment_id': 'rolling-$index',
+                'text': words[index],
+                'start_ms': index * 3000 + 500,
+                'end_ms': index * 3000 + 1000,
+              },
+            const {
+              'segment_id': 'rolling-7',
+              'text': 'Hotel',
+              'start_ms': 26500,
+              'end_ms': 27000,
+            },
+            const {
+              'segment_id': 'rolling-8',
+              'text': 'India',
+              'start_ms': 25500,
+              'end_ms': 26000,
+            },
+          ],
+        },
+        const {
+          'tokens': <Object>[],
+          'failed_window_ids': ['window-0'],
+        },
+      ]);
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/rolling.wav',
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: segments,
+            speakers: const [],
+            updatedAt: DateTime.utc(2026, 8, 26),
+          ),
+          languageHints: const ['en'],
+          timelineMode: ForcedAlignmentTimelineMode.orderedText,
+        ),
+      );
+
+      expect(worker.requests, hasLength(2));
+      expect(result.status, ForcedAlignmentStatus.completed);
+      expect(result.tokens, hasLength(words.length));
+      expect(
+        (result.tokens.first.startMs, result.tokens.first.endMs),
+        (500, 1000),
+      );
+      for (var index = 0; index + 1 < result.tokens.length; index++) {
+        expect(
+          result.tokens[index].endMs,
+          lessThanOrEqualTo(result.tokens[index + 1].startMs),
+        );
+      }
+    },
+  );
+
+  test('ordered subtitle windows retain rolling cue audio at seams', () async {
+    final segments = [
+      for (var index = 0; index < 40; index++)
+        TranscriptSegment(
+          id: 'rolling-$index',
+          startMs: index * 1000,
+          endMs: index * 1000 + 5000,
+          text: 'Sentence $index.',
+          alignmentWindowStartMs: index * 1000,
+          alignmentWindowEndMs: index * 1000 + 5000,
+        ),
+    ];
+    final worker = _Worker(const {'tokens': []});
+    final service = ProcessForcedAlignmentService(
+      models: _Models(ready: true),
+      pcm: _Pcm(),
+      worker: worker,
+      platformSupported: true,
+    );
+
+    await service.align(
+      ForcedAlignmentRequest(
+        model: alignmentModel,
+        sourcePath: '/rolling.wav',
+        document: TranscriptDocument(
+          tokens: const [],
+          segments: segments,
+          speakers: const [],
+          updatedAt: DateTime.utc(2026, 8, 26),
+        ),
+        languageHints: const ['en'],
+        timelineMode: ForcedAlignmentTimelineMode.orderedText,
+      ),
+    );
+
+    final windows = (worker.request!['windows'] as List).cast<Map>();
+    expect(windows, hasLength(greaterThan(1)));
+    var overlappingSeams = 0;
+    for (final window in windows) {
+      final segments = (window['segments'] as List).cast<Map>();
+      expect(
+        window['start_ms'] as int,
+        lessThanOrEqualTo(segments.first['start_ms'] as int),
+      );
+      expect(
+        window['end_ms'] as int,
+        greaterThanOrEqualTo(segments.last['end_ms'] as int),
+      );
+    }
+    for (var index = 0; index + 1 < windows.length; index++) {
+      if ((windows[index]['end_ms'] as int) >
+          (windows[index + 1]['start_ms'] as int)) {
+        overlappingSeams++;
+      }
+    }
+    expect(overlappingSeams, greaterThan(0));
+  });
+
+  test(
+    'ordered subtitle retry reuses reliable words outside display cues',
+    () async {
+      final worker = _ResumeAlignmentWorker();
+      final service = ProcessForcedAlignmentService(
+        models: _Models(ready: true),
+        pcm: _Pcm(),
+        worker: worker,
+        platformSupported: true,
+      );
+
+      final result = await service.align(
+        ForcedAlignmentRequest(
+          model: alignmentModel,
+          sourcePath: '/rolling-retry.wav',
+          document: TranscriptDocument(
+            tokens: const [
+              TranscriptToken(
+                text: 'Alpha',
+                startMs: 100,
+                endMs: 400,
+                segmentId: 'rolling-1',
+              ),
+            ],
+            segments: const [
+              TranscriptSegment(
+                id: 'rolling-1',
+                startMs: 1000,
+                endMs: 2000,
+                text: 'Alpha',
+                alignmentWindowStartMs: 1000,
+                alignmentWindowEndMs: 2000,
+              ),
+              TranscriptSegment(
+                id: 'rolling-2',
+                startMs: 2000,
+                endMs: 3000,
+                text: 'Bravo',
+                alignmentWindowStartMs: 2000,
+                alignmentWindowEndMs: 3000,
+              ),
+            ],
+            speakers: const [],
+            updatedAt: DateTime.utc(2026, 8, 26),
+          ),
+          languageHints: const ['en'],
+          timelineMode: ForcedAlignmentTimelineMode.orderedText,
+        ),
+      );
+
+      expect(worker.requestedSegmentIds, ['rolling-2']);
+      expect(result.status, ForcedAlignmentStatus.completed);
+      expect(result.tokens.map((token) => token.text), ['Alpha', 'Bravo']);
+    },
+  );
+
+  test('ordered subtitle retained-only retry repairs timeline seams', () async {
+    final worker = _Worker(const {'tokens': []});
+    final service = ProcessForcedAlignmentService(
+      models: _Models(ready: true),
+      pcm: _Pcm(),
+      worker: worker,
+      platformSupported: true,
+    );
+
+    final result = await service.align(
+      ForcedAlignmentRequest(
+        model: alignmentModel,
+        sourcePath: '/rolling-retry.wav',
+        document: TranscriptDocument(
+          tokens: const [
+            TranscriptToken(
+              text: 'Alpha',
+              startMs: 100,
+              endMs: 400,
+              segmentId: 'rolling-1',
+            ),
+            TranscriptToken(
+              text: 'Bravo',
+              startMs: 200,
+              endMs: 500,
+              segmentId: 'rolling-2',
+            ),
+          ],
+          segments: const [
+            TranscriptSegment(
+              id: 'rolling-1',
+              startMs: 0,
+              endMs: 1000,
+              text: 'Alpha',
+              alignmentWindowStartMs: 0,
+              alignmentWindowEndMs: 1000,
+            ),
+            TranscriptSegment(
+              id: 'rolling-2',
+              startMs: 500,
+              endMs: 1500,
+              text: 'Bravo',
+              alignmentWindowStartMs: 500,
+              alignmentWindowEndMs: 1500,
+            ),
+          ],
+          speakers: const [],
+          updatedAt: DateTime.utc(2026, 8, 26),
+        ),
+        languageHints: const ['en'],
+        timelineMode: ForcedAlignmentTimelineMode.orderedText,
+      ),
+    );
+
+    expect(worker.command, isNull);
+    expect(result.status, ForcedAlignmentStatus.completed);
+    expect(result.tokens, hasLength(2));
+    expect(
+      result.tokens.first.endMs,
+      lessThanOrEqualTo(result.tokens.last.startMs),
+    );
+  });
+
   test('an oversized segment is skipped with a partial warning', () async {
     final document = TranscriptDocument(
       tokens: const [],
@@ -1156,7 +2152,11 @@ void main() {
         },
       );
 
-      expect(progress, [closeTo(0.1, 1e-9), closeTo(0.6, 1e-9)]);
+      expect(progress, [
+        closeTo(0.1, 1e-9),
+        closeTo(0.6, 1e-9),
+        closeTo(1, 1e-9),
+      ]);
       expect(progress, orderedEquals(progress.toList()..sort()));
     },
   );
@@ -1270,6 +2270,24 @@ class _Worker implements LocalSpeechWorker {
   }
 }
 
+class _SequenceWorker implements LocalSpeechWorker {
+  _SequenceWorker(this.responses);
+
+  final List<Map<String, dynamic>> responses;
+  final requests = <Map<String, dynamic>>[];
+
+  @override
+  Future<Map<String, dynamic>> run(
+    SpeechWorkerCommand command,
+    Map<String, dynamic> request, {
+    void Function(double? fraction, String? detail)? onProgress,
+    bool Function()? shouldCancel,
+  }) async {
+    requests.add(request);
+    return responses[(requests.length - 1).clamp(0, responses.length - 1)];
+  }
+}
+
 class _CapacityLimitedAlignmentWorker implements LocalSpeechWorker {
   Map<String, dynamic>? request;
   final rejectedWindows = <String>[];
@@ -1327,5 +2345,118 @@ class _CapacityLimitedAlignmentWorker implements LocalSpeechWorker {
       'failed_window_ids': rejectedWindows,
       if (rejectedWindows.isNotEmpty) 'warning_code': 'alignment_partial',
     };
+  }
+}
+
+class _WindowLimitedAlignmentWorker implements LocalSpeechWorker {
+  _WindowLimitedAlignmentWorker({required this.maxWindows});
+
+  final int maxWindows;
+  int failedRuns = 0;
+  int successfulRuns = 0;
+
+  @override
+  Future<Map<String, dynamic>> run(
+    SpeechWorkerCommand command,
+    Map<String, dynamic> request, {
+    void Function(double? fraction, String? detail)? onProgress,
+    bool Function()? shouldCancel,
+  }) async {
+    final windows = (request['windows'] as List).cast<Map>();
+    if (windows.length > maxWindows) {
+      failedRuns++;
+      throw const LocalSpeechException(
+        'local_worker_failed',
+        message: 'Worker exited with code 9.',
+      );
+    }
+    successfulRuns++;
+    final tokens = <Map<String, dynamic>>[];
+    for (final rawWindow in windows) {
+      final window = rawWindow.cast<String, dynamic>();
+      for (final rawSegment in (window['segments'] as List).cast<Map>()) {
+        final segment = rawSegment.cast<String, dynamic>();
+        final units = (segment['units'] as List).cast<String>();
+        for (var index = 0; index < units.length; index++) {
+          tokens.add({
+            'segment_id': segment['id'],
+            'text': units[index],
+            'start_ms': (segment['start_ms'] as num).toInt(),
+            'end_ms': (segment['end_ms'] as num).toInt(),
+          });
+        }
+      }
+    }
+    return {'tokens': tokens, 'failed_window_ids': const <Object>[]};
+  }
+}
+
+class _SelectiveFailureAlignmentWorker implements LocalSpeechWorker {
+  _SelectiveFailureAlignmentWorker({required this.failedSegmentId});
+
+  final String failedSegmentId;
+
+  @override
+  Future<Map<String, dynamic>> run(
+    SpeechWorkerCommand command,
+    Map<String, dynamic> request, {
+    void Function(double? fraction, String? detail)? onProgress,
+    bool Function()? shouldCancel,
+  }) async {
+    final windows = (request['windows'] as List).cast<Map>();
+    final containsFailure = windows.any(
+      (window) =>
+          ((window['segments'] as List).single as Map)['id'] == failedSegmentId,
+    );
+    if (containsFailure) {
+      throw const LocalSpeechException(
+        'local_worker_failed',
+        message: 'Worker was terminated by signal 9.',
+      );
+    }
+    final tokens = <Map<String, dynamic>>[];
+    for (final window in windows) {
+      final segment = ((window['segments'] as List).single as Map)
+          .cast<String, dynamic>();
+      for (final unit in (segment['units'] as List).cast<String>()) {
+        tokens.add({
+          'segment_id': segment['id'],
+          'text': unit,
+          'start_ms': segment['start_ms'],
+          'end_ms': segment['end_ms'],
+        });
+      }
+    }
+    return {'tokens': tokens, 'failed_window_ids': const <Object>[]};
+  }
+}
+
+class _ResumeAlignmentWorker implements LocalSpeechWorker {
+  final requestedSegmentIds = <String>[];
+
+  @override
+  Future<Map<String, dynamic>> run(
+    SpeechWorkerCommand command,
+    Map<String, dynamic> request, {
+    void Function(double? fraction, String? detail)? onProgress,
+    bool Function()? shouldCancel,
+  }) async {
+    final tokens = <Map<String, dynamic>>[];
+    for (final window in (request['windows'] as List).cast<Map>()) {
+      for (final rawSegment in (window['segments'] as List).cast<Map>()) {
+        final segment = rawSegment.cast<String, dynamic>();
+        final id = segment['id'].toString();
+        requestedSegmentIds.add(id);
+        for (final unit in (segment['units'] as List).cast<String>()) {
+          tokens.add({
+            'segment_id': id,
+            'text': unit,
+            'start_ms': segment['start_ms'],
+            'end_ms': segment['end_ms'],
+          });
+        }
+      }
+    }
+    return {'tokens': tokens, 'failed_window_ids': const <Object>[]};
   }
 }

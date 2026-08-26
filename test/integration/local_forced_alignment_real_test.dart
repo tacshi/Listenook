@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_stt/core/contracts.dart';
+import 'package:meow_stt/core/imported_subtitle_alignment.dart';
 import 'package:meow_stt/core/local_speech.dart';
 import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/data/local_speech_process.dart';
@@ -26,6 +27,15 @@ void main() {
       .toSet();
   final requireComplete =
       Platform.environment['MEOWSTT_TEST_ALIGNMENT_REQUIRE_COMPLETE'] == '1';
+  final useExactSegments =
+      Platform.environment['MEOWSTT_TEST_ALIGNMENT_EXACT_SEGMENTS'] == '1';
+  final resumeSavedTokens =
+      Platform.environment['MEOWSTT_TEST_ALIGNMENT_RESUME_SAVED_TOKENS'] == '1';
+  final requestedWindowRadius =
+      int.tryParse(
+        Platform.environment['MEOWSTT_TEST_ALIGNMENT_WINDOW_RADIUS'] ?? '',
+      ) ??
+      0;
   final configured =
       manifestPath != null &&
       pcmPath != null &&
@@ -41,8 +51,23 @@ void main() {
               .cast<String, dynamic>();
       final job = TranscriptionJob.fromJson(manifest);
       final savedDocument = job.document!;
+      final importedPlan =
+          job.transcriptAcquisitionMode ==
+              TranscriptAcquisitionMode.importedSubtitles
+          ? const ImportedSubtitleAlignmentPlanner().prepare(
+              savedDocument,
+              sentenceBreaksNormalized:
+                  job.importedSubtitleProvenance?.sentenceBreaksNormalized ??
+                  false,
+            )
+          : null;
+      final alignmentDocument = importedPlan?.document ?? savedDocument;
+      final timelineMode =
+          importedPlan?.timelineMode == ImportedSubtitleTimelineMode.orderedText
+          ? ForcedAlignmentTimelineMode.orderedText
+          : ForcedAlignmentTimelineMode.segmentBounded;
       var selectedSegmentIds = requestedSegmentIds;
-      if (requestedSegmentIds != null) {
+      if (requestedSegmentIds != null && !useExactSegments) {
         final captureWorker = _RequestCapturingWorker();
         final planningService = ProcessForcedAlignmentService(
           models: _InstalledAlignmentModel(modelDirectory!, alignmentModel),
@@ -53,19 +78,32 @@ void main() {
         await planningService.align(
           ForcedAlignmentRequest(
             sourcePath: job.sourcePath,
-            document: savedDocument.copyWith(tokens: const []),
+            document: alignmentDocument.copyWith(tokens: const []),
             model: alignmentModel,
             languageHints: job.options.languageHints,
+            timelineMode: timelineMode,
           ),
         );
         selectedSegmentIds = captureWorker.windowSegmentIdsContaining(
           requestedSegmentIds,
+          radius: requestedWindowRadius,
         );
       }
       final document = selectedSegmentIds == null
-          ? savedDocument
-          : savedDocument.copyWith(
-              tokens: const [],
+          ? alignmentDocument.copyWith(
+              tokens: resumeSavedTokens ? alignmentDocument.tokens : const [],
+              preserveUpdatedAt: true,
+            )
+          : alignmentDocument.copyWith(
+              tokens: resumeSavedTokens
+                  ? alignmentDocument.tokens
+                        .where(
+                          (token) =>
+                              token.segmentId != null &&
+                              selectedSegmentIds!.contains(token.segmentId),
+                        )
+                        .toList()
+                  : const [],
               segments: savedDocument.segments
                   .where((segment) => selectedSegmentIds!.contains(segment.id))
                   .toList(),
@@ -95,15 +133,32 @@ void main() {
       final result = await service.align(
         ForcedAlignmentRequest(
           sourcePath: job.sourcePath,
-          document: document.copyWith(tokens: const []),
+          document: document,
           model: alignmentModel,
           languageHints: job.options.languageHints,
+          timelineMode: timelineMode,
         ),
       );
       final covered = result.tokens
           .map((token) => token.segmentId)
           .whereType<String>()
           .toSet();
+      final timelineConflicts = <Map<String, Object?>>[];
+      if (timelineMode == ForcedAlignmentTimelineMode.orderedText) {
+        for (var index = 0; index + 1 < result.tokens.length; index++) {
+          final left = result.tokens[index];
+          final right = result.tokens[index + 1];
+          if (left.endMs <= right.startMs) continue;
+          timelineConflicts.add({
+            'left_segment_id': left.segmentId,
+            'left_start_ms': left.startMs,
+            'left_end_ms': left.endMs,
+            'right_segment_id': right.segmentId,
+            'right_start_ms': right.startMs,
+            'right_end_ms': right.endMs,
+          });
+        }
+      }
 
       final missing = document.segments
           .map((segment) => segment.id)
@@ -115,9 +170,18 @@ void main() {
         print(<String, Object?>{
           'missing_segment_ids': missing,
           'failed_window_reasons': worker.lastOutput?['failed_window_reasons'],
+          'windows': worker.windowsFor(missing),
           'raw_tokens': worker.tokensFor(missing),
         });
       }
+      if (timelineConflicts.isNotEmpty) {
+        // ignore: avoid_print
+        print({
+          'timeline_conflicts': timelineConflicts,
+          'last_worker_windows': worker.windowSummaries(),
+        });
+      }
+      expect(timelineConflicts, isEmpty);
       if (requestedSegmentIds != null || requireComplete) {
         expect(missing, isEmpty);
       } else {
@@ -143,6 +207,53 @@ class _RecordingWorker implements LocalSpeechWorker {
   final LocalSpeechWorker delegate;
   Map<String, dynamic>? lastOutput;
   Map<String, dynamic>? lastRequest;
+
+  List<Map<String, Object?>> windowSummaries() {
+    final windows = lastRequest?['windows'];
+    if (windows is! List) return const [];
+    return windows.whereType<Map>().map((window) {
+      final segments = window['segments'];
+      return <String, Object?>{
+        'start_ms': window['start_ms'],
+        'end_ms': window['end_ms'],
+        'segment_ids': segments is List
+            ? segments
+                  .whereType<Map>()
+                  .map((segment) => segment['id']?.toString())
+                  .whereType<String>()
+                  .toList()
+            : const <String>[],
+      };
+    }).toList();
+  }
+
+  List<Map<String, Object?>> windowsFor(Iterable<String> segmentIds) {
+    final requested = segmentIds.toSet();
+    final windows = lastRequest?['windows'];
+    if (windows is! List) return const [];
+    return windows
+        .whereType<Map>()
+        .where((window) {
+          final segments = window['segments'];
+          if (segments is! List) return false;
+          return segments.whereType<Map>().any(
+            (segment) => requested.contains(segment['id']?.toString()),
+          );
+        })
+        .map((window) {
+          return <String, Object?>{
+            'id': window['id']?.toString(),
+            'start_ms': window['start_ms'],
+            'end_ms': window['end_ms'],
+            'segment_ids': (window['segments'] as List)
+                .whereType<Map>()
+                .map((segment) => segment['id']?.toString())
+                .whereType<String>()
+                .toList(),
+          };
+        })
+        .toList();
+  }
 
   List<Map<String, Object?>> tokensFor(Iterable<String> segmentIds) {
     final requested = segmentIds.toSet();
@@ -183,21 +294,36 @@ class _RecordingWorker implements LocalSpeechWorker {
 }
 
 class _RequestCapturingWorker implements LocalSpeechWorker {
-  Map<String, dynamic>? request;
+  final requests = <Map<String, dynamic>>[];
 
-  Set<String> windowSegmentIdsContaining(Set<String> requestedIds) {
-    final windows = request?['windows'];
-    if (windows is! List) return const {};
+  Set<String> windowSegmentIdsContaining(
+    Set<String> requestedIds, {
+    int radius = 0,
+  }) {
+    final orderedWindows = <Set<String>>[];
+    for (final request in requests) {
+      final windows = request['windows'];
+      if (windows is! List) continue;
+      for (final rawWindow in windows.whereType<Map>()) {
+        final segments = rawWindow['segments'];
+        if (segments is! List) continue;
+        orderedWindows.add(
+          segments
+              .whereType<Map>()
+              .map((segment) => segment['id']?.toString())
+              .whereType<String>()
+              .toSet(),
+        );
+      }
+    }
     final selected = <String>{};
-    for (final rawWindow in windows.whereType<Map>()) {
-      final segments = rawWindow['segments'];
-      if (segments is! List) continue;
-      final ids = segments
-          .whereType<Map>()
-          .map((segment) => segment['id']?.toString())
-          .whereType<String>()
-          .toSet();
-      if (ids.intersection(requestedIds).isNotEmpty) selected.addAll(ids);
+    for (var index = 0; index < orderedWindows.length; index++) {
+      if (orderedWindows[index].intersection(requestedIds).isEmpty) continue;
+      final first = (index - radius).clamp(0, orderedWindows.length - 1);
+      final last = (index + radius).clamp(0, orderedWindows.length - 1);
+      for (var neighbor = first; neighbor <= last; neighbor++) {
+        selected.addAll(orderedWindows[neighbor]);
+      }
     }
     return selected;
   }
@@ -209,7 +335,7 @@ class _RequestCapturingWorker implements LocalSpeechWorker {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
-    this.request = request;
+    requests.add(request);
     return const <String, dynamic>{
       'tokens': <Object>[],
       'failed_window_ids': <Object>[],

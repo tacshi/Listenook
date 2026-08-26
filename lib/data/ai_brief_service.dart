@@ -57,6 +57,7 @@ class DefaultAiBriefService implements AiBriefService {
     );
     final totalRequests = chunks.length + (chunks.length > 1 ? 1 : 0);
     final candidates = <Map<String, dynamic>>[];
+    String? singleChunkPrompt;
     try {
       for (var index = 0; index < chunks.length; index++) {
         _checkCancelled(shouldCancel);
@@ -70,6 +71,7 @@ class DefaultAiBriefService implements AiBriefService {
           chunkIndex: index,
           chunkCount: chunks.length,
         );
+        if (chunks.length == 1) singleChunkPrompt = prompt;
         candidates.add(
           await _completeJson(
             settings: settings,
@@ -81,31 +83,36 @@ class DefaultAiBriefService implements AiBriefService {
       }
 
       Map<String, dynamic> result;
+      String finalPrompt;
       if (candidates.length == 1) {
         result = candidates.single;
+        finalPrompt = singleChunkPrompt!;
       } else {
         _checkCancelled(shouldCancel);
+        finalPrompt = _synthesisPrompt(
+          candidates,
+          sections: sections,
+          outputLanguage: outputLanguage,
+          learningLanguage: resolvedLearningLanguage,
+          learningLevel: learningLevel,
+        );
         result = await _completeJson(
           settings: settings,
-          prompt: _synthesisPrompt(
-            candidates,
-            sections: sections,
-            outputLanguage: outputLanguage,
-            learningLanguage: resolvedLearningLanguage,
-            learningLevel: learningLevel,
-          ),
+          prompt: finalPrompt,
           shouldCancel: shouldCancel,
         );
         await onProgress?.call('synthesizing', totalRequests, totalRequests);
       }
-      return _validatedBrief(
+      return await _validatedBriefWithRepair(
         result,
         settings: settings,
+        prompt: finalPrompt,
         document: document,
         sections: sections,
         outputLanguage: outputLanguage,
         learningLanguage: learningLanguage,
         learningLevel: learningLevel,
+        shouldCancel: shouldCancel,
       );
     } on OperationCancelledException {
       rethrow;
@@ -277,6 +284,7 @@ source_excerpt must be a short verbatim substring of a cited transcript segment.
     CancelCheck? shouldCancel,
   }) async {
     for (var attempt = 0; attempt < 2; attempt++) {
+      _checkCancelled(shouldCancel);
       final response = await _llm.complete(
         settings: settings,
         systemPrompt: _systemPrompt,
@@ -298,18 +306,103 @@ source_excerpt must be a short verbatim substring of a cited transcript segment.
   }
 
   Map<String, dynamic> _decodeJsonObject(String value) {
-    var candidate = value.trim();
-    if (candidate.startsWith('```')) {
-      candidate = candidate
-          .replaceFirst(RegExp(r'^```(?:json)?\s*'), '')
-          .replaceFirst(RegExp(r'\s*```$'), '');
+    Map<String, dynamic>? fallback;
+    Map<String, dynamic>? brief;
+    for (var start = 0; start < value.length; start++) {
+      if (value.codeUnitAt(start) != 0x7b) continue;
+      final end = _matchingObjectEnd(value, start);
+      if (end == null) continue;
+      try {
+        final decoded = jsonDecode(value.substring(start, end + 1));
+        if (decoded is! Map) continue;
+        final object = decoded.cast<String, dynamic>();
+        fallback = object;
+        if (_looksLikeBriefJson(object)) brief = object;
+      } on FormatException {
+        continue;
+      }
     }
-    final start = candidate.indexOf('{');
-    final end = candidate.lastIndexOf('}');
-    if (start < 0 || end <= start) throw const FormatException();
-    final decoded = jsonDecode(candidate.substring(start, end + 1));
-    if (decoded is! Map) throw const FormatException();
-    return decoded.cast<String, dynamic>();
+    return brief ?? fallback ?? (throw const FormatException());
+  }
+
+  int? _matchingObjectEnd(String value, int start) {
+    var depth = 0;
+    var inString = false;
+    var escaped = false;
+    for (var index = start; index < value.length; index++) {
+      final codeUnit = value.codeUnitAt(index);
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (codeUnit == 0x5c) {
+          escaped = true;
+        } else if (codeUnit == 0x22) {
+          inString = false;
+        }
+        continue;
+      }
+      if (codeUnit == 0x22) {
+        inString = true;
+      } else if (codeUnit == 0x7b) {
+        depth++;
+      } else if (codeUnit == 0x7d) {
+        depth--;
+        if (depth == 0) return index;
+      }
+    }
+    return null;
+  }
+
+  bool _looksLikeBriefJson(Map<String, dynamic> value) =>
+      value.containsKey('overview') ||
+      value.containsKey('overview_evidence') ||
+      value.containsKey('chapters') ||
+      value.containsKey('insights') ||
+      value.containsKey('language_notes');
+
+  Future<AiBrief> _validatedBriefWithRepair(
+    Map<String, dynamic> json, {
+    required LlmProviderSettings settings,
+    required String prompt,
+    required TranscriptDocument document,
+    required Set<AiBriefSection> sections,
+    required String outputLanguage,
+    required String? learningLanguage,
+    required AiLearningLevel learningLevel,
+    CancelCheck? shouldCancel,
+  }) async {
+    try {
+      return _validatedBrief(
+        json,
+        settings: settings,
+        document: document,
+        sections: sections,
+        outputLanguage: outputLanguage,
+        learningLanguage: learningLanguage,
+        learningLevel: learningLevel,
+      );
+    } on AiBriefException catch (error) {
+      if (error.code != 'ai_brief_no_supported_content') rethrow;
+    }
+    _checkCancelled(shouldCancel);
+    final repaired = await _completeJson(
+      settings: settings,
+      prompt:
+          '$prompt\nYour previous response was valid JSON but did not contain '
+          'usable content for the requested sections. Use only exact segment '
+          'IDs shown in the transcript, include evidence for every returned '
+          'item, and return at least one supported requested item.',
+      shouldCancel: shouldCancel,
+    );
+    return _validatedBrief(
+      repaired,
+      settings: settings,
+      document: document,
+      sections: sections,
+      outputLanguage: outputLanguage,
+      learningLanguage: learningLanguage,
+      learningLevel: learningLevel,
+    );
   }
 
   AiBrief _validatedBrief(

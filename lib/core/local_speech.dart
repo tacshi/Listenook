@@ -564,18 +564,26 @@ abstract interface class LocalSttService {
   });
 }
 
+typedef AlignmentCheckpointCallback = void Function(AlignmentResult result);
+
+enum ForcedAlignmentTimelineMode { segmentBounded, orderedText }
+
 class ForcedAlignmentRequest {
   const ForcedAlignmentRequest({
     required this.sourcePath,
     required this.document,
     required this.model,
     this.languageHints = const [],
+    this.onCheckpoint,
+    this.timelineMode = ForcedAlignmentTimelineMode.segmentBounded,
   });
 
   final String sourcePath;
   final TranscriptDocument document;
   final LocalModelDescriptor model;
   final List<String> languageHints;
+  final AlignmentCheckpointCallback? onCheckpoint;
+  final ForcedAlignmentTimelineMode timelineMode;
 }
 
 class AlignmentResult {

@@ -80,4 +80,34 @@ while true; do sleep 1; done
       throwsA(isA<OperationCancelledException>()),
     );
   }, skip: !Platform.isMacOS);
+
+  test('speech worker reports a non-zero exit code with diagnostics', () async {
+    final root = await Directory.systemTemp.createTemp('meow-worker-exit-');
+    addTearDown(() => root.delete(recursive: true));
+    final executable = File('${root.path}/worker.sh');
+    await executable.writeAsString(r'''#!/bin/sh
+printf 'Loaded tokenizer before failure\n' >&2
+exit 9
+''');
+    await Process.run('/bin/chmod', ['700', executable.path]);
+
+    await expectLater(
+      ProcessLocalSpeechWorker(
+        temporaryDirectory: root,
+        executablePath: executable.path,
+      ).run(SpeechWorkerCommand.alignQwen3, const {'protocol': 1}),
+      throwsA(
+        isA<LocalSpeechException>()
+            .having((error) => error.code, 'code', 'local_worker_failed')
+            .having(
+              (error) => error.message,
+              'message',
+              allOf(
+                contains('Worker exited with code 9'),
+                contains('Loaded tokenizer'),
+              ),
+            ),
+      ),
+    );
+  }, skip: !Platform.isMacOS);
 }
