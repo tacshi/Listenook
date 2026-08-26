@@ -11,6 +11,7 @@ import '../core/models.dart';
 import '../data/desktop_runtime.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
+import 'app_notice.dart';
 import 'inbox_monitor_setup_dialog.dart';
 
 typedef ExternalUrlLauncher = Future<bool> Function(Uri url);
@@ -884,10 +885,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void _showMessage(String message) {
-    final messenger = ScaffoldMessenger.of(context);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    showAppNotice(context, message: message);
   }
 }
 
@@ -1359,9 +1357,7 @@ class _AiProviderSettingsSectionState
   );
 
   void _message(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    showAppNotice(context, message: message);
   }
 }
 

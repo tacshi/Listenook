@@ -15,6 +15,11 @@ The package name is `meow_stt`. Its permanent desktop identity is
 
 - Recursive folder and multi-file drag/drop with hidden-file filtering and
   canonical-path deduplication.
+- Existing SRT or WebVTT files can be paired with local media in Inbox and sent
+  directly to Qwen3 ForcedAligner on Apple Silicon/macOS 15+. MeowSTT preserves
+  cue text and order, tightens successfully aligned cue edges, retains original
+  timing for unsuccessful cues, and never invokes or charges a transcription
+  provider for these jobs.
 - An optional Podcast tab that searches public Apple Podcasts results, opens
   RSS feeds, previews episodes, and follows shows locally. Deep-listen
   downloads an episode into Inbox for confirmation. Word-level publisher
@@ -72,7 +77,9 @@ The package name is `meow_stt`. Its permanent desktop identity is
 ## Privacy model
 
 MeowSTT is BYOK and has no application backend. Starting a job uploads its
-media directly to the provider recorded on that job; MOSS Pro may first create
+media directly to the provider recorded on that job, except for imported
+subtitle jobs, which align against local media without an upload or
+transcription request. MOSS Pro may first create
 a compact temporary audio copy on macOS. Optional Soniox
 translation is performed within the Soniox request. Optional LLM translation is a separate operation;
 when requested, transcript text—not media—is sent to the single
@@ -90,7 +97,9 @@ size, modification time, disposition, and optional job ID in a separate atomic
 Application Support JSON file. It never moves, modifies, deletes, or uploads a
 monitored source. Discovery notifications are sent only while the window is
 hidden; pressing **Transcribe** remains the point at which media can leave the
-device.
+device. Imported SRT/WebVTT snapshots and local alignment never make media
+leave the device; optional LLM translation can still send transcript text to
+the configured text provider.
 See [PRIVACY.md](PRIVACY.md).
 
 ## Development

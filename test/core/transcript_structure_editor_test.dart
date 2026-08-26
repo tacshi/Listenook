@@ -33,6 +33,8 @@ void main() {
           endMs: 1500,
           text: 'Hello, world again.',
           translatedText: 'Hola, mundo otra vez.',
+          alignmentWindowStartMs: 0,
+          alignmentWindowEndMs: 1500,
         ),
       ],
       speakers: const [],
@@ -51,11 +53,15 @@ void main() {
     expect(result.document.segments.first.text, 'Hello,');
     expect(result.document.segments.first.endMs, 400);
     expect(result.document.segments.first.translatedText, isNull);
+    expect(result.document.segments.first.alignmentWindowStartMs, 0);
+    expect(result.document.segments.first.alignmentWindowEndMs, 400);
     expect(result.document.segments.last.id, 'right');
     expect(result.document.segments.last.text, 'world again.');
     expect(result.document.segments.last.startMs, 600);
     expect(result.document.segments.last.preserveBoundaryBefore, isTrue);
     expect(result.document.segments.last.translatedText, isNull);
+    expect(result.document.segments.last.alignmentWindowStartMs, 600);
+    expect(result.document.segments.last.alignmentWindowEndMs, 1500);
     expect(result.document.tokens.map((token) => token.segmentId), [
       'sentence',
       'right',
@@ -93,6 +99,8 @@ void main() {
           language: 'en',
           translatedText: 'Hola,',
           preserveBoundaryBefore: true,
+          alignmentWindowStartMs: 0,
+          alignmentWindowEndMs: 600,
         ),
         TranscriptSegment(
           id: 'right',
@@ -103,6 +111,8 @@ void main() {
           language: 'en',
           translatedText: 'mundo.',
           preserveBoundaryBefore: true,
+          alignmentWindowStartMs: 600,
+          alignmentWindowEndMs: 1300,
         ),
       ],
       speakers: const [],
@@ -124,6 +134,8 @@ void main() {
     expect(merged.startMs, 0);
     expect(merged.endMs, 1200);
     expect(merged.preserveBoundaryBefore, isTrue);
+    expect(merged.alignmentWindowStartMs, 0);
+    expect(merged.alignmentWindowEndMs, 1300);
     expect(result.document.tokens.map((token) => token.segmentId), [
       'left',
       'left',
@@ -457,5 +469,59 @@ void main() {
     expect(once.segments.map((segment) => segment.id), ['left', 'manual']);
     expect(once.segments.last.preserveBoundaryBefore, isTrue);
     expect(twice.segments.map((segment) => segment.id), ['left', 'manual']);
+  });
+
+  test('edit availability finds merges and token-backed splits', () {
+    final editor = TranscriptStructureEditor();
+    final mergeable = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(id: 'left', startMs: 0, endMs: 400, text: 'One'),
+        TranscriptSegment(id: 'right', startMs: 500, endMs: 900, text: 'Two'),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+    );
+    expect(editor.canMergeWithNext(mergeable, 0), isTrue);
+    expect(editor.hasAvailableEdit(mergeable), isTrue);
+
+    final splitOnly = TranscriptDocument(
+      tokens: const [
+        TranscriptToken(
+          text: 'Hello',
+          startMs: 100,
+          endMs: 300,
+          segmentId: 'first',
+        ),
+        TranscriptToken(
+          text: ' world',
+          startMs: 400,
+          endMs: 700,
+          segmentId: 'first',
+        ),
+      ],
+      segments: const [
+        TranscriptSegment(
+          id: 'first',
+          startMs: 0,
+          endMs: 800,
+          text: 'Hello world.',
+          speaker: 'one',
+          language: 'en',
+        ),
+        TranscriptSegment(
+          id: 'second',
+          startMs: 900,
+          endMs: 1200,
+          text: 'Bonjour.',
+          speaker: 'two',
+          language: 'fr',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+    );
+    expect(editor.canMergeWithNext(splitOnly, 0), isFalse);
+    expect(editor.hasAvailableEdit(splitOnly), isTrue);
   });
 }

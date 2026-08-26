@@ -95,7 +95,7 @@ class ProcessLocalSpeechWorker implements LocalSpeechWorker {
     Process? process;
     StreamSubscription<String>? stdoutSubscription;
     StreamSubscription<String>? stderrSubscription;
-    final stderr = StringBuffer();
+    var stderrTail = '';
     final stdoutDone = Completer<void>();
     final stderrDone = Completer<void>();
     try {
@@ -124,7 +124,7 @@ class ProcessLocalSpeechWorker implements LocalSpeechWorker {
       stderrSubscription = process.stderr.transform(utf8.decoder).listen((
         chunk,
       ) {
-        if (stderr.length < 8192) stderr.write(chunk);
+        stderrTail = _appendDiagnosticTail(stderrTail, chunk);
       }, onDone: stderrDone.complete);
 
       final exitFuture = process.exitCode;
@@ -158,10 +158,14 @@ class ProcessLocalSpeechWorker implements LocalSpeechWorker {
         final errorMap = error is Map
             ? error.cast<String, dynamic>()
             : const <String, dynamic>{};
+        final code = errorMap['code']?.toString() ?? 'local_worker_failed';
+        final detail =
+            errorMap['message']?.toString() ?? _cleanError(stderrTail);
         throw LocalSpeechException(
-          errorMap['code']?.toString() ?? 'local_worker_failed',
-          message:
-              errorMap['message']?.toString() ?? _cleanError(stderr.toString()),
+          code,
+          message: code == 'local_worker_failed'
+              ? _workerExitMessage(exitCode, detail)
+              : detail,
         );
       }
       final result = envelope['result'];
@@ -233,6 +237,22 @@ class ProcessLocalSpeechWorker implements LocalSpeechWorker {
     final value = raw.trim().replaceAll(RegExp(r'\s+'), ' ');
     if (value.isEmpty) return null;
     return value.length <= 500 ? value : value.substring(0, 500);
+  }
+
+  String _appendDiagnosticTail(String current, String chunk) {
+    const limit = 8192;
+    final combined = '$current$chunk';
+    return combined.length <= limit
+        ? combined
+        : combined.substring(combined.length - limit);
+  }
+
+  String _workerExitMessage(int exitCode, String? detail) {
+    final exit = exitCode < 0
+        ? 'Worker was terminated by signal ${-exitCode}.'
+        : 'Worker exited with code $exitCode.';
+    final cleaned = _cleanError(detail ?? '');
+    return cleaned == null ? exit : '$exit $cleaned';
   }
 
   Future<void> _deleteIfPresent(File file) async {

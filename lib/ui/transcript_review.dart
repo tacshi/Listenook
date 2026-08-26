@@ -18,6 +18,7 @@ import '../core/transcript_structure_editor.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
+import 'app_notice.dart';
 import 'job_actions.dart';
 import 'keyboard_shortcuts.dart';
 import 'review_fullscreen_controller.dart';
@@ -48,6 +49,56 @@ Future<bool> Function(String path)? debugTranscriptReviewSourceExists;
 @visibleForTesting
 VoidCallback? debugTranscriptReviewScheduleMediaFrame;
 
+@visibleForTesting
+SentenceRepeatLoopController? Function(Player player)?
+debugTranscriptReviewSentenceRepeatLoopFactory;
+
+abstract interface class SentenceRepeatLoopController {
+  Future<void> setRange({required int startMs, required int endMs});
+
+  Future<void> clear();
+}
+
+class MpvSentenceRepeatLoopController implements SentenceRepeatLoopController {
+  MpvSentenceRepeatLoopController(this._setProperty);
+
+  final Future<void> Function(String property, String value) _setProperty;
+  Future<void> _pending = Future<void>.value();
+
+  @override
+  Future<void> setRange({required int startMs, required int endMs}) =>
+      _enqueue(() async {
+        await _setProperty('ab-loop-b', 'no');
+        await _setProperty('ab-loop-count', 'inf');
+        await _setProperty('ab-loop-a', _mpvTimestamp(startMs));
+        await _setProperty('ab-loop-b', _mpvTimestamp(endMs));
+      });
+
+  @override
+  Future<void> clear() => _enqueue(() async {
+    await _setProperty('ab-loop-b', 'no');
+    await _setProperty('ab-loop-a', 'no');
+  });
+
+  Future<void> _enqueue(Future<void> Function() operation) {
+    final result = _pending.then(
+      (_) => operation(),
+      onError: (_, _) => operation(),
+    );
+    _pending = result;
+    return result;
+  }
+
+  static String _mpvTimestamp(int milliseconds) =>
+      (milliseconds / 1000).toStringAsFixed(3);
+}
+
+SentenceRepeatLoopController? _mpvSentenceRepeatLoopFor(Player player) {
+  final platform = player.platform;
+  if (platform is! NativePlayer) return null;
+  return MpvSentenceRepeatLoopController(platform.setProperty);
+}
+
 class _ReviewPlaybackTick extends ChangeNotifier {
   void tick() => notifyListeners();
 }
@@ -64,6 +115,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   Player? _player;
   LatestSeekDispatcher? _seekDispatcher;
+  SentenceRepeatLoopController? _sentenceRepeatLoop;
+  Future<void> _sentenceRepeatLoopUpdate = Future<void>.value();
+  int _sentenceRepeatLoopRequest = 0;
+  String? _nativeRepeatingSegmentId;
   VideoController? _video;
   final _search = TextEditingController();
   final _aiBriefScroll = ScrollController();
@@ -122,6 +177,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
   late final VideoControlsBuilder _videoControls;
   final _playbackTick = _ReviewPlaybackTick();
   final _structureEditor = TranscriptStructureEditor();
+  TranscriptDocument? _structureAvailabilityDocument;
+  bool _cachedStructureEditingAvailable = false;
 
   ReviewFullscreenController get _fullscreenController =>
       widget.fullscreenController ?? _localFullscreenController;
@@ -179,6 +236,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _openedPath = '';
     final player = debugTranscriptReviewPlayerFactory?.call() ?? Player();
     _player = player;
+    _sentenceRepeatLoop =
+        debugTranscriptReviewSentenceRepeatLoopFactory?.call(player) ??
+        _mpvSentenceRepeatLoopFor(player);
     _seekDispatcher = LatestSeekDispatcher(player.seek);
     _video = VideoController(player);
     (debugTranscriptReviewScheduleMediaFrame ??
@@ -227,6 +287,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _playing = false;
       _manualRepeatingSegmentId = null;
       _heldRepeatingSegmentId = null;
+      _nativeRepeatingSegmentId = null;
       _repeatRestartQueued = false;
       _repeatRestartQueuedResume = false;
       _followPlayback = true;
@@ -239,6 +300,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _lastScrolledSegmentId = null;
       _mappedDocument = null;
       _tokensBySegment = const {};
+      _structureAvailabilityDocument = null;
+      _cachedStructureEditingAvailable = false;
       _openedPath = '';
       _waveformSource = '';
       _waveformPath = null;
@@ -247,6 +310,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _companionLeftPaneFraction = null;
       _companionLayoutActive = false;
       if (_aiBriefScroll.hasClients) _aiBriefScroll.jumpTo(0);
+      unawaited(_setNativeSentenceRepeat(null));
       _openSource();
     }
   }
@@ -272,12 +336,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final repeatedSegment = _repeatingSegment;
     if (_playing &&
         repeatedSegment != null &&
+        !_nativeSentenceRepeatActive &&
         shouldRestartRepeatedSentence(
           repeatedSegment,
           value.inMilliseconds,
           previousSegment: _previousSegmentFor(repeatedSegment),
+          nextSegment: _nextSegmentFor(repeatedSegment),
         )) {
-      _queueRepeatRestart();
+      _queueRepeatRestart(resumeAfterSeek: true);
     }
     if (shouldAutoFollowPlaybackSegment(
       playing: _playing,
@@ -351,9 +417,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final repeatedSegment = _repeatingSegment;
     if (resumed &&
         repeatedSegment != null &&
+        !_nativeSentenceRepeatActive &&
         shouldRestartRepeatedSentence(
           repeatedSegment,
           _position.inMilliseconds,
+          previousSegment: _previousSegmentFor(repeatedSegment),
+          nextSegment: _nextSegmentFor(repeatedSegment),
         )) {
       _queueRepeatRestart(resumeAfterSeek: true);
     }
@@ -403,11 +472,80 @@ class _TranscriptReviewState extends State<TranscriptReview>
         .firstOrNull;
   }
 
+  bool get _nativeSentenceRepeatActive {
+    final segmentId = _repeatingSegmentId;
+    return segmentId != null && _nativeRepeatingSegmentId == segmentId;
+  }
+
+  Future<bool> _setNativeSentenceRepeat(TranscriptSegment? segment) {
+    final loop = _sentenceRepeatLoop;
+    final request = ++_sentenceRepeatLoopRequest;
+    _nativeRepeatingSegmentId = null;
+    if (loop == null) return Future<bool>.value(false);
+
+    final completer = Completer<bool>();
+    final previous = _sentenceRepeatLoopUpdate;
+    _sentenceRepeatLoopUpdate = () async {
+      try {
+        try {
+          await previous;
+        } on Object {
+          // A failed native property update must not block the latest request.
+        }
+        if (request != _sentenceRepeatLoopRequest ||
+            !identical(loop, _sentenceRepeatLoop)) {
+          completer.complete(false);
+          return;
+        }
+        if (segment == null) {
+          await loop.clear();
+          completer.complete(false);
+          return;
+        }
+        if (_repeatingSegmentId != segment.id) {
+          completer.complete(false);
+          return;
+        }
+        await loop.setRange(
+          startMs: sentenceRepeatStartMs(
+            segment,
+            previousSegment: _previousSegmentFor(segment),
+          ),
+          endMs: sentenceRepeatEndMs(
+            segment,
+            nextSegment: _nextSegmentFor(segment),
+          ),
+        );
+        final active =
+            request == _sentenceRepeatLoopRequest &&
+            identical(loop, _sentenceRepeatLoop) &&
+            _repeatingSegmentId == segment.id;
+        if (active) _nativeRepeatingSegmentId = segment.id;
+        completer.complete(active);
+      } on Object {
+        if (request == _sentenceRepeatLoopRequest) {
+          _nativeRepeatingSegmentId = null;
+        }
+        completer.complete(false);
+      }
+    }();
+    return completer.future;
+  }
+
   TranscriptSegment? _previousSegmentFor(TranscriptSegment segment) {
     final segments = _document?.segments;
     if (segments == null) return null;
     final index = segments.indexWhere((item) => item.id == segment.id);
     return index > 0 ? segments[index - 1] : null;
+  }
+
+  TranscriptSegment? _nextSegmentFor(TranscriptSegment segment) {
+    final segments = _document?.segments;
+    if (segments == null) return null;
+    final index = segments.indexWhere((item) => item.id == segment.id);
+    return index >= 0 && index + 1 < segments.length
+        ? segments[index + 1]
+        : null;
   }
 
   Future<void> _openSource() async {
@@ -443,7 +581,21 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _playbackRestoreReady = false;
       _playbackRestoreSeekInFlight = false;
       final player = _player!;
+      await _setNativeSentenceRepeat(null);
+      if (!mounted || request != _sourceRequest || widget.jobId != job.id) {
+        return;
+      }
       await player.open(Media(job.sourcePath), play: false);
+      if (!mounted || request != _sourceRequest || widget.jobId != job.id) {
+        return;
+      }
+      if (job.metadata?.hasVideo ?? false) {
+        try {
+          await player.setSubtitleTrack(SubtitleTrack.no());
+        } on Object {
+          // Playback remains usable if a platform cannot control subtitles.
+        }
+      }
       if (!mounted || request != _sourceRequest || widget.jobId != job.id) {
         return;
       }
@@ -529,6 +681,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _clearPendingPlaybackRestore();
     final player = _player;
     _player = null;
+    await _setNativeSentenceRepeat(null);
+    _sentenceRepeatLoop = null;
+    _nativeRepeatingSegmentId = null;
     final seekDispatcher = _seekDispatcher;
     _seekDispatcher = null;
     _video = null;
@@ -1202,10 +1357,23 @@ class _TranscriptReviewState extends State<TranscriptReview>
                   },
                   itemBuilder: (context, index) {
                     final segment = segments[index];
+                    final tokens =
+                        _tokensBySegment[segment.id] ??
+                        const <TranscriptToken>[];
+                    final alignmentFailed =
+                        _importedSubtitleCueNeedsAlignmentAttention(
+                          job,
+                          segment,
+                          tokens,
+                        );
                     return _TranscriptSegmentGroup(
                       key: ValueKey('group-${segment.id}'),
                       segment: segment,
-                      tokens: _tokensBySegment[segment.id] ?? const [],
+                      tokens: tokens,
+                      alignmentFailed: alignmentFailed,
+                      alignmentFailureMessage: alignmentFailed
+                          ? context.strings.t('subtitle_cue_original_timing')
+                          : '',
                       positionMs: _position.inMilliseconds,
                       isCurrent: query.isEmpty && index == currentIndex,
                       viewMode: _viewMode,
@@ -1227,6 +1395,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
                           ? _structureEditor.splitTargets(document, segment.id)
                           : const [],
                       isRepeating: _repeatingSegmentId == segment.id,
+                      onResolveAlignment: alignmentFailed
+                          ? () => _setAlignmentResolved(segment.id, true)
+                          : null,
                       onToggleRepeat: _canRepeat(segment)
                           ? () => _toggleSentenceRepeat(segment)
                           : null,
@@ -1333,13 +1504,20 @@ class _TranscriptReviewState extends State<TranscriptReview>
                     ),
                     child: _structureNoticeMessageKey == null
                         ? const SizedBox.shrink()
-                        : _TranscriptStructureEditNotice(
+                        : AppNoticeSurface(
                             key: const ValueKey('transcript-structure-notice'),
                             message: context.strings.t(
                               _structureNoticeMessageKey!,
                             ),
-                            undoLabel: context.strings.t('undo'),
-                            onUndo: () => unawaited(_undoStructureEdit()),
+                            tone: AppNoticeTone.success,
+                            actionLabel: context.strings.t('undo'),
+                            actionKey: const Key(
+                              'transcript-structure-notice-undo',
+                            ),
+                            dismissKey: const Key(
+                              'dismiss-transcript-structure-notice',
+                            ),
+                            onAction: () => unawaited(_undoStructureEdit()),
                             onDismiss: _dismissStructureNotice,
                           ),
                   ),
@@ -1391,9 +1569,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   Future<void> _showAiBriefDialog(TranscriptionJob job) async {
     final controller = context.read<AppController>();
     if (!controller.aiBriefConfigured) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.strings.t('ai_brief_configure'))),
-      );
+      showAppNotice(context, message: context.strings.t('ai_brief_configure'));
       return;
     }
     final result = await _showAiBriefGenerationDialog(context, job);
@@ -1538,7 +1714,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   bool _canRepeat(TranscriptSegment segment) =>
-      _player != null && segment.endMs > segment.startMs;
+      _player != null &&
+      sentenceRepeatEndMs(segment, nextSegment: _nextSegmentFor(segment)) >
+          segment.startMs;
 
   void _toggleSentenceRepeat(TranscriptSegment segment) {
     if (_manualRepeatingSegmentId == segment.id) {
@@ -1547,6 +1725,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
         _repeatRestartQueued = false;
         _repeatRestartQueuedResume = false;
       });
+      unawaited(_setNativeSentenceRepeat(_repeatingSegment));
       return;
     }
     if (!_canRepeat(segment)) return;
@@ -1635,6 +1814,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final segment = document.segments[index];
     if (!_canRepeat(segment)) return false;
     setState(() => _heldRepeatingSegmentId = segment.id);
+    unawaited(_setNativeSentenceRepeat(segment));
     unawaited(_ensurePlaybackContinues(player));
     return true;
   }
@@ -1655,6 +1835,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
         restoredSegmentId != null &&
         restoredSegmentId != heldSegmentId) {
       _queueRepeatRestart(resumeAfterSeek: _player?.state.playing ?? false);
+    } else if (restoredSegmentId == null) {
+      unawaited(_setNativeSentenceRepeat(null));
     }
     if (notify && player != null) {
       unawaited(_ensurePlaybackContinues(player));
@@ -1687,12 +1869,25 @@ class _TranscriptReviewState extends State<TranscriptReview>
   Future<void> _restartRepeatedSentence({required bool resumeAfterSeek}) async {
     final player = _player;
     final segment = _repeatingSegment;
-    if (player == null || segment == null || segment.endMs <= segment.startMs) {
+    if (player == null || segment == null || !_canRepeat(segment)) {
       return;
     }
     final segmentId = segment.id;
+    final shouldResume = resumeAfterSeek || player.state.playing;
     _repeatRestartPending = true;
     try {
+      final nativeLoopActive = await _setNativeSentenceRepeat(segment);
+      if (!mounted ||
+          !identical(_player, player) ||
+          _repeatingSegmentId != segmentId) {
+        return;
+      }
+      if (!nativeLoopActive && player.state.playing) await player.pause();
+      if (!mounted ||
+          !identical(_player, player) ||
+          _repeatingSegmentId != segmentId) {
+        return;
+      }
       await _seek(
         Duration(
           milliseconds: sentenceRepeatStartMs(
@@ -1703,8 +1898,17 @@ class _TranscriptReviewState extends State<TranscriptReview>
         reason: TranscriptSeekReason.repeatRestart,
       );
       if (!mounted || _repeatingSegmentId != segmentId) return;
-      if (resumeAfterSeek && !player.state.playing) await player.play();
     } finally {
+      if (shouldResume &&
+          mounted &&
+          identical(_player, player) &&
+          !player.state.playing) {
+        try {
+          await player.play();
+        } on Object {
+          // Media teardown can race a repeat restart.
+        }
+      }
       _repeatRestartPending = false;
       if (_repeatRestartQueued && mounted && _repeatingSegmentId != null) {
         final resumeQueued = _repeatRestartQueuedResume;
@@ -1825,23 +2029,17 @@ class _TranscriptReviewState extends State<TranscriptReview>
         _editingTranslationSegmentId != null) {
       return false;
     }
-    for (final segment in document.segments) {
-      if (_structureEditor.splitTargets(document, segment.id).isNotEmpty) {
-        return true;
-      }
+    if (!identical(_structureAvailabilityDocument, document)) {
+      _structureAvailabilityDocument = document;
+      _cachedStructureEditingAvailable = _structureEditor.hasAvailableEdit(
+        document,
+      );
     }
-    for (var index = 0; index + 1 < document.segments.length; index++) {
-      if (_structureMergeAllowed(document, index)) return true;
-    }
-    return false;
+    return _cachedStructureEditingAvailable;
   }
 
   bool _structureMergeAllowed(TranscriptDocument document, int leftIndex) =>
-      _structureEditor.apply(
-            document,
-            MergeWithNext(document.segments[leftIndex].id),
-          )
-          is TranscriptStructureEditResult;
+      _structureEditor.canMergeWithNext(document, leftIndex);
 
   void _toggleStructureMode() {
     setState(() {
@@ -1874,6 +2072,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
         !currentIds.contains(_heldRepeatingSegmentId)) {
       _heldRepeatingSegmentId = null;
     }
+    await _setNativeSentenceRepeat(_repeatingSegment);
     await _player?.pause();
     final position = Duration(milliseconds: outcome.focusMs);
     if (_seekDispatcher == null) {
@@ -1955,8 +2154,41 @@ class _TranscriptReviewState extends State<TranscriptReview>
       }
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.strings.t('error_unexpected'))),
+      showAppNotice(
+        context,
+        message: context.strings.t('error_unexpected'),
+        tone: AppNoticeTone.error,
+      );
+    }
+  }
+
+  Future<void> _setAlignmentResolved(
+    String segmentId,
+    bool resolved, {
+    bool showFeedback = true,
+  }) async {
+    try {
+      await context.read<AppController>().setImportedSubtitleSegmentResolved(
+        widget.jobId,
+        segmentId,
+        resolved: resolved,
+      );
+      if (!mounted || !resolved || !showFeedback) return;
+      showAppNotice(
+        context,
+        message: context.strings.t('alignment_marked_resolved'),
+        tone: AppNoticeTone.success,
+        actionLabel: context.strings.t('undo'),
+        onAction: () => unawaited(
+          _setAlignmentResolved(segmentId, false, showFeedback: false),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      showAppNotice(
+        context,
+        message: context.strings.t('error_unexpected'),
+        tone: AppNoticeTone.error,
       );
     }
   }
@@ -1970,8 +2202,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
       );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.strings.t('error_unexpected'))),
+      showAppNotice(
+        context,
+        message: context.strings.t('error_unexpected'),
+        tone: AppNoticeTone.error,
       );
     }
   }
@@ -2005,8 +2239,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
       }
     } on Object {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.strings.t('error_unexpected'))),
+      showAppNotice(
+        context,
+        message: context.strings.t('error_unexpected'),
+        tone: AppNoticeTone.error,
       );
     }
   }
@@ -3193,9 +3429,11 @@ class _EvidenceChips extends StatelessWidget {
 Future<void> _copyBriefText(BuildContext context, String text) async {
   await Clipboard.setData(ClipboardData(text: text.trim()));
   if (!context.mounted) return;
-  ScaffoldMessenger.of(
+  showAppNotice(
     context,
-  ).showSnackBar(SnackBar(content: Text(context.strings.t('brief_copied'))));
+    message: context.strings.t('brief_copied'),
+    tone: AppNoticeTone.success,
+  );
 }
 
 Future<void> _exportBrief(BuildContext context, String jobId) async {
@@ -3205,9 +3443,11 @@ Future<void> _exportBrief(BuildContext context, String jobId) async {
   if (directory == null || !context.mounted) return;
   await context.read<AppController>().exportAiBrief(jobId, directory);
   if (!context.mounted) return;
-  ScaffoldMessenger.of(
+  showAppNotice(
     context,
-  ).showSnackBar(SnackBar(content: Text(context.strings.t('brief_exported'))));
+    message: context.strings.t('brief_exported'),
+    tone: AppNoticeTone.success,
+  );
 }
 
 Future<void> _regenerateAiSection(
@@ -3952,6 +4192,9 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         : Icons.translate_rounded;
     final alignment = job.forcedAlignment;
     final supportsLocalAlignment =
+        job.transcriptSource == TranscriptSource.importedSubtitle ||
+        job.transcriptAcquisitionMode ==
+            TranscriptAcquisitionMode.importedSubtitles ||
         job.transcriptSource == TranscriptSource.mossPro ||
         job.transcriptSource == TranscriptSource.mossLocal ||
         job.transcriptSource == TranscriptSource.qwen3Local ||
@@ -4168,8 +4411,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   ) async {
     final queued = await controller.enqueueAgain(job.id);
     if (queued == null && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.strings.t('source_missing'))),
+      showAppNotice(
+        context,
+        message: context.strings.t('source_missing'),
+        tone: AppNoticeTone.error,
       );
     }
   }
@@ -4193,9 +4438,11 @@ class _UnifiedReviewToolbar extends StatelessWidget {
       ClipboardData(text: controller.renderJob(job.id, options)),
     );
     if (context.mounted) {
-      ScaffoldMessenger.of(
+      showAppNotice(
         context,
-      ).showSnackBar(SnackBar(content: Text(context.strings.t('copied'))));
+        message: context.strings.t('copied'),
+        tone: AppNoticeTone.success,
+      );
     }
   }
 
@@ -4614,6 +4861,8 @@ class _TranscriptSegmentGroup extends StatefulWidget {
     super.key,
     required this.segment,
     required this.tokens,
+    required this.alignmentFailed,
+    required this.alignmentFailureMessage,
     required this.positionMs,
     required this.isCurrent,
     required this.viewMode,
@@ -4628,6 +4877,7 @@ class _TranscriptSegmentGroup extends StatefulWidget {
     required this.structureMode,
     required this.splitTargets,
     required this.isRepeating,
+    required this.onResolveAlignment,
     required this.onToggleRepeat,
     required this.onSeek,
     required this.onEditOriginal,
@@ -4643,6 +4893,8 @@ class _TranscriptSegmentGroup extends StatefulWidget {
 
   final TranscriptSegment segment;
   final List<TranscriptToken> tokens;
+  final bool alignmentFailed;
+  final String alignmentFailureMessage;
   final int positionMs;
   final bool isCurrent;
   final TranslationViewMode viewMode;
@@ -4657,6 +4909,7 @@ class _TranscriptSegmentGroup extends StatefulWidget {
   final bool structureMode;
   final List<TranscriptSplitTarget> splitTargets;
   final bool isRepeating;
+  final VoidCallback? onResolveAlignment;
   final VoidCallback? onToggleRepeat;
   final TranscriptSegmentSeekCallback onSeek;
   final VoidCallback onEditOriginal;
@@ -4695,6 +4948,15 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
         isCurrent: widget.isCurrent,
         isEditing: widget.isEditingOriginal || widget.isEditingTranslation,
         highlightTranslated: widget.highlightTranslated,
+        alignmentFailed: widget.alignmentFailed,
+        alignmentFailureKey: ValueKey(
+          'segment-alignment-failed-${widget.segment.id}',
+        ),
+        alignmentResolutionKey: ValueKey(
+          'mark-alignment-resolved-${widget.segment.id}',
+        ),
+        alignmentFailureMessage: widget.alignmentFailureMessage,
+        onResolveAlignment: widget.onResolveAlignment,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -4785,6 +5047,11 @@ class _TranscriptSegmentSurface extends StatelessWidget {
     required this.highlightTranslated,
     required this.padding,
     required this.child,
+    this.alignmentFailed = false,
+    this.alignmentFailureKey,
+    this.alignmentResolutionKey,
+    this.alignmentFailureMessage = '',
+    this.onResolveAlignment,
   });
 
   final Key surfaceKey;
@@ -4794,12 +5061,19 @@ class _TranscriptSegmentSurface extends StatelessWidget {
   final bool highlightTranslated;
   final EdgeInsetsGeometry padding;
   final Widget child;
+  final bool alignmentFailed;
+  final Key? alignmentFailureKey;
+  final Key? alignmentResolutionKey;
+  final String alignmentFailureMessage;
+  final VoidCallback? onResolveAlignment;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final backgroundColor = isEditing
         ? colors.surfaceContainerLow
+        : alignmentFailed
+        ? colors.errorContainer.withValues(alpha: hovered ? .42 : .26)
         : hovered
         ? colors.surfaceContainerLow
         : highlightTranslated
@@ -4810,11 +5084,20 @@ class _TranscriptSegmentSurface extends StatelessWidget {
       decoration: BoxDecoration(
         color: backgroundColor,
         borderRadius: BorderRadius.circular(10),
-        border: isEditing ? Border.all(color: colors.outlineVariant) : null,
+        border: alignmentFailed
+            ? Border.all(color: colors.error.withValues(alpha: .7))
+            : isEditing
+            ? Border.all(color: colors.outlineVariant)
+            : null,
       ),
       child: Stack(
         children: [
-          Padding(padding: padding, child: child),
+          Padding(
+            padding: padding.add(
+              EdgeInsets.only(right: alignmentFailed ? 64 : 0),
+            ),
+            child: child,
+          ),
           Positioned(
             left: 0,
             top: 8,
@@ -4824,11 +5107,45 @@ class _TranscriptSegmentSurface extends StatelessWidget {
               duration: const Duration(milliseconds: 120),
               width: 3,
               decoration: BoxDecoration(
-                color: isCurrent ? colors.primary : Colors.transparent,
+                color: isCurrent
+                    ? colors.primary
+                    : alignmentFailed
+                    ? colors.error
+                    : Colors.transparent,
                 borderRadius: BorderRadius.circular(3),
               ),
             ),
           ),
+          if (alignmentFailed)
+            Positioned(
+              right: 4,
+              top: 4,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Tooltip(
+                    message: alignmentFailureMessage,
+                    child: Icon(
+                      key: alignmentFailureKey,
+                      Icons.warning_amber_rounded,
+                      size: 18,
+                      color: colors.error,
+                    ),
+                  ),
+                  IconButton(
+                    key: alignmentResolutionKey,
+                    tooltip: context.strings.t('mark_alignment_resolved'),
+                    onPressed: onResolveAlignment,
+                    style: _compactSegmentActionStyle(context),
+                    icon: Icon(
+                      Icons.task_alt_rounded,
+                      size: 18,
+                      color: colors.error,
+                    ),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -6807,90 +7124,6 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
   }
 }
 
-class _TranscriptStructureEditNotice extends StatelessWidget {
-  const _TranscriptStructureEditNotice({
-    super.key,
-    required this.message,
-    required this.undoLabel,
-    required this.onUndo,
-    required this.onDismiss,
-  });
-
-  final String message;
-  final String undoLabel;
-  final VoidCallback onUndo;
-  final VoidCallback onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Semantics(
-      liveRegion: true,
-      container: true,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 360),
-        child: Material(
-          elevation: 6,
-          color: colors.inverseSurface,
-          shadowColor: Colors.black.withValues(alpha: .22),
-          borderRadius: BorderRadius.circular(12),
-          clipBehavior: Clip.antiAlias,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.check_circle_outline_rounded,
-                  size: 18,
-                  color: colors.onInverseSurface,
-                ),
-                const SizedBox(width: 10),
-                Flexible(
-                  child: Text(
-                    message,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: colors.onInverseSurface,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                TextButton(
-                  key: const Key('transcript-structure-notice-undo'),
-                  onPressed: onUndo,
-                  style: TextButton.styleFrom(
-                    foregroundColor: colors.inversePrimary,
-                    minimumSize: const Size(0, 32),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: Text(undoLabel),
-                ),
-                IconButton(
-                  key: const Key('dismiss-transcript-structure-notice'),
-                  onPressed: onDismiss,
-                  tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
-                  color: colors.onInverseSurface.withValues(alpha: .76),
-                  iconSize: 18,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 32,
-                    height: 32,
-                  ),
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.close_rounded),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _TranscriptStructureSplitText extends StatefulWidget {
   const _TranscriptStructureSplitText({
     super.key,
@@ -7424,6 +7657,7 @@ class LatestSeekDispatcher {
 const _sentenceRepeatPreRollMs = 350;
 const _sentenceRepeatPreviousCueSafetyMs = 100;
 const _repeatSeekUndershootToleranceMs = 250;
+const _overlappingRepeatBoundaryGuardMs = 120;
 
 int sentenceRepeatStartMs(
   TranscriptSegment segment, {
@@ -7459,6 +7693,31 @@ typedef TranscriptSeekCallback =
 typedef TranscriptSegmentSeekCallback =
     void Function({required TranscriptSeekReason reason});
 
+bool _importedSubtitleCueNeedsAlignmentAttention(
+  TranscriptionJob job,
+  TranscriptSegment segment,
+  List<TranscriptToken> tokens,
+) {
+  final imported =
+      job.transcriptAcquisitionMode ==
+          TranscriptAcquisitionMode.importedSubtitles ||
+      job.transcriptSource == TranscriptSource.importedSubtitle;
+  if (!imported ||
+      segment.alignmentManuallyResolved ||
+      (!segment.alignmentIncomplete && tokens.isNotEmpty)) {
+    return false;
+  }
+  return switch (job.forcedAlignment.status) {
+    ForcedAlignmentStatus.completed ||
+    ForcedAlignmentStatus.partial ||
+    ForcedAlignmentStatus.unavailable ||
+    ForcedAlignmentStatus.failed ||
+    ForcedAlignmentStatus.cancelled ||
+    ForcedAlignmentStatus.interrupted => true,
+    _ => false,
+  };
+}
+
 bool shouldFocusTranscriptAfterSeek(TranscriptSeekReason reason) =>
     reason == TranscriptSeekReason.standard;
 
@@ -7469,12 +7728,41 @@ bool shouldRestartRepeatedSentence(
   TranscriptSegment segment,
   int positionMs, {
   TranscriptSegment? previousSegment,
+  TranscriptSegment? nextSegment,
 }) =>
-    segment.endMs > segment.startMs &&
+    sentenceRepeatEndMs(segment, nextSegment: nextSegment) > segment.startMs &&
     (positionMs <
             sentenceRepeatStartMs(segment, previousSegment: previousSegment) -
                 _repeatSeekUndershootToleranceMs ||
-        positionMs >= segment.endMs);
+        positionMs >=
+            sentenceRepeatRestartMs(segment, nextSegment: nextSegment));
+
+int sentenceRepeatRestartMs(
+  TranscriptSegment segment, {
+  TranscriptSegment? nextSegment,
+}) {
+  final endMs = sentenceRepeatEndMs(segment, nextSegment: nextSegment);
+  final nextStartMs = nextSegment?.startMs;
+  final hasOverlappingNext =
+      nextStartMs != null &&
+      nextStartMs > segment.startMs &&
+      nextStartMs < segment.endMs;
+  if (!hasOverlappingNext) return endMs;
+  return max(segment.startMs + 1, endMs - _overlappingRepeatBoundaryGuardMs);
+}
+
+int sentenceRepeatEndMs(
+  TranscriptSegment segment, {
+  TranscriptSegment? nextSegment,
+}) {
+  final nextStartMs = nextSegment?.startMs;
+  if (nextStartMs == null ||
+      nextStartMs <= segment.startMs ||
+      nextStartMs >= segment.endMs) {
+    return segment.endMs;
+  }
+  return nextStartMs;
+}
 
 int? currentTranscriptSegmentIndex(
   List<TranscriptSegment> segments,

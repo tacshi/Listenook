@@ -6,6 +6,7 @@ import '../core/models.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import '../state/podcast_controller.dart';
+import 'app_notice.dart';
 
 Future<bool> chooseAndRelink(BuildContext context, String jobId) async {
   final file = await openFile();
@@ -16,10 +17,68 @@ Future<bool> chooseAndRelink(BuildContext context, String jobId) async {
   );
   if (!context.mounted) return errorCode == null;
   if (errorCode != null) {
-    final messenger = ScaffoldMessenger.of(context);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(context.strings.error(errorCode))));
+    showAppNotice(
+      context,
+      message: context.strings.error(errorCode),
+      tone: AppNoticeTone.error,
+    );
+    return false;
+  }
+  return true;
+}
+
+Future<bool> chooseAndReplaceSubtitle(
+  BuildContext context,
+  TranscriptionJob job,
+) async {
+  final discardsDerivedWork =
+      job.document?.tokens.isNotEmpty == true ||
+      job.document?.segments.any(
+            (segment) => segment.translatedText?.isNotEmpty == true,
+          ) ==
+          true ||
+      job.translationState.status != TranslationStatus.idle ||
+      job.aiBrief != null;
+  if (discardsDerivedWork) {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(context.strings.t('replace_subtitle_title')),
+        content: Text(context.strings.t('replace_subtitle_body')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(context.strings.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(context.strings.t('replace')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return false;
+  }
+  final file = await openFile(
+    acceptedTypeGroups: [
+      XTypeGroup(
+        label: context.strings.t('subtitles'),
+        extensions: const ['srt', 'vtt'],
+      ),
+    ],
+  );
+  if (file == null || !context.mounted) return false;
+  final errorCode = await context.read<AppController>().replaceImportedSubtitle(
+    job.id,
+    file.path,
+  );
+  if (!context.mounted) return errorCode == null;
+  if (errorCode != null) {
+    showAppNotice(
+      context,
+      message: context.strings.error(errorCode),
+      tone: AppNoticeTone.error,
+    );
     return false;
   }
   return true;

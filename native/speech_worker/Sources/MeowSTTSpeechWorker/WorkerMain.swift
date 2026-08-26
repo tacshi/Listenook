@@ -781,19 +781,15 @@ private func alignQwen3(_ request: [String: Any]) throws -> [String: Any] {
                 return !retryOwners.contains(owner)
             }
             var recoveredOwners = attempt.owners.subtracting(retryOwners)
-            let unresolved: [String: String] = [:]
+            var unresolved: [String: String] = [:]
             for segment in segments {
                 guard let owner = segment["id"] as? String,
                       retryOwners.contains(owner)
                 else { continue }
-                let originalTokens = attempt.tokens.filter {
-                    $0["segment_id"] as? String == owner
-                }
-                guard segments.count > 1,
-                      let (retryStart, retryEnd) = childBounds([segment])
+                guard let (retryStart, retryEnd) =
+                        alignmentBoundaryRetryBounds(segment: segment)
                 else {
-                    recoveredTokens.append(contentsOf: originalTokens)
-                    recoveredOwners.insert(owner)
+                    unresolved[owner] = "invalid-segment-bounds"
                     continue
                 }
                 let retry = attemptAlignment(
@@ -807,8 +803,8 @@ private func alignQwen3(_ request: [String: Any]) throws -> [String: Any] {
                         segments: [segment]
                       ).isEmpty
                 else {
-                    recoveredTokens.append(contentsOf: originalTokens)
-                    recoveredOwners.insert(owner)
+                    unresolved[owner] =
+                        retry.failureReason ?? "boundary-outside-cue"
                     continue
                 }
                 recoveredTokens.append(contentsOf: retry.tokens)
@@ -838,12 +834,20 @@ private func alignQwen3(_ request: [String: Any]) throws -> [String: Any] {
             Array(segments[..<splitIndex]),
             Array(segments[splitIndex...]),
         ]
+        let orderedBounds = orderedAlignmentSplitBounds(
+            startMs: startMs,
+            endMs: endMs,
+            leftSegments: groups[0],
+            rightSegments: groups[1],
+            paddingMs: paddingMs
+        )
         var recoveredTokens: [[String: Any]] = []
         var recoveredOwners: Set<String> = []
         var unresolved: [String: String] = [:]
         for (childIndex, group) in groups.enumerated() {
             let childID = "\(id)/\(childIndex)"
-            guard let (childStart, childEnd) = childBounds(group) else {
+            let bounds = orderedBounds?[childIndex] ?? childBounds(group)
+            guard let (childStart, childEnd) = bounds else {
                 unresolved[childID] = "invalid-window"
                 continue
             }

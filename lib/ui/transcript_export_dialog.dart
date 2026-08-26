@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../core/models.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
+import 'app_notice.dart';
 
 Future<void> showTranscriptExportDialog(
   BuildContext context, {
@@ -176,9 +177,11 @@ Future<void> showTranscriptExportDialog(
     controller.settings.copyWith(exportOptions: selected.options),
   );
   if (context.mounted) {
-    ScaffoldMessenger.of(
+    showAppNotice(
       context,
-    ).showSnackBar(SnackBar(content: Text(context.strings.t('exported'))));
+      message: context.strings.t('exported'),
+      tone: AppNoticeTone.success,
+    );
   }
 }
 
