@@ -13,6 +13,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/local_speech.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/core/transcript_structure_editor.dart';
 import 'package:meow_stt/core/podcast_models.dart';
 import 'package:meow_stt/data/podcast/http_podcast_gateway.dart';
 import 'package:meow_stt/data/local_media_source_resolver.dart';
@@ -70,6 +71,57 @@ void main() {
       same(original),
     );
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('blurred sentence click dispatches standard sentence seek', (
+    tester,
+  ) async {
+    final seeks = <TranscriptSeekReason>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: [AppStrings.delegate],
+        home: Scaffold(
+          body: SelectionArea(
+            child: TranscriptSegmentEditor(
+              segment: const TranscriptSegment(
+                id: 'click',
+                startMs: 1000,
+                endMs: 2000,
+                text: 'Hidden sentence',
+              ),
+              tokens: const [],
+              positionMs: 0,
+              isCurrent: false,
+              query: '',
+              speakerName: '',
+              showSpeaker: false,
+              showTimestamp: false,
+              isEditing: false,
+              blindListening: true,
+              blurred: true,
+              onSeek: ({required reason}) => seeks.add(reason),
+              onEdit: () {},
+              onCancel: () {},
+              onSave: (_) async {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('blind-original-click')),
+      warnIfMissed: false,
+    );
+    await tester.pump();
+    expect(seeks, [TranscriptSeekReason.sentenceClick]);
+    expect(
+      tester
+          .widget<BlindListeningBlur>(
+            find.byKey(const ValueKey('blind-original-click')),
+          )
+          .blurred,
+      isTrue,
+    );
   });
 
   testWidgets(
@@ -251,6 +303,240 @@ void main() {
   });
 
   testWidgets(
+    'dictation pins drafts, checks locally and restores them on navigation',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final directory = (await tester.runAsync(
+        () => Directory.systemTemp.createTemp('meow-blind-'),
+      ))!;
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/listen.mp4');
+      await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+      late _ReviewFakePlatformPlayer platform;
+      debugTranscriptReviewPlayerFactory = () => Player(
+        platformPlayer: platform = _ReviewFakePlatformPlayer(
+          updatePlayingStateOnControls: true,
+        ),
+      );
+      debugTranscriptReviewSourceExists = (_) async => true;
+      final loop = _RecordingSentenceRepeatLoopController();
+      debugTranscriptReviewSentenceRepeatLoopFactory = (_) => loop;
+      addTearDown(() {
+        debugTranscriptReviewPlayerFactory = null;
+        debugTranscriptReviewSourceExists = null;
+        debugTranscriptReviewSentenceRepeatLoopFactory = null;
+      });
+      final controller = await _controllerForDocument(
+        TranscriptDocument(
+          tokens: const [],
+          segments: const [
+            TranscriptSegment(
+              id: 'a',
+              startMs: 0,
+              endMs: 1000,
+              text: 'First sentence.',
+              translatedText: '第一句',
+            ),
+            TranscriptSegment(
+              id: 'b',
+              startMs: 2000,
+              endMs: 3000,
+              text: 'Second sentence.',
+              translatedText: '第二句',
+            ),
+            TranscriptSegment(
+              id: 'c',
+              startMs: 4000,
+              endMs: 5000,
+              text: 'Third sentence.',
+              translatedText: '第三句',
+            ),
+          ],
+          speakers: const [],
+          updatedAt: DateTime.utc(2026),
+        ),
+        sourcePath: source.path,
+        metadata: const MediaMetadata(
+          sizeBytes: 4,
+          durationMs: 5000,
+          hasAudio: true,
+          hasVideo: true,
+          formatName: 'mp4',
+        ),
+        transcriptSource: TranscriptSource.importedSubtitle,
+        transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+        settings: const AppSettings(blindListeningEnabled: true),
+      );
+      addTearDown(controller.dispose);
+      controller.openInWorkspace('job');
+      final fullscreen = ReviewFullscreenController();
+      Widget reviewForJob(String jobId) => ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(
+            body: TranscriptReview(
+              jobId: jobId,
+              fullscreenController: fullscreen,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(reviewForJob('job'));
+      await tester.pump();
+      await tester.pump();
+      await tester.pumpAndSettle();
+      await _selectTranslationView(tester, 'Bilingual');
+      await platform.play();
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('toggle-dictation')));
+      await tester.pumpAndSettle();
+      expect(platform.state.playing, isFalse);
+      final input = find.byKey(const Key('dictation-answer'));
+      await tester.enterText(input, 'First wrong');
+      platform.emitPosition(const Duration(milliseconds: 2500));
+      await tester.pump();
+      expect(tester.widget<TextField>(input).controller!.text, 'First wrong');
+      expect(find.text('Sentence 1 · 00:00'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('dictation-check')));
+      await tester.pump();
+      expect(find.byKey(const Key('dictation-retry')), findsOneWidget);
+      expect(find.text('Different: wrong → sentence'), findsNothing);
+      expect(
+        tester
+            .widget<BlindListeningBlur>(
+              find.byKey(const ValueKey('blind-original-a')),
+            )
+            .blurred,
+        isTrue,
+      );
+      await tester.enterText(input, 'First sentence');
+      await tester.pump();
+      expect(find.byKey(const Key('dictation-retry')), findsNothing);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(find.byKey(const Key('dictation-correct')), findsOneWidget);
+      expect(find.text('Matches transcript'), findsNothing);
+      expect(find.byKey(const Key('dictation-retry')), findsNothing);
+      await tester.tap(find.byKey(const Key('dictation-replay')));
+      await tester.pumpAndSettle();
+      expect(platform.state.playing, isTrue);
+      expect(loop.events.where((event) => event.startsWith('range:')), isEmpty);
+      platform.emitPosition(const Duration(milliseconds: 999));
+      await tester.pump();
+      expect(platform.state.playing, isTrue);
+      platform.emitPosition(const Duration(milliseconds: 1000));
+      await tester.pumpAndSettle();
+      expect(platform.state.playing, isFalse);
+      expect(platform.state.position, const Duration(milliseconds: 1000));
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'First sentence',
+      );
+      await tester.tap(find.byKey(const Key('dictation-replay')));
+      await tester.pumpAndSettle();
+      expect(platform.state.playing, isTrue);
+      await tester.tap(find.byKey(const Key('next-sentence')).first);
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(input).controller!.text, isEmpty);
+      await tester.enterText(input, 'Second draft');
+      await tester.tap(find.byKey(const Key('previous-sentence')).first);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'First sentence',
+      );
+      await tester.tap(find.byKey(const Key('close-dictation')));
+      await tester.pumpAndSettle();
+      expect(input, findsNothing);
+      await tester.tap(find.byKey(const Key('toggle-dictation')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'First sentence',
+      );
+      await controller.updateSettings(
+        controller.settings.copyWith(blindListeningEnabled: false),
+      );
+      await tester.pumpAndSettle();
+      expect(input, findsNothing);
+      await controller.updateSettings(
+        controller.settings.copyWith(blindListeningEnabled: true),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'First sentence',
+      );
+      await controller.updateSegment('job', 'a', 'Changed reference.');
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'First sentence',
+      );
+      expect(find.byKey(const Key('dictation-retry')), findsNothing);
+      // A timeline seek into silence keeps the preceding sentence available.
+      final transport = tester.widget<VideoTransport>(
+        find.byType(VideoTransport).first,
+      );
+      transport.onSeek(const Duration(milliseconds: 1500));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'First sentence',
+      );
+      transport.onSeek(Duration.zero);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'First sentence',
+      );
+      final inputFocus = tester.widget<TextField>(input).focusNode!;
+      inputFocus.unfocus();
+      fullscreen.markEntered(
+        tester.state<NavigatorState>(find.byType(Navigator).first),
+      );
+      await tester.pumpWidget(reviewForJob('job'));
+      await tester.pumpAndSettle();
+      expect(input, findsNothing);
+      fullscreen.markExited();
+      await tester.pumpWidget(reviewForJob('job'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'First sentence',
+      );
+      expect(tester.widget<TextField>(input).focusNode!.hasFocus, isFalse);
+      transport.onSeek(const Duration(milliseconds: 2000));
+      await tester.pumpAndSettle();
+      await controller.applyTranscriptStructureEdit(
+        'job',
+        const MergeWithNext('a'),
+      );
+      await tester.pumpAndSettle();
+      expect(input, findsNothing);
+      await controller.undoTranscriptStructureEdit('job');
+      await tester.pumpAndSettle();
+      transport.onSeek(const Duration(milliseconds: 2000));
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(input).controller!.text, isEmpty);
+      await tester.pumpWidget(reviewForJob('other'));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(reviewForJob('job'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('dictation-panel')), findsNothing);
+      await tester.tap(find.byKey(const Key('toggle-dictation')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(input).controller!.text, isEmpty);
+    },
+  );
+
+  testWidgets(
     'blind listening reveals only current cue and resets on navigation',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1400, 1000));
@@ -381,8 +667,22 @@ void main() {
               find.byKey(const Key('reveal-current-sentence')),
             )
             .onPressed,
-        isNull,
+        isNotNull,
       );
+      expect(
+        tester
+            .widget<IconButton>(find.byKey(const Key('toggle-dictation')))
+            .onPressed,
+        isNotNull,
+      );
+      await tester.tap(find.byKey(const Key('reveal-current-sentence')));
+      await tester.pump();
+      expect(blurred('a'), isFalse);
+      await tester.tap(find.byKey(const Key('toggle-dictation')));
+      await tester.pumpAndSettle();
+      expect(find.text('Sentence 1 · 00:00'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('close-dictation')));
+      await tester.pumpAndSettle();
       platform.emitPosition(const Duration(milliseconds: 2500));
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
@@ -4797,7 +5097,9 @@ void main() {
     },
   );
 
-  testWidgets('Open Main Window tray action opens Podcast', (tester) async {
+  testWidgets('Open Main Window tray action preserves the current tab', (
+    tester,
+  ) async {
     const windowChannel = MethodChannel('window_manager');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -4845,7 +5147,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(controller.destination, AppDestination.podcast);
+    expect(controller.destination, AppDestination.library);
   });
 
   testWidgets(

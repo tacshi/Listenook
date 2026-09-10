@@ -381,7 +381,7 @@ class _AppShellState extends State<AppShell>
 
   Future<void> _restoreInbox() => _restoreWindow(AppDestination.inbox);
 
-  Future<void> _restoreMainWindow() => _restoreWindow(AppDestination.podcast);
+  Future<void> _restoreMainWindow() => _showAndFocusWindow();
 
   Future<void> _restoreWindow(AppDestination destination) async {
     await _setDestination(destination);

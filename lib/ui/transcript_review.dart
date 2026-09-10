@@ -14,12 +14,14 @@ import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../core/dictation_comparison.dart';
 import '../core/models.dart';
 import '../core/transcript_structure_editor.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'app_notice.dart';
+import 'dictation_panel.dart';
 import 'job_actions.dart';
 import 'keyboard_shortcuts.dart';
 import 'review_fullscreen_controller.dart';
@@ -104,8 +106,25 @@ class _ReviewPlaybackTick extends ChangeNotifier {
   void tick() => notifyListeners();
 }
 
+class _DictationAttempt {
+  _DictationAttempt(this.reference);
+  String reference;
+  String draft = '';
+  DictationResult? result;
+}
+
 class _TranscriptReviewState extends State<TranscriptReview>
     with WindowListener {
+  final _dictationAttempts = <String, _DictationAttempt>{};
+  final _dictationText = TextEditingController();
+  final _dictationFocus = FocusNode();
+  bool _dictationOpen = false;
+  int _dictationPauseGeneration = 0;
+  int _dictationReplayRequest = 0;
+  int? _dictationReplayEndMs;
+  String? _dictationTargetId;
+  TranscriptDocument? _dictationDocument;
+
   static const _reviewDividerWidth = 9.0;
   static const _minimumReviewPaneWidth = 280.0;
   static const _minimumCompanionPaneWidth = 420.0;
@@ -281,6 +300,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (oldWidget.jobId != widget.jobId) {
       unawaited(TranscriptStructureCursors.deactivateAll());
       _resetStructureNotice();
+      _cancelDictationReplay();
+      _dictationDocument = null;
+      _dictationAttempts.clear();
+      _dictationTargetId = null;
+      _dictationOpen = false;
+      _dictationText.clear();
+      _dictationFocus.unfocus();
       _rememberPlaybackPosition(oldWidget.jobId);
       _sourceRequest++;
       _clearPendingPlaybackRestore();
@@ -358,6 +384,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _position = value;
     });
     _appController.rememberPlaybackPosition(widget.jobId, value);
+    final replayEnd = _dictationReplayEndMs;
+    if (replayEnd != null && value.inMilliseconds >= replayEnd) {
+      _cancelDictationReplay();
+      unawaited(_player?.pause());
+    }
     final repeatedSegment = _repeatingSegment;
     if (_playing &&
         repeatedSegment != null &&
@@ -682,6 +713,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _rememberPlaybackPosition(widget.jobId);
     _fullscreenController.unregisterMediaShutdown(this);
     windowManager.removeListener(this);
+    _cancelDictationReplay();
+    _dictationText.dispose();
+    _dictationFocus.dispose();
     _search.dispose();
     _aiBriefScroll.dispose();
     _structureNoticeTimer?.cancel();
@@ -702,6 +736,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   Future<void> _disposeMediaResources() async {
+    _cancelDictationReplay();
     _sourceRequest++;
     _clearPendingPlaybackRestore();
     final player = _player;
@@ -753,6 +788,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
         .firstOrNull;
     final document = job?.document;
     if (job == null || document == null) return const SizedBox.shrink();
+    _syncDictation(document);
     _ensureTokenMap(document);
     final query = _search.text.trim().toLowerCase();
     final segments = query.isEmpty
@@ -785,6 +821,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
       key: const Key('transcript-review-surface'),
       children: [
         _UnifiedReviewToolbar(
+          dictationOpen: _dictationOpen,
+          onToggleDictation: _dictationOpen || _currentSentenceId != null
+              ? _toggleDictation
+              : null,
           blindListening: _blindListening,
           sentenceRevealed: _sentenceRevealed,
           onReveal: _currentSentenceId == null ? null : _toggleReveal,
@@ -1494,6 +1534,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
       key: const Key('transcript-pane'),
       children: [
         _UnifiedReviewToolbar(
+          dictationOpen: _dictationOpen,
+          onToggleDictation: _dictationOpen || _currentSentenceId != null
+              ? _toggleDictation
+              : null,
           blindListening: _blindListening,
           sentenceRevealed: _sentenceRevealed,
           onReveal: _currentSentenceId == null ? null : _toggleReveal,
@@ -1583,6 +1627,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
             ],
           ),
         ),
+        if (_blindListening &&
+            _dictationOpen &&
+            !_fullscreenController.isActive)
+          _buildDictationPanel(document),
       ],
     );
   }
@@ -1747,12 +1795,15 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _fullscreenController.markEntered(navigator);
       _playbackTick.tick();
     }
+    _dictationFocus.unfocus();
+    if (mounted) setState(() {});
     await defaultEnterNativeFullscreen();
   }
 
   Future<void> _exitNativeFullscreen() async {
     _endSentenceRepeatHold();
     _fullscreenController.markExited();
+    if (mounted) setState(() {});
     _playbackTick.tick();
     await defaultExitNativeFullscreen();
   }
@@ -1761,6 +1812,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     Duration position, {
     TranscriptSeekReason reason = TranscriptSeekReason.standard,
   }) async {
+    if (reason != TranscriptSeekReason.repeatRestart) _cancelDictationReplay();
     final seekDispatcher = _seekDispatcher;
     if (seekDispatcher == null) return;
     _clearPendingPlaybackRestore();
@@ -1774,6 +1826,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
         _revealedSegmentId = null;
       }
       _position = position;
+      if (_blindListening &&
+          _dictationOpen &&
+          reason != TranscriptSeekReason.repeatRestart) {
+        _selectDictationTarget(_currentSentenceId);
+      }
       _followPlayback = true;
     });
     _appController.rememberPlaybackPosition(widget.jobId, position);
@@ -1789,6 +1846,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
           segment.startMs;
 
   void _toggleSentenceRepeat(TranscriptSegment segment) {
+    _cancelDictationReplay();
     if (_manualRepeatingSegmentId == segment.id) {
       setState(() {
         _manualRepeatingSegmentId = null;
@@ -1803,15 +1861,155 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _queueRepeatRestart(resumeAfterSeek: true);
   }
 
+  void _syncDictation(TranscriptDocument document) {
+    if (identical(document, _dictationDocument)) return;
+    _dictationDocument = document;
+    final byId = {for (final segment in document.segments) segment.id: segment};
+    _dictationAttempts.removeWhere((id, _) => !byId.containsKey(id));
+    for (final entry in _dictationAttempts.entries) {
+      final reference = byId[entry.key]!.text;
+      if (entry.value.reference != reference) {
+        entry.value.reference = reference;
+        entry.value.result = null;
+      }
+    }
+    if (!byId.containsKey(_dictationTargetId)) _dictationTargetId = null;
+  }
+
+  void _selectDictationTarget(String? id) {
+    _dictationTargetId = id;
+    final segment = _document?.segments.where((s) => s.id == id).firstOrNull;
+    final attempt = segment == null
+        ? null
+        : _dictationAttempts.putIfAbsent(
+            segment.id,
+            () => _DictationAttempt(segment.text),
+          );
+    _dictationText.value = TextEditingValue(
+      text: attempt?.draft ?? '',
+      selection: TextSelection.collapsed(offset: attempt?.draft.length ?? 0),
+    );
+  }
+
+  void _cancelDictationReplay() {
+    _dictationReplayRequest++;
+    _dictationReplayEndMs = null;
+  }
+
+  Future<void> _replayDictationOnce(TranscriptSegment segment) async {
+    final player = _player;
+    if (player == null || !_canRepeat(segment)) return;
+    _pauseForDictation();
+    final request = _dictationReplayRequest;
+    bool current() =>
+        mounted &&
+        identical(player, _player) &&
+        request == _dictationReplayRequest;
+    setState(() {
+      _manualRepeatingSegmentId = null;
+      _heldRepeatingSegmentId = null;
+    });
+    await _setNativeSentenceRepeat(null);
+    if (!current()) return;
+    await _seek(
+      Duration(
+        milliseconds: sentenceRepeatStartMs(
+          segment,
+          previousSegment: _previousSegmentFor(segment),
+        ),
+      ),
+      reason: TranscriptSeekReason.repeatRestart,
+    );
+    if (!current()) return;
+    _dictationReplayEndMs = sentenceRepeatEndMs(
+      segment,
+      nextSegment: _nextSegmentFor(segment),
+    );
+    await player.play();
+  }
+
+  void _pauseForDictation() {
+    _cancelDictationReplay();
+    // A pending repeat seek must not resume after opening/checking an answer.
+    _dictationPauseGeneration++;
+    _repeatRestartQueued = false;
+    _repeatRestartQueuedResume = false;
+    unawaited(_player?.pause());
+  }
+
+  void _toggleDictation() {
+    if (_dictationOpen) {
+      if (_dictationReplayEndMs != null) unawaited(_player?.pause());
+      _cancelDictationReplay();
+      _dictationFocus.unfocus();
+      setState(() => _dictationOpen = false);
+      return;
+    }
+    if (_currentSentenceId == null) return;
+    _pauseForDictation();
+    setState(() {
+      _dictationOpen = true;
+      _selectDictationTarget(_currentSentenceId);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted &&
+          _dictationOpen &&
+          _blindListening &&
+          !_fullscreenController.isActive) {
+        _dictationFocus.requestFocus();
+      }
+    });
+  }
+
+  Widget _buildDictationPanel(TranscriptDocument document) {
+    final index = document.segments.indexWhere(
+      (s) => s.id == _dictationTargetId,
+    );
+    final segment = index < 0 ? null : document.segments[index];
+    final attempt = _dictationAttempts[_dictationTargetId];
+    final eligible =
+        segment != null &&
+        supportsEnglishDictation(segment.text, segment.language);
+    return DictationPanel(
+      controller: _dictationText,
+      focusNode: _dictationFocus,
+      targetLabel: segment == null
+          ? null
+          : '${context.strings.t('dictation_sentence')} ${index + 1} · ${formatClock(segment.startMs)}',
+      eligible: eligible,
+      result: eligible ? attempt?.result : null,
+      onChanged: (text) => setState(() {
+        attempt?.draft = text;
+        attempt?.result = null;
+      }),
+      onCheck:
+          !eligible || attempt == null || _dictationText.text.trim().isEmpty
+          ? null
+          : () {
+              _pauseForDictation();
+              setState(
+                () => attempt.result = compareDictation(
+                  segment.text,
+                  attempt.draft,
+                ),
+              );
+            },
+      onReplay: segment == null || !_canRepeat(segment)
+          ? null
+          : () => unawaited(_replayDictationOnce(segment)),
+      onClose: _toggleDictation,
+    );
+  }
+
   bool get _blindListening => _appController.settings.blindListeningEnabled;
 
   String? get _currentSentenceId {
     final segments = _document?.segments ?? const <TranscriptSegment>[];
-    final index = currentListeningSegmentIndex(
-      segments,
-      _position.inMilliseconds,
-    );
-    return index == null ? null : segments[index].id;
+    if (segments.isEmpty) return null;
+    // Practice controls remain usable before, between, and after timed cues.
+    final index =
+        currentTranscriptSegmentIndex(segments, _position.inMilliseconds) ?? 0;
+    return segments[index].id;
   }
 
   bool get _sentenceRevealed =>
@@ -1829,6 +2027,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (_editingSegmentId != null || _editingTranslationSegmentId != null) {
       return;
     }
+    if (_dictationReplayEndMs != null) unawaited(_player?.pause());
+    _cancelDictationReplay();
+    _dictationFocus.unfocus();
     final enabled = !_blindListening;
     setState(() {
       _revealedSegmentId = null;
@@ -2006,6 +2207,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (index == null) return false;
     final segment = document.segments[index];
     if (!_canRepeat(segment)) return false;
+    _cancelDictationReplay();
     setState(() => _heldRepeatingSegmentId = segment.id);
     unawaited(_setNativeSentenceRepeat(segment));
     unawaited(_ensurePlaybackContinues(player));
@@ -2037,6 +2239,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   Future<void> _ensurePlaybackContinues(Player player) async {
+    final pauseGeneration = _dictationPauseGeneration;
     final navigationRequest = _sentenceNavigationRequest;
     try {
       await _seekDispatcher?.idle;
@@ -2045,6 +2248,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     }
     if (!mounted ||
         navigationRequest != _sentenceNavigationRequest ||
+        pauseGeneration != _dictationPauseGeneration ||
         !identical(_player, player) ||
         player.state.playing) {
       return;
@@ -2072,6 +2276,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       return;
     }
     final segmentId = segment.id;
+    final pauseGeneration = _dictationPauseGeneration;
     final shouldResume = resumeAfterSeek || player.state.playing;
     _repeatRestartPending = true;
     try {
@@ -2099,6 +2304,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       if (!mounted || _repeatingSegmentId != segmentId) return;
     } finally {
       if (shouldResume &&
+          pauseGeneration == _dictationPauseGeneration &&
           _repeatingSegmentId == segmentId &&
           mounted &&
           identical(_player, player) &&
@@ -4070,6 +4276,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     this.sentenceRevealed = false,
     this.onReveal,
     this.onToggleBlindListening,
+    this.dictationOpen = false,
+    this.onToggleDictation,
     this.showFilename = true,
     this.structureMode = false,
     this.structureEnabled = false,
@@ -4086,6 +4294,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   final bool sentenceRevealed;
   final VoidCallback? onReveal;
   final VoidCallback? onToggleBlindListening;
+  final bool dictationOpen;
+  final VoidCallback? onToggleDictation;
   final _ReviewToolbarRole role;
   final TranscriptionJob job;
   final TranslationViewMode viewMode;
@@ -4338,8 +4548,18 @@ class _UnifiedReviewToolbar extends StatelessWidget {
             selectedIcon: const Icon(Icons.schedule_rounded),
           ),
         ],
-        if (blindListening)
+        if (blindListening) ...[
           SentenceRevealButton(revealed: sentenceRevealed, onPressed: onReveal),
+          IconButton(
+            key: const Key('toggle-dictation'),
+            tooltip: context.strings.t('dictation_type_answer'),
+            isSelected: dictationOpen,
+            onPressed: onToggleDictation,
+            constraints: const BoxConstraints.tightFor(width: 32, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.keyboard_outlined),
+          ),
+        ],
         _focusButton(context),
         if (showDirectActions) ...[
           IconButton(
@@ -5639,6 +5859,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
               child: BlindListeningBlur(
                 key: ValueKey('blind-translation-${widget.segment.id}'),
                 blurred: widget.blurred,
+                onHiddenTap: _seek,
                 child: widget.isEditing
                     ? SelectionContainer.disabled(
                         child: CallbackShortcuts(
@@ -7244,6 +7465,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
               child: BlindListeningBlur(
                 key: ValueKey('blind-original-${widget.segment.id}'),
                 blurred: widget.blurred,
+                onHiddenTap: _seek,
                 child: _buildContent(context),
               ),
             ),
@@ -8243,28 +8465,34 @@ class BlindListeningBlur extends StatelessWidget {
     super.key,
     required this.blurred,
     required this.child,
+    this.onHiddenTap,
   });
   final bool blurred;
   final Widget child;
+  final VoidCallback? onHiddenTap;
 
   @override
   Widget build(BuildContext context) {
     final registrar = SelectionContainer.maybeOf(context);
     // Keep text elements and their inherited dependencies mounted across toggles.
     // Hidden text never registers with the enclosing selection area.
-    return SelectionRegistrarScope(
-      registrar: blurred
-          ? const _BlindSelectionRegistrar()
-          : registrar ?? const _BlindSelectionRegistrar(),
-      child: ExcludeSemantics(
-        excluding: blurred,
-        child: IgnorePointer(
-          ignoring: blurred,
-          child: ClipRect(
-            child: ImageFiltered(
-              enabled: blurred,
-              imageFilter: ui.ImageFilter.blur(sigmaX: 9, sigmaY: 9),
-              child: child,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: blurred ? onHiddenTap : null,
+      child: SelectionRegistrarScope(
+        registrar: blurred
+            ? const _BlindSelectionRegistrar()
+            : registrar ?? const _BlindSelectionRegistrar(),
+        child: ExcludeSemantics(
+          excluding: blurred,
+          child: IgnorePointer(
+            ignoring: blurred,
+            child: ClipRect(
+              child: ImageFiltered(
+                enabled: blurred,
+                imageFilter: ui.ImageFilter.blur(sigmaX: 9, sigmaY: 9),
+                child: child,
+              ),
             ),
           ),
         ),
