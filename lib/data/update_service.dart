@@ -84,6 +84,7 @@ class UpdateService extends ChangeNotifier {
       _downloadedFile != null &&
       (_phase == UpdatePhase.readyToRestart ||
           _phase == UpdatePhase.installing);
+  bool get supported => _platformKey != null;
   double? get progress => _totalBytes <= 0
       ? null
       : (_receivedBytes / _totalBytes).clamp(0, 1).toDouble();
