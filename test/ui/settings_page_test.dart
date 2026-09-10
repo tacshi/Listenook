@@ -317,7 +317,7 @@ void main() {
       const Key('auto-transcribe-local-switch'),
     );
     expect(autoTranscribe, findsOneWidget);
-    expect(tester.widget<SwitchListTile>(autoTranscribe).value, isFalse);
+    expect(tester.widget<Switch>(autoTranscribe).value, isFalse);
 
     await tester.tap(find.text('MOSS Local'));
     await tester.pumpAndSettle();
@@ -349,7 +349,7 @@ void main() {
       findsNothing,
     );
     expect(autoTranscribe, findsOneWidget);
-    expect(find.text('Auto-transcribe new items'), findsOneWidget);
+    expect(find.text('Automatic transcription'), findsOneWidget);
     expect(
       find.textContaining('Files dropped into Inbox still require'),
       findsOneWidget,
@@ -367,11 +367,11 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.textContaining('Higher-quality multilingual text'),
+      find.textContaining('Local multilingual transcription'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('Speaker identification is not available'),
+      find.textContaining('Speaker labels are unavailable'),
       findsOneWidget,
     );
 
@@ -841,14 +841,7 @@ void main() {
     expect(controller.keyConfigured, isTrue);
     expect(find.text('Soniox key saved securely.'), findsOneWidget);
     expect(find.text('Securely stored on this device'), findsNothing);
-    final sonioxStatus = find.byKey(const Key('provider-status-soniox'));
-    expect(
-      find.descendant(
-        of: sonioxStatus,
-        matching: find.text('Ready to transcribe'),
-      ),
-      findsOneWidget,
-    );
+    expect(find.byKey(const Key('provider-status-soniox')), findsNothing);
 
     await tester.tap(find.text('Shortcuts'));
     await tester.pumpAndSettle();
