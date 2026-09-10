@@ -5,6 +5,27 @@ import 'package:meow_stt/core/models.dart';
 import 'package:meow_stt/data/local_repositories.dart';
 
 void main() {
+  test('blind listening defaults off and persists independently', () {
+    expect(AppSettings.fromJson({}).blindListeningEnabled, isFalse);
+    final settings = const AppSettings().copyWith(blindListeningEnabled: true);
+    expect(
+      settings.exportOptions.toJson(),
+      isNot(contains('blind_listening_enabled')),
+    );
+    expect(
+      AppSettings.fromJson(settings.toJson()).blindListeningEnabled,
+      isTrue,
+    );
+    expect(
+      settings.copyWith(showTimestamps: true).blindListeningEnabled,
+      isTrue,
+    );
+    expect(
+      settings.copyWith(blindListeningEnabled: false).blindListeningEnabled,
+      isFalse,
+    );
+  });
+
   test('translation provider defaults blank and migrates known endpoints', () {
     const defaults = TranslationSettings();
     expect(defaults.provider, TranslationProviderTemplate.custom);

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -158,6 +159,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
   Timer? _structureNoticeTimer;
   int _structureNoticeGeneration = 0;
   bool _showAiBrief = false;
+  String? _revealedSegmentId;
+  int _sentenceNavigationRequest = 0;
+  bool _sentenceNavigationPending = false;
   TranslationViewMode _viewMode = TranslationViewMode.original;
   int _programmaticScrolls = 0;
   String? _lastScrolledSegmentId;
@@ -281,6 +285,9 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _sourceRequest++;
       _clearPendingPlaybackRestore();
       _search.clear();
+      _revealedSegmentId = null;
+      _sentenceNavigationRequest++;
+      _sentenceNavigationPending = false;
       _position = _appController.playbackPositionFor(widget.jobId);
       _duration = Duration.zero;
       _videoAspectRatio = 16 / 9;
@@ -316,7 +323,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   void _handlePosition(Duration value) {
-    if (!mounted || (_seekDispatcher?.isBusy ?? false)) return;
+    if (!mounted ||
+        _sentenceNavigationPending ||
+        (_seekDispatcher?.isBusy ?? false)) {
+      return;
+    }
     if (_consumePlaybackRestoreReset(value)) return;
     final document = _document;
     final previousIndex = document == null
@@ -331,7 +342,21 @@ class _TranscriptReviewState extends State<TranscriptReview>
             document.segments,
             value.inMilliseconds,
           );
-    setState(() => _position = value);
+    setState(() {
+      final listeningIndex = currentListeningSegmentIndex(
+        document?.segments ?? const [],
+        value.inMilliseconds,
+      );
+      final repeatingRevealedSentence =
+          _revealedSegmentId != null &&
+          _repeatingSegmentId == _revealedSegmentId;
+      if (!repeatingRevealedSentence &&
+          (listeningIndex == null ||
+              document!.segments[listeningIndex].id != _revealedSegmentId)) {
+        _revealedSegmentId = null;
+      }
+      _position = value;
+    });
     _appController.rememberPlaybackPosition(widget.jobId, value);
     final repeatedSegment = _repeatingSegment;
     if (_playing &&
@@ -745,16 +770,28 @@ class _TranscriptReviewState extends State<TranscriptReview>
               )
               .toList();
     final currentIndex = query.isEmpty
-        ? currentTranscriptSegmentIndex(
-            document.segments,
-            _position.inMilliseconds,
-            pinnedSegmentId: _repeatingSegmentId,
-          )
+        ? _blindListening
+              ? currentListeningSegmentIndex(
+                  document.segments,
+                  _position.inMilliseconds,
+                )
+              : currentTranscriptSegmentIndex(
+                  document.segments,
+                  _position.inMilliseconds,
+                  pinnedSegmentId: _repeatingSegmentId,
+                )
         : null;
     return Column(
       key: const Key('transcript-review-surface'),
       children: [
         _UnifiedReviewToolbar(
+          blindListening: _blindListening,
+          sentenceRevealed: _sentenceRevealed,
+          onReveal: _currentSentenceId == null ? null : _toggleReveal,
+          onToggleBlindListening:
+              _editingSegmentId == null && _editingTranslationSegmentId == null
+              ? _toggleBlindListening
+              : null,
           role: _ReviewToolbarRole.global,
           job: job,
           viewMode: _viewMode,
@@ -1246,6 +1283,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ? _duration
         : Duration(milliseconds: job.metadata?.durationMs ?? 0);
     final audio = AudioTransport(
+      sentenceNavigation: _sentenceNavigationControls(),
       playing: _playing,
       position: _position,
       duration: mediaDuration,
@@ -1259,6 +1297,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     late final Widget pane;
     if (hasVideo) {
       final video = _MediaPane(
+        sentenceNavigation: _sentenceNavigationControls(),
         job: job,
         video: _video!,
         videoKey: _videoKey,
@@ -1317,7 +1356,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
             job.translationState.status != TranslationStatus.completed)
           _TranslationStatusStrip(job: job),
         if (controller.settings.showSpeakers && document.speakers.isNotEmpty)
-          SpeakerStrip(job: job, document: document),
+          IgnorePointer(
+            ignoring: _blindListening,
+            child: ExcludeFocus(
+              excluding: _blindListening,
+              child: SpeakerStrip(job: job, document: document),
+            ),
+          ),
         Expanded(
           child: Listener(
             onPointerSignal: (event) {
@@ -1368,6 +1413,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
                         );
                     return _TranscriptSegmentGroup(
                       key: ValueKey('group-${segment.id}'),
+                      blindListening: _blindListening,
+                      blurred:
+                          _blindListening &&
+                          (_revealedSegmentId != segment.id ||
+                              _currentSentenceId != segment.id),
                       segment: segment,
                       tokens: tokens,
                       alignmentFailed: alignmentFailed,
@@ -1444,6 +1494,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
       key: const Key('transcript-pane'),
       children: [
         _UnifiedReviewToolbar(
+          blindListening: _blindListening,
+          sentenceRevealed: _sentenceRevealed,
+          onReveal: _currentSentenceId == null ? null : _toggleReveal,
+          onToggleBlindListening:
+              _editingSegmentId == null && _editingTranslationSegmentId == null
+              ? _toggleBlindListening
+              : null,
           role: _ReviewToolbarRole.transcript,
           job: job,
           viewMode: _viewMode,
@@ -1595,7 +1652,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       if (replace != true || !mounted) return;
     }
     setState(() {
-      _showAiBrief = true;
+      _showAiBrief = !_blindListening;
       _searchVisible = false;
     });
     unawaited(
@@ -1642,6 +1699,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
         ? _duration
         : Duration(milliseconds: job?.metadata?.durationMs ?? 0);
     return VideoFullscreenKeyboardRegion(
+      blindListening: _blindListening,
+      sentenceRevealed: _sentenceRevealed,
+      onReveal: _currentSentenceId == null ? null : _toggleReveal,
+      onListeningKey: _handleListeningShortcut,
+      sentenceNavigation: _sentenceNavigationControls(),
       subtitle: fullscreenTranscriptSubtitle(
         document.segments,
         _position.inMilliseconds,
@@ -1703,6 +1765,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (seekDispatcher == null) return;
     _clearPendingPlaybackRestore();
     setState(() {
+      final index = currentListeningSegmentIndex(
+        _document?.segments ?? const [],
+        position.inMilliseconds,
+      );
+      if (index == null ||
+          _document!.segments[index].id != _revealedSegmentId) {
+        _revealedSegmentId = null;
+      }
       _position = position;
       _followPlayback = true;
     });
@@ -1733,15 +1803,138 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _queueRepeatRestart(resumeAfterSeek: true);
   }
 
+  bool get _blindListening => _appController.settings.blindListeningEnabled;
+
+  String? get _currentSentenceId {
+    final segments = _document?.segments ?? const <TranscriptSegment>[];
+    final index = currentListeningSegmentIndex(
+      segments,
+      _position.inMilliseconds,
+    );
+    return index == null ? null : segments[index].id;
+  }
+
+  bool get _sentenceRevealed =>
+      _currentSentenceId != null && _revealedSegmentId == _currentSentenceId;
+
+  void _toggleReveal() {
+    if (!_blindListening || _currentSentenceId == null) return;
+    setState(
+      () => _revealedSegmentId = _sentenceRevealed ? null : _currentSentenceId,
+    );
+    _queueFocusCurrent(force: true);
+  }
+
+  void _toggleBlindListening() {
+    if (_editingSegmentId != null || _editingTranslationSegmentId != null) {
+      return;
+    }
+    final enabled = !_blindListening;
+    setState(() {
+      _revealedSegmentId = null;
+      if (enabled) {
+        _search.clear();
+        _searchVisible = false;
+        _showAiBrief = false;
+        _structureMode = false;
+      }
+    });
+    unawaited(TranscriptStructureCursors.deactivateAll());
+    unawaited(
+      _appController.updateSettings(
+        _appController.settings.copyWith(blindListeningEnabled: enabled),
+      ),
+    );
+    _playbackTick.tick();
+  }
+
+  int? _sentenceTarget(bool forward) => _player == null
+      ? null
+      : sentenceNavigationTarget(
+          _document?.segments ?? const [],
+          _position.inMilliseconds,
+          forward: forward,
+        );
+
+  Future<void> _navigateSentence(bool forward) async {
+    final target = _sentenceTarget(forward);
+    final player = _player;
+    if (target == null || player == null) return;
+    final position = Duration(
+      milliseconds: _document!.segments[target].startMs,
+    );
+    final request = ++_sentenceNavigationRequest;
+    setState(() {
+      _sentenceNavigationPending = true;
+      _manualRepeatingSegmentId = null;
+      _heldRepeatingSegmentId = null;
+      _repeatRestartQueued = false;
+      _repeatRestartQueuedResume = false;
+      _revealedSegmentId = null;
+      _position = position;
+    });
+    try {
+      await _setNativeSentenceRepeat(null);
+      if (!mounted ||
+          request != _sentenceNavigationRequest ||
+          !identical(player, _player)) {
+        return;
+      }
+      await _seek(position, reason: TranscriptSeekReason.sentenceClick);
+    } finally {
+      if (mounted && request == _sentenceNavigationRequest) {
+        setState(() => _sentenceNavigationPending = false);
+      }
+    }
+  }
+
+  Widget _sentenceNavigationControls() => SentenceNavigationControls(
+    onPrevious: _sentenceTarget(false) == null
+        ? null
+        : () => unawaited(_navigateSentence(false)),
+    onNext: _sentenceTarget(true) == null
+        ? null
+        : () => unawaited(_navigateSentence(true)),
+  );
+
+  bool _handleListeningShortcut(KeyEvent event) {
+    if (primaryFocusIsEditable() || event is! KeyDownEvent) return false;
+    final keyboard = HardwareKeyboard.instance;
+    if (event.logicalKey == LogicalKeyboardKey.keyS &&
+        !shortcutModifierPressed() &&
+        _blindListening) {
+      _toggleReveal();
+      return true;
+    }
+    if (keyboard.isAltPressed &&
+        !keyboard.isMetaPressed &&
+        !keyboard.isControlPressed &&
+        !keyboard.isShiftPressed &&
+        (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+            event.logicalKey == LogicalKeyboardKey.arrowRight)) {
+      unawaited(
+        _navigateSentence(event.logicalKey == LogicalKeyboardKey.arrowRight),
+      );
+      return true;
+    }
+    return false;
+  }
+
   bool _handleReviewShortcut(KeyEvent event) {
     if (_fullscreenController.isActive) return false;
+    if (_appController.destination == AppDestination.workspace &&
+        ModalRoute.of(context)?.isCurrent != false &&
+        _handleListeningShortcut(event)) {
+      return true;
+    }
     if (event is KeyDownEvent &&
         event.logicalKey == LogicalKeyboardKey.escape &&
         _structureMode) {
       _toggleStructureMode();
       return true;
     }
-    if (event is KeyDownEvent &&
+    if (!_blindListening &&
+        event is KeyDownEvent &&
         !primaryFocusIsEditable() &&
         (HardwareKeyboard.instance.isMetaPressed ||
             HardwareKeyboard.instance.isControlPressed)) {
@@ -1844,12 +2037,18 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   Future<void> _ensurePlaybackContinues(Player player) async {
+    final navigationRequest = _sentenceNavigationRequest;
     try {
       await _seekDispatcher?.idle;
     } on Object {
       return;
     }
-    if (!mounted || !identical(_player, player) || player.state.playing) return;
+    if (!mounted ||
+        navigationRequest != _sentenceNavigationRequest ||
+        !identical(_player, player) ||
+        player.state.playing) {
+      return;
+    }
     try {
       await player.play();
     } on Object {
@@ -1900,6 +2099,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       if (!mounted || _repeatingSegmentId != segmentId) return;
     } finally {
       if (shouldResume &&
+          _repeatingSegmentId == segmentId &&
           mounted &&
           identical(_player, player) &&
           !player.state.playing) {
@@ -2022,7 +2222,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
     TranscriptionJob job,
     TranscriptDocument document,
   ) {
-    if (job.status.isActive ||
+    if (_blindListening ||
+        job.status.isActive ||
         job.translationState.status.isActive ||
         job.aiGenerationState.status.isActive ||
         _editingSegmentId != null ||
@@ -2126,6 +2327,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   void _startEditing(String segmentId) {
+    if (_blindListening) return;
     if (_structureMode) {
       unawaited(TranscriptStructureCursors.deactivateAll());
     }
@@ -2211,6 +2413,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   void _startTranslationEditing(String segmentId) {
+    if (_blindListening) return;
     if (_structureMode) {
       unawaited(TranscriptStructureCursors.deactivateAll());
     }
@@ -2315,11 +2518,13 @@ class _ReviewSplitDivider extends StatelessWidget {
 class _ReviewContentTabs extends StatelessWidget {
   const _ReviewContentTabs({
     required this.width,
+    this.aiBriefEnabled = true,
     required this.showAiBrief,
     required this.onChanged,
   });
 
   final double width;
+  final bool aiBriefEnabled;
   final bool showAiBrief;
   final ValueChanged<bool> onChanged;
 
@@ -2343,6 +2548,7 @@ class _ReviewContentTabs extends StatelessWidget {
         ),
         ButtonSegment(
           value: true,
+          enabled: aiBriefEnabled,
           label: Text(
             context.strings.t('ai_brief'),
             maxLines: 1,
@@ -3829,6 +4035,7 @@ String _languageNoteKindLabel(BuildContext context, AiLanguageNoteKind kind) =>
     context.strings.t('ai_language_note_kind_${kind.name}');
 
 enum _TranscriptMoreAction {
+  toggleBlindListening,
   toggleStructure,
   toggleSpeakers,
   toggleTimestamps,
@@ -3859,6 +4066,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     required this.onSearch,
     required this.onFocusCurrentSentence,
     required this.onGenerateAiBrief,
+    this.blindListening = false,
+    this.sentenceRevealed = false,
+    this.onReveal,
+    this.onToggleBlindListening,
     this.showFilename = true,
     this.structureMode = false,
     this.structureEnabled = false,
@@ -3871,6 +4082,10 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   static const _paneMediumBreakpoint = 520.0;
   static const _paneDirectActionsBreakpoint = 400.0;
 
+  final bool blindListening;
+  final bool sentenceRevealed;
+  final VoidCallback? onReveal;
+  final VoidCallback? onToggleBlindListening;
   final _ReviewToolbarRole role;
   final TranscriptionJob job;
   final TranslationViewMode viewMode;
@@ -4009,6 +4224,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     width: width,
     showAiBrief: showAiBrief,
     onChanged: onTabChanged,
+    aiBriefEnabled: !blindListening,
   );
 
   Widget _buildPaneSearchRow(BuildContext context) => Row(
@@ -4070,7 +4286,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         IconButton(
           key: const Key('open-transcript-search'),
           tooltip: context.strings.t('search_transcript'),
-          onPressed: onOpenSearch,
+          onPressed: blindListening ? null : onOpenSearch,
           constraints: const BoxConstraints.tightFor(width: 40, height: 40),
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.search_rounded),
@@ -4122,6 +4338,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
             selectedIcon: const Icon(Icons.schedule_rounded),
           ),
         ],
+        if (blindListening)
+          SentenceRevealButton(revealed: sentenceRevealed, onPressed: onReveal),
         _focusButton(context),
         if (showDirectActions) ...[
           IconButton(
@@ -4201,7 +4419,15 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         job.transcriptionProvider == TranscriptionProvider.mossPro ||
         job.transcriptionProvider == TranscriptionProvider.mossLocal ||
         job.transcriptionProvider == TranscriptionProvider.qwen3Local;
-    final entries = <PopupMenuEntry<_TranscriptMoreAction>>[];
+    final entries = <PopupMenuEntry<_TranscriptMoreAction>>[
+      CheckedPopupMenuItem(
+        key: const Key('toggle-blind-listening'),
+        value: _TranscriptMoreAction.toggleBlindListening,
+        checked: blindListening,
+        enabled: onToggleBlindListening != null,
+        child: Text(context.strings.t('blind_listening')),
+      ),
+    ];
     void addSection(List<PopupMenuEntry<_TranscriptMoreAction>> section) {
       if (section.isEmpty) return;
       if (entries.isNotEmpty) entries.add(const PopupMenuDivider());
@@ -4363,6 +4589,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     _TranscriptMoreAction action,
   ) {
     switch (action) {
+      case _TranscriptMoreAction.toggleBlindListening:
+        onToggleBlindListening?.call();
       case _TranscriptMoreAction.toggleStructure:
         onToggleStructure?.call();
       case _TranscriptMoreAction.toggleSpeakers:
@@ -4859,6 +5087,8 @@ Future<bool?> _confirmTranslationReplacement(BuildContext context) =>
 class _TranscriptSegmentGroup extends StatefulWidget {
   const _TranscriptSegmentGroup({
     super.key,
+    this.blindListening = false,
+    this.blurred = false,
     required this.segment,
     required this.tokens,
     required this.alignmentFailed,
@@ -4891,6 +5121,8 @@ class _TranscriptSegmentGroup extends StatefulWidget {
     required this.onRetranslate,
   });
 
+  final bool blindListening;
+  final bool blurred;
   final TranscriptSegment segment;
   final List<TranscriptToken> tokens;
   final bool alignmentFailed;
@@ -4972,10 +5204,14 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
                 showSpeaker: widget.showSpeaker,
                 showTimestamp: widget.showTimestamp,
                 onSeek: widget.onSeek,
-                onSpeakerChanged: widget.onSpeakerChanged,
+                onSpeakerChanged: widget.blindListening
+                    ? null
+                    : widget.onSpeakerChanged,
               ),
             if (showOriginal)
               TranscriptSegmentEditor(
+                blindListening: widget.blindListening,
+                blurred: widget.blurred,
                 key: ValueKey(widget.segment.id),
                 segment: widget.segment,
                 tokens: widget.tokens,
@@ -5005,6 +5241,8 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
                     ? ValueKey('translated-segment-${widget.segment.id}')
                     : null,
                 child: _TranslatedSegmentEditor(
+                  blindListening: widget.blindListening,
+                  blurred: widget.blurred,
                   key: ValueKey('translated-${widget.segment.id}'),
                   segment: widget.segment,
                   isCurrent: widget.isCurrent,
@@ -5285,6 +5523,8 @@ class _TranscriptSegmentMetadata extends StatelessWidget {
 
 class _TranslatedSegmentEditor extends StatefulWidget {
   const _TranslatedSegmentEditor({
+    this.blindListening = false,
+    this.blurred = false,
     super.key,
     required this.segment,
     required this.isCurrent,
@@ -5305,6 +5545,8 @@ class _TranslatedSegmentEditor extends StatefulWidget {
     required this.onRetranslate,
   });
 
+  final bool blindListening;
+  final bool blurred;
   final TranscriptSegment segment;
   final bool isCurrent;
   final String query;
@@ -5394,57 +5636,61 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: widget.isEditing
-                  ? SelectionContainer.disabled(
-                      child: CallbackShortcuts(
-                        bindings: {
-                          const SingleActivator(
-                            LogicalKeyboardKey.enter,
-                            meta: true,
-                          ): _save,
-                          const SingleActivator(
-                            LogicalKeyboardKey.enter,
-                            control: true,
-                          ): _save,
-                          const SingleActivator(LogicalKeyboardKey.escape):
-                              widget.onCancel,
-                        },
-                        child: TextField(
-                          key: ValueKey(
-                            'translated-field-${widget.segment.id}',
+              child: BlindListeningBlur(
+                key: ValueKey('blind-translation-${widget.segment.id}'),
+                blurred: widget.blurred,
+                child: widget.isEditing
+                    ? SelectionContainer.disabled(
+                        child: CallbackShortcuts(
+                          bindings: {
+                            const SingleActivator(
+                              LogicalKeyboardKey.enter,
+                              meta: true,
+                            ): _save,
+                            const SingleActivator(
+                              LogicalKeyboardKey.enter,
+                              control: true,
+                            ): _save,
+                            const SingleActivator(LogicalKeyboardKey.escape):
+                                widget.onCancel,
+                          },
+                          child: TextField(
+                            key: ValueKey(
+                              'translated-field-${widget.segment.id}',
+                            ),
+                            controller: _draft,
+                            autofocus: true,
+                            minLines: 1,
+                            maxLines: null,
+                            style: textStyle,
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              filled: false,
+                              contentPadding: EdgeInsets.all(4),
+                              border: InputBorder.none,
+                            ),
                           ),
-                          controller: _draft,
-                          autofocus: true,
-                          minLines: 1,
-                          maxLines: null,
-                          style: textStyle,
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            filled: false,
-                            contentPadding: EdgeInsets.all(4),
-                            border: InputBorder.none,
+                        ),
+                      )
+                    : InkWell(
+                        key: ValueKey('translated-text-${widget.segment.id}'),
+                        onTap: _seek,
+                        hoverColor: Colors.transparent,
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: SearchHighlightedText(
+                            text: fallback ? widget.segment.text : translated,
+                            query: widget.query,
+                            style: textStyle?.copyWith(
+                              fontStyle: fallback ? FontStyle.italic : null,
+                              color: fallback
+                                  ? colors.onSurfaceVariant
+                                  : textStyle.color,
+                            ),
                           ),
                         ),
                       ),
-                    )
-                  : InkWell(
-                      key: ValueKey('translated-text-${widget.segment.id}'),
-                      onTap: _seek,
-                      hoverColor: Colors.transparent,
-                      child: Padding(
-                        padding: const EdgeInsets.all(4),
-                        child: SearchHighlightedText(
-                          text: fallback ? widget.segment.text : translated,
-                          query: widget.query,
-                          style: textStyle?.copyWith(
-                            fontStyle: fallback ? FontStyle.italic : null,
-                            color: fallback
-                                ? colors.onSurfaceVariant
-                                : textStyle.color,
-                          ),
-                        ),
-                      ),
-                    ),
+              ),
             ),
             const SizedBox(width: 4),
             _buildActions(context),
@@ -5543,7 +5789,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
               child: IconButton(
                 key: ValueKey('translated-edit-${widget.segment.id}'),
                 tooltip: context.strings.t('edit_translation'),
-                onPressed: widget.onEdit,
+                onPressed: widget.blindListening ? null : widget.onEdit,
                 style: _compactSegmentActionStyle(context),
                 icon: const Icon(Icons.edit_outlined, size: 18),
               ),
@@ -5557,7 +5803,9 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
                 child: IconButton(
                   key: ValueKey('translated-retranslate-${widget.segment.id}'),
                   tooltip: context.strings.t('retranslate_segment_with_llm'),
-                  onPressed: widget.onRetranslate,
+                  onPressed: widget.blindListening
+                      ? null
+                      : widget.onRetranslate,
                   style: _compactSegmentActionStyle(context),
                   icon: const Icon(Icons.translate_rounded, size: 18),
                 ),
@@ -5723,6 +5971,7 @@ class _ReviewFilename extends StatelessWidget {
 
 class _MediaPane extends StatelessWidget {
   const _MediaPane({
+    this.sentenceNavigation,
     required this.job,
     required this.video,
     required this.videoKey,
@@ -5749,6 +5998,7 @@ class _MediaPane extends StatelessWidget {
   final double videoAspectRatio;
   final double? maxVideoHeight;
   final bool centerInAvailableHeight;
+  final Widget? sentenceNavigation;
   final bool playing;
   final double playbackRate;
   final Duration position;
@@ -5810,6 +6060,7 @@ class _MediaPane extends StatelessWidget {
               ),
             ),
             VideoTransport(
+              sentenceNavigation: sentenceNavigation,
               playing: playing,
               position: position,
               duration: mediaDuration,
@@ -5842,6 +6093,7 @@ double videoViewportHeight({
 
 class VideoTransport extends StatelessWidget {
   const VideoTransport({
+    this.sentenceNavigation,
     super.key,
     required this.playing,
     required this.position,
@@ -5856,6 +6108,7 @@ class VideoTransport extends StatelessWidget {
 
   static const height = 56.0;
 
+  final Widget? sentenceNavigation;
   final bool playing;
   final Duration position;
   final Duration duration;
@@ -5881,6 +6134,7 @@ class VideoTransport extends StatelessWidget {
               playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
             ),
           ),
+          if (sentenceNavigation != null) sentenceNavigation!,
           const SizedBox(width: 8),
           Text(
             formatClock(position.inMilliseconds),
@@ -5994,6 +6248,11 @@ class _ReviewFullscreenControlsHost extends StatelessWidget {
 
 class VideoFullscreenKeyboardRegion extends StatefulWidget {
   const VideoFullscreenKeyboardRegion({
+    this.blindListening = false,
+    this.sentenceRevealed = false,
+    this.onReveal,
+    this.onListeningKey,
+    this.sentenceNavigation,
     super.key,
     this.subtitle,
     this.subtitleHighlight,
@@ -6011,6 +6270,12 @@ class VideoFullscreenKeyboardRegion extends StatefulWidget {
     required this.onRepeatHoldEnd,
     required this.child,
   });
+
+  final bool blindListening;
+  final bool sentenceRevealed;
+  final VoidCallback? onReveal;
+  final bool Function(KeyEvent)? onListeningKey;
+  final Widget? sentenceNavigation;
 
   static const controlsAutoHideDelay = Duration(seconds: 3);
   static const controlsTransitionDuration = Duration(milliseconds: 180);
@@ -6070,6 +6335,14 @@ class _VideoFullscreenKeyboardRegionState
   }
 
   KeyEventResult _handleKeyEvent(FocusNode _, KeyEvent event) {
+    if (ModalRoute.of(context)?.isCurrent == false ||
+        primaryFocusIsEditable()) {
+      return KeyEventResult.ignored;
+    }
+    if (widget.onListeningKey?.call(event) ?? false) {
+      _showControls();
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey != LogicalKeyboardKey.keyR) {
       return KeyEventResult.ignored;
     }
@@ -6219,10 +6492,15 @@ class _VideoFullscreenKeyboardRegionState
                                           horizontal: 16,
                                           vertical: 10,
                                         ),
-                                        child: _FullscreenSubtitleText(
-                                          text: text,
-                                          highlight: widget.subtitleHighlight,
-                                          fontSize: fontSize,
+                                        child: BlindListeningBlur(
+                                          blurred:
+                                              widget.blindListening &&
+                                              !widget.sentenceRevealed,
+                                          child: _FullscreenSubtitleText(
+                                            text: text,
+                                            highlight: widget.subtitleHighlight,
+                                            fontSize: fontSize,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -6309,6 +6587,12 @@ class _VideoFullscreenKeyboardRegionState
                       : Icons.play_arrow_rounded,
                 ),
               ),
+              if (widget.sentenceNavigation != null) widget.sentenceNavigation!,
+              if (widget.blindListening)
+                SentenceRevealButton(
+                  revealed: widget.sentenceRevealed,
+                  onPressed: widget.onReveal,
+                ),
               const SizedBox(width: 4),
               Text(
                 formatClock(positionMs.round()),
@@ -6411,6 +6695,7 @@ class _FullscreenSubtitleText extends StatelessWidget {
 
 class AudioTransport extends StatelessWidget {
   const AudioTransport({
+    this.sentenceNavigation,
     super.key,
     required this.playing,
     required this.position,
@@ -6424,6 +6709,7 @@ class AudioTransport extends StatelessWidget {
 
   static const height = 64.0;
 
+  final Widget? sentenceNavigation;
   final bool playing;
   final Duration position;
   final Duration duration;
@@ -6449,6 +6735,7 @@ class AudioTransport extends StatelessWidget {
               playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
             ),
           ),
+          if (sentenceNavigation != null) sentenceNavigation!,
           const SizedBox(width: 8),
           Text(
             formatClock(position.inMilliseconds),
@@ -6827,6 +7114,8 @@ class _RenameSpeakerDialogState extends State<_RenameSpeakerDialog> {
 
 class TranscriptSegmentEditor extends StatefulWidget {
   const TranscriptSegmentEditor({
+    this.blindListening = false,
+    this.blurred = false,
     super.key,
     required this.segment,
     required this.tokens,
@@ -6851,6 +7140,8 @@ class TranscriptSegmentEditor extends StatefulWidget {
     this.onSplit,
   });
 
+  final bool blindListening;
+  final bool blurred;
   final TranscriptSegment segment;
   final List<TranscriptToken> tokens;
   final int positionMs;
@@ -6949,7 +7240,13 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(child: _buildContent(context)),
+            Expanded(
+              child: BlindListeningBlur(
+                key: ValueKey('blind-original-${widget.segment.id}'),
+                blurred: widget.blurred,
+                child: _buildContent(context),
+              ),
+            ),
             const SizedBox(width: 4),
             _buildActions(context),
           ],
@@ -7112,7 +7409,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
               child: IconButton(
                 key: ValueKey('segment-edit-${widget.segment.id}'),
                 tooltip: context.strings.t('edit'),
-                onPressed: widget.onEdit,
+                onPressed: widget.blindListening ? null : widget.onEdit,
                 style: _compactSegmentActionStyle(context),
                 icon: const Icon(Icons.edit_outlined, size: 18),
               ),
@@ -7903,4 +8200,154 @@ class SearchHighlightedText extends StatelessWidget {
 
 extension _FirstOrNull<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;
+}
+
+/// Finds a neighboring timed cue without assuming there is a cue in a gap.
+int? sentenceNavigationTarget(
+  List<TranscriptSegment> segments,
+  int positionMs, {
+  required bool forward,
+}) {
+  final current = currentListeningSegmentIndex(segments, positionMs);
+  bool usable(int index) =>
+      segments[index].startMs >= 0 &&
+      segments[index].endMs > segments[index].startMs;
+  if (current != null) {
+    for (
+      var index = current + (forward ? 1 : -1);
+      index >= 0 && index < segments.length;
+      index += forward ? 1 : -1
+    ) {
+      if (usable(index)) return index;
+    }
+    return null;
+  }
+  int? best;
+  for (var index = 0; index < segments.length; index++) {
+    if (!usable(index)) continue;
+    final start = segments[index].startMs;
+    if (forward ? start > positionMs : segments[index].endMs <= positionMs) {
+      if (best == null ||
+          (forward
+              ? start < segments[best].startMs
+              : start > segments[best].startMs)) {
+        best = index;
+      }
+    }
+  }
+  return best;
+}
+
+class BlindListeningBlur extends StatelessWidget {
+  const BlindListeningBlur({
+    super.key,
+    required this.blurred,
+    required this.child,
+  });
+  final bool blurred;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final registrar = SelectionContainer.maybeOf(context);
+    // Keep text elements and their inherited dependencies mounted across toggles.
+    // Hidden text never registers with the enclosing selection area.
+    return SelectionRegistrarScope(
+      registrar: blurred
+          ? const _BlindSelectionRegistrar()
+          : registrar ?? const _BlindSelectionRegistrar(),
+      child: ExcludeSemantics(
+        excluding: blurred,
+        child: IgnorePointer(
+          ignoring: blurred,
+          child: ClipRect(
+            child: ImageFiltered(
+              enabled: blurred,
+              imageFilter: ui.ImageFilter.blur(sigmaX: 9, sigmaY: 9),
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BlindSelectionRegistrar implements SelectionRegistrar {
+  const _BlindSelectionRegistrar();
+
+  @override
+  void add(Selectable selectable) {}
+
+  @override
+  void remove(Selectable selectable) {}
+}
+
+class SentenceRevealButton extends StatelessWidget {
+  const SentenceRevealButton({
+    super.key,
+    required this.revealed,
+    required this.onPressed,
+  });
+  final bool revealed;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    key: const Key('reveal-current-sentence'),
+    tooltip:
+        '${context.strings.t(revealed ? 'blur_current_sentence' : 'reveal_current_sentence')} (S)',
+    onPressed: onPressed,
+    isSelected: revealed,
+    constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+    padding: EdgeInsets.zero,
+    icon: Icon(
+      revealed ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+    ),
+  );
+}
+
+class SentenceNavigationControls extends StatelessWidget {
+  const SentenceNavigationControls({
+    super.key,
+    required this.onPrevious,
+    required this.onNext,
+  });
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      IconButton(
+        key: const Key('previous-sentence'),
+        tooltip:
+            '${context.strings.t('previous_sentence')} (${Platform.isMacOS ? '⌥' : 'Alt+'}←)',
+        onPressed: onPrevious,
+        constraints: const BoxConstraints.tightFor(width: 32, height: 40),
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.skip_previous_rounded),
+      ),
+      IconButton(
+        key: const Key('next-sentence'),
+        tooltip:
+            '${context.strings.t('next_sentence')} (${Platform.isMacOS ? '⌥' : 'Alt+'}→)',
+        onPressed: onNext,
+        constraints: const BoxConstraints.tightFor(width: 32, height: 40),
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.skip_next_rounded),
+      ),
+    ],
+  );
+}
+
+/// Uses the established overlap resolver, but treats gaps as no active cue.
+int? currentListeningSegmentIndex(
+  List<TranscriptSegment> segments,
+  int positionMs,
+) {
+  final index = currentTranscriptSegmentIndex(segments, positionMs);
+  if (index == null || positionMs >= segments[index].endMs) return null;
+  return index;
 }

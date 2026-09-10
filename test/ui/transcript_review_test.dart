@@ -31,6 +31,490 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:tray_manager/tray_manager.dart' as tray;
 
 void main() {
+  testWidgets('blur toggle preserves selectable widget ancestry', (
+    tester,
+  ) async {
+    var blurred = true;
+    late StateSetter update;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SelectionArea(
+          child: StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return BlindListeningBlur(
+                blurred: blurred,
+                child: const Text(
+                  'Current sentence',
+                  key: ValueKey('stable-blind-text'),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    final original = tester.element(
+      find.byKey(const ValueKey('stable-blind-text')),
+    );
+    update(() => blurred = false);
+    await tester.pump();
+    expect(
+      tester.element(find.byKey(const ValueKey('stable-blind-text'))),
+      same(original),
+    );
+    update(() => blurred = true);
+    await tester.pump();
+    expect(
+      tester.element(find.byKey(const ValueKey('stable-blind-text'))),
+      same(original),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'blind listening toolbar preference protects drafts and restores normal text',
+    (tester) async {
+      final controller = await _controllerForDocument(_simpleDocument());
+      addTearDown(controller.dispose);
+      controller.openInWorkspace('job');
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: TranscriptReview(jobId: 'job')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      tester
+          .widget<IconButton>(
+            find.byKey(const ValueKey('segment-edit-segment')),
+          )
+          .onPressed!();
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('review-toolbar-more')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<CheckedPopupMenuItem>(
+              find.byKey(const Key('toggle-blind-listening')),
+            )
+            .enabled,
+        isFalse,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('segment-cancel-segment')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('review-toolbar-more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('toggle-blind-listening')));
+      await tester.pumpAndSettle();
+      expect(controller.settings.blindListeningEnabled, isTrue);
+      expect(
+        tester
+            .widget<BlindListeningBlur>(
+              find.byKey(const ValueKey('blind-original-segment')),
+            )
+            .blurred,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<SegmentedButton<bool>>(
+              find.byKey(const Key('review-content-tabs')),
+            )
+            .segments
+            .last
+            .enabled,
+        isFalse,
+      );
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyS);
+      await tester.pump();
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyS);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyS);
+      await tester.pump();
+      expect(
+        tester
+            .widget<BlindListeningBlur>(
+              find.byKey(const ValueKey('blind-original-segment')),
+            )
+            .blurred,
+        isFalse,
+      );
+      await tester.tap(find.byKey(const Key('review-toolbar-more')));
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+      await tester.pump();
+      expect(
+        tester
+            .widget<BlindListeningBlur>(
+              find.byKey(const ValueKey('blind-original-segment')),
+            )
+            .blurred,
+        isFalse,
+      );
+      await tester.tap(find.byKey(const Key('toggle-blind-listening')));
+      await tester.pumpAndSettle();
+      expect(controller.settings.blindListeningEnabled, isFalse);
+      expect(find.byKey(const Key('reveal-current-sentence')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('paused fullscreen reveal button changes only subtitle blur', (
+    tester,
+  ) async {
+    var revealed = false;
+    var previousCalls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('en'),
+        supportedLocales: AppStrings.supportedLocales,
+        localizationsDelegates: const [AppStrings.delegate],
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, update) => VideoFullscreenKeyboardRegion(
+              blindListening: true,
+              sentenceRevealed: revealed,
+              onReveal: () => update(() => revealed = !revealed),
+              subtitle: 'Current sentence',
+              playing: false,
+              position: const Duration(seconds: 2),
+              duration: const Duration(seconds: 10),
+              onExit: () {},
+              onPlayPause: () {},
+              onSeek: (_) {},
+              onSeekBackward: () {},
+              onSeekForward: () {},
+              onDecreaseSpeed: () {},
+              onIncreaseSpeed: () {},
+              onRepeatHoldStart: () {},
+              onRepeatHoldEnd: () {},
+              sentenceNavigation: SentenceNavigationControls(
+                onPrevious: () => previousCalls++,
+                onNext: null,
+              ),
+              child: const SizedBox.expand(),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(
+      tester
+          .widget<BlindListeningBlur>(find.byType(BlindListeningBlur))
+          .blurred,
+      isTrue,
+    );
+    await tester.tap(find.byKey(const Key('reveal-current-sentence')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<BlindListeningBlur>(find.byType(BlindListeningBlur))
+          .blurred,
+      isFalse,
+    );
+    await tester.tap(find.byKey(const Key('previous-sentence')));
+    expect(previousCalls, 1);
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const Key('next-sentence')))
+          .onPressed,
+      isNull,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  test('sentence navigation handles cue boundaries, gaps and overlaps', () {
+    const cues = [
+      TranscriptSegment(id: 'a', startMs: 1000, endMs: 2000, text: 'A'),
+      TranscriptSegment(id: 'b', startMs: 3000, endMs: 5000, text: 'B'),
+      TranscriptSegment(id: 'c', startMs: 4500, endMs: 6000, text: 'C'),
+    ];
+    expect(sentenceNavigationTarget(cues, 3500, forward: false), 0);
+    expect(sentenceNavigationTarget(cues, 3500, forward: true), 2);
+    expect(sentenceNavigationTarget(cues, 2500, forward: false), 0);
+    expect(sentenceNavigationTarget(cues, 2500, forward: true), 1);
+    expect(sentenceNavigationTarget(cues, 0, forward: false), isNull);
+    expect(sentenceNavigationTarget(cues, 0, forward: true), 0);
+    expect(sentenceNavigationTarget(cues, 7000, forward: false), 2);
+    expect(sentenceNavigationTarget(cues, 7000, forward: true), isNull);
+    expect(sentenceNavigationTarget(cues, 4700, forward: false), 1);
+    expect(currentListeningSegmentIndex(cues, 2500), isNull);
+    expect(currentListeningSegmentIndex(cues, 6000), isNull);
+    expect(sentenceNavigationTarget(const [], 0, forward: true), isNull);
+  });
+
+  testWidgets(
+    'blind listening reveals only current cue and resets on navigation',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final directory = (await tester.runAsync(
+        () => Directory.systemTemp.createTemp('meow-blind-'),
+      ))!;
+      addTearDown(() => directory.delete(recursive: true));
+      final source = File('${directory.path}/listen.mp4');
+      await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+      late _ReviewFakePlatformPlayer platform;
+      debugTranscriptReviewPlayerFactory = () => Player(
+        platformPlayer: platform = _ReviewFakePlatformPlayer(
+          updatePlayingStateOnControls: true,
+        ),
+      );
+      debugTranscriptReviewSourceExists = (_) async => true;
+      final loop = _RecordingSentenceRepeatLoopController();
+      debugTranscriptReviewSentenceRepeatLoopFactory = (_) => loop;
+      addTearDown(() {
+        debugTranscriptReviewPlayerFactory = null;
+        debugTranscriptReviewSourceExists = null;
+        debugTranscriptReviewSentenceRepeatLoopFactory = null;
+      });
+      final controller = await _controllerForDocument(
+        TranscriptDocument(
+          tokens: const [],
+          segments: const [
+            TranscriptSegment(
+              id: 'a',
+              startMs: 0,
+              endMs: 1000,
+              text: 'First sentence.',
+              translatedText: '第一句',
+            ),
+            TranscriptSegment(
+              id: 'b',
+              startMs: 2000,
+              endMs: 3000,
+              text: 'Second sentence.',
+              translatedText: '第二句',
+            ),
+            TranscriptSegment(
+              id: 'c',
+              startMs: 4000,
+              endMs: 5000,
+              text: 'Third sentence.',
+              translatedText: '第三句',
+            ),
+          ],
+          speakers: const [],
+          updatedAt: DateTime.utc(2026),
+        ),
+        sourcePath: source.path,
+        metadata: const MediaMetadata(
+          sizeBytes: 4,
+          durationMs: 5000,
+          hasAudio: true,
+          hasVideo: true,
+          formatName: 'mp4',
+        ),
+        transcriptSource: TranscriptSource.importedSubtitle,
+        transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+        settings: const AppSettings(blindListeningEnabled: true),
+      );
+      addTearDown(controller.dispose);
+      controller.openInWorkspace('job');
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: TranscriptReview(jobId: 'job')),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pumpAndSettle();
+      await _selectTranslationView(tester, 'Bilingual');
+      bool blurred(String id) => tester
+          .widget<BlindListeningBlur>(
+            find.byKey(ValueKey('blind-original-$id')),
+          )
+          .blurred;
+      expect(blurred('a'), isTrue);
+      expect(blurred('b'), isTrue);
+      expect(
+        tester
+            .widget<IconButton>(find.byKey(const Key('open-transcript-search')))
+            .onPressed,
+        isNull,
+      );
+      await tester.tap(find.byKey(const Key('reveal-current-sentence')));
+      await tester.pump();
+      expect(blurred('a'), isFalse);
+      expect(
+        tester
+            .widget<BlindListeningBlur>(
+              find.byKey(const ValueKey('blind-translation-a')),
+            )
+            .blurred,
+        isFalse,
+      );
+      expect(
+        tester
+            .widget<BlindListeningBlur>(
+              find.byKey(const ValueKey('blind-translation-b')),
+            )
+            .blurred,
+        isTrue,
+      );
+      expect(blurred('b'), isTrue);
+      expect(controller.settings.blindListeningEnabled, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+      await tester.pump();
+      expect(blurred('a'), isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+      await tester.pump();
+      platform.emitPosition(const Duration(milliseconds: 1500));
+      await tester.pump();
+      expect(blurred('a'), isTrue);
+      expect(
+        tester
+            .widget<IconButton>(
+              find.byKey(const Key('reveal-current-sentence')),
+            )
+            .onPressed,
+        isNull,
+      );
+      platform.emitPosition(const Duration(milliseconds: 2500));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+      await tester.pump();
+      expect(blurred('b'), isFalse);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyR);
+      await tester.pump();
+      platform.emitPosition(const Duration(milliseconds: 1800));
+      await tester.pump();
+      expect(blurred('b'), isTrue);
+      platform.emitPosition(const Duration(milliseconds: 2500));
+      await tester.pump();
+      expect(blurred('b'), isFalse);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyR);
+      await tester.pump();
+      platform.emitPlaying(false);
+      await tester.pump();
+
+      // Rapid presses use the pending target even before the native loop clears.
+      final previous = tester
+          .widget<IconButton>(find.byKey(const Key('previous-sentence')))
+          .onPressed!;
+      previous();
+      await tester.pump();
+      await tester.pump();
+      expect(platform.seekDurations.last, Duration.zero);
+      expect(blurred('b'), isTrue);
+      expect(platform.state.playing, isFalse);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyR);
+      await tester.pump();
+      platform.emitPlaying(false);
+      await tester.pump();
+      final next = tester
+          .widget<IconButton>(find.byKey(const Key('next-sentence')))
+          .onPressed!;
+      next();
+      next();
+      await tester.pump();
+      await tester.pump();
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyR);
+      await tester.pump();
+      expect(platform.seekDurations.last, const Duration(milliseconds: 4000));
+      expect(platform.state.playing, isFalse);
+      expect(loop.events.last, 'clear');
+      expect(blurred('c'), isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('blur excludes hidden text from semantics and selection', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    String? selected;
+    var blurred = true;
+    late StateSetter update;
+    try {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SelectionArea(
+            onSelectionChanged: (value) => selected = value?.plainText,
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                update = setState;
+                return Align(
+                  alignment: Alignment.topLeft,
+                  child: BlindListeningBlur(
+                    blurred: blurred,
+                    child: const Text('Hidden answer'),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      Future<void> selectText() async {
+        final rect = tester.getRect(find.text('Hidden answer'));
+        final pointer = await tester.startGesture(
+          rect.centerLeft + const Offset(1, 0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await pointer.moveTo(rect.centerRight - const Offset(1, 0));
+        await pointer.up();
+        await tester.pump();
+      }
+
+      expect(
+        tester
+            .binding
+            .renderViews
+            .single
+            .owner!
+            .semanticsOwner!
+            .rootSemanticsNode!
+            .toStringDeep(),
+        isNot(contains('Hidden answer')),
+      );
+      await selectText();
+      expect(selected ?? '', isEmpty);
+      update(() => blurred = false);
+      await tester.pump();
+      expect(find.bySemanticsLabel('Hidden answer'), findsOneWidget);
+      await selectText();
+      expect(selected, contains('Hidden answer'));
+      update(() => blurred = true);
+      await tester.pump();
+      final selectionDelegate = tester
+          .widgetList<SelectionRegistrarScope>(
+            find.byType(SelectionRegistrarScope),
+          )
+          .map((scope) => scope.registrar)
+          .whereType<SelectionContainerDelegate>()
+          .first;
+      expect(selectionDelegate.getSelectedContent()?.plainText ?? '', isEmpty);
+      expect(
+        tester
+            .binding
+            .renderViews
+            .single
+            .owner!
+            .semanticsOwner!
+            .rootSemanticsNode!
+            .toStringDeep(),
+        isNot(contains('Hidden answer')),
+      );
+      expect(tester.takeException(), isNull);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('podcast shortcuts toggle playback and seek five seconds', (
     tester,
   ) async {
@@ -1537,7 +2021,8 @@ void main() {
     expect(find.text('Translate unfinished with LLM'), findsNothing);
     expect(find.text('Retranslate all with LLM'), findsNothing);
     expect(find.byKey(const Key('translation-more-actions')), findsNothing);
-    expect(find.byKey(const Key('review-toolbar-more')), findsNothing);
+    // Blind listening remains accessible while translation is running.
+    expect(find.byKey(const Key('review-toolbar-more')), findsOneWidget);
     expect(find.byKey(const Key('translation-status-strip')), findsOneWidget);
     expect(find.byKey(const Key('translation-view-mode')), findsOneWidget);
     expect(find.byKey(const Key('toggle-speaker-labels')), findsOneWidget);
