@@ -134,9 +134,16 @@ class DictationPanel extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (result != null && !matches)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: _DictationDiff(words: result!.words),
+                  ),
                 if (!eligible) Text(strings.t('dictation_english_only')),
+                const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
+                  runSpacing: 8,
                   children: [
                     TextButton.icon(
                       key: const Key('dictation-replay'),
@@ -156,6 +163,54 @@ class DictationPanel extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Renders the answer as a word diff. Expected words are never shown: wrong
+/// words are underlined, missed words become '…', extra words are struck out.
+class _DictationDiff extends StatelessWidget {
+  const _DictationDiff({required this.words});
+  final List<DictationWord> words;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final base = theme.textTheme.bodyMedium;
+    final error = theme.colorScheme.error;
+    final spans = <TextSpan>[];
+    for (final word in words) {
+      if (spans.isNotEmpty) spans.add(const TextSpan(text: ' '));
+      spans.add(
+        switch (word.kind) {
+          DictationWordKind.matching => TextSpan(text: word.actual),
+          DictationWordKind.different => TextSpan(
+            text: word.actual,
+            style: TextStyle(
+              color: error,
+              decoration: TextDecoration.underline,
+              decorationStyle: TextDecorationStyle.wavy,
+              decorationColor: error,
+            ),
+          ),
+          DictationWordKind.missing => TextSpan(
+            text: '…',
+            style: TextStyle(color: error, fontWeight: FontWeight.bold),
+          ),
+          DictationWordKind.extra => TextSpan(
+            text: word.actual,
+            style: TextStyle(
+              color: error,
+              decoration: TextDecoration.lineThrough,
+              decorationColor: error,
+            ),
+          ),
+        },
+      );
+    }
+    return Text.rich(
+      TextSpan(style: base, children: spans),
+      key: const Key('dictation-diff'),
     );
   }
 }

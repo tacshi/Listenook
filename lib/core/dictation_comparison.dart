@@ -70,7 +70,13 @@ DictationResult compareDictation(String reference, String answer) {
           actual: actual[--j],
         ),
       );
-    } else if (i > 0 && j > 0 && costs[i][j] == costs[i - 1][j - 1] + 1) {
+    } else if (i > 0 && costs[i][j] == costs[i - 1][j] + 1) {
+      result.add(
+        DictationWord(DictationWordKind.missing, expected: expected[--i]),
+      );
+    } else if (j > 0 && costs[i][j] == costs[i][j - 1] + 1) {
+      result.add(DictationWord(DictationWordKind.extra, actual: actual[--j]));
+    } else {
       result.add(
         DictationWord(
           DictationWordKind.different,
@@ -78,12 +84,6 @@ DictationResult compareDictation(String reference, String answer) {
           actual: actual[--j],
         ),
       );
-    } else if (i > 0 && costs[i][j] == costs[i - 1][j] + 1) {
-      result.add(
-        DictationWord(DictationWordKind.missing, expected: expected[--i]),
-      );
-    } else {
-      result.add(DictationWord(DictationWordKind.extra, actual: actual[--j]));
     }
   }
   return DictationResult(List.unmodifiable(result.reversed));
