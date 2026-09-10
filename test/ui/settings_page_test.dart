@@ -1,14 +1,21 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:meow_stt/core/contracts.dart';
 import 'package:meow_stt/core/local_speech.dart';
 import 'package:meow_stt/core/models.dart';
+import 'package:meow_stt/core/update_models.dart';
 import 'package:meow_stt/data/local_media_source_resolver.dart';
 import 'package:meow_stt/data/transcript_exporter.dart';
+import 'package:meow_stt/data/update_installer.dart';
+import 'package:meow_stt/data/update_service.dart';
 import 'package:meow_stt/l10n/strings.dart';
 import 'package:meow_stt/state/app_controller.dart';
 import 'package:meow_stt/ui/settings_page.dart';
@@ -1112,6 +1119,187 @@ void main() {
       expect(controller.translationKeyConfigured, isFalse);
     },
   );
+
+  testWidgets('About check button runs an update check', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    final updates = UpdateService(
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'schema': 1,
+            'platforms': {
+              'macos-arm64': {
+                'version': '1.0.0',
+                'build': 1,
+                'kind': 'appZip',
+                'fileName': 'MeowSTT.zip',
+                'size': 3,
+                'sha256': sha256.convert(const [1, 2, 3]).toString(),
+                'url': 'https://example.com/MeowSTT.zip',
+              },
+            },
+          }),
+          200,
+        ),
+      ),
+      installer: const UnsupportedUpdateInstaller(),
+      manifestUri: Uri.parse('https://example.com/latest.json'),
+      readCurrentVersion: () async => const AppVersion(1, 0, 0, build: 1),
+      updatesDirectory: () => Future.error(StateError('unavailable')),
+      platformKey: 'macos-arm64',
+      automaticEnabled: false,
+    );
+    addTearDown(updates.dispose);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: controller),
+          ChangeNotifierProvider.value(value: updates),
+        ],
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: Scaffold(body: SettingsPage()),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('settings-tab-about')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('about-check-for-updates')));
+    await tester.pumpAndSettle();
+
+    expect(updates.phase, UpdatePhase.upToDate);
+    expect(find.byKey(const Key('about-update-up-to-date')), findsOneWidget);
+    expect(find.text('MeowSTT is up to date.'), findsOneWidget);
+  });
+
+  testWidgets('About tab shows the version and checks for updates', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final directory = Directory.systemTemp.createTempSync(
+      'meow-settings-about-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    var releaseVersion = '1.0.0';
+    var releaseBuild = 1;
+    const bytes = <int>[1, 2, 3];
+    final updates = UpdateService(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('latest.json')) {
+          return http.Response(
+            jsonEncode({
+              'schema': 1,
+              'platforms': {
+                'macos-arm64': {
+                  'version': releaseVersion,
+                  'build': releaseBuild,
+                  'kind': 'appZip',
+                  'fileName': 'MeowSTT.zip',
+                  'size': bytes.length,
+                  'sha256': sha256.convert(bytes).toString(),
+                  'url': 'https://example.com/MeowSTT.zip',
+                },
+              },
+            }),
+            200,
+          );
+        }
+        return http.Response.bytes(bytes, 200);
+      }),
+      installer: const UnsupportedUpdateInstaller(),
+      manifestUri: Uri.parse('https://example.com/latest.json'),
+      readCurrentVersion: () async => const AppVersion(1, 0, 0, build: 1),
+      updatesDirectory: () async => directory,
+      platformKey: 'macos-arm64',
+      automaticEnabled: false,
+    );
+    addTearDown(updates.dispose);
+    await tester.runAsync(updates.initialize);
+
+    var restarts = 0;
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: controller),
+          ChangeNotifierProvider.value(value: updates),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: Scaffold(
+            body: SettingsPage(onRestartUpdate: () => restarts++),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('settings-tab-about')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Version 1.0.0+1'), findsOneWidget);
+
+    await tester.runAsync(updates.checkAndDownloadNow);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('about-update-up-to-date')), findsOneWidget);
+
+    releaseVersion = '2.0.0';
+    releaseBuild = 2;
+    await tester.runAsync(updates.checkAndDownloadNow);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('about-update-ready')), findsOneWidget);
+    expect(find.text('MeowSTT 2.0.0 is ready to install.'), findsOneWidget);
+    expect(
+      find.byKey(const Key('about-check-for-updates')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const Key('about-restart-to-update')));
+    expect(restarts, 1);
+  });
 }
 
 Future<void> _selectDefaultProvider(

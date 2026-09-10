@@ -110,6 +110,10 @@ class _AppShellState extends State<AppShell>
       await _restoreWindow(AppDestination.settings);
       return null;
     }
+    if (call.method == 'checkForUpdates') {
+      unawaited(_checkForUpdates());
+      return null;
+    }
     if (call.method == 'requestQuit') {
       await _requestQuit();
       return null;
@@ -461,6 +465,57 @@ class _AppShellState extends State<AppShell>
     } on Object {
       _windowClosing = false;
       rethrow;
+    }
+  }
+
+  Future<void> _checkForUpdates() async {
+    final updates = _updates;
+    if (updates == null || !mounted) return;
+    await _showAndFocusWindow();
+    if (!mounted) return;
+    final strings = context.strings;
+    if (!updates.supported) {
+      showAppNotice(context, message: strings.t('update_not_supported'));
+      return;
+    }
+    showAppNotice(context, message: strings.t('update_checking'));
+    try {
+      await updates.checkAndDownloadNow();
+    } on Object catch (error) {
+      if (!mounted) return;
+      showAppNotice(
+        context,
+        message: '${context.strings.t('update_check_failed')} $error',
+        tone: AppNoticeTone.error,
+      );
+      return;
+    }
+    if (!mounted) return;
+    final release = updates.release;
+    if (updates.readyToRestart && release != null) {
+      showAppNotice(
+        context,
+        message: context.strings
+            .t('update_ready')
+            .replaceFirst('{version}', release.version.name),
+        tone: AppNoticeTone.success,
+        actionLabel: context.strings.t('restart_to_update'),
+        onAction: () => unawaited(_restartForUpdate(updates)),
+      );
+      return;
+    }
+    if (updates.phase == UpdatePhase.upToDate) {
+      showAppNotice(
+        context,
+        message: context.strings.t('update_up_to_date'),
+        tone: AppNoticeTone.success,
+      );
+    } else if (updates.phase == UpdatePhase.idle) {
+      showAppNotice(
+        context,
+        message: context.strings.t('update_check_failed'),
+        tone: AppNoticeTone.error,
+      );
     }
   }
 
@@ -904,8 +959,13 @@ class _AppShellState extends State<AppShell>
                                   AppDestination.library => const LibraryPage(
                                     key: ValueKey('library'),
                                   ),
-                                  AppDestination.settings => const SettingsPage(
-                                    key: ValueKey('settings'),
+                                  AppDestination.settings => SettingsPage(
+                                    key: const ValueKey('settings'),
+                                    onRestartUpdate: updates == null
+                                        ? null
+                                        : () => unawaited(
+                                            _restartForUpdate(updates),
+                                          ),
                                   ),
                                 },
                               ),

@@ -89,6 +89,10 @@ class AppDelegate: FlutterAppDelegate {
     invokeNavigation("showSettings", sender: sender)
   }
 
+  @IBAction func checkForUpdates(_ sender: Any?) {
+    invokeNavigation("checkForUpdates", sender: sender)
+  }
+
   @IBAction func requestQuit(_ sender: Any?) {
     invokeNavigation("requestQuit", sender: sender)
   }

@@ -1,14 +1,18 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/contracts.dart';
 import '../core/local_speech.dart';
 import '../core/models.dart';
+import '../core/update_models.dart';
 import '../data/desktop_runtime.dart';
+import '../data/update_service.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'app_notice.dart';
@@ -32,9 +36,14 @@ enum _SettingsDestination {
 }
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, this.launchExternalUrl = _launchExternalUrl});
+  const SettingsPage({
+    super.key,
+    this.launchExternalUrl = _launchExternalUrl,
+    this.onRestartUpdate,
+  });
 
   final ExternalUrlLauncher launchExternalUrl;
+  final VoidCallback? onRestartUpdate;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -775,6 +784,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Widget _aboutTab(BuildContext context) => _tabList([
+    _AboutAppSection(onRestartUpdate: widget.onRestartUpdate),
     _Section(
       title: context.strings.t('privacy'),
       icon: Icons.shield_outlined,
@@ -2088,6 +2098,192 @@ class _CompactToggleRow extends StatelessWidget {
       ],
     ),
   );
+}
+
+class _AboutAppSection extends StatefulWidget {
+  const _AboutAppSection({this.onRestartUpdate});
+
+  final VoidCallback? onRestartUpdate;
+
+  @override
+  State<_AboutAppSection> createState() => _AboutAppSectionState();
+}
+
+class _AboutAppSectionState extends State<_AboutAppSection> {
+  String? _versionLabel;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadVersionLabel());
+  }
+
+  Future<void> _loadVersionLabel() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final parsed = AppVersion.tryParse(
+        info.version,
+        build: int.tryParse(info.buildNumber) ?? 0,
+      );
+      if (mounted) {
+        setState(() => _versionLabel = parsed?.label ?? info.version);
+      }
+    } on Object {
+      // Package info is unavailable in widget tests.
+    }
+  }
+
+  Future<void> _checkForUpdates() async {
+    try {
+      await context.read<UpdateService?>()?.checkAndDownloadNow();
+    } on Object {
+      // Failures surface in the status line below.
+    }
+  }
+
+  Widget _statusLine(
+    BuildContext context, {
+    required String statusKey,
+    required IconData icon,
+    required String text,
+    Color? color,
+  }) {
+    final effective = color ?? Theme.of(context).colorScheme.onSurfaceVariant;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: effective),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            key: Key(statusKey),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: effective),
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = context.strings;
+    final updates = context.watch<UpdateService?>();
+    final version = updates?.currentVersion?.label ?? _versionLabel;
+    final phase = updates?.phase ?? UpdatePhase.idle;
+    final release = updates?.release;
+    final ready = updates?.readyToRestart == true && release != null;
+    final installing = phase == UpdatePhase.installing;
+    final busy =
+        phase == UpdatePhase.checking ||
+        phase == UpdatePhase.downloading ||
+        phase == UpdatePhase.verifying;
+
+    final Widget? status;
+    if (installing) {
+      status = _statusLine(
+        context,
+        statusKey: 'about-update-installing',
+        icon: Icons.restart_alt_rounded,
+        text: strings.t('restarting_to_update'),
+      );
+    } else if (ready) {
+      status = _statusLine(
+        context,
+        statusKey: 'about-update-ready',
+        icon: Icons.system_update_alt_rounded,
+        text: strings
+            .t('update_ready')
+            .replaceFirst('{version}', release.version.name),
+      );
+    } else if (busy) {
+      status = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            strings.t(
+              phase == UpdatePhase.checking
+                  ? 'update_checking'
+                  : 'update_downloading',
+            ),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(
+            key: const Key('about-update-progress'),
+            value: phase == UpdatePhase.downloading
+                ? updates?.progress
+                : null,
+          ),
+        ],
+      );
+    } else if (phase == UpdatePhase.upToDate) {
+      status = _statusLine(
+        context,
+        statusKey: 'about-update-up-to-date',
+        icon: Icons.check_circle_outline_rounded,
+        text: strings.t('update_up_to_date'),
+        color: Colors.green,
+      );
+    } else if (phase == UpdatePhase.failed) {
+      status = _statusLine(
+        context,
+        statusKey: 'about-update-failed',
+        icon: Icons.error_outline_rounded,
+        text: '${strings.t('update_check_failed')} ${updates?.error ?? ''}'
+            .trim(),
+        color: Theme.of(context).colorScheme.error,
+      );
+    } else {
+      status = null;
+    }
+
+    return _Section(
+      title: 'MeowSTT',
+      icon: Icons.info_outline_rounded,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (version != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                strings.t('app_version').replaceFirst('{version}', version),
+                key: const Key('about-version-label'),
+              ),
+            ),
+          if (status != null) ...[status, const SizedBox(height: 12)],
+          if (ready)
+            FilledButton.icon(
+              key: const Key('about-restart-to-update'),
+              onPressed: installing ? null : widget.onRestartUpdate,
+              icon: const Icon(Icons.restart_alt_rounded),
+              label: Text(strings.t('restart_to_update')),
+            )
+          else
+            OutlinedButton.icon(
+              key: const Key('about-check-for-updates'),
+              onPressed: updates?.supported == true && !busy
+                  ? _checkForUpdates
+                  : null,
+              icon: busy
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh_rounded),
+              label: Text(strings.t('check_for_updates')),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _Section extends StatelessWidget {
