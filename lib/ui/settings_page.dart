@@ -495,27 +495,22 @@ class _SettingsPageState extends State<SettingsPage> {
     ],
   );
 
-  Widget _providerHeaderTrailing(
+  Widget? _providerHeaderTrailing(
     BuildContext context,
     AppController controller,
     TranscriptionProvider provider,
   ) {
     final configured = controller.isTranscriptionProviderConfigured(provider);
+    if (configured) return null;
     return Chip(
       key: ValueKey('provider-status-${provider.name}'),
       visualDensity: VisualDensity.compact,
       avatar: Icon(
-        configured ? Icons.circle : Icons.settings_outlined,
+        Icons.settings_outlined,
         size: 14,
-        color: configured
-            ? Colors.green
-            : Theme.of(context).colorScheme.secondary,
+        color: Theme.of(context).colorScheme.secondary,
       ),
-      label: Text(
-        context.strings.t(
-          configured ? 'provider_ready' : 'provider_setup_required',
-        ),
-      ),
+      label: Text(context.strings.t('provider_setup_required')),
     );
   }
 
@@ -1549,7 +1544,7 @@ class _LocalTranscriptionProviderSection extends StatelessWidget {
   final TranscriptionProvider provider;
   final AppController controller;
   final ValueChanged<String> showMessage;
-  final Widget trailing;
+  final Widget? trailing;
 
   bool get _isQwen => provider == TranscriptionProvider.qwen3Local;
 
@@ -1560,7 +1555,7 @@ class _LocalTranscriptionProviderSection extends StatelessWidget {
     );
     return _Section(
       title: context.strings.transcriptionProviderName(provider),
-      icon: _isQwen ? Icons.high_quality_rounded : Icons.memory_rounded,
+      icon: Icons.memory_rounded,
       trailing: trailing,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1609,19 +1604,19 @@ class _LocalTranscriptionBehaviorSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => _Section(
-    title: context.strings.t('local_transcription_behavior'),
-    icon: Icons.auto_mode_rounded,
-    child: SwitchListTile(
-      key: const Key('auto-transcribe-local-switch'),
-      contentPadding: EdgeInsets.zero,
-      dense: true,
-      title: Text(context.strings.t('auto_transcribe_local')),
-      subtitle: Text(context.strings.t('auto_transcribe_local_description')),
-      value: settings.autoTranscribeLocal,
-      onChanged: (value) => controller.updateSettings(
-        settings.copyWith(autoTranscribeLocal: value),
+    title: context.strings.t('auto_transcribe_local'),
+    icon: Icons.play_circle_outline_rounded,
+    trailing: Semantics(
+      label: context.strings.t('auto_transcribe_local'),
+      child: Switch(
+        key: const Key('auto-transcribe-local-switch'),
+        value: settings.autoTranscribeLocal,
+        onChanged: (value) => controller.updateSettings(
+          settings.copyWith(autoTranscribeLocal: value),
+        ),
       ),
     ),
+    child: Text(context.strings.t('auto_transcribe_local_description')),
   );
 }
 

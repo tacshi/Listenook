@@ -476,7 +476,6 @@ class AppStrings {
     'soniox_description':
         'Cloud transcription with speaker labels and native word timing. Media is uploaded to Soniox.',
     'api_key': 'API key',
-    'provider_ready': 'Ready to transcribe',
     'provider_setup_required': 'Setup required',
     'moss_key': 'MOSS API key',
     'create_moss_key': 'Create a MOSS API key',
@@ -491,14 +490,13 @@ class AppStrings {
         'Local transcription with speaker labels. Media stays on this Mac.',
     'qwen3_local': 'Qwen3 Local (Beta)',
     'qwen3_local_description':
-        'Higher-quality multilingual text with VAD segment timing, or precise word timing when an aligner is installed. Speaker identification is not available. Media stays on this Mac.',
+        'Local multilingual transcription with segment timestamps. Install an alignment model for word timing. Speaker labels are unavailable.',
     'local_moss_model': 'Local MOSS model',
     'local_qwen_model': 'Qwen3 Local model bundle',
     'local_model_missing': 'Install the local MOSS model in Settings to start',
     'local_qwen_model_missing':
         'Install the Qwen3 ASR 1.7B bundle in Settings to start',
     'transcription_model': 'Transcription model',
-    'local_transcription_behavior': 'Local transcription behavior',
     'alignment_models': 'Alignment models',
     'alignment_models_description':
         'Install a Qwen aligner for precise word timing, then choose which installed model new and retried alignments use.',
@@ -507,7 +505,7 @@ class AppStrings {
         'INT8 uses less disk and memory; FP16 provides full precision. The choice applies to new and retried alignments.',
     'alignment_model_download_to_select':
         'Download a word-timing model to select it',
-    'auto_transcribe_local': 'Auto-transcribe new items',
+    'auto_transcribe_local': 'Automatic transcription',
     'auto_transcribe_local_description':
         'Automatically start eligible new local-transcription items. Files dropped into Inbox still require Start Transcription.',
     'automatic_word_timing': 'Automatic word timing',
@@ -1258,7 +1256,6 @@ class AppStrings {
     'default_transcription_provider': '默认转写服务',
     'soniox_description': '云端转写，提供说话人标签和原生词级时间。媒体会上传至 Soniox。',
     'api_key': 'API 密钥',
-    'provider_ready': '可以开始转写',
     'provider_setup_required': '需要配置',
     'moss_key': 'MOSS API 密钥',
     'create_moss_key': '创建 MOSS API 密钥',
@@ -1271,21 +1268,19 @@ class AppStrings {
     'moss_local': 'MOSS Local',
     'moss_local_description': '本地转写并区分说话人，媒体不会离开本机。',
     'qwen3_local': 'Qwen3 Local（测试版）',
-    'qwen3_local_description':
-        '提供更高质量的多语言文本和 VAD 片段时间；安装对齐模型后可生成精确词级时间。不提供说话人识别，媒体不会离开本机。',
+    'qwen3_local_description': '本地多语言转写，提供片段时间。安装对齐模型后可生成词级时间。不支持说话人识别。',
     'local_moss_model': '本地 MOSS 模型',
     'local_qwen_model': 'Qwen3 Local 模型包',
     'local_model_missing': '请先在“设置”中安装本地 MOSS 模型',
     'local_qwen_model_missing': '请先在“设置”中安装 Qwen3 ASR 1.7B 模型包',
     'transcription_model': '转写模型',
-    'local_transcription_behavior': '本地转写行为',
     'alignment_models': '对齐模型',
     'alignment_models_description': '安装 Qwen 对齐模型以生成精确词级时间，并选择新任务和重试任务使用的默认模型。',
     'default_alignment_model': '默认词级时间模型',
     'default_alignment_model_description':
         'INT8 占用更少磁盘和内存；FP16 提供完整精度。此选择适用于新的对齐任务和重试。',
     'alignment_model_download_to_select': '请先下载词级时间模型再选择',
-    'auto_transcribe_local': '自动转写新项目',
+    'auto_transcribe_local': '自动转写',
     'auto_transcribe_local_description':
         '自动开始符合条件的新本地转写任务。拖入收件箱的文件仍需手动点击“开始转写”。',
     'automatic_word_timing': '自动生成词级时间',
