@@ -112,6 +112,47 @@ void main() {
     semantics.dispose();
   });
 
+  testWidgets('check feedback echoes answer with wrong and missing words', (
+    tester,
+  ) async {
+    final controller = TextEditingController(text: 'the quik fox jumps');
+    final focus = FocusNode();
+    addTearDown(controller.dispose);
+    addTearDown(focus.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: [AppStrings.delegate],
+        home: Scaffold(
+          body: DictationPanel(
+            controller: controller,
+            focusNode: focus,
+            targetLabel: 'Sentence 1',
+            eligible: true,
+            result: compareDictation(
+              'the quick brown fox jumps high',
+              'the quik fox jumps',
+            ),
+            onChanged: (_) {},
+            onCheck: () {},
+            onReplay: () {},
+            onClose: () {},
+          ),
+        ),
+      ),
+    );
+    final diff = find.byKey(const Key('dictation-diff'));
+    expect(diff, findsOneWidget);
+    expect(
+      tester.widget<Text>(diff).textSpan!.toPlainText(),
+      'the quik … fox jumps …',
+    );
+    expect(find.textContaining('quick'), findsNothing);
+    expect(find.textContaining('brown'), findsNothing);
+    expect(find.textContaining('high'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
     'typing and IME composition do not accidentally check; narrow panel fits',
     (tester) async {
