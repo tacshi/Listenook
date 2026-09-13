@@ -9,6 +9,13 @@ import 'package:windows_single_instance/windows_single_instance.dart';
 
 import 'app.dart';
 import 'core/local_speech.dart';
+import 'core/app_identity.dart';
+import 'core/models.dart';
+import 'data/app_data_migration.dart';
+import 'data/migrating_secure_value.dart';
+import 'ui/startup_page.dart';
+
+export 'ui/startup_page.dart';
 import 'data/ai_brief_service.dart';
 import 'data/desktop_runtime.dart';
 import 'data/inbox_folder_monitor.dart';
@@ -28,64 +35,6 @@ import 'data/update_service.dart';
 import 'state/app_controller.dart';
 import 'state/podcast_controller.dart';
 
-class MeowSttBootstrap extends StatelessWidget {
-  const MeowSttBootstrap({super.key, required this.application});
-
-  final Future<Widget> application;
-
-  @override
-  Widget build(BuildContext context) => FutureBuilder<Widget>(
-    future: application,
-    builder: (context, snapshot) {
-      if (snapshot.hasData) return snapshot.data!;
-      if (snapshot.hasError) {
-        return const MaterialApp(
-          debugShowCheckedModeBanner: false,
-          home: Scaffold(
-            body: Center(
-              child: Padding(
-                padding: EdgeInsets.all(32),
-                child: Text(
-                  'MeowSTT could not start. Please quit and reopen the app.',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-          ),
-        );
-      }
-      return MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff7439ce)),
-        ),
-        home: const Scaffold(
-          body: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.graphic_eq_rounded,
-                  size: 52,
-                  color: Color(0xff7439ce),
-                ),
-                SizedBox(height: 20),
-                SizedBox(
-                  width: 26,
-                  height: 26,
-                  child: CircularProgressIndicator(strokeWidth: 3),
-                ),
-                SizedBox(height: 14),
-                Text('Starting MeowSTT…'),
-              ],
-            ),
-          ),
-        ),
-      );
-    },
-  );
-}
-
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -93,7 +42,7 @@ Future<void> main(List<String> arguments) async {
   if (Platform.isWindows) {
     await WindowsSingleInstance.ensureSingleInstance(
       arguments,
-      'meowstt-desktop-inbox',
+      '${AppIdentity.bundleId}.instance',
       onSecondWindow: (_) async {
         await windowManager.setSkipTaskbar(false);
         await windowManager.show();
@@ -102,15 +51,58 @@ Future<void> main(List<String> arguments) async {
     );
   }
   final backgroundLaunch = arguments.contains('--background');
-  final application = (() async {
-    final paths = await AppPaths.create();
+  final migrationProgress = ValueNotifier<double?>(null);
+  final startupLocale = ValueNotifier(
+    WidgetsBinding.instance.platformDispatcher.locale,
+  );
+  Future<Widget> createApplication() async {
+    migrationProgress.value = null;
+    final paths = await AppPaths.create(
+      onMigrationProgress: (value) {
+        migrationProgress.value = value;
+      },
+    );
+    migrationProgress.value = null;
     final settingsRepository = JsonSettingsRepository(paths);
+    final initialSettings = await settingsRepository.load();
+    startupLocale.value = switch (initialSettings.localeMode) {
+      AppLocaleMode.english => const Locale('en'),
+      AppLocaleMode.simplifiedChinese => const Locale('zh', 'CN'),
+      AppLocaleMode.system => WidgetsBinding.instance.platformDispatcher.locale,
+    };
     final credentials = SecureCredentialStore();
     final mossCredentials = SecureCredentialStore(
-      storageKey: 'app.meowstt.desktop.moss_api_key',
+      storageKey: '${AppIdentity.bundleId}.moss_api_key',
       environmentVariable: 'MOSS_API_KEY',
     );
     final llmCredentials = SecureLlmCredentialStore();
+    final failedCredentials = <CredentialMigrationTarget>[];
+    for (final target in [
+      CredentialMigrationTarget(
+        'Soniox',
+        credentials.migrateLegacy,
+        credentials.writeApiKey,
+      ),
+      CredentialMigrationTarget(
+        'MOSS',
+        mossCredentials.migrateLegacy,
+        mossCredentials.writeApiKey,
+      ),
+      CredentialMigrationTarget(
+        'AI',
+        llmCredentials.migrateLegacy,
+        llmCredentials.writeApiKey,
+      ),
+    ]) {
+      try {
+        await target.migrate();
+      } on Object {
+        failedCredentials.add(target);
+      }
+    }
+    if (failedCredentials.isNotEmpty) {
+      throw CredentialMigrationException(failedCredentials);
+    }
     final llmClient = OpenAiCompatibleLlmClient(llmCredentials);
     final media = ProcessMediaService(paths);
     final localModels = HttpLocalModelManager(modelsDirectory: paths.models);
@@ -163,7 +155,11 @@ Future<void> main(List<String> arguments) async {
       podcastManagedRoot: paths.root.path,
     );
     await controller.initialize();
-    final desktopRuntime = DesktopRuntime();
+    final desktopRuntime = DesktopRuntime(
+      migrationMarker: File(
+        '${paths.root.path}/${AppDataMigration.markerName}',
+      ),
+    );
     await desktopRuntime.setLaunchAtLogin(
       controller.inboxMonitorConfig.launchAtLogin,
     );
@@ -180,14 +176,34 @@ Future<void> main(List<String> arguments) async {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(localModels.removeLegacyGGUFModels());
     });
-    return MeowSttApp(
+    return ListenookApp(
       controller: controller,
       updates: updates,
       desktopRuntime: desktopRuntime,
       podcastController: podcastController,
     );
-  })();
-  runApp(MeowSttBootstrap(application: application));
+  }
+
+  Future<Widget> start() async {
+    try {
+      return await createApplication();
+    } on Object {
+      if (backgroundLaunch) {
+        await windowManager.setSkipTaskbar(false);
+        await windowManager.show();
+      }
+      rethrow;
+    }
+  }
+
+  runApp(
+    ListenookBootstrap(
+      application: start(),
+      restart: start,
+      progress: migrationProgress,
+      locale: startupLocale,
+    ),
+  );
   await windowManager.waitUntilReadyToShow(
     const WindowOptions(
       title: '',

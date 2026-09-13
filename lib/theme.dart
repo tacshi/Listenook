@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-class MeowTheme {
+class ListenookTheme {
   static const seed = Color(0xFF8855D9);
   static const coral = Color(0xFFFF7D6B);
 

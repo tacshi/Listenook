@@ -105,7 +105,7 @@ class DefaultTranscriptExporter implements TranscriptExporter {
       ..writeln('# $title')
       ..writeln()
       ..writeln(
-        options.localeCode == 'zh' ? '- 由 MeowSTT 导出' : '- Exported by MeowSTT',
+        options.localeCode == 'zh' ? '- 由聆页导出' : '- Exported by Listenook',
       )
       ..writeln(
         options.localeCode == 'zh'

@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import MeowSTTSpeechWorker
+@testable import ListenookSpeechWorker
 
 final class PCM16WaveFileTests: XCTestCase {
     func testReadsOnlyTheRequestedStandardPCMRange() throws {
@@ -47,7 +47,7 @@ final class PCM16WaveFileTests: XCTestCase {
     func testReadsTheTailOfASparseFiveHourWave() throws {
         let sampleCount = 16_000 * 60 * 60 * 5
         let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "meow-wave-sparse-\(UUID().uuidString).wav"
+            "listenook-wave-sparse-\(UUID().uuidString).wav"
         )
         FileManager.default.createFile(atPath: fixture.path, contents: nil)
         let handle = try FileHandle(forWritingTo: fixture)
@@ -71,7 +71,7 @@ final class PCM16WaveFileTests: XCTestCase {
 
     func testRejectsATruncatedDataChunk() throws {
         let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "meow-wave-truncated-\(UUID().uuidString).wav"
+            "listenook-wave-truncated-\(UUID().uuidString).wav"
         )
         var data = waveHeader(dataBytes: 4)
         data.append(contentsOf: [0, 0])
@@ -88,7 +88,7 @@ final class PCM16WaveFileTests: XCTestCase {
         extensible: Bool
     ) throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "meow-wave-\(UUID().uuidString).wav"
+            "listenook-wave-\(UUID().uuidString).wav"
         )
         var data = extensible
             ? extensibleWaveHeader(dataBytes: samples.count * 2)

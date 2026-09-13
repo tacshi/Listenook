@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/data/podcast/html_text.dart';
+import 'package:listenook/data/podcast/html_text.dart';
 
 void main() {
   test('turns plain podcast notes into paragraphs, headings, and links', () {

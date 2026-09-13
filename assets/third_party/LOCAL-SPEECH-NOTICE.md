@@ -1,6 +1,6 @@
 # Local speech notices
 
-MeowSTT's optional Apple Silicon speech worker links speech-swift at commit
+Listenook's optional Apple Silicon speech worker links speech-swift at commit
 `13643ab4361da8f33c8002026c9d357ded0b6896` and Apple's Core ML framework.
 speech-swift is licensed under Apache License 2.0.
 

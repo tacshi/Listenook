@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BINARY="$(mktemp /private/tmp/meowstt-startup-measure.XXXXXX)"
+BINARY="$(mktemp /private/tmp/listenook-startup-measure.XXXXXX)"
 trap 'rm -f "$BINARY"' EXIT
 
 xcrun swiftc \

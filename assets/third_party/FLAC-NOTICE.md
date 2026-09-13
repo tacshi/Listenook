@@ -1,6 +1,6 @@
 # FLAC encoder notice
 
-Windows distributions of MeowSTT include `flac.exe` and, for x64,
+Windows distributions of Listenook include `flac.exe` and, for x64,
 `libFLAC.dll` from FLAC 1.5.0. The command-line encoder is licensed under
 GPL-2.0-or-later; libFLAC uses the adjacent Xiph license.
 

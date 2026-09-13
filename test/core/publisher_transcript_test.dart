@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/podcast_models.dart';
-import 'package:meow_stt/data/podcast/publisher_transcript.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/data/podcast/publisher_transcript.dart';
 
 void main() {
   const parser = PublisherTranscriptParser();

@@ -1445,12 +1445,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
                     final tokens =
                         _tokensBySegment[segment.id] ??
                         const <TranscriptToken>[];
-                    final alignmentFailed =
-                        _importedSubtitleCueNeedsAlignmentAttention(
-                          job,
-                          segment,
-                          tokens,
-                        );
                     return _TranscriptSegmentGroup(
                       key: ValueKey('group-${segment.id}'),
                       blindListening: _blindListening,
@@ -1460,10 +1454,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
                               _currentSentenceId != segment.id),
                       segment: segment,
                       tokens: tokens,
-                      alignmentFailed: alignmentFailed,
-                      alignmentFailureMessage: alignmentFailed
-                          ? context.strings.t('subtitle_cue_original_timing')
-                          : '',
                       positionMs: _position.inMilliseconds,
                       isCurrent: query.isEmpty && index == currentIndex,
                       viewMode: _viewMode,
@@ -1485,9 +1475,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
                           ? _structureEditor.splitTargets(document, segment.id)
                           : const [],
                       isRepeating: _repeatingSegmentId == segment.id,
-                      onResolveAlignment: alignmentFailed
-                          ? () => _setAlignmentResolved(segment.id, true)
-                          : null,
                       onToggleRepeat: _canRepeat(segment)
                           ? () => _toggleSentenceRepeat(segment)
                           : null,
@@ -2560,37 +2547,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
       if (mounted && _editingSegmentId == segmentId) {
         setState(() => _editingSegmentId = null);
       }
-    } catch (_) {
-      if (!mounted) return;
-      showAppNotice(
-        context,
-        message: context.strings.t('error_unexpected'),
-        tone: AppNoticeTone.error,
-      );
-    }
-  }
-
-  Future<void> _setAlignmentResolved(
-    String segmentId,
-    bool resolved, {
-    bool showFeedback = true,
-  }) async {
-    try {
-      await context.read<AppController>().setImportedSubtitleSegmentResolved(
-        widget.jobId,
-        segmentId,
-        resolved: resolved,
-      );
-      if (!mounted || !resolved || !showFeedback) return;
-      showAppNotice(
-        context,
-        message: context.strings.t('alignment_marked_resolved'),
-        tone: AppNoticeTone.success,
-        actionLabel: context.strings.t('undo'),
-        onAction: () => unawaited(
-          _setAlignmentResolved(segmentId, false, showFeedback: false),
-        ),
-      );
     } catch (_) {
       if (!mounted) return;
       showAppNotice(
@@ -4629,16 +4585,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         ? _translationToolbarActionIcon(translationAction)
         : Icons.translate_rounded;
     final alignment = job.forcedAlignment;
-    final supportsLocalAlignment =
-        job.transcriptSource == TranscriptSource.importedSubtitle ||
-        job.transcriptAcquisitionMode ==
-            TranscriptAcquisitionMode.importedSubtitles ||
-        job.transcriptSource == TranscriptSource.mossPro ||
-        job.transcriptSource == TranscriptSource.mossLocal ||
-        job.transcriptSource == TranscriptSource.qwen3Local ||
-        job.transcriptionProvider == TranscriptionProvider.mossPro ||
-        job.transcriptionProvider == TranscriptionProvider.mossLocal ||
-        job.transcriptionProvider == TranscriptionProvider.qwen3Local;
+    final supportsLocalAlignment = job.supportsLocalWordAlignment;
     final entries = <PopupMenuEntry<_TranscriptMoreAction>>[
       CheckedPopupMenuItem(
         key: const Key('toggle-blind-listening'),
@@ -5311,8 +5258,6 @@ class _TranscriptSegmentGroup extends StatefulWidget {
     this.blurred = false,
     required this.segment,
     required this.tokens,
-    required this.alignmentFailed,
-    required this.alignmentFailureMessage,
     required this.positionMs,
     required this.isCurrent,
     required this.viewMode,
@@ -5327,7 +5272,6 @@ class _TranscriptSegmentGroup extends StatefulWidget {
     required this.structureMode,
     required this.splitTargets,
     required this.isRepeating,
-    required this.onResolveAlignment,
     required this.onToggleRepeat,
     required this.onSeek,
     required this.onEditOriginal,
@@ -5345,8 +5289,6 @@ class _TranscriptSegmentGroup extends StatefulWidget {
   final bool blurred;
   final TranscriptSegment segment;
   final List<TranscriptToken> tokens;
-  final bool alignmentFailed;
-  final String alignmentFailureMessage;
   final int positionMs;
   final bool isCurrent;
   final TranslationViewMode viewMode;
@@ -5361,7 +5303,6 @@ class _TranscriptSegmentGroup extends StatefulWidget {
   final bool structureMode;
   final List<TranscriptSplitTarget> splitTargets;
   final bool isRepeating;
-  final VoidCallback? onResolveAlignment;
   final VoidCallback? onToggleRepeat;
   final TranscriptSegmentSeekCallback onSeek;
   final VoidCallback onEditOriginal;
@@ -5400,15 +5341,6 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
         isCurrent: widget.isCurrent,
         isEditing: widget.isEditingOriginal || widget.isEditingTranslation,
         highlightTranslated: widget.highlightTranslated,
-        alignmentFailed: widget.alignmentFailed,
-        alignmentFailureKey: ValueKey(
-          'segment-alignment-failed-${widget.segment.id}',
-        ),
-        alignmentResolutionKey: ValueKey(
-          'mark-alignment-resolved-${widget.segment.id}',
-        ),
-        alignmentFailureMessage: widget.alignmentFailureMessage,
-        onResolveAlignment: widget.onResolveAlignment,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -5505,11 +5437,6 @@ class _TranscriptSegmentSurface extends StatelessWidget {
     required this.highlightTranslated,
     required this.padding,
     required this.child,
-    this.alignmentFailed = false,
-    this.alignmentFailureKey,
-    this.alignmentResolutionKey,
-    this.alignmentFailureMessage = '',
-    this.onResolveAlignment,
   });
 
   final Key surfaceKey;
@@ -5519,19 +5446,12 @@ class _TranscriptSegmentSurface extends StatelessWidget {
   final bool highlightTranslated;
   final EdgeInsetsGeometry padding;
   final Widget child;
-  final bool alignmentFailed;
-  final Key? alignmentFailureKey;
-  final Key? alignmentResolutionKey;
-  final String alignmentFailureMessage;
-  final VoidCallback? onResolveAlignment;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final backgroundColor = isEditing
         ? colors.surfaceContainerLow
-        : alignmentFailed
-        ? colors.errorContainer.withValues(alpha: hovered ? .42 : .26)
         : hovered
         ? colors.surfaceContainerLow
         : highlightTranslated
@@ -5542,20 +5462,11 @@ class _TranscriptSegmentSurface extends StatelessWidget {
       decoration: BoxDecoration(
         color: backgroundColor,
         borderRadius: BorderRadius.circular(10),
-        border: alignmentFailed
-            ? Border.all(color: colors.error.withValues(alpha: .7))
-            : isEditing
-            ? Border.all(color: colors.outlineVariant)
-            : null,
+        border: isEditing ? Border.all(color: colors.outlineVariant) : null,
       ),
       child: Stack(
         children: [
-          Padding(
-            padding: padding.add(
-              EdgeInsets.only(right: alignmentFailed ? 64 : 0),
-            ),
-            child: child,
-          ),
+          Padding(padding: padding, child: child),
           Positioned(
             left: 0,
             top: 8,
@@ -5565,45 +5476,11 @@ class _TranscriptSegmentSurface extends StatelessWidget {
               duration: const Duration(milliseconds: 120),
               width: 3,
               decoration: BoxDecoration(
-                color: isCurrent
-                    ? colors.primary
-                    : alignmentFailed
-                    ? colors.error
-                    : Colors.transparent,
+                color: isCurrent ? colors.primary : Colors.transparent,
                 borderRadius: BorderRadius.circular(3),
               ),
             ),
           ),
-          if (alignmentFailed)
-            Positioned(
-              right: 4,
-              top: 4,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Tooltip(
-                    message: alignmentFailureMessage,
-                    child: Icon(
-                      key: alignmentFailureKey,
-                      Icons.warning_amber_rounded,
-                      size: 18,
-                      color: colors.error,
-                    ),
-                  ),
-                  IconButton(
-                    key: alignmentResolutionKey,
-                    tooltip: context.strings.t('mark_alignment_resolved'),
-                    onPressed: onResolveAlignment,
-                    style: _compactSegmentActionStyle(context),
-                    icon: Icon(
-                      Icons.task_alt_rounded,
-                      size: 18,
-                      color: colors.error,
-                    ),
-                  ),
-                ],
-              ),
-            ),
         ],
       ),
     );
@@ -8211,31 +8088,6 @@ typedef TranscriptSeekCallback =
 
 typedef TranscriptSegmentSeekCallback =
     void Function({required TranscriptSeekReason reason});
-
-bool _importedSubtitleCueNeedsAlignmentAttention(
-  TranscriptionJob job,
-  TranscriptSegment segment,
-  List<TranscriptToken> tokens,
-) {
-  final imported =
-      job.transcriptAcquisitionMode ==
-          TranscriptAcquisitionMode.importedSubtitles ||
-      job.transcriptSource == TranscriptSource.importedSubtitle;
-  if (!imported ||
-      segment.alignmentManuallyResolved ||
-      (!segment.alignmentIncomplete && tokens.isNotEmpty)) {
-    return false;
-  }
-  return switch (job.forcedAlignment.status) {
-    ForcedAlignmentStatus.completed ||
-    ForcedAlignmentStatus.partial ||
-    ForcedAlignmentStatus.unavailable ||
-    ForcedAlignmentStatus.failed ||
-    ForcedAlignmentStatus.cancelled ||
-    ForcedAlignmentStatus.interrupted => true,
-    _ => false,
-  };
-}
 
 bool shouldFocusTranscriptAfterSeek(TranscriptSeekReason reason) =>
     reason == TranscriptSeekReason.standard;

@@ -1,6 +1,6 @@
 # FFmpeg component notice
 
-MeowSTT does not distribute or launch the standalone `ffmpeg` and `ffprobe`
+Listenook does not distribute or launch the standalone `ffmpeg` and `ffprobe`
 command-line programs. Playback, probing, and PCM extraction use the libmpv
 native library supplied by `media_kit_libs_video`. That libmpv build includes
 FFmpeg components and other codecs internally.

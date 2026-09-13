@@ -13,11 +13,11 @@ void main() {
 
   test('macOS tray template has native alpha-only 1x and 2x assets', () {
     final oneX = image.decodePng(
-      File('assets/branding/tray/meowstt-tray-template.png').readAsBytesSync(),
+      File('assets/branding/tray/listenook-tray-template.png').readAsBytesSync(),
     )!;
     final twoX = image.decodePng(
       File(
-        'assets/branding/tray/meowstt-tray-template@2x.png',
+        'assets/branding/tray/listenook-tray-template@2x.png',
       ).readAsBytesSync(),
     )!;
 
@@ -33,7 +33,7 @@ void main() {
 
   test('Windows tray ICO contains the required transparent native sizes', () {
     final bytes = File(
-      'assets/branding/tray/meowstt-tray.ico',
+      'assets/branding/tray/listenook-tray.ico',
     ).readAsBytesSync();
     final data = ByteData.sublistView(bytes);
     expect(data.getUint16(0, Endian.little), 0);
@@ -51,7 +51,7 @@ void main() {
 
     final preview = image.decodePng(
       File(
-        'assets/branding/tray/meowstt-tray-windows-preview.png',
+        'assets/branding/tray/listenook-tray-windows-preview.png',
       ).readAsBytesSync(),
     )!;
     expect(preview.any((pixel) => pixel.a == 0), isTrue);

@@ -1,9 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/podcast_models.dart';
-import 'package:meow_stt/state/podcast_player.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/state/podcast_player.dart';
 
 void main() {
   final sampledAt = DateTime.utc(2026, 8, 15, 12);

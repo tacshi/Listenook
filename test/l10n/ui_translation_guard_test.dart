@@ -27,8 +27,8 @@ void main() {
             .where((file) => file.path.endsWith('.dart'))) {
       final source = file
           .readAsStringSync()
-          .replaceAll("'MeowSTT'", "context.strings.t('product_name')")
-          .replaceAll('"MeowSTT"', 'context.strings.t("product_name")');
+          .replaceAll("'Listenook'", "context.strings.t('product_name')")
+          .replaceAll('"Listenook"', 'context.strings.t("product_name")');
       for (final pattern in patterns) {
         for (final match in pattern.allMatches(source)) {
           final line =

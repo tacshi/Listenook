@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../core/update_models.dart';
+import '../core/app_identity.dart';
 import 'update_installer.dart';
 
 enum UpdatePhase {
@@ -44,9 +45,9 @@ class UpdateService extends ChangeNotifier {
        _platformKey = platformKey ?? currentUpdatePlatformKey,
        _automaticEnabled = automaticEnabled ?? kReleaseMode;
 
-  static const releaseRepoUrl = 'https://github.com/tacshi/MeowSTT-Release';
+  static const releaseRepoUrl = 'https://github.com/${AppIdentity.releaseRepository}';
   static const defaultManifestUrl =
-      'https://raw.githubusercontent.com/tacshi/MeowSTT-Release/main/latest.json';
+      'https://raw.githubusercontent.com/${AppIdentity.releaseRepository}/main/${AppIdentity.manifestName}';
 
   final http.Client _client;
   final bool _ownsClient;

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 
-resolve_meowstt_debug_sign_identity() {
-  local root="${1:?MeowSTT repository root is required}"
-  if [[ -n "${MEOWSTT_MAC_DEBUG_SIGN_IDENTITY:-}" ]]; then
-    printf '%s\n' "$MEOWSTT_MAC_DEBUG_SIGN_IDENTITY"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/environment.sh"
+resolve_listenook_debug_sign_identity() {
+  local root="${1:?Listenook repository root is required}"
+  if [[ -n "${LISTENOOK_MAC_DEBUG_SIGN_IDENTITY:-}" ]]; then
+    printf '%s\n' "$LISTENOOK_MAC_DEBUG_SIGN_IDENTITY"
     return
   fi
-  if [[ -n "${MEOWSTT_MAC_SIGN_IDENTITY:-}" ]]; then
-    printf '%s\n' "$MEOWSTT_MAC_SIGN_IDENTITY"
+  if [[ -n "${LISTENOOK_MAC_SIGN_IDENTITY:-}" ]]; then
+    printf '%s\n' "$LISTENOOK_MAC_SIGN_IDENTITY"
     return
   fi
   if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
@@ -24,6 +25,8 @@ resolve_meowstt_debug_sign_identity() {
   )"
 
   for reference in \
+    "$root/build/macos/Build/Products/Release/Listenook.app" \
+    "/Applications/Listenook.app" \
     "$root/build/macos/Build/Products/Release/MeowSTT.app" \
     "/Applications/MeowSTT.app"; do
     [[ -d "$reference" ]] || continue
@@ -59,7 +62,7 @@ resolve_meowstt_debug_sign_identity() {
   printf '%s\n' '-'
 }
 
-meowstt_sign_app_bundle() {
+listenook_sign_app_bundle() {
   local app="${1:?app bundle is required}"
   local identity="${2:?signing identity is required}"
   local entitlements="${3:?entitlements path is required}"
@@ -85,7 +88,7 @@ meowstt_sign_app_bundle() {
       -o -type d -name '*.xpc' -o -type d -name '*.app' \
       -o -type f -name '*.dylib' \
       -o -type f -name '*.metallib' \
-      -o -type f -name 'MeowSTTSpeechWorker' \) -print0
+      -o -type f -name 'ListenookSpeechWorker' \) -print0
   )
 
   local sign_args=(--force --sign "$identity" --entitlements "$entitlements")

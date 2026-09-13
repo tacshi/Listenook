@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/ui/app_notice.dart';
+import 'package:listenook/ui/app_notice.dart';
 
 void main() {
   testWidgets('app notices are compact, floating, and dismissible', (

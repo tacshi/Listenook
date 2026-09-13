@@ -1,24 +1,30 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:win32_registry/win32_registry.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../core/app_identity.dart';
 
 typedef DesktopNotificationCallback = Future<void> Function();
 
 class DesktopRuntime {
-  DesktopRuntime({FlutterLocalNotificationsPlugin? notifications})
-    : _notifications = notifications ?? FlutterLocalNotificationsPlugin();
+  DesktopRuntime({
+    FlutterLocalNotificationsPlugin? notifications,
+    this.migrationMarker,
+  }) : _notifications = notifications ?? FlutterLocalNotificationsPlugin();
 
-  static const _startupChannel = MethodChannel(
-    'app.meowstt.desktop/launch_at_login',
-  );
+  static const _startupChannel = MethodChannel(AppIdentity.startupChannel);
   static const _windowsRunKey =
       r'Software\Microsoft\Windows\CurrentVersion\Run';
-  static const _windowsRunValue = 'MeowSTT';
+  static const _windowsRunValue = AppIdentity.name;
 
   final FlutterLocalNotificationsPlugin _notifications;
+  final File? migrationMarker;
+  String _displayName = AppIdentity.name;
   DesktopNotificationCallback? _onNotificationSelected;
   bool _notificationsReady = false;
 
@@ -29,15 +35,15 @@ class DesktopRuntime {
     if (!Platform.isMacOS && !Platform.isWindows) return;
     try {
       final initialized = await _notifications.initialize(
-        settings: const InitializationSettings(
+        settings: InitializationSettings(
           macOS: DarwinInitializationSettings(
             requestAlertPermission: false,
             requestBadgePermission: false,
             requestSoundPermission: false,
           ),
           windows: WindowsInitializationSettings(
-            appName: 'MeowSTT',
-            appUserModelId: 'MeowSTT.Desktop.Inbox',
+            appName: _displayName,
+            appUserModelId: AppIdentity.bundleId,
             guid: '5ec4426e-335e-4b64-a21c-b87d5074702f',
           ),
         ),
@@ -81,14 +87,14 @@ class DesktopRuntime {
         title: title,
         body: body,
         payload: 'inbox',
-        notificationDetails: const NotificationDetails(
+        notificationDetails: NotificationDetails(
           macOS: DarwinNotificationDetails(
-            threadIdentifier: 'meowstt-inbox-discovery',
+            threadIdentifier: 'listenook-inbox-discovery',
           ),
           windows: WindowsNotificationDetails(
             header: WindowsHeader(
-              id: 'meowstt-inbox-discovery',
-              title: 'MeowSTT Inbox',
+              id: 'listenook-inbox-discovery',
+              title: _displayName,
               arguments: 'inbox',
             ),
           ),
@@ -106,6 +112,7 @@ class DesktopRuntime {
       try {
         final key = CURRENT_USER.create(_windowsRunKey);
         try {
+          if (key.getValue('MeowSTT') != null) key.removeValue('MeowSTT');
           if (enabled) {
             final command = '"${Platform.resolvedExecutable}" --background';
             key.setValue(_windowsRunValue, RegistryValue.string(command));
@@ -129,5 +136,50 @@ class DesktopRuntime {
         debugPrint('Unable to update macOS launch-at-login: $error');
       }
     }
+  }
+
+  Future<void> setDisplayName(String name, String languageCode) async {
+    _displayName = name;
+    if (Platform.isMacOS) {
+      try {
+        await _startupChannel.invokeMethod<void>('setDisplayName', {
+          'name': name,
+          'languageCode': languageCode,
+        });
+      } on MissingPluginException {
+        // Not present in widget tests.
+      }
+    }
+    if (Platform.isWindows &&
+        _notificationsReady &&
+        _onNotificationSelected != null) {
+      await initialize(onNotificationSelected: _onNotificationSelected!);
+    }
+  }
+
+  Future<bool> needsLegacyLoginNotice() async {
+    final file = migrationMarker;
+    if (!Platform.isMacOS || file == null || !await file.exists()) return false;
+    final marker = jsonDecode(await file.readAsString()) as Map;
+    return marker['migrated'] == true &&
+        marker['legacy_login_notice_dismissed'] != true;
+  }
+
+  Future<void> dismissLegacyLoginNotice({bool openSettings = false}) async {
+    if (openSettings) {
+      final opened = await launchUrl(
+        Uri.parse(
+          'x-apple.systempreferences:com.apple.LoginItems-Settings.extension',
+        ),
+      );
+      if (!opened) return;
+    }
+    final file = migrationMarker;
+    if (file == null || !await file.exists()) return;
+    final marker = jsonDecode(await file.readAsString()) as Map;
+    marker['legacy_login_notice_dismissed'] = true;
+    final temporary = File('${file.path}.tmp');
+    await temporary.writeAsString(jsonEncode(marker), flush: true);
+    await temporary.rename(file.path);
   }
 }

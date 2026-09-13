@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/l10n/strings.dart';
+import 'package:listenook/l10n/strings.dart';
 
 void main() {
   testWidgets('English localization loads', (tester) async {

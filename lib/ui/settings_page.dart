@@ -2245,7 +2245,7 @@ class _AboutAppSectionState extends State<_AboutAppSection> {
     }
 
     return _Section(
-      title: 'MeowSTT',
+      title: strings.appName,
       icon: Icons.info_outline_rounded,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

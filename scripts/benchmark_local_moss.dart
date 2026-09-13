@@ -9,7 +9,7 @@ Future<void> main(List<String> arguments) async {
   final options = _Options.parse(arguments);
   final audioDuration = await _wavDuration(File(options.audioPath));
   final temporaryDirectory = await Directory.systemTemp.createTemp(
-    'meowstt-moss-benchmark-',
+    'listenook-moss-benchmark-',
   );
 
   try {

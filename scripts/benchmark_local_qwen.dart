@@ -7,7 +7,7 @@ Future<void> main(List<String> arguments) async {
   final options = _Options.parse(arguments);
   final duration = await _wavDuration(File(options.audioPath));
   final exchange = await Directory.systemTemp.createTemp(
-    'meowstt-qwen-benchmark-',
+    'listenook-qwen-benchmark-',
   );
   var failed = false;
   try {

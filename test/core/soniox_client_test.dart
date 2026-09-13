@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/soniox_api_client.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/soniox_api_client.dart';
 
 void main() {
   late HttpServer server;
@@ -89,7 +89,7 @@ void main() {
       fileId,
       const TranscriptionOptions(
         languageHints: ['en', 'zh'],
-        contextTerms: ['MeowSTT'],
+        contextTerms: ['Listenook'],
       ),
     );
     expect(fileId, 'file-1');
@@ -98,7 +98,7 @@ void main() {
     expect(createBody!['model'], 'stt-async-v5');
     expect(createBody!['enable_speaker_diarization'], isTrue);
     expect(createBody!['enable_language_identification'], isTrue);
-    expect((createBody!['context'] as Map)['terms'], ['MeowSTT']);
+    expect((createBody!['context'] as Map)['terms'], ['Listenook']);
     expect(createBody!.containsKey('translation'), isFalse);
     expect(authorizations, everyElement('Bearer test-key'));
   });

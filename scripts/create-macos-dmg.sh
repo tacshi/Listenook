@@ -13,14 +13,14 @@ fi
 
 if (( MACOS_MAJOR >= 14 )); then
   diskutil image create from \
-    --volumeName MeowSTT \
+    --volumeName Listenook \
     --format UDZO \
     "$SOURCE_FOLDER" \
     "$DESTINATION" \
     >/dev/null
 else
   hdiutil create \
-    -volname MeowSTT \
+    -volname Listenook \
     -srcfolder "$SOURCE_FOLDER" \
     -ov \
     -format UDZO \

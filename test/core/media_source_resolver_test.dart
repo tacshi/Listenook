@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
 import 'package:path/path.dart' as p;
 
 void main() {

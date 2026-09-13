@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/openai_translation_service.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/openai_translation_service.dart';
 
 void main() {
   test('translation settings require HTTPS except on loopback hosts', () {

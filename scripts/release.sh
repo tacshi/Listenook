@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# Build and publish a MeowSTT desktop release from macOS.
+# Build and publish a Listenook desktop release from macOS.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 source "$ROOT/scripts/release-notes.sh"
 
-RELEASE_REPO="tacshi/MeowSTT-Release"
-RELEASE_REPO_DIR="${RELEASE_REPO_DIR:-$ROOT/../MeowSTT-Release}"
+RELEASE_REPO="tacshi/Listenook-Release"
+if [[ -z "${RELEASE_REPO_DIR:-}" ]]; then
+  RELEASE_REPO_DIR="$ROOT/../Listenook-Release"
+  # Keep existing release checkouts usable without moving their working directory.
+  if [[ ! -d "$RELEASE_REPO_DIR/.git" && -d "$ROOT/../MeowSTT-Release/.git" ]]; then
+    RELEASE_REPO_DIR="$ROOT/../MeowSTT-Release"
+  fi
+fi
 DIST_DIR="$ROOT/dist"
 STAGE_DIR="$DIST_DIR/release"
 VERSION=""
@@ -26,7 +32,7 @@ usage() {
     'usage: ./scripts/release.sh VERSION [options]' \
     '' \
     '  --skip-windows     publish macOS while retaining the previous Windows entry' \
-    '  --no-upload        build and generate latest.json without publishing' \
+    '  --no-upload        build and generate listenook-latest.json without publishing' \
     '  --reuse-artifacts  reuse the matching files already in dist/release' \
     '  --no-tag           do not create the source-repository tag' \
     '  --allow-branch     bypass the main/origin publication check'
@@ -73,21 +79,21 @@ if [[ "$NO_UPLOAD" == false ]]; then
   [[ "$(gh repo view "$RELEASE_REPO" --json visibility --jq .visibility)" == PUBLIC ]] ||
     die "$RELEASE_REPO must be public for anonymous app updates"
   [[ -d "$RELEASE_REPO_DIR/.git" ]] ||
-    die "clone git@github.com:tacshi/MeowSTT-Release.git to $RELEASE_REPO_DIR"
+    die "clone git@github.com:tacshi/Listenook-Release.git to $RELEASE_REPO_DIR"
   [[ -z "$(git -C "$RELEASE_REPO_DIR" status --porcelain)" ]] ||
     die "the release-repo checkout is dirty: $RELEASE_REPO_DIR"
   [[ "$(git -C "$RELEASE_REPO_DIR" symbolic-ref --short HEAD)" == main ]] ||
     die "the release-repo checkout must be on main"
   RELEASE_REMOTE="$(git -C "$RELEASE_REPO_DIR" remote get-url origin)"
-  [[ "$RELEASE_REMOTE" == *"tacshi/MeowSTT-Release.git" ]] ||
+  [[ "$RELEASE_REMOTE" == *"tacshi/Listenook-Release.git" ]] ||
     die "release-repo origin is unexpected: $RELEASE_REMOTE"
   if git -C "$RELEASE_REPO_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
     git -C "$RELEASE_REPO_DIR" pull --ff-only ||
       die "could not fast-forward the release-repo checkout"
   else
     printf '%s\n\n%s\n' \
-      '# MeowSTT Releases' \
-      'Download the latest build from the Releases page. latest.json is managed by the release publisher.' \
+      '# Listenook Releases' \
+      'Download the latest build from the Releases page. listenook-latest.json is managed by the release publisher.' \
       > "$RELEASE_REPO_DIR/README.md"
     git -C "$RELEASE_REPO_DIR" add README.md
     git -C "$RELEASE_REPO_DIR" commit -m "Initial release repository"
@@ -98,7 +104,7 @@ fi
 
 mkdir -p "$STAGE_DIR"
 NOTES_FILE="$STAGE_DIR/notes.md"
-OVERRIDE_NOTES="$ROOT/release-notes/MeowSTT-$VERSION.md"
+OVERRIDE_NOTES="$ROOT/release-notes/Listenook-$VERSION.md"
 if [[ -f "$OVERRIDE_NOTES" ]]; then
   cp "$OVERRIDE_NOTES" "$NOTES_FILE"
 else
@@ -127,7 +133,7 @@ if [[ "$NO_UPLOAD" == false ]]; then
   done
 fi
 
-WIN_EXE="$DIST_DIR/MeowSTT-$VERSION-windows-x64-release-setup.exe"
+WIN_EXE="$DIST_DIR/Listenook-$VERSION-windows-x64-release-setup.exe"
 if [[ "$SKIP_WINDOWS" == false ]]; then
   [[ -f "$WIN_EXE" ]] || die "Windows installer not found: $WIN_EXE
 Build it on Windows with: .\\scripts\\win-release.ps1 $VERSION"
@@ -147,18 +153,18 @@ if [[ "$REUSE" == false ]]; then
   step "building signed macOS arm64 and Intel packages"
   BUILD_NAME="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" \
     bash "$ROOT/scripts/build-release.sh" --arch all
-  cp "$DIST_DIR/MeowSTT-$VERSION-macos-arm64-release.dmg" "$STAGE_DIR/"
-  cp "$DIST_DIR/MeowSTT-$VERSION-macos-arm64-release.zip" "$STAGE_DIR/"
-  cp "$DIST_DIR/MeowSTT-$VERSION-macos-x64-release.dmg" "$STAGE_DIR/"
-  cp "$DIST_DIR/MeowSTT-$VERSION-macos-x64-release.zip" "$STAGE_DIR/"
+  cp "$DIST_DIR/Listenook-$VERSION-macos-arm64-release.dmg" "$STAGE_DIR/"
+  cp "$DIST_DIR/Listenook-$VERSION-macos-arm64-release.zip" "$STAGE_DIR/"
+  cp "$DIST_DIR/Listenook-$VERSION-macos-x64-release.dmg" "$STAGE_DIR/"
+  cp "$DIST_DIR/Listenook-$VERSION-macos-x64-release.zip" "$STAGE_DIR/"
   if [[ "$SKIP_WINDOWS" == false ]]; then cp "$WIN_EXE" "$STAGE_DIR/"; fi
 else
   step "reusing staged artifacts"
   for required in \
-    "$STAGE_DIR/MeowSTT-$VERSION-macos-arm64-release.dmg" \
-    "$STAGE_DIR/MeowSTT-$VERSION-macos-arm64-release.zip" \
-    "$STAGE_DIR/MeowSTT-$VERSION-macos-x64-release.dmg" \
-    "$STAGE_DIR/MeowSTT-$VERSION-macos-x64-release.zip"; do
+    "$STAGE_DIR/Listenook-$VERSION-macos-arm64-release.dmg" \
+    "$STAGE_DIR/Listenook-$VERSION-macos-arm64-release.zip" \
+    "$STAGE_DIR/Listenook-$VERSION-macos-x64-release.dmg" \
+    "$STAGE_DIR/Listenook-$VERSION-macos-x64-release.zip"; do
     [[ -f "$required" ]] || die "missing staged artifact: $required"
   done
   if [[ "$SKIP_WINDOWS" == false ]]; then
@@ -166,16 +172,16 @@ else
   fi
 fi
 
-step "generating latest.json"
-MANIFEST_ARGS=(--version "$VERSION" --build "$BUILD_NUMBER" --dir "$STAGE_DIR" --out "$STAGE_DIR/latest.json")
-if [[ -f "$RELEASE_REPO_DIR/latest.json" ]]; then
-  MANIFEST_ARGS+=(--previous "$RELEASE_REPO_DIR/latest.json")
+step "generating listenook-latest.json"
+MANIFEST_ARGS=(--version "$VERSION" --build "$BUILD_NUMBER" --dir "$STAGE_DIR" --out "$STAGE_DIR/listenook-latest.json")
+if [[ -f "$RELEASE_REPO_DIR/listenook-latest.json" ]]; then
+  MANIFEST_ARGS+=(--previous "$RELEASE_REPO_DIR/listenook-latest.json")
 fi
 dart run tool/make_update_manifest.dart "${MANIFEST_ARGS[@]}"
 
 if [[ "$NO_UPLOAD" == true ]]; then
   step "dry run complete"
-  info "$STAGE_DIR/latest.json"
+  info "$STAGE_DIR/listenook-latest.json"
   exit 0
 fi
 
@@ -187,15 +193,15 @@ while IFS= read -r asset; do ASSETS+=("$asset"); done < <(
 
 step "publishing GitHub release assets"
 if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
-  gh release edit "$TAG" --repo "$RELEASE_REPO" --title "MeowSTT $VERSION" --notes-file "$NOTES_FILE"
-  gh release upload "$TAG" --repo "$RELEASE_REPO" --clobber "${ASSETS[@]}" "$STAGE_DIR/latest.json"
+  gh release edit "$TAG" --repo "$RELEASE_REPO" --title "Listenook $VERSION" --notes-file "$NOTES_FILE"
+  gh release upload "$TAG" --repo "$RELEASE_REPO" --clobber "${ASSETS[@]}" "$STAGE_DIR/listenook-latest.json"
 else
-  gh release create "$TAG" --repo "$RELEASE_REPO" --title "MeowSTT $VERSION" --notes-file "$NOTES_FILE" "${ASSETS[@]}" "$STAGE_DIR/latest.json"
+  gh release create "$TAG" --repo "$RELEASE_REPO" --title "Listenook $VERSION" --notes-file "$NOTES_FILE" "${ASSETS[@]}" "$STAGE_DIR/listenook-latest.json"
 fi
 
 step "publishing manifest last"
-cp "$STAGE_DIR/latest.json" "$RELEASE_REPO_DIR/latest.json"
-git -C "$RELEASE_REPO_DIR" add latest.json
+cp "$STAGE_DIR/listenook-latest.json" "$RELEASE_REPO_DIR/listenook-latest.json"
+git -C "$RELEASE_REPO_DIR" add listenook-latest.json
 if ! git -C "$RELEASE_REPO_DIR" diff --cached --quiet; then
   git -C "$RELEASE_REPO_DIR" commit -m "release: $TAG"
   git -C "$RELEASE_REPO_DIR" push -u origin HEAD

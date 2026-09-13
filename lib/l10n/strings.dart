@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
+import '../core/app_identity.dart';
 import '../core/models.dart';
 
 class AppStrings {
@@ -8,6 +9,7 @@ class AppStrings {
 
   final Locale locale;
   bool get isZh => locale.languageCode == 'zh';
+  String get appName => AppIdentity.displayName(locale.languageCode);
 
   static const supportedLocales = [Locale('en'), Locale('zh', 'CN')];
   static const delegate = _AppStringsDelegate();
@@ -96,6 +98,33 @@ class AppStrings {
       _zh.keys.toSet()..removeAll(_en.keys);
 
   static const _en = <String, String>{
+    'startup_loading': 'Starting Listenook…',
+    'startup_failed':
+        'Listenook could not start. Please retry or reopen the app.',
+    'migration_loading': 'Migrating your MeowSTT library…',
+    'migration_legacy_running':
+        'Quit MeowSTT, including its menu bar or tray app, then retry.',
+    'migration_check_failed':
+        'Could not check whether MeowSTT is running. Quit it and retry.',
+    'migration_source_changed':
+        'MeowSTT data changed during migration. Quit MeowSTT and retry.',
+    'migration_destination_changed':
+        'Listenook data changed during migration. Close the other instance and retry.',
+    'migration_copy_failed':
+        'Could not migrate your library. Check available disk space and folder access, then retry. Your MeowSTT data is unchanged.',
+    'migration_link_found':
+        'The old library contains a linked file or folder. Replace the link with a local copy, then retry.',
+    'migration_credentials_failed':
+        'Could not read the previous API keys. Allow Keychain access and retry, or enter the keys again.',
+    'migration_enter_keys': 'Enter API keys again',
+    'migration_save_continue': 'Save and continue',
+    'migration_key_save_failed':
+        'Could not save the keys. Check secure storage access and retry.',
+    'migration_login_title': 'Update your login items',
+    'migration_login_body':
+        'Disable MeowSTT in Login Items so only Listenook starts at login.',
+    'migration_open_login': 'Open Login Items',
+    'migration_later': 'Later',
     'inbox': 'Inbox',
     'podcast': 'Podcast',
     'workspace': 'Workspace',
@@ -109,7 +138,7 @@ class AppStrings {
     'settings_system_about': 'About',
     'inbox_monitor_title': 'Turn a folder into your Inbox',
     'inbox_monitor_body':
-        'MeowSTT can watch one folder and add matching audio and video files here automatically.',
+        'Listenook can watch one folder and add matching audio and video files here automatically.',
     'inbox_monitor_review_hint':
         'Nothing is uploaded or transcribed until you press Transcribe.',
     'inbox_monitor_supported':
@@ -214,10 +243,11 @@ class AppStrings {
         'Subfolders are included. Hidden folders and symbolic links are ignored.',
     'inbox_monitor_podcast_downloads_hint':
         'Downloaded podcast audio is stored in the app cache. Export it from an episode when you want a copy.',
-    'inbox_monitor_launch_at_login': 'Launch MeowSTT at login',
+    'inbox_monitor_launch_at_login': 'Launch Listenook at login',
     'desktop_menu_bar_icon': 'Show menu bar icon',
     'desktop_tray_icon': 'Show system tray icon',
-    'desktop_icon_hint': 'Keeps MeowSTT available after its window is closed.',
+    'desktop_icon_hint':
+        'Keeps Listenook available after its window is closed.',
     'desktop_menu_bar_launch_hint': 'Starts hidden in the menu bar.',
     'desktop_tray_launch_hint': 'Starts hidden in the system tray.',
     'inbox_monitor_file_type_required': 'Select at least one file type.',
@@ -241,7 +271,7 @@ class AppStrings {
     'inbox_monitor_source': 'Monitored folder',
     'tray_open_main_window': 'Open Main Window',
     'tray_open_settings': 'Settings',
-    'tray_quit': 'Quit MeowSTT',
+    'tray_quit': 'Quit Listenook',
     'monitor_notification_title': 'Files added to Inbox',
     'monitor_notification_body': '{count} files are ready for review.',
     'add_files': 'Add files',
@@ -255,18 +285,13 @@ class AppStrings {
         '{count} untranscribed files will be removed. Completed transcripts stay in your library.',
     'start_new': 'Start new batch',
     'transcribe': 'Transcribe',
-    'align_subtitles': 'Align subtitles',
-    'process_all': 'Process all',
     'drop_title': 'Drop media with matching subtitles',
     'supported': 'Audio/video + SRT/WebVTT · up to 5 hours each',
     'subtitle_import_review_title': 'Review media and subtitles',
-    'subtitle_import_local_alignment': 'Local alignment',
     'subtitle_import_stays_local': 'Audio stays on this Mac',
     'subtitle_import_no_stt_charge': 'No transcription API charge',
     'subtitle_import_translation_disclosure':
         'Optional LLM translation can still send subtitle text to your configured provider and may incur a charge.',
-    'subtitle_alignment_platform_required':
-        'Local subtitle alignment requires an Apple Silicon Mac running macOS 15 or later.',
     'subtitle_import_media_required':
         'Add a supported audio or video file to pair with these subtitles.',
     'subtitle_import_unmatched_count':
@@ -281,58 +306,7 @@ class AppStrings {
     'subtitle_import_cue_summary': '{format} · {count} timed cues',
     'subtitle_import_ignored_cues':
         '{count} malformed or out-of-range cue(s) will be omitted.',
-    'subtitle_import_long_cues':
-        '{count} cue(s) exceed 29 seconds and will keep their original timing.',
     'subtitle_import_failed': 'The media and subtitles could not be imported.',
-    'subtitle_alignment_ready_count':
-        '{count} item(s) will align existing subtitles locally',
-    'subtitle_alignment_model_ready':
-        'The selected word-timing model is installed and ready.',
-    'subtitle_alignment_model_required':
-        'Install or choose a word-timing model before alignment can start.',
-    'install_recommended_alignment_model': 'Install recommended INT8 model',
-    'choose_another_model': 'Choose another model',
-    'existing_subtitles': 'Existing subtitles',
-    'subtitle_alignment_ready': 'Ready to align',
-    'subtitle_alignment_retry_available': 'Select Align subtitles to retry',
-    'subtitle_alignment_running': 'Aligning locally…',
-    'subtitle_alignment_coverage':
-        '{aligned}/{total} cues aligned · {kept} kept original timing',
-    'subtitle_cue_original_timing': 'Not aligned · original timing kept',
-    'mark_alignment_resolved': 'Mark as resolved',
-    'alignment_marked_resolved': 'Marked as resolved',
-    'subtitle_alignment_completed': 'Imported {format} · locally aligned',
-    'subtitle_alignment_partial':
-        'Imported {format} · some cues kept original timing',
-    'subtitle_alignment_original_kept':
-        'Imported {format} · original cue timing kept',
-    'view_problem': 'View problem',
-    'subtitle_alignment_problem_title': 'Subtitle alignment problem',
-    'alignment_problem_what_happened': 'What happened',
-    'alignment_problem_impact_title': 'Result preserved',
-    'alignment_problem_impact':
-        '{aligned}/{total} cues aligned. {kept} kept their original timing; subtitle text and order were not changed.',
-    'alignment_problem_actions_title': 'What you can do',
-    'alignment_problem_worker_actions':
-        'Close other memory-intensive apps, select the recommended INT8 alignment model in Settings, then retry. If it happens again, reinstall the selected model.',
-    'alignment_problem_language_actions':
-        'Choose the subtitle language explicitly or replace the subtitle with a supported-language SRT/WebVTT file, then retry.',
-    'alignment_problem_model_actions':
-        'Install or reselect the recommended INT8 alignment model in Settings, then retry.',
-    'alignment_problem_source_actions':
-        'Relink the original media file, then retry alignment.',
-    'alignment_problem_default_actions':
-        'Retry alignment. If the same problem repeats, switch to the recommended INT8 model or replace the subtitle file.',
-    'alignment_problem_technical_details': 'Technical details',
-    'alignment_problem_code': 'Error code: {code}',
-    'alignment_problem_model': 'Model: {model}',
-    'alignment_problem_no_details':
-        'The alignment worker did not report additional details.',
-    'alignment_problem_worker_no_exit_detail':
-        'The worker did not report why it stopped. The text below is its last captured diagnostic output, not necessarily the cause.',
-    'copy_diagnostics': 'Copy diagnostics',
-    'diagnostics_copied': 'Diagnostics copied',
-    'retry_alignment': 'Retry alignment',
     'replace_subtitle': 'Replace subtitle',
     'replace_subtitle_title': 'Replace this subtitle?',
     'replace_subtitle_body':
@@ -344,18 +318,18 @@ class AppStrings {
     'processing': 'Processing',
     'paused': 'Paused for next run',
     'cancel': 'Cancel',
-    'update_ready': 'MeowSTT {version} is ready to install.',
+    'update_ready': 'Listenook {version} is ready to install.',
     'restart_to_update': 'Restart to Update',
     'restarting_to_update': 'Restarting…',
     'update_active_title': 'Restart while work is active?',
     'update_active_body':
-        'MeowSTT will close to install the update. Persisted transcription work will resume the next time it opens.',
+        'Listenook will close to install the update. Persisted transcription work will resume the next time it opens.',
     'update_restart_failed': 'Could not restart for the update.',
     'app_version': 'Version {version}',
     'check_for_updates': 'Check for Updates',
     'update_checking': 'Checking for updates…',
     'update_downloading': 'Downloading the update…',
-    'update_up_to_date': 'MeowSTT is up to date.',
+    'update_up_to_date': 'Listenook is up to date.',
     'update_check_failed': 'Could not check for updates.',
     'update_not_supported': 'Updates are not available for this build.',
     'retry': 'Retry',
@@ -669,13 +643,13 @@ class AppStrings {
         'Could not save the key securely. Check Keychain access and try again.',
     'privacy': 'Privacy',
     'privacy_body':
-        'Cloud transcription uploads media directly to the Soniox or MOSI provider selected for the job. Imported SRT/WebVTT alignment stays on this Mac and never calls a transcription provider. MeowSTT deletes the supported remote resources it created; MOSI task records follow the provider retention policy. Optional LLM translation and AI Briefs send transcript text—not media—to your configured AI endpoint.',
+        'Cloud transcription uploads media directly to the Soniox or MOSI provider selected for the job. Imported SRT/WebVTT alignment stays on this Mac and never calls a transcription provider. Listenook deletes the supported remote resources it created; MOSI task records follow the provider retention policy. Optional LLM translation and AI Briefs send transcript text—not media—to your configured AI endpoint.',
     'notices': 'Third-party notices',
     'notices_body':
         'Playback and extraction use bundled libmpv components. Windows distributions also include the compact FLAC encoder. Soniox and MOSI are third-party transcription providers. Podcast search uses Apple’s public iTunes Search API; episode media and publisher transcripts are fetched from the show’s public RSS feed. Provenance and license texts are included with each distribution.',
     'welcome_title': 'Your recordings stay yours',
     'welcome_body':
-        'MeowSTT is a bring-your-own-key desktop app. Media is sent to your selected Soniox or MOSI provider only when you start cloud transcription; imported subtitle alignment stays local. LLM translation and AI Briefs send transcript text separately to your configured AI endpoint only when requested. Local history contains file paths, transcripts, and brief drafts—not media copies.',
+        'Listenook is a bring-your-own-key desktop app. Media is sent to your selected Soniox or MOSI provider only when you start cloud transcription; imported subtitle alignment stays local. LLM translation and AI Briefs send transcript text separately to your configured AI endpoint only when requested. Local history contains file paths, transcripts, and brief drafts—not media copies.',
     'continue': 'Continue',
     'add_to_inbox': 'Add to Inbox',
     'add_to_inbox_tooltip': 'Adds this file to the Inbox transcription queue.',
@@ -684,7 +658,7 @@ class AppStrings {
     'quit_resume': 'Quit & resume later',
     'cancel_quit': 'Cancel remote jobs & quit',
     'quit_title': 'Transcription is still active',
-    'quit_body': 'MeowSTT can safely resume remote processing next time.',
+    'quit_body': 'Listenook can safely resume remote processing next time.',
     'source_missing': 'Source missing',
     'relink': 'Relink',
     'delete_history': 'Remove from library',
@@ -785,8 +759,6 @@ class AppStrings {
         'MOSS Local returned an incomplete tagged transcript.',
     'error_alignment_partial':
         'Some segments could not receive reliable word timing.',
-    'error_alignment_timeline_conflict':
-        'Aligned words crossed a neighboring subtitle, so both cues kept their original timing.',
     'error_alignment_segment_too_long':
         'A segment over 29 seconds was skipped during local alignment.',
     'error_alignment_failed':
@@ -919,6 +891,23 @@ class AppStrings {
   };
 
   static const _zh = <String, String>{
+    'startup_loading': '正在启动聆页…',
+    'startup_failed': '聆页无法启动。请重试或重新打开应用。',
+    'migration_loading': '正在迁移 MeowSTT 资料库…',
+    'migration_legacy_running': '请退出 MeowSTT（包括菜单栏或托盘中的程序），然后重试。',
+    'migration_check_failed': '无法检查 MeowSTT 是否正在运行。请退出旧版后重试。',
+    'migration_source_changed': '迁移期间旧数据发生变化。请退出 MeowSTT 后重试。',
+    'migration_destination_changed': '迁移期间聆页数据发生变化。请关闭另一个实例后重试。',
+    'migration_copy_failed': '资料库迁移失败。请检查磁盘剩余空间和文件夹权限后重试。MeowSTT 原数据已保留。',
+    'migration_link_found': '旧资料库中包含文件或文件夹链接。请将链接替换为本地副本后重试。',
+    'migration_credentials_failed': '无法读取原有 API 密钥。请允许钥匙串访问后重试，或重新输入密钥。',
+    'migration_enter_keys': '重新输入 API 密钥',
+    'migration_save_continue': '保存并继续',
+    'migration_key_save_failed': '密钥保存失败。请检查安全存储访问权限后重试。',
+    'migration_login_title': '更新登录启动项',
+    'migration_login_body': '请在登录项中关闭 MeowSTT，避免旧版与聆页同时启动。',
+    'migration_open_login': '打开登录项',
+    'migration_later': '稍后',
     'inbox': '收件箱',
     'podcast': '播客',
     'workspace': '工作区',
@@ -931,7 +920,7 @@ class AppStrings {
     'settings_shortcuts': '快捷键',
     'settings_system_about': '关于',
     'inbox_monitor_title': '将文件夹设为收件箱',
-    'inbox_monitor_body': 'MeowSTT 可以监控一个文件夹，并自动将匹配的音频和视频文件添加到这里。',
+    'inbox_monitor_body': '聆页可以监控一个文件夹，并自动将匹配的音频和视频文件添加到这里。',
     'inbox_monitor_review_hint': '只有在你点击“转写”后，文件才会上传或开始转写。',
     'inbox_monitor_supported': '递归监控 · MP3、WAV、M4A、OGG、MP4、MKV、AVI',
     'inbox_monitor_inline_hint': '自动将文件夹中的媒体添加到收件箱；不会自动开始转写。',
@@ -1025,10 +1014,10 @@ class AppStrings {
     'inbox_monitor_select_all': '全选',
     'inbox_monitor_recursive_hint': '包含所有子文件夹；隐藏文件夹和符号链接会被忽略。',
     'inbox_monitor_podcast_downloads_hint': '下载的播客音频保存在应用缓存中。需要副本时，从单集导出即可。',
-    'inbox_monitor_launch_at_login': '登录时启动 MeowSTT',
+    'inbox_monitor_launch_at_login': '登录时启动聆页',
     'desktop_menu_bar_icon': '显示菜单栏图标',
     'desktop_tray_icon': '显示系统托盘图标',
-    'desktop_icon_hint': '窗口关闭后仍可使用 MeowSTT。',
+    'desktop_icon_hint': '窗口关闭后仍可使用聆页。',
     'desktop_menu_bar_launch_hint': '启动后隐藏在菜单栏中。',
     'desktop_tray_launch_hint': '启动后隐藏在系统托盘中。',
     'inbox_monitor_file_type_required': '请至少选择一种文件类型。',
@@ -1050,7 +1039,7 @@ class AppStrings {
     'inbox_monitor_source': '监控文件夹',
     'tray_open_main_window': '打开主窗口',
     'tray_open_settings': '设置',
-    'tray_quit': '退出 MeowSTT',
+    'tray_quit': '退出聆页',
     'monitor_notification_title': '文件已添加到收件箱',
     'monitor_notification_body': '{count} 个文件可供确认。',
     'add_files': '添加文件',
@@ -1063,18 +1052,13 @@ class AppStrings {
     'new_session_body': '{count} 个尚未转写的文件将被移除。已完成的转写仍会保留在资料库中。',
     'start_new': '开始新批次',
     'transcribe': '开始转写',
-    'align_subtitles': '对齐字幕',
-    'process_all': '处理全部',
     'drop_title': '拖入媒体及同名字幕',
     'supported': '音视频 + SRT/WebVTT · 单文件最长 5 小时',
     'subtitle_import_review_title': '确认媒体与字幕',
-    'subtitle_import_local_alignment': '本地对齐',
     'subtitle_import_stays_local': '音频保留在此 Mac',
     'subtitle_import_no_stt_charge': '不产生转写 API 费用',
     'subtitle_import_translation_disclosure':
         '可选的 LLM 翻译仍可能把字幕文本发送到你配置的服务商，并产生费用。',
-    'subtitle_alignment_platform_required':
-        '本地字幕对齐需要运行 macOS 15 或更高版本的 Apple Silicon Mac。',
     'subtitle_import_media_required': '请添加支持的音频或视频文件与这些字幕配对。',
     'subtitle_import_unmatched_count': '有 {count} 个字幕未能自动匹配；如有需要，请在媒体行中手动选择。',
     'subtitle_import_duplicate_selection': '每个字幕文件只能分配给一个媒体。',
@@ -1085,48 +1069,7 @@ class AppStrings {
     'language': '语言',
     'subtitle_import_cue_summary': '{format} · {count} 条定时字幕',
     'subtitle_import_ignored_cues': '将忽略 {count} 条格式错误或超出范围的字幕。',
-    'subtitle_import_long_cues': '有 {count} 条字幕超过 29 秒，将保留原始时间。',
     'subtitle_import_failed': '无法导入媒体和字幕。',
-    'subtitle_alignment_ready_count': '{count} 项将使用现有字幕进行本地对齐',
-    'subtitle_alignment_model_ready': '所选词级时间模型已安装并可用。',
-    'subtitle_alignment_model_required': '开始对齐前，请安装或选择词级时间模型。',
-    'install_recommended_alignment_model': '安装推荐的 INT8 模型',
-    'choose_another_model': '选择其他模型',
-    'existing_subtitles': '现有字幕',
-    'subtitle_alignment_ready': '可以开始对齐',
-    'subtitle_alignment_retry_available': '点击“对齐字幕”重试',
-    'subtitle_alignment_running': '正在本地对齐…',
-    'subtitle_alignment_coverage': '已对齐 {aligned}/{total} 条 · {kept} 条保留原始时间',
-    'subtitle_cue_original_timing': '未对齐 · 保留原始时间',
-    'mark_alignment_resolved': '标记为已解决',
-    'alignment_marked_resolved': '已标记为已解决',
-    'subtitle_alignment_completed': '导入 {format} · 已在本地对齐',
-    'subtitle_alignment_partial': '导入 {format} · 部分保留原始时间',
-    'subtitle_alignment_original_kept': '导入 {format} · 已保留原始时间',
-    'view_problem': '查看问题',
-    'subtitle_alignment_problem_title': '字幕对齐问题',
-    'alignment_problem_what_happened': '问题原因',
-    'alignment_problem_impact_title': '已保留的结果',
-    'alignment_problem_impact':
-        '{aligned}/{total} 条字幕已对齐。{kept} 条保留原始时间；字幕文本和顺序没有改变。',
-    'alignment_problem_actions_title': '手动处理方法',
-    'alignment_problem_worker_actions':
-        '关闭其他占用大量内存的应用，在“设置”中选择推荐的 INT8 对齐模型，然后重试。如果再次发生，请重新安装所选模型。',
-    'alignment_problem_language_actions':
-        '明确选择字幕语言，或替换为受支持语言的 SRT/WebVTT 文件，然后重试。',
-    'alignment_problem_model_actions': '请在“设置”中安装或重新选择推荐的 INT8 对齐模型，然后重试。',
-    'alignment_problem_source_actions': '重新关联原始媒体文件，然后重试对齐。',
-    'alignment_problem_default_actions':
-        '请重试对齐。如果同一问题反复发生，请改用推荐的 INT8 模型或替换字幕文件。',
-    'alignment_problem_technical_details': '技术详情',
-    'alignment_problem_code': '错误码：{code}',
-    'alignment_problem_model': '模型：{model}',
-    'alignment_problem_no_details': '对齐进程没有报告更多详情。',
-    'alignment_problem_worker_no_exit_detail':
-        '进程没有报告停止原因。下方内容只是最后捕获的诊断输出，不一定是故障原因。',
-    'copy_diagnostics': '复制诊断信息',
-    'diagnostics_copied': '诊断信息已复制',
-    'retry_alignment': '重试对齐',
     'replace_subtitle': '替换字幕',
     'replace_subtitle_title': '替换这个字幕？',
     'replace_subtitle_body': '这会清除当前词级时间、翻译和此项目的 AI 简报内容。原始媒体不会改变。',
@@ -1137,17 +1080,17 @@ class AppStrings {
     'processing': '处理中',
     'paused': '等待下次开始',
     'cancel': '取消',
-    'update_ready': 'MeowSTT {version} 已下载完成。',
+    'update_ready': '聆页 {version} 已下载完成。',
     'restart_to_update': '重启并更新',
     'restarting_to_update': '正在重启…',
     'update_active_title': '正在处理任务，仍要重启吗？',
-    'update_active_body': 'MeowSTT 将关闭并安装更新。已保存的转写任务会在下次启动时继续。',
+    'update_active_body': '聆页将关闭并安装更新。已保存的转写任务会在下次启动时继续。',
     'update_restart_failed': '无法重启并安装更新。',
     'app_version': '版本 {version}',
     'check_for_updates': '检查更新',
     'update_checking': '正在检查更新…',
     'update_downloading': '正在下载更新…',
-    'update_up_to_date': 'MeowSTT 已是最新版本。',
+    'update_up_to_date': '聆页已是最新版本。',
     'update_check_failed': '检查更新失败。',
     'update_not_supported': '当前版本不支持自动更新。',
     'retry': '重试',
@@ -1435,13 +1378,13 @@ class AppStrings {
     'key_save_failed': '无法安全保存密钥。请检查“钥匙串”访问权限后重试。',
     'privacy': '隐私',
     'privacy_body':
-        '云端转写会将媒体直接上传到任务所选的 Soniox 或 MOSI。导入 SRT/WebVTT 的对齐完全在本机进行，且不会调用转写服务。MeowSTT 只删除自己创建且 API 支持删除的远程资源；MOSI 任务记录遵循服务方的保留政策。可选的 LLM 翻译和 AI 简报只会把文本（不包含媒体）发送到你配置的 AI 端点。',
+        '云端转写会将媒体直接上传到任务所选的 Soniox 或 MOSI。导入 SRT/WebVTT 的对齐完全在本机进行，且不会调用转写服务。聆页只删除自己创建且 API 支持删除的远程资源；MOSI 任务记录遵循服务方的保留政策。可选的 LLM 翻译和 AI 简报只会把文本（不包含媒体）发送到你配置的 AI 端点。',
     'notices': '第三方声明',
     'notices_body':
         '播放和音频提取使用随附的 libmpv 组件。Windows 发行包还包含精简的 FLAC 编码器。Soniox 与 MOSI 是第三方转写服务提供商。播客搜索使用 Apple 公开的 iTunes Search API；单集音频和官方文稿从节目公开 RSS 获取。每个发行包均包含来源信息和许可证文本。',
     'welcome_title': '你的录音始终属于你',
     'welcome_body':
-        'MeowSTT 使用你自己的 API 密钥。只有开始云端转写后媒体才会发送到所选的 Soniox 或 MOSI；导入字幕的对齐始终留在本机。仅在你请求 LLM 翻译或 AI 简报时，文本才会另行发送到你配置的 AI 端点。历史记录只保存文件路径、转写数据和简报草稿，不复制原始媒体。',
+        '聆页使用你自己的 API 密钥。只有开始云端转写后媒体才会发送到所选的 Soniox 或 MOSI；导入字幕的对齐始终留在本机。仅在你请求 LLM 翻译或 AI 简报时，文本才会另行发送到你配置的 AI 端点。历史记录只保存文件路径、转写数据和简报草稿，不复制原始媒体。',
     'continue': '继续',
     'add_to_inbox': '添加到收件箱',
     'add_to_inbox_tooltip': '将此文件添加到收件箱的转写队列。',
@@ -1450,7 +1393,7 @@ class AppStrings {
     'quit_resume': '退出并稍后继续',
     'cancel_quit': '取消远程任务并退出',
     'quit_title': '转写仍在进行',
-    'quit_body': 'MeowSTT 下次启动时可以安全地继续远程处理。',
+    'quit_body': '聆页下次启动时可以安全地继续远程处理。',
     'source_missing': '源文件丢失',
     'relink': '重新关联',
     'delete_history': '从资料库移除',
@@ -1532,7 +1475,6 @@ class AppStrings {
     'error_local_audio_format': '准备好的本地音频格式不受支持。',
     'error_moss_truncated_output': 'MOSS Local 返回了不完整的标签化转写。',
     'error_alignment_partial': '部分片段无法生成可靠的词级时间。',
-    'error_alignment_timeline_conflict': '对齐词跨入相邻字幕，因此两条字幕均保留原始时间。',
     'error_alignment_segment_too_long': '本地对齐已跳过超过 29 秒的字幕片段。',
     'error_alignment_failed': '精确时间轴生成失败，已保留说话人段落稿。',
     'error_alignment_unsupported': '此 Mac 无法使用本地对齐。',

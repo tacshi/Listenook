@@ -226,7 +226,7 @@ class HttpPodcastGateway implements PodcastGateway {
       current.followRedirects = false;
       current.headers.putIfAbsent(
         HttpHeaders.userAgentHeader,
-        () => 'MeowSTT/1.2 (podcast)',
+        () => 'Listenook/1.2 (podcast)',
       );
       final response = await _client.send(current);
       if (response.isRedirect) {

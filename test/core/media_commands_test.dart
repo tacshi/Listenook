@@ -4,11 +4,11 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as image;
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/local_repositories.dart';
-import 'package:meow_stt/data/process_media_service.dart';
-import 'package:meow_stt/data/waveform_renderer.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/local_repositories.dart';
+import 'package:listenook/data/process_media_service.dart';
+import 'package:listenook/data/waveform_renderer.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -120,7 +120,7 @@ void main() {
   test(
     'macOS compact encoder sends the AAC contract to the native channel',
     () async {
-      const channel = MethodChannel('app.meowstt.test/audio_encoder');
+      const channel = MethodChannel('app.listenook.test/audio_encoder');
       MethodCall? received;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {

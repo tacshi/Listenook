@@ -31,11 +31,16 @@ if [[ -n "${BUILD_NUMBER:-}" ]]; then
 fi
 ARCHES=("$ARCH")
 if [[ "$ARCH" == "all" ]]; then ARCHES=(arm64 x64); fi
-NOTARY_PROFILE="${MEOWSTT_NOTARY_PROFILE:-MeowSTT}"
+NOTARY_PROFILE="${LISTENOOK_NOTARY_PROFILE:-Listenook}"
 
 if [[ "$MODE" == "release" ]]; then
-  RELEASE_SIGN_IDENTITY="${MEOWSTT_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:--}}"
+  RELEASE_SIGN_IDENTITY="${LISTENOOK_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:--}}"
   if [[ "$RELEASE_SIGN_IDENTITY" != "-" ]]; then
+    if [[ -z "${LISTENOOK_NOTARY_PROFILE:-}" ]] &&
+       ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 &&
+       xcrun notarytool history --keychain-profile MeowSTT >/dev/null 2>&1; then
+      NOTARY_PROFILE=MeowSTT
+    fi
     if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
       echo "No working notarytool keychain profile named '$NOTARY_PROFILE'." >&2
       echo "Create it with 'xcrun notarytool store-credentials $NOTARY_PROFILE ...'" >&2
@@ -49,16 +54,16 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   EXPECTED_MACHO="$CURRENT_ARCH"
   if [[ "$CURRENT_ARCH" == "x64" ]]; then EXPECTED_MACHO="x86_64"; fi
   OUT="$ROOT/dist"
-  BASE="MeowSTT-$VERSION-macos-$CURRENT_ARCH-$MODE"
+  BASE="Listenook-$VERSION-macos-$CURRENT_ARCH-$MODE"
   if [[ "$MODE" == "debug" ]]; then
     DEBUG_APP="$OUT/$BASE.app"
-    DEBUG_EXECUTABLE="$DEBUG_APP/Contents/MacOS/MeowSTT"
+    DEBUG_EXECUTABLE="$DEBUG_APP/Contents/MacOS/Listenook"
     if bash "$ROOT/scripts/is-macos-app-running.sh" "$DEBUG_EXECUTABLE"; then
       echo "Closing running debug app: $DEBUG_APP"
       bash "$ROOT/scripts/stop-macos-app.sh" "$DEBUG_EXECUTABLE"
     fi
   fi
-  echo "Building MeowSTT $VERSION macOS $CURRENT_ARCH $MODE"
+  echo "Building Listenook $VERSION macOS $CURRENT_ARCH $MODE"
   cd "$ROOT"
   if [[ "$MODE" == "debug" ]]; then
     flutter build macos --debug --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
@@ -92,9 +97,9 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
 
   CONFIG="Debug"
   if [[ "$MODE" == "release" ]]; then CONFIG="Release"; fi
-  APP="$ROOT/build/macos/Build/Products/$CONFIG/MeowSTT.app"
+  APP="$ROOT/build/macos/Build/Products/$CONFIG/Listenook.app"
   [[ -d "$APP" ]] || { echo "Missing build product: $APP" >&2; exit 1; }
-  APP_ARCHS="$(lipo -archs "$APP/Contents/MacOS/MeowSTT")"
+  APP_ARCHS="$(lipo -archs "$APP/Contents/MacOS/Listenook")"
   [[ " $APP_ARCHS " == *" $EXPECTED_MACHO "* ]] || {
     echo "Expected $EXPECTED_MACHO app, found: $APP_ARCHS" >&2; exit 1;
   }
@@ -102,13 +107,13 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   if [[ "$CURRENT_ARCH" == "arm64" ]]; then
     mkdir -p "$APP/Contents/Helpers"
     bash "$ROOT/scripts/build-speech-worker.sh" \
-      "$APP/Contents/Helpers/MeowSTTSpeechWorker"
+      "$APP/Contents/Helpers/ListenookSpeechWorker"
     [[ -s "$APP/Contents/Helpers/mlx.metallib" ]] || {
       echo "Missing packaged MLX Metal library." >&2
       exit 1
     }
   else
-    rm -f "$APP/Contents/Helpers/MeowSTTSpeechWorker"
+    rm -f "$APP/Contents/Helpers/ListenookSpeechWorker"
     rm -f "$APP/Contents/Helpers/mlx.metallib"
   fi
 
@@ -119,22 +124,22 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   cp "$ROOT/assets/third_party/"* "$APP/Contents/Resources/third_party/"
   bash "$ROOT/scripts/strip-macos-download-metadata.sh" "$APP"
   if [[ "$MODE" == "debug" ]]; then
-    SIGN_IDENTITY="$(resolve_meowstt_debug_sign_identity "$ROOT")"
+    SIGN_IDENTITY="$(resolve_listenook_debug_sign_identity "$ROOT")"
     if [[ "$SIGN_IDENTITY" == "-" ]]; then
       echo "Warning: no usable release signing identity was found; using ad-hoc signing." >&2
     else
       echo "Using release signing identity for debug: $SIGN_IDENTITY"
     fi
   else
-    SIGN_IDENTITY="${MEOWSTT_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:--}}"
+    SIGN_IDENTITY="${LISTENOOK_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:--}}"
   fi
   ENTITLEMENTS="$ROOT/macos/Runner/DebugProfile.entitlements"
   if [[ "$MODE" == "release" ]]; then ENTITLEMENTS="$ROOT/macos/Runner/Release.entitlements"; fi
-  if ! meowstt_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"; then
+  if ! listenook_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"; then
     if [[ "$MODE" == "debug" && "$SIGN_IDENTITY" != "-" ]]; then
       echo "Warning: release-identity signing failed; retrying the debug app ad-hoc." >&2
       SIGN_IDENTITY="-"
-      meowstt_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"
+      listenook_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"
     else
       exit 1
     fi
@@ -151,7 +156,7 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   else
     rm -f "$OUT/$BASE.app.zip"
     STAGE="$(mktemp -d)"
-    ditto "$APP" "$STAGE/MeowSTT.app"
+    ditto "$APP" "$STAGE/Listenook.app"
     ln -s /Applications "$STAGE/Applications"
     DMG="$OUT/$BASE.dmg"
     rm -f "$DMG"

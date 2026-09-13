@@ -9,7 +9,7 @@ import '../core/models.dart';
 import '../core/subtitle_text.dart';
 
 const supportedSubtitleExtensions = {'srt', 'vtt'};
-const supportedAlignmentLanguageCodes = {
+const supportedSubtitleLanguageCodes = {
   'zh',
   'yue',
   'en',
@@ -28,13 +28,11 @@ class TimedSubtitleParseResult {
     required this.format,
     required this.document,
     required this.ignoredCueCount,
-    required this.longCueCount,
   });
 
   final SubtitleFormat format;
   final TranscriptDocument document;
   final int ignoredCueCount;
-  final int longCueCount;
 }
 
 class SubtitleFileCandidate {
@@ -43,7 +41,6 @@ class SubtitleFileCandidate {
     required this.displayName,
     required this.format,
     required this.parseResult,
-    this.languageCode,
     this.errorCode,
   });
 
@@ -51,7 +48,6 @@ class SubtitleFileCandidate {
   final String displayName;
   final SubtitleFormat format;
   final TimedSubtitleParseResult? parseResult;
-  final String? languageCode;
   final String? errorCode;
 
   bool get isValid =>
@@ -81,15 +77,10 @@ class SubtitleImportReview {
 }
 
 class SubtitleImportSelection {
-  const SubtitleImportSelection({
-    required this.media,
-    this.subtitle,
-    this.languageCode,
-  });
+  const SubtitleImportSelection({required this.media, this.subtitle});
 
   final ResolvedMediaSource media;
   final SubtitleFileCandidate? subtitle;
-  final String? languageCode;
 }
 
 class TimedSubtitleImportException implements Exception {
@@ -100,8 +91,6 @@ class TimedSubtitleImportException implements Exception {
 
 class TimedSubtitleImportService {
   const TimedSubtitleImportService();
-
-  static const _maximumAlignmentWindowMs = 29000;
 
   Future<SubtitleImportReview?> preview(
     Iterable<String> inputs, {
@@ -175,7 +164,6 @@ class TimedSubtitleImportService {
   ) {
     final segments = <TranscriptSegment>[];
     var ignored = source.ignoredCueCount;
-    var long = 0;
     for (final segment in source.document.segments) {
       if (segment.startMs >= durationMs) {
         ignored++;
@@ -186,14 +174,12 @@ class TimedSubtitleImportService {
         ignored++;
         continue;
       }
-      if (endMs - segment.startMs > _maximumAlignmentWindowMs) long++;
-      segments.add(segment.copyWith(endMs: endMs, alignmentWindowEndMs: endMs));
+      segments.add(segment.copyWith(endMs: endMs));
     }
     return TimedSubtitleParseResult(
       format: source.format,
       document: source.document.copyWith(segments: segments),
       ignoredCueCount: ignored,
-      longCueCount: long,
     );
   }
 
@@ -207,7 +193,6 @@ class TimedSubtitleImportService {
         displayName: displayName,
         format: format,
         parseResult: result,
-        languageCode: _languageSuffix(path),
         errorCode: result.document.segments.isEmpty
             ? 'subtitle_no_valid_cues'
             : null,
@@ -218,7 +203,6 @@ class TimedSubtitleImportService {
         displayName: displayName,
         format: format,
         parseResult: null,
-        languageCode: _languageSuffix(path),
         errorCode: error.code,
       );
     } on Object {
@@ -227,7 +211,6 @@ class TimedSubtitleImportService {
         displayName: displayName,
         format: format,
         parseResult: null,
-        languageCode: _languageSuffix(path),
         errorCode: 'subtitle_read_failed',
       );
     }
@@ -248,7 +231,6 @@ class TimedSubtitleImportService {
     final speakers = <SpeakerProfile>[];
     final speakerIds = <String, String>{};
     var ignored = 0;
-    var long = 0;
     for (var index = 0; index < rawCues.cues.length; index++) {
       final cue = rawCues.cues[index];
       final cleaned = _cleanText(cue.text);
@@ -269,7 +251,6 @@ class TimedSubtitleImportService {
           continue;
         }
       }
-      if (endMs - startMs > _maximumAlignmentWindowMs) long++;
       String? speakerId;
       final speakerName = cleaned.speaker?.trim();
       if (speakerName != null && speakerName.isNotEmpty) {
@@ -289,8 +270,6 @@ class TimedSubtitleImportService {
           text: cleaned.text.trim(),
           speaker: speakerId,
           preserveBoundaryBefore: true,
-          alignmentWindowStartMs: startMs,
-          alignmentWindowEndMs: endMs,
         ),
       );
     }
@@ -304,7 +283,6 @@ class TimedSubtitleImportService {
         updatedAt: DateTime.now().toUtc(),
       ),
       ignoredCueCount: ignored,
-      longCueCount: long,
     );
   }
 
@@ -485,18 +463,9 @@ class TimedSubtitleImportService {
     if (dot < 0) return stem;
     final suffix = stem.substring(dot + 1).replaceAll('_', '-');
     final base = suffix.split('-').first;
-    return supportedAlignmentLanguageCodes.contains(base)
+    return supportedSubtitleLanguageCodes.contains(base)
         ? stem.substring(0, dot)
         : stem;
-  }
-
-  String? _languageSuffix(String path) {
-    final stem = p.basenameWithoutExtension(path).toLowerCase();
-    final dot = stem.lastIndexOf('.');
-    if (dot < 0) return null;
-    final suffix = stem.substring(dot + 1).replaceAll('_', '-');
-    final base = suffix.split('-').first;
-    return supportedAlignmentLanguageCodes.contains(base) ? base : null;
   }
 
   String _extension(String path) =>

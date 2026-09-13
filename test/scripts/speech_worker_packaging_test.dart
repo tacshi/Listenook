@@ -19,7 +19,7 @@ void main() {
       '$root/native/speech_worker/Package.swift',
     ).readAsString();
     final worker = await File(
-      '$root/native/speech_worker/Sources/MeowSTTSpeechWorker/WorkerMain.swift',
+      '$root/native/speech_worker/Sources/ListenookSpeechWorker/WorkerMain.swift',
     ).readAsString();
 
     expect(build, contains('13643ab4361da8f33c8002026c9d357ded0b6896'));
@@ -36,9 +36,9 @@ void main() {
     expect(manifest, contains('Qwen3ASR'));
     expect(manifest, contains('SpeechVAD'));
     expect(manifest, contains('revision:'));
-    expect(package, contains(r'$APP/Contents/Helpers/MeowSTTSpeechWorker'));
+    expect(package, contains(r'$APP/Contents/Helpers/ListenookSpeechWorker'));
     expect(package, contains(r'$APP/Contents/Helpers/mlx.metallib'));
-    expect(signing, contains("-name 'MeowSTTSpeechWorker'"));
+    expect(signing, contains("-name 'ListenookSpeechWorker'"));
     expect(signing, contains("-name '*.metallib'"));
     expect(verification, contains(r'lipo -archs "$SPEECH_WORKER"'));
     expect(
@@ -79,7 +79,7 @@ void main() {
     );
   });
 
-  final executable = Platform.environment['MEOWSTT_TEST_SPEECH_WORKER'];
+  final executable = Platform.environment['LISTENOOK_TEST_SPEECH_WORKER'];
   test(
     'native worker validates arguments and protocol with stable exit codes',
     () async {

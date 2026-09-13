@@ -67,7 +67,6 @@ class _SubtitleImportReviewDialog extends StatefulWidget {
 class _SubtitleImportReviewDialogState
     extends State<_SubtitleImportReviewDialog> {
   final Map<String, String?> _selectedPaths = {};
-  final Map<String, String?> _languages = {};
   final Set<String> _decidedMedia = {};
 
   List<SubtitleFileCandidate> get _allCandidates {
@@ -90,7 +89,6 @@ class _SubtitleImportReviewDialogState
     for (final match in widget.review.media) {
       final automatic = match.automaticCandidate;
       _selectedPaths[match.media.path] = automatic?.path;
-      _languages[match.media.path] = automatic?.languageCode;
       if (automatic != null || match.candidates.isEmpty) {
         _decidedMedia.add(match.media.path);
       }
@@ -99,7 +97,6 @@ class _SubtitleImportReviewDialogState
 
   @override
   Widget build(BuildContext context) {
-    final controller = context.watch<AppController>();
     final duplicates = _selectedPaths.values.whereType<String>().toList();
     final hasDuplicateSelection =
         duplicates.toSet().length != duplicates.length;
@@ -122,10 +119,6 @@ class _SubtitleImportReviewDialogState
               runSpacing: 8,
               children: [
                 _BenefitChip(
-                  icon: Icons.auto_fix_high_rounded,
-                  label: context.strings.t('subtitle_import_local_alignment'),
-                ),
-                _BenefitChip(
                   icon: Icons.laptop_mac_rounded,
                   label: context.strings.t('subtitle_import_stays_local'),
                 ),
@@ -142,12 +135,6 @@ class _SubtitleImportReviewDialogState
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
-            if (!controller.localForcedAlignmentSupported) ...[
-              const SizedBox(height: 10),
-              _WarningLine(
-                text: context.strings.t('subtitle_alignment_platform_required'),
-              ),
-            ],
             const Divider(height: 24),
             Expanded(
               child: widget.review.media.isEmpty
@@ -238,84 +225,39 @@ class _SubtitleImportReviewDialogState
               ],
             ),
             const SizedBox(height: 10),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: DropdownButtonFormField<String?>(
-                    key: ValueKey('subtitle-choice-${match.media.path}'),
-                    isExpanded: true,
-                    initialValue: selectedPath,
-                    decoration: InputDecoration(
-                      labelText: context.strings.t('subtitle_file'),
-                      prefixIcon: const Icon(Icons.subtitles_outlined),
-                    ),
-                    items: [
-                      DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text(
-                          context.strings.t(
-                            'subtitle_import_transcribe_normally',
-                          ),
-                        ),
-                      ),
-                      for (final candidate in candidates)
-                        DropdownMenuItem<String?>(
-                          value: candidate.path,
-                          enabled: candidate.isValid,
-                          child: Text(
-                            candidate.isValid
-                                ? candidate.displayName
-                                : '${candidate.displayName} · ${context.strings.t('invalid')}',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                    ],
-                    onChanged: (path) {
-                      final candidate = candidates
-                          .where((item) => item.path == path)
-                          .firstOrNull;
-                      setState(() {
-                        _selectedPaths[match.media.path] = path;
-                        _languages[match.media.path] = candidate?.languageCode;
-                        _decidedMedia.add(match.media.path);
-                      });
-                    },
+            DropdownButtonFormField<String?>(
+              key: ValueKey('subtitle-choice-${match.media.path}'),
+              isExpanded: true,
+              initialValue: selectedPath,
+              decoration: InputDecoration(
+                labelText: context.strings.t('subtitle_file'),
+                prefixIcon: const Icon(Icons.subtitles_outlined),
+              ),
+              items: [
+                DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text(
+                    context.strings.t('subtitle_import_transcribe_normally'),
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  flex: 2,
-                  child: DropdownButtonFormField<String?>(
-                    key: ValueKey('subtitle-language-${match.media.path}'),
-                    isExpanded: true,
-                    initialValue: _languages[match.media.path],
-                    decoration: InputDecoration(
-                      labelText: context.strings.t('language'),
-                      prefixIcon: const Icon(Icons.translate_rounded),
+                for (final candidate in candidates)
+                  DropdownMenuItem<String?>(
+                    value: candidate.path,
+                    enabled: candidate.isValid,
+                    child: Text(
+                      candidate.isValid
+                          ? candidate.displayName
+                          : '${candidate.displayName} · ${context.strings.t('invalid')}',
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    items: [
-                      DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text(context.strings.t('automatic')),
-                      ),
-                      for (final code in supportedAlignmentLanguageCodes)
-                        DropdownMenuItem<String?>(
-                          value: code,
-                          child: Text(
-                            context.strings.translationLanguageName(code),
-                          ),
-                        ),
-                    ],
-                    onChanged: selected == null
-                        ? null
-                        : (value) => setState(
-                            () => _languages[match.media.path] = value,
-                          ),
                   ),
-                ),
               ],
+              onChanged: (path) {
+                setState(() {
+                  _selectedPaths[match.media.path] = path;
+                  _decidedMedia.add(match.media.path);
+                });
+              },
             ),
             if (result != null) ...[
               const SizedBox(height: 8),
@@ -338,12 +280,6 @@ class _SubtitleImportReviewDialogState
                       .t('subtitle_import_ignored_cues')
                       .replaceFirst('{count}', '${result.ignoredCueCount}'),
                 ),
-              if (result.longCueCount > 0)
-                _WarningLine(
-                  text: context.strings
-                      .t('subtitle_import_long_cues')
-                      .replaceFirst('{count}', '${result.longCueCount}'),
-                ),
               if (reviewedCandidate?.errorCode case final errorCode?)
                 _WarningLine(text: context.strings.error(errorCode)),
             ],
@@ -365,7 +301,6 @@ class _SubtitleImportReviewDialogState
                     candidate.path == _selectedPaths[match.media.path],
               )
               .firstOrNull,
-          languageCode: _languages[match.media.path],
         ),
     ]);
   }

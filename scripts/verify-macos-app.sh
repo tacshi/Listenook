@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP="${1:?usage: verify-macos-app.sh /path/to/MeowSTT.app}"
+APP="${1:?usage: verify-macos-app.sh /path/to/Listenook.app}"
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "macOS launch verification must run on macOS." >&2
   exit 2
@@ -20,7 +20,7 @@ if [[ ! -x "$EXECUTABLE" ]]; then
 fi
 
 APP_ARCHS="$(lipo -archs "$EXECUTABLE")"
-SPEECH_WORKER="$APP/Contents/Helpers/MeowSTTSpeechWorker"
+SPEECH_WORKER="$APP/Contents/Helpers/ListenookSpeechWorker"
 MLX_METALLIB="$APP/Contents/Helpers/mlx.metallib"
 if [[ " $APP_ARCHS " == *" arm64 "* ]]; then
   if [[ ! -x "$SPEECH_WORKER" ]]; then

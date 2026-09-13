@@ -31,10 +31,10 @@ void main() {
         '${root.path}/scripts/strip-macos-download-metadata.sh',
       );
       final temporary = await Directory.systemTemp.createTemp(
-        'meowstt-gatekeeper-metadata-',
+        'listenook-gatekeeper-metadata-',
       );
       addTearDown(() => temporary.delete(recursive: true));
-      final nestedFile = File('${temporary.path}/Contents/MacOS/MeowSTT');
+      final nestedFile = File('${temporary.path}/Contents/MacOS/Listenook');
       await nestedFile.create(recursive: true);
       final attributeWrite = await Process.run('xattr', [
         '-w',
@@ -88,11 +88,11 @@ void main() {
       final detector = File('${root.path}/scripts/is-macos-app-running.sh');
       final stopHelper = File('${root.path}/scripts/stop-macos-app.sh');
       final temporary = await Directory.systemTemp.createTemp(
-        'meowstt-stop-app-',
+        'listenook-stop-app-',
       );
       addTearDown(() => temporary.delete(recursive: true));
       final fakeExecutable = File(
-        '${temporary.path}/Debug.app/Contents/MacOS/MeowSTT',
+        '${temporary.path}/Debug.app/Contents/MacOS/Listenook',
       );
       await fakeExecutable.parent.create(recursive: true);
       final copy = await Process.run('cp', ['/bin/sleep', fakeExecutable.path]);

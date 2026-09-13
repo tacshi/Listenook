@@ -15,7 +15,7 @@
 namespace {
 
 constexpr char kTranscriptCursorChannel[] =
-    "app.meowstt.desktop/transcript_structure_cursor";
+    "app.capyvibe.listenook/transcript_structure_cursor";
 constexpr UINT_PTR kTranscriptCursorSubclassId = 0x4D535443;
 
 const flutter::EncodableValue* MapValue(

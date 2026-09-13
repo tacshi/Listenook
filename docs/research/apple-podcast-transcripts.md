@@ -17,7 +17,7 @@ is documented as a catalog search and ID-lookup service. Neither its documented
 result fields nor the live
 [Modern Wisdom lookup response](https://itunes.apple.com/lookup?id=1347973549&entity=podcast)
 provides an Apple transcript URL. Therefore, using an Apple-generated transcript
-in MeowSTT would require relying on an undocumented Apple-internal interface,
+in Listenook would require relying on an undocumented Apple-internal interface,
 which is not a stable or supported integration.
 
 The supported interoperable route is publisher-supplied captions. Apple accepts
@@ -28,7 +28,7 @@ plus MIME type, with optional language and relationship attributes. See Apple's
 [RSS guide](https://help.apple.com/itc/podcasts_connect/en.lproj/itcb54353390.html)
 and the [Podcasting 2.0 transcript specification](https://podcasting2.org/docs/podcast-namespace/tags/transcript).
 
-## Why Modern Wisdom has no captions in MeowSTT
+## Why Modern Wisdom has no captions in Listenook
 
 Apple's lookup resolves Modern Wisdom (catalog ID `1347973549`) to the
 [publisher's live Megaphone feed](https://feeds.megaphone.fm/modernwisdom). A
@@ -38,7 +38,7 @@ complete scan on 2026-08-15 found 1,133 RSS `<item>` elements and zero
 its own app, but that Apple-hosted transcript is not published through the
 show's RSS feed.
 
-This matches MeowSTT's current behavior:
+This matches Listenook's current behavior:
 
 - The [RSS parser](../../lib/data/podcast/rss_parser.dart) only creates
   transcript references from transcript elements in an episode.
@@ -49,14 +49,14 @@ This matches MeowSTT's current behavior:
 - A downloaded episode with no publisher transcript is assigned to the Soniox
   acquisition path by the [app controller](../../lib/state/app_controller.dart).
   That transcript becomes available after the user sends the downloaded episode
-  through MeowSTT's transcription workflow; ordinary streaming playback does
+  through Listenook's transcription workflow; ordinary streaming playback does
   not start transcription by itself.
 
 ## Product implication
 
 The empty transcript pane is expected for Modern Wisdom under the current
-architecture, not evidence that Apple's catalog lookup failed. MeowSTT can show
+architecture, not evidence that Apple's catalog lookup failed. Listenook can show
 captions immediately only when a publisher exposes a timed transcript in RSS
-or when MeowSTT already has a completed transcript. Supporting captions for
-every streamed episode would require a separate MeowSTT transcription-on-demand
+or when Listenook already has a completed transcript. Supporting captions for
+every streamed episode would require a separate Listenook transcription-on-demand
 feature, not an Apple transcript download integration.

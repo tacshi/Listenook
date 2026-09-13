@@ -4,8 +4,8 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:meow_stt/core/local_speech.dart';
-import 'package:meow_stt/data/local_model_manager.dart';
+import 'package:listenook/core/local_speech.dart';
+import 'package:listenook/data/local_model_manager.dart';
 import 'package:path/path.dart' as p;
 
 void main() {

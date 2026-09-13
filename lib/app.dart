@@ -11,8 +11,8 @@ import 'state/podcast_controller.dart';
 import 'theme.dart';
 import 'ui/app_shell.dart';
 
-class MeowSttApp extends StatelessWidget {
-  const MeowSttApp({
+class ListenookApp extends StatelessWidget {
+  const ListenookApp({
     super.key,
     required this.controller,
     required this.updates,
@@ -35,10 +35,10 @@ class MeowSttApp extends StatelessWidget {
     ],
     child: Consumer<AppController>(
       builder: (context, state, _) => MaterialApp(
-        title: 'MeowSTT',
+        onGenerateTitle: (context) => AppStrings.of(context).appName,
         debugShowCheckedModeBanner: false,
-        theme: MeowTheme.light(),
-        darkTheme: MeowTheme.dark(),
+        theme: ListenookTheme.light(),
+        darkTheme: ListenookTheme.dark(),
         themeMode: switch (state.settings.themeMode) {
           AppThemeMode.light => ThemeMode.light,
           AppThemeMode.dark => ThemeMode.dark,

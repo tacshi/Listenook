@@ -1,300 +1,22 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/local_speech.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
-import 'package:meow_stt/data/timed_subtitle_import.dart';
-import 'package:meow_stt/data/transcript_exporter.dart';
-import 'package:meow_stt/l10n/strings.dart';
-import 'package:meow_stt/state/app_controller.dart';
-import 'package:meow_stt/ui/inbox_page.dart';
-import 'package:meow_stt/ui/subtitle_import_review_dialog.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/local_speech.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/timed_subtitle_import.dart';
+import 'package:listenook/data/transcript_exporter.dart';
+import 'package:listenook/l10n/strings.dart';
+import 'package:listenook/state/app_controller.dart';
+import 'package:listenook/ui/inbox_page.dart';
+import 'package:listenook/ui/subtitle_import_review_dialog.dart';
 import 'package:provider/provider.dart';
 
 void main() {
-  testWidgets(
-    'failed subtitle alignment exposes actionable diagnostics in Chinese',
-    (tester) async {
-      final directory = Directory.systemTemp.createTempSync(
-        'meow-subtitle-problem-widget-',
-      );
-      addTearDown(() => directory.delete(recursive: true));
-      final media = File('${directory.path}/problem.wav')
-        ..writeAsBytesSync([0]);
-      final subtitle = File('${directory.path}/problem.srt')
-        ..writeAsStringSync('''
-1
-00:00:00,100 --> 00:00:00,900
-Show the problem
-''');
-      final controller = _controller(
-        localModelManager: _AlignmentModels()..installed = true,
-        forcedAlignmentService: _FailedAlignment(),
-      );
-      addTearDown(controller.dispose);
-      await controller.initialize();
-      final review = await tester.runAsync(
-        () => controller.previewSourceImports([media.path, subtitle.path]),
-      );
-      await tester.runAsync(
-        () => controller.enqueueReviewedImports([
-          SubtitleImportSelection(
-            media: review!.media.single.media,
-            subtitle: review.media.single.automaticCandidate,
-          ),
-        ]),
-      );
-      await tester.runAsync(controller.startReady);
-      final job = controller.inboxJobs.single;
-      expect(job.forcedAlignment.status, ForcedAlignmentStatus.failed);
-
-      await _pumpInbox(tester, controller, locale: const Locale('zh', 'CN'));
-
-      expect(find.textContaining('本地对齐进程意外停止'), findsOneWidget);
-      expect(find.text('查看问题'), findsOneWidget);
-
-      await tester.tap(find.byKey(ValueKey('alignment-problem-${job.id}')));
-      await tester.pumpAndSettle();
-
-      expect(find.text('字幕对齐问题'), findsOneWidget);
-      expect(find.textContaining('0/1 条字幕已对齐'), findsOneWidget);
-      expect(find.textContaining('local_worker_failed'), findsOneWidget);
-      expect(find.textContaining('Worker exited with code 9'), findsOneWidget);
-      expect(find.textContaining('关闭其他占用大量内存的应用'), findsOneWidget);
-      expect(find.text('重试对齐'), findsOneWidget);
-    },
-  );
-
-  testWidgets('active imported alignment keeps Align subtitles label', (
-    tester,
-  ) async {
-    final directory = Directory.systemTemp.createTempSync(
-      'meow-subtitle-active-label-widget-',
-    );
-    addTearDown(() => directory.delete(recursive: true));
-    final media = File('${directory.path}/active.wav')..writeAsBytesSync([0]);
-    final subtitle = File('${directory.path}/active.srt')
-      ..writeAsStringSync('''
-1
-00:00:00,100 --> 00:00:00,900
-Align locally
-''');
-    final models = _AlignmentModels()..installed = true;
-    final alignment = _GatedAlignment();
-    addTearDown(() {
-      if (!alignment.release.isCompleted) alignment.release.complete();
-    });
-    final controller = _controller(
-      localModelManager: models,
-      forcedAlignmentService: alignment,
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    final review = await tester.runAsync(
-      () => controller.previewSourceImports([media.path, subtitle.path]),
-    );
-    await tester.runAsync(
-      () => controller.enqueueReviewedImports([
-        SubtitleImportSelection(
-          media: review!.media.single.media,
-          subtitle: review.media.single.automaticCandidate,
-        ),
-      ]),
-    );
-    await _pumpInbox(tester, controller);
-    expect(controller.defaultForcedAlignerReady, isTrue);
-    expect(controller.inboxJobs.single.status, JobStatus.ready);
-    expect(controller.inboxJobs.single.forcedAlignment.canRequest, isTrue);
-    expect(controller.canStartReady, isTrue);
-
-    late Future<void> processing;
-    await tester.runAsync(() async {
-      processing = controller.startReady();
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    });
-    await tester.pump();
-
-    expect(alignment.entered.isCompleted, isTrue);
-    expect(controller.inboxJobs.single.status, JobStatus.aligning);
-    expect(find.text('Align subtitles'), findsOneWidget);
-    expect(find.textContaining('Aligning locally…'), findsOneWidget);
-    expect(find.textContaining('Existing subtitles'), findsNothing);
-    expect(find.textContaining('Aligning subtitles locally'), findsNothing);
-
-    alignment.release.complete();
-    await tester.runAsync(() => processing);
-    await tester.pumpAndSettle();
-  });
-
-  testWidgets('partial subtitle alignment remains resumable from Inbox', (
-    tester,
-  ) async {
-    final directory = Directory.systemTemp.createTempSync(
-      'meow-subtitle-partial-resume-widget-',
-    );
-    addTearDown(() => directory.delete(recursive: true));
-    final media = File('${directory.path}/resume.wav')..writeAsBytesSync([0]);
-    final subtitle = File('${directory.path}/resume.srt')
-      ..writeAsStringSync('''
-1
-00:00:00,100 --> 00:00:00,900
-Resume locally
-''');
-    final controller = _controller(
-      localModelManager: _AlignmentModels()..installed = true,
-      forcedAlignmentService: _SupportedAlignment(),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    final review = await tester.runAsync(
-      () => controller.previewSourceImports([media.path, subtitle.path]),
-    );
-    await tester.runAsync(
-      () => controller.enqueueReviewedImports([
-        SubtitleImportSelection(
-          media: review!.media.single.media,
-          subtitle: review.media.single.automaticCandidate,
-        ),
-      ]),
-    );
-    await tester.runAsync(controller.startReady);
-    expect(
-      controller.inboxJobs.single.forcedAlignment.status,
-      ForcedAlignmentStatus.partial,
-    );
-
-    await _pumpInbox(tester, controller);
-
-    expect(controller.canStartReady, isTrue);
-    expect(find.text('Align subtitles'), findsOneWidget);
-    expect(find.text('View problem'), findsOneWidget);
-    final action = tester.widget<FilledButton>(
-      find.byKey(const Key('header-transcribe')),
-    );
-    expect(action.onPressed, isNotNull);
-  });
-
-  testWidgets('an unavailable imported alignment remains actionable in Inbox', (
-    tester,
-  ) async {
-    final directory = Directory.systemTemp.createTempSync(
-      'meow-subtitle-retry-widget-',
-    );
-    addTearDown(() => directory.delete(recursive: true));
-    final media = File('${directory.path}/retry.wav')..writeAsBytesSync([0]);
-    final subtitle = File('${directory.path}/retry.srt')
-      ..writeAsStringSync('''
-1
-00:00:00,100 --> 00:00:00,900
-Retry locally
-''');
-    final models = _AlignmentModels()..installed = true;
-    final alignment = _UnavailableAlignment();
-    final controller = _controller(
-      localModelManager: models,
-      forcedAlignmentService: alignment,
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    final review = await tester.runAsync(
-      () => controller.previewSourceImports([media.path, subtitle.path]),
-    );
-    await tester.runAsync(
-      () => controller.enqueueReviewedImports([
-        SubtitleImportSelection(
-          media: review!.media.single.media,
-          subtitle: review.media.single.automaticCandidate,
-        ),
-      ]),
-    );
-    await tester.runAsync(controller.startReady);
-    expect(controller.inboxJobs.single.status, JobStatus.completed);
-    expect(
-      controller.inboxJobs.single.forcedAlignment.status,
-      ForcedAlignmentStatus.unavailable,
-    );
-
-    await _pumpInbox(tester, controller);
-
-    expect(find.text('Align subtitles'), findsOneWidget);
-    expect(
-      find.textContaining('selected language is not supported'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('Select Align subtitles to retry'),
-      findsOneWidget,
-    );
-    final action = tester.widget<FilledButton>(
-      find.byKey(const Key('header-transcribe')),
-    );
-    expect(action.onPressed, isNotNull);
-
-    await tester.tap(find.byKey(const Key('header-transcribe')));
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 100)),
-    );
-    await tester.pumpAndSettle();
-    expect(alignment.calls, 2);
-  });
-
-  testWidgets('subtitle jobs stay ready until the recommended model installs', (
-    tester,
-  ) async {
-    final directory = Directory.systemTemp.createTempSync(
-      'meow-subtitle-model-widget-',
-    );
-    addTearDown(() => directory.delete(recursive: true));
-    final media = File('${directory.path}/clip.wav')..writeAsBytesSync([0]);
-    final subtitle = File('${directory.path}/clip.srt')
-      ..writeAsStringSync('''
-1
-00:00:00,100 --> 00:00:00,900
-Install locally
-''');
-    final models = _AlignmentModels();
-    final controller = _controller(
-      localModelManager: models,
-      forcedAlignmentService: _SupportedAlignment(),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    final review = await tester.runAsync(
-      () => controller.previewSourceImports([media.path, subtitle.path]),
-    );
-    await tester.runAsync(
-      () => controller.enqueueReviewedImports([
-        SubtitleImportSelection(
-          media: review!.media.single.media,
-          subtitle: review.media.single.automaticCandidate,
-        ),
-      ]),
-    );
-
-    await _pumpInbox(tester, controller);
-
-    expect(controller.inboxJobs.single.status, JobStatus.ready);
-    expect(controller.canStartReady, isFalse);
-    expect(
-      find.byKey(const Key('install-subtitle-alignment-model')),
-      findsOneWidget,
-    );
-
-    await tester.tap(find.byKey(const Key('install-subtitle-alignment-model')));
-    await tester.pumpAndSettle();
-
-    expect(models.installed, isTrue);
-    expect(controller.defaultForcedAlignerReady, isTrue);
-    expect(controller.canStartReady, isTrue);
-    expect(find.textContaining('installed and ready'), findsOneWidget);
-  });
-
-  testWidgets('subtitle pairing review explains local alignment and enqueues', (
+  testWidgets('subtitle pairing review enqueues a completed job', (
     tester,
   ) async {
     final directory = Directory.systemTemp.createTempSync(
@@ -331,10 +53,8 @@ Hello locally
       find.byKey(const Key('subtitle-import-review-dialog')),
       findsOneWidget,
     );
-    expect(find.text('Local alignment'), findsOneWidget);
-    expect(find.text('Audio stays on this Mac'), findsOneWidget);
-    expect(find.text('No transcription API charge'), findsOneWidget);
     expect(find.textContaining('SRT · 1 timed cue'), findsOneWidget);
+    expect(find.text('Local alignment'), findsNothing);
 
     await tester.tap(find.byKey(const Key('subtitle-import-confirm')));
     await tester.pumpAndSettle();
@@ -346,12 +66,56 @@ Hello locally
       job.transcriptAcquisitionMode,
       TranscriptAcquisitionMode.importedSubtitles,
     );
+    expect(job.status, JobStatus.completed);
     expect(job.document!.segments.single.text, 'Hello locally');
+    expect(job.document!.segments.single.startMs, 100);
+    expect(job.document!.segments.single.endMs, 900);
+    expect(job.forcedAlignment.status, ForcedAlignmentStatus.notRequested);
 
     await _pumpInbox(tester, controller);
-    expect(find.text('Align subtitles'), findsOneWidget);
-    expect(find.byKey(const Key('subtitle-alignment-panel')), findsOneWidget);
-    expect(find.textContaining('macOS 15 or later'), findsOneWidget);
+    expect(find.text('Align subtitles'), findsNothing);
+    expect(find.byKey(const Key('subtitle-alignment-panel')), findsNothing);
+  });
+
+  testWidgets('subtitle imports complete without an alignment model', (
+    tester,
+  ) async {
+    final directory = Directory.systemTemp.createTempSync(
+      'meow-subtitle-model-widget-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final media = File('${directory.path}/clip.wav')..writeAsBytesSync([0]);
+    final subtitle = File('${directory.path}/clip.srt')
+      ..writeAsStringSync('''
+1
+00:00:00,100 --> 00:00:00,900
+Install locally
+''');
+    final controller = _controller(
+      localModelManager: _AlignmentModels(),
+      forcedAlignmentService: _SupportedAlignment(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    final review = await tester.runAsync(
+      () => controller.previewSourceImports([media.path, subtitle.path]),
+    );
+    await tester.runAsync(
+      () => controller.enqueueReviewedImports([
+        SubtitleImportSelection(
+          media: review!.media.single.media,
+          subtitle: review.media.single.automaticCandidate,
+        ),
+      ]),
+    );
+
+    await _pumpInbox(tester, controller);
+
+    expect(controller.inboxJobs.single.status, JobStatus.completed);
+    expect(
+      find.byKey(const Key('install-subtitle-alignment-model')),
+      findsNothing,
+    );
   });
 
   testWidgets('unconfigured Inbox uses compact monitoring guidance', (
@@ -579,73 +343,6 @@ class _SupportedAlignment implements ForcedAlignmentService {
     alignedSegments: 0,
     totalSegments: request.document.segments.length,
   );
-}
-
-class _GatedAlignment implements ForcedAlignmentService {
-  final entered = Completer<void>();
-  final release = Completer<void>();
-
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<AlignmentResult> align(
-    ForcedAlignmentRequest request, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    entered.complete();
-    await release.future;
-    return AlignmentResult(
-      tokens: const [],
-      status: ForcedAlignmentStatus.partial,
-      alignedSegments: 0,
-      totalSegments: request.document.segments.length,
-    );
-  }
-}
-
-class _FailedAlignment implements ForcedAlignmentService {
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<AlignmentResult> align(
-    ForcedAlignmentRequest request, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => AlignmentResult(
-    tokens: const [],
-    status: ForcedAlignmentStatus.failed,
-    alignedSegments: 0,
-    totalSegments: request.document.segments.length,
-    warningCode: 'local_worker_failed',
-    warningMessage:
-        'Worker exited with code 9. Loaded tokenizer with 151706 tokens.',
-  );
-}
-
-class _UnavailableAlignment implements ForcedAlignmentService {
-  int calls = 0;
-
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<AlignmentResult> align(
-    ForcedAlignmentRequest request, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    calls++;
-    return AlignmentResult(
-      tokens: const [],
-      status: ForcedAlignmentStatus.unavailable,
-      alignedSegments: 0,
-      totalSegments: request.document.segments.length,
-      warningCode: 'alignment_language_unsupported',
-    );
-  }
 }
 
 class _Credentials implements CredentialStore {

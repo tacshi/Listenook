@@ -1,9 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
-import 'package:meow_stt/data/timed_subtitle_import.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/timed_subtitle_import.dart';
 
 void main() {
   late Directory directory;
@@ -17,7 +17,7 @@ void main() {
   });
 
   test(
-    'SRT parsing preserves cue order, line breaks, and source windows',
+    'SRT parsing preserves cue order and line breaks',
     () async {
       final file = File('${directory.path}/movie.srt');
       await file.writeAsString('''
@@ -43,10 +43,10 @@ no timing
       expect(result.document.segments.first.id, 'subtitle-cue-1');
       expect(result.document.segments.first.text, 'Hello\nworld');
       expect(result.document.segments.first.startMs, 1000);
-      expect(result.document.segments.first.alignmentWindowStartMs, 1000);
-      expect(result.document.segments.first.alignmentWindowEndMs, 3000);
+      expect(result.document.segments.first.endMs, 3000);
       expect(result.document.segments.last.id, 'subtitle-cue-2');
-      expect(result.longCueCount, 1);
+      expect(result.document.segments.last.startMs, 1000);
+      expect(result.document.segments.last.endMs, 32500);
       expect(result.ignoredCueCount, 1);
     },
   );
@@ -155,7 +155,6 @@ Late
 
       expect(constrained.document.segments, hasLength(1));
       expect(constrained.document.segments.single.endMs, 2000);
-      expect(constrained.document.segments.single.alignmentWindowEndMs, 2000);
       expect(constrained.ignoredCueCount, 1);
     },
   );
@@ -208,12 +207,6 @@ Backwards
     );
     expect(review.media.single.automaticCandidate, isNull);
     expect(review.unmatchedSubtitles.single.path, unrelated.path);
-    expect(
-      review.media.single.candidates
-          .singleWhere((candidate) => candidate.path == localized.path)
-          .languageCode,
-      'en',
-    );
   });
 
   test('pairing never crosses directories', () async {

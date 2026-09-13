@@ -1,3 +1,4 @@
+import '../core/app_identity.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -23,7 +24,7 @@ class MacosCompactAudioEncoder implements CompactAudioEncoder {
   const MacosCompactAudioEncoder({MethodChannel? channel})
     : _channel = channel ?? const MethodChannel(_channelName);
 
-  static const _channelName = 'app.meowstt.desktop/audio_encoder';
+  static const _channelName = AppIdentity.encoderChannel;
   final MethodChannel _channel;
 
   @override
@@ -494,7 +495,7 @@ class ProcessMediaService implements MediaService {
   Future<String> _resolveWindowsEncoder({bool refresh = false}) async {
     if (!refresh && _encoderPath != null) return _encoderPath!;
     final executableDirectory = File(Platform.resolvedExecutable).parent.path;
-    final override = Platform.environment['MEOWSTT_FLAC_DIR']?.trim();
+    final override = AppIdentity.environment('LISTENOOK_FLAC_DIR')?.trim();
     final nativeArch =
         (Platform.environment['PROCESSOR_ARCHITEW6432'] ??
                 Platform.environment['PROCESSOR_ARCHITECTURE'] ??

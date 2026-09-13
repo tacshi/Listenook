@@ -5,7 +5,10 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../core/app_identity.dart';
 import '../core/contracts.dart';
+import 'app_data_migration.dart';
+import 'migrating_secure_value.dart';
 import '../core/models.dart';
 import '../core/podcast_models.dart';
 
@@ -27,9 +30,21 @@ class AppPaths {
   File get podcastPlayback => File(p.join(root.path, 'podcast_playback.json'));
   Directory get podcasts => Directory(p.join(root.path, 'podcasts'));
 
-  static Future<AppPaths> create() async {
+  static Future<AppPaths> create({
+    void Function(double)? onMigrationProgress,
+  }) async {
     final support = await getApplicationSupportDirectory();
-    final paths = AppPaths._(Directory(p.join(support.path, 'MeowSTT')));
+    await AppDataMigration(
+      destination: support,
+      legacyRoot: AppDataMigration.legacyDirectory(
+        support,
+        windows: Platform.isWindows,
+      ),
+      isLegacyRunning: AppDataMigration.legacyProcessIsRunning,
+      windows: Platform.isWindows,
+      onProgress: onMigrationProgress,
+    ).run();
+    final paths = AppPaths._(support);
     await paths.root.create(recursive: true);
     await paths.jobs.create(recursive: true);
     await paths.temporary.create(recursive: true);
@@ -43,109 +58,61 @@ class SecureCredentialStore
     implements CredentialStore, CredentialAvailabilityStore {
   SecureCredentialStore({
     FlutterSecureStorage? storage,
-    String storageKey = _defaultKey,
+    String storageKey = '${AppIdentity.bundleId}.soniox_api_key',
     String environmentVariable = 'SONIOX_API_KEY',
-  }) : _storage = storage ?? const FlutterSecureStorage(),
-       _storageKey = storageKey,
+  }) : _value = MigratingSecureValue(
+         storage: storage ?? const FlutterSecureStorage(),
+         key: storageKey,
+       ),
        _environmentVariable = environmentVariable;
 
-  static const _service = 'app.meowstt.desktop';
-  static const _defaultKey = 'app.meowstt.desktop.soniox_api_key';
-  static const _options = MacOsOptions(
-    accountName: _service,
-    accessibility: KeychainAccessibility.first_unlock,
-    usesDataProtectionKeychain: false,
-  );
-  static const _legacyOptions = MacOsOptions(
-    accessibility: KeychainAccessibility.first_unlock,
-    usesDataProtectionKeychain: false,
-  );
-  final FlutterSecureStorage _storage;
-  final String _storageKey;
+  final MigratingSecureValue _value;
   final String _environmentVariable;
 
+  Future<void> migrateLegacy() => _value.migrate();
+
   @override
-  Future<bool> hasApiKey() async {
-    if (await _storage.containsKey(key: _storageKey, mOptions: _options)) {
-      return true;
-    }
-    if (Platform.isMacOS &&
-        await _storage.containsKey(
-          key: _storageKey,
-          mOptions: _legacyOptions,
-        )) {
-      return true;
-    }
-    final fallback = Platform.environment[_environmentVariable]?.trim();
-    return fallback != null && fallback.isNotEmpty;
-  }
+  Future<bool> hasApiKey() async =>
+      await _value.contains() ||
+      (Platform.environment[_environmentVariable]?.trim().isNotEmpty ?? false);
 
   @override
   Future<String?> readApiKey() async {
-    var stored = await _storage.read(key: _storageKey, mOptions: _options);
-    if (Platform.isMacOS && (stored == null || stored.trim().isEmpty)) {
-      final legacy = await _storage.read(
-        key: _storageKey,
-        mOptions: _legacyOptions,
-      );
-      if (legacy != null && legacy.trim().isNotEmpty) {
-        stored = legacy.trim();
-        await _storage.write(
-          key: _storageKey,
-          value: stored,
-          mOptions: _options,
-        );
-        await _storage.delete(key: _storageKey, mOptions: _legacyOptions);
-      }
-    }
-    if (stored != null && stored.trim().isNotEmpty) return stored.trim();
+    final stored = await _value.read();
+    if (stored != null) return stored;
     final fallback = Platform.environment[_environmentVariable]?.trim();
     return fallback == null || fallback.isEmpty ? null : fallback;
   }
 
   @override
-  Future<void> writeApiKey(String key) =>
-      _storage.write(key: _storageKey, value: key.trim(), mOptions: _options);
+  Future<void> writeApiKey(String key) => _value.write(key);
 
   @override
-  Future<void> deleteApiKey() =>
-      _storage.delete(key: _storageKey, mOptions: _options);
+  Future<void> deleteApiKey() => _value.delete();
 }
 
 class SecureLlmCredentialStore
     implements TranslationCredentialStore, CredentialAvailabilityStore {
   SecureLlmCredentialStore({FlutterSecureStorage? storage})
-    : _storage = storage ?? const FlutterSecureStorage();
+    : _value = MigratingSecureValue(
+        storage: storage ?? const FlutterSecureStorage(),
+        key: '${AppIdentity.bundleId}.openai_compatible_translation_api_key',
+      );
 
-  static const _service = 'app.meowstt.desktop';
-  static const _storageKey =
-      'app.meowstt.desktop.openai_compatible_translation_api_key';
-  static const _options = MacOsOptions(
-    accountName: _service,
-    accessibility: KeychainAccessibility.first_unlock,
-    usesDataProtectionKeychain: false,
-  );
-
-  final FlutterSecureStorage _storage;
+  final MigratingSecureValue _value;
+  Future<void> migrateLegacy() => _value.migrate();
 
   @override
-  Future<bool> hasApiKey() =>
-      _storage.containsKey(key: _storageKey, mOptions: _options);
+  Future<bool> hasApiKey() => _value.contains();
 
   @override
-  Future<String?> readApiKey() async {
-    final value = await _storage.read(key: _storageKey, mOptions: _options);
-    final trimmed = value?.trim();
-    return trimmed == null || trimmed.isEmpty ? null : trimmed;
-  }
+  Future<String?> readApiKey() => _value.read();
 
   @override
-  Future<void> writeApiKey(String key) =>
-      _storage.write(key: _storageKey, value: key.trim(), mOptions: _options);
+  Future<void> writeApiKey(String key) => _value.write(key);
 
   @override
-  Future<void> deleteApiKey() =>
-      _storage.delete(key: _storageKey, mOptions: _options);
+  Future<void> deleteApiKey() => _value.delete();
 }
 
 @Deprecated('Use SecureLlmCredentialStore.')

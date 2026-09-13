@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/transcript_parser.dart';
-import 'package:meow_stt/core/transcript_structure_editor.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/transcript_parser.dart';
+import 'package:listenook/core/transcript_structure_editor.dart';
 
 void main() {
   test('split preserves punctuation, timing gap, and token ownership', () {
@@ -33,8 +33,6 @@ void main() {
           endMs: 1500,
           text: 'Hello, world again.',
           translatedText: 'Hola, mundo otra vez.',
-          alignmentWindowStartMs: 0,
-          alignmentWindowEndMs: 1500,
         ),
       ],
       speakers: const [],
@@ -53,15 +51,11 @@ void main() {
     expect(result.document.segments.first.text, 'Hello,');
     expect(result.document.segments.first.endMs, 400);
     expect(result.document.segments.first.translatedText, isNull);
-    expect(result.document.segments.first.alignmentWindowStartMs, 0);
-    expect(result.document.segments.first.alignmentWindowEndMs, 400);
     expect(result.document.segments.last.id, 'right');
     expect(result.document.segments.last.text, 'world again.');
     expect(result.document.segments.last.startMs, 600);
     expect(result.document.segments.last.preserveBoundaryBefore, isTrue);
     expect(result.document.segments.last.translatedText, isNull);
-    expect(result.document.segments.last.alignmentWindowStartMs, 600);
-    expect(result.document.segments.last.alignmentWindowEndMs, 1500);
     expect(result.document.tokens.map((token) => token.segmentId), [
       'sentence',
       'right',
@@ -99,8 +93,6 @@ void main() {
           language: 'en',
           translatedText: 'Hola,',
           preserveBoundaryBefore: true,
-          alignmentWindowStartMs: 0,
-          alignmentWindowEndMs: 600,
         ),
         TranscriptSegment(
           id: 'right',
@@ -111,8 +103,6 @@ void main() {
           language: 'en',
           translatedText: 'mundo.',
           preserveBoundaryBefore: true,
-          alignmentWindowStartMs: 600,
-          alignmentWindowEndMs: 1300,
         ),
       ],
       speakers: const [],
@@ -134,8 +124,6 @@ void main() {
     expect(merged.startMs, 0);
     expect(merged.endMs, 1200);
     expect(merged.preserveBoundaryBefore, isTrue);
-    expect(merged.alignmentWindowStartMs, 0);
-    expect(merged.alignmentWindowEndMs, 1300);
     expect(result.document.tokens.map((token) => token.segmentId), [
       'left',
       'left',

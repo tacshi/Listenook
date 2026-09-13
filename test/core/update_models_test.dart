@@ -1,7 +1,7 @@
 import 'dart:ffi';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/update_models.dart';
+import 'package:listenook/core/update_models.dart';
 
 void main() {
   group('AppVersion', () {
@@ -82,10 +82,10 @@ Map<String, Object?> _manifest() => {
       'version': '2.0.0',
       'build': 42,
       'kind': 'appZip',
-      'fileName': 'MeowSTT.zip',
+      'fileName': 'Listenook.zip',
       'size': 3,
       'sha256': List.filled(64, '0').join(),
-      'url': 'https://example.com/MeowSTT.zip',
+      'url': 'https://example.com/Listenook.zip',
       'releasedAt': '2026-08-12T00:00:00Z',
       'notesUrl': 'https://example.com/releases/v2.0.0',
     },

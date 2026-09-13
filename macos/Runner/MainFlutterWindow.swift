@@ -57,7 +57,7 @@ final class TranscriptStructureCursorController {
   }
 
   private static let channelName =
-    "app.meowstt.desktop/transcript_structure_cursor"
+    "app.capyvibe.listenook/transcript_structure_cursor"
   private weak var hostView: NSView?
   private var channel: FlutterMethodChannel?
   private(set) var activeSession: Int?

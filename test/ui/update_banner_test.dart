@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/l10n/strings.dart';
-import 'package:meow_stt/ui/app_shell.dart';
+import 'package:listenook/l10n/strings.dart';
+import 'package:listenook/ui/app_shell.dart';
 
 void main() {
   testWidgets('shows update as a compact title-bar action', (tester) async {
@@ -26,13 +26,13 @@ void main() {
     final toggle = find.byKey(const Key('toggle-app-sidebar'));
     final update = find.byKey(const Key('restart-to-update'));
     expect(find.byKey(const Key('update-ready-banner')), findsNothing);
-    expect(find.text('MeowSTT 2.0.0 is ready to install.'), findsNothing);
+    expect(find.text('Listenook 2.0.0 is ready to install.'), findsNothing);
     expect(update, findsOneWidget);
     expect(tester.getSize(update), const Size.square(32));
     expect(tester.getCenter(toggle).dx, lessThan(tester.getCenter(update).dx));
     expect(tester.getTopLeft(update).dy, tester.getTopLeft(toolbar).dy);
     expect(
-      find.byTooltip('MeowSTT 2.0.0 is ready to install. Restart to Update'),
+      find.byTooltip('Listenook 2.0.0 is ready to install. Restart to Update'),
       findsOneWidget,
     );
     await tester.tap(find.byKey(const Key('restart-to-update')));
@@ -64,7 +64,7 @@ void main() {
       ),
     );
 
-    expect(find.text('MeowSTT 2.0.0 已下载完成。'), findsNothing);
+    expect(find.text('Listenook 2.0.0 已下载完成。'), findsNothing);
     expect(find.byTooltip('正在重启…'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     final button = tester.widget<IconButton>(

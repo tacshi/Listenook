@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
-import 'package:meow_stt/core/podcast_models.dart';
-import 'package:meow_stt/data/podcast/http_podcast_gateway.dart';
+import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/data/podcast/http_podcast_gateway.dart';
 
 void main() {
   test('Apple lookup ignores non-podcast tracks returned for stale IDs', () {

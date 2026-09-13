@@ -10,23 +10,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/local_speech.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/transcript_structure_editor.dart';
-import 'package:meow_stt/core/podcast_models.dart';
-import 'package:meow_stt/data/podcast/http_podcast_gateway.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
-import 'package:meow_stt/data/transcript_exporter.dart';
-import 'package:meow_stt/l10n/strings.dart';
-import 'package:meow_stt/state/app_controller.dart';
-import 'package:meow_stt/state/podcast_controller.dart';
-import 'package:meow_stt/state/podcast_player.dart';
-import 'package:meow_stt/ui/app_shell.dart';
-import 'package:meow_stt/ui/inbox_page.dart';
-import 'package:meow_stt/ui/review_fullscreen_controller.dart';
-import 'package:meow_stt/ui/transcript_review.dart';
-import 'package:meow_stt/ui/workspace_page.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/local_speech.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/transcript_structure_editor.dart';
+import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/data/podcast/http_podcast_gateway.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/transcript_exporter.dart';
+import 'package:listenook/l10n/strings.dart';
+import 'package:listenook/state/app_controller.dart';
+import 'package:listenook/state/podcast_controller.dart';
+import 'package:listenook/state/podcast_player.dart';
+import 'package:listenook/ui/app_shell.dart';
+import 'package:listenook/ui/inbox_page.dart';
+import 'package:listenook/ui/review_fullscreen_controller.dart';
+import 'package:listenook/ui/transcript_review.dart';
+import 'package:listenook/ui/workspace_page.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:tray_manager/tray_manager.dart' as tray;
@@ -1469,240 +1469,6 @@ void main() {
     expect(
       tester.getTopLeft(find.byKey(const ValueKey('segment-card-segment-0'))),
       firstSegmentTop,
-    );
-  });
-
-  testWidgets('partial imported alignment highlights cues kept unchanged', (
-    tester,
-  ) async {
-    _setTestWindow(tester, const Size(800, 700));
-    final controller = await _controllerForDocument(
-      TranscriptDocument(
-        tokens: const [
-          TranscriptToken(
-            text: 'Aligned',
-            startMs: 120,
-            endMs: 820,
-            segmentId: 'aligned',
-          ),
-        ],
-        segments: const [
-          TranscriptSegment(
-            id: 'aligned',
-            startMs: 120,
-            endMs: 820,
-            text: 'Aligned cue',
-            alignmentWindowStartMs: 100,
-            alignmentWindowEndMs: 900,
-          ),
-          TranscriptSegment(
-            id: 'failed',
-            startMs: 1000,
-            endMs: 1900,
-            text: 'Cue with original timing',
-            alignmentWindowStartMs: 1000,
-            alignmentWindowEndMs: 1900,
-          ),
-        ],
-        speakers: const [],
-        updatedAt: DateTime.now().toUtc(),
-      ),
-      transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
-      transcriptSource: TranscriptSource.importedSubtitle,
-      forcedAlignment: const ForcedAlignmentState(
-        status: ForcedAlignmentStatus.partial,
-        alignedSegments: 1,
-        totalSegments: 2,
-        warningCode: 'alignment_partial',
-      ),
-    );
-    addTearDown(controller.dispose);
-
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: const MaterialApp(
-          locale: Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [AppStrings.delegate],
-          home: Scaffold(body: TranscriptReview(jobId: 'job')),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(
-      find.byKey(const ValueKey('segment-alignment-failed-failed')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('segment-alignment-failed-aligned')),
-      findsNothing,
-    );
-
-    final resolve = find.byKey(
-      const ValueKey('mark-alignment-resolved-failed'),
-    );
-    expect(resolve, findsOneWidget);
-    await tester.tap(resolve);
-    await tester.pumpAndSettle();
-
-    expect(
-      find.byKey(const ValueKey('segment-alignment-failed-failed')),
-      findsNothing,
-    );
-    expect(
-      controller.allJobs.single.document!.segments
-          .singleWhere((segment) => segment.id == 'failed')
-          .alignmentManuallyResolved,
-      isTrue,
-    );
-    expect(find.text('Marked as resolved'), findsOneWidget);
-    final noticeRect = tester.getRect(find.byKey(const Key('app-notice')));
-    expect(noticeRect.width, lessThan(520));
-    expect(noticeRect.bottom, lessThan(700));
-
-    await tester.tap(find.text('Undo'));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('segment-alignment-failed-failed')),
-      findsOneWidget,
-    );
-    expect(
-      controller.allJobs.single.document!.segments
-          .singleWhere((segment) => segment.id == 'failed')
-          .alignmentManuallyResolved,
-      isFalse,
-    );
-  });
-
-  testWidgets('imported subtitle cues read as complete sentences', (
-    tester,
-  ) async {
-    _setTestWindow(tester, const Size(800, 700));
-    final source = TranscriptDocument(
-      tokens: const [],
-      segments: const [
-        TranscriptSegment(
-          id: 'cue-1',
-          startMs: 0,
-          endMs: 900,
-          text: "To get us started, I'm going to try",
-        ),
-        TranscriptSegment(
-          id: 'cue-2',
-          startMs: 1000,
-          endMs: 1900,
-          text: "something. >> So, I'm going to ask ChatGPT [noise]",
-        ),
-        TranscriptSegment(
-          id: 'cue-3',
-          startMs: 2000,
-          endMs: 2900,
-          text: 'what it truly believes.',
-        ),
-      ],
-      speakers: const [],
-      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
-    );
-    final controller = await _controllerForDocument(
-      TranscriptDocument(
-        tokens: const [
-          TranscriptToken(
-            text: 'To',
-            startMs: 0,
-            endMs: 100,
-            segmentId: 'cue-1',
-          ),
-          TranscriptToken(
-            text: 'try',
-            startMs: 700,
-            endMs: 850,
-            segmentId: 'cue-1',
-          ),
-          TranscriptToken(
-            text: 'something',
-            startMs: 1000,
-            endMs: 1200,
-            segmentId: 'cue-2',
-          ),
-          TranscriptToken(
-            text: 'So',
-            startMs: 1250,
-            endMs: 1350,
-            segmentId: 'cue-2',
-          ),
-          TranscriptToken(
-            text: 'ChatGPT',
-            startMs: 1700,
-            endMs: 1850,
-            segmentId: 'cue-2',
-          ),
-          TranscriptToken(
-            text: 'what',
-            startMs: 2000,
-            endMs: 2100,
-            segmentId: 'cue-3',
-          ),
-          TranscriptToken(
-            text: 'believes',
-            startMs: 2700,
-            endMs: 2850,
-            segmentId: 'cue-3',
-          ),
-        ],
-        segments: source.segments,
-        speakers: const [],
-        updatedAt: DateTime.now().toUtc(),
-      ),
-      transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
-      transcriptSource: TranscriptSource.importedSubtitle,
-      importedSubtitleProvenance: ImportedSubtitleProvenance(
-        sourcePath: '/missing/subtitle.srt',
-        displayName: 'subtitle.srt',
-        format: SubtitleFormat.srt,
-        importedAt: DateTime.fromMillisecondsSinceEpoch(0),
-        sourceDocumentSnapshot: source,
-      ),
-      forcedAlignment: const ForcedAlignmentState(
-        status: ForcedAlignmentStatus.completed,
-        alignedSegments: 3,
-        totalSegments: 3,
-      ),
-    );
-    addTearDown(controller.dispose);
-
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: const MaterialApp(
-          locale: Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [AppStrings.delegate],
-          home: Scaffold(body: TranscriptReview(jobId: 'job')),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text("To get us started, I'm going to try something."),
-      findsOneWidget,
-    );
-    expect(
-      find.text("So, I'm going to ask ChatGPT what it truly believes."),
-      findsOneWidget,
-    );
-    expect(controller.allJobs.single.document!.segments, hasLength(2));
-    expect(
-      controller
-          .allJobs
-          .single
-          .importedSubtitleProvenance!
-          .sourceDocumentSnapshot!
-          .segments[1]
-          .text,
-      "something. So, I'm going to ask ChatGPT",
     );
   });
 
@@ -4838,7 +4604,7 @@ void main() {
     expect(find.byKey(const Key('empty-add-files')), findsOneWidget);
 
     await messenger.handlePlatformMessage(
-      'app.meowstt.desktop/navigation',
+      'app.capyvibe.listenook/navigation',
       const StandardMethodCodec().encodeMethodCall(
         const MethodCall('showSettings'),
       ),
@@ -4849,7 +4615,7 @@ void main() {
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
 
     await messenger.handlePlatformMessage(
-      'app.meowstt.desktop/navigation',
+      'app.capyvibe.listenook/navigation',
       const StandardMethodCodec().encodeMethodCall(
         const MethodCall('showInbox'),
       ),
@@ -4861,7 +4627,7 @@ void main() {
     controller.setDestination(AppDestination.library);
     await tester.pumpAndSettle();
     await messenger.handlePlatformMessage(
-      'app.meowstt.desktop/navigation',
+      'app.capyvibe.listenook/navigation',
       const StandardMethodCodec().encodeMethodCall(
         const MethodCall('showWindow'),
       ),
@@ -5500,7 +5266,7 @@ void main() {
         () => appShellState.onWindowClose() as Future<void>,
       );
       final restoreFuture = messenger.handlePlatformMessage(
-        'app.meowstt.desktop/navigation',
+        'app.capyvibe.listenook/navigation',
         const StandardMethodCodec().encodeMethodCall(
           const MethodCall('showWindow'),
         ),
@@ -5715,6 +5481,36 @@ void main() {
       findsNothing,
     );
   });
+
+  for (final provider in TranscriptionProvider.values) {
+    testWidgets('imported subtitle menu hides alignment for ${provider.name}', (
+      tester,
+    ) async {
+      final controller = await _controllerForDocument(
+        _simpleDocument(),
+        transcriptionProvider: provider,
+        transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+        transcriptSource: TranscriptSource.importedSubtitle,
+      );
+      addTearDown(controller.dispose);
+      controller.openInWorkspace('job');
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: WorkspacePage()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('review-toolbar-more')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('retry-forced-alignment')), findsNothing);
+    });
+  }
 
   testWidgets('legacy MOSS transcripts expose manual local alignment', (
     tester,
@@ -6895,15 +6691,15 @@ void main() {
 
     await tester.enterText(
       find.byKey(const Key('session-context-terms-field')),
-      'MeowSTT, Soniox',
+      'Listenook, Soniox',
     );
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
 
-    expect(controller.sessionOptions.contextTerms, ['MeowSTT', 'Soniox']);
+    expect(controller.sessionOptions.contextTerms, ['Listenook', 'Soniox']);
     expect(controller.inboxJobs.single.options.languageHints, ['zh', 'en']);
     expect(controller.inboxJobs.single.options.contextTerms, [
-      'MeowSTT',
+      'Listenook',
       'Soniox',
     ]);
   });
@@ -8771,6 +8567,7 @@ Future<AppController> _controllerForDocument(
   AiGenerationState aiGenerationState = const AiGenerationState(),
   JobSourceOrigin sourceOrigin = JobSourceOrigin.manual,
   PodcastEpisodeProvenance? podcastProvenance,
+  TranscriptionProvider transcriptionProvider = TranscriptionProvider.soniox,
   TranscriptAcquisitionMode transcriptAcquisitionMode =
       TranscriptAcquisitionMode.soniox,
   TranscriptSource? transcriptSource,
@@ -8797,6 +8594,7 @@ Future<AppController> _controllerForDocument(
         aiGenerationState: aiGenerationState,
         sourceOrigin: sourceOrigin,
         podcastProvenance: podcastProvenance,
+        transcriptionProvider: transcriptionProvider,
         transcriptAcquisitionMode: transcriptAcquisitionMode,
         transcriptSource: transcriptSource,
         importedSubtitleProvenance: importedSubtitleProvenance,

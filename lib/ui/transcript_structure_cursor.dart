@@ -1,3 +1,4 @@
+import '../core/app_identity.dart';
 import 'dart:async';
 
 import 'package:flutter/services.dart';
@@ -45,7 +46,7 @@ class TranscriptStructureMouseCursor extends MouseCursor {
   const TranscriptStructureMouseCursor._(this.kind, this.fallback);
 
   static const _channel = MethodChannel(
-    'app.meowstt.desktop/transcript_structure_cursor',
+    AppIdentity.cursorChannel,
   );
   static int _nextSessionId = 1;
 
