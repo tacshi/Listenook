@@ -285,18 +285,13 @@ class AppStrings {
         '{count} untranscribed files will be removed. Completed transcripts stay in your library.',
     'start_new': 'Start new batch',
     'transcribe': 'Transcribe',
-    'align_subtitles': 'Align subtitles',
-    'process_all': 'Process all',
     'drop_title': 'Drop media with matching subtitles',
     'supported': 'Audio/video + SRT/WebVTT · up to 5 hours each',
     'subtitle_import_review_title': 'Review media and subtitles',
-    'subtitle_import_local_alignment': 'Local alignment',
     'subtitle_import_stays_local': 'Audio stays on this Mac',
     'subtitle_import_no_stt_charge': 'No transcription API charge',
     'subtitle_import_translation_disclosure':
         'Optional LLM translation can still send subtitle text to your configured provider and may incur a charge.',
-    'subtitle_alignment_platform_required':
-        'Local subtitle alignment requires an Apple Silicon Mac running macOS 15 or later.',
     'subtitle_import_media_required':
         'Add a supported audio or video file to pair with these subtitles.',
     'subtitle_import_unmatched_count':
@@ -311,58 +306,7 @@ class AppStrings {
     'subtitle_import_cue_summary': '{format} · {count} timed cues',
     'subtitle_import_ignored_cues':
         '{count} malformed or out-of-range cue(s) will be omitted.',
-    'subtitle_import_long_cues':
-        '{count} cue(s) exceed 29 seconds and will keep their original timing.',
     'subtitle_import_failed': 'The media and subtitles could not be imported.',
-    'subtitle_alignment_ready_count':
-        '{count} item(s) will align existing subtitles locally',
-    'subtitle_alignment_model_ready':
-        'The selected word-timing model is installed and ready.',
-    'subtitle_alignment_model_required':
-        'Install or choose a word-timing model before alignment can start.',
-    'install_recommended_alignment_model': 'Install recommended INT8 model',
-    'choose_another_model': 'Choose another model',
-    'existing_subtitles': 'Existing subtitles',
-    'subtitle_alignment_ready': 'Ready to align',
-    'subtitle_alignment_retry_available': 'Select Align subtitles to retry',
-    'subtitle_alignment_running': 'Aligning locally…',
-    'subtitle_alignment_coverage':
-        '{aligned}/{total} cues aligned · {kept} kept original timing',
-    'subtitle_cue_original_timing': 'Not aligned · original timing kept',
-    'mark_alignment_resolved': 'Mark as resolved',
-    'alignment_marked_resolved': 'Marked as resolved',
-    'subtitle_alignment_completed': 'Imported {format} · locally aligned',
-    'subtitle_alignment_partial':
-        'Imported {format} · some cues kept original timing',
-    'subtitle_alignment_original_kept':
-        'Imported {format} · original cue timing kept',
-    'view_problem': 'View problem',
-    'subtitle_alignment_problem_title': 'Subtitle alignment problem',
-    'alignment_problem_what_happened': 'What happened',
-    'alignment_problem_impact_title': 'Result preserved',
-    'alignment_problem_impact':
-        '{aligned}/{total} cues aligned. {kept} kept their original timing; subtitle text and order were not changed.',
-    'alignment_problem_actions_title': 'What you can do',
-    'alignment_problem_worker_actions':
-        'Close other memory-intensive apps, select the recommended INT8 alignment model in Settings, then retry. If it happens again, reinstall the selected model.',
-    'alignment_problem_language_actions':
-        'Choose the subtitle language explicitly or replace the subtitle with a supported-language SRT/WebVTT file, then retry.',
-    'alignment_problem_model_actions':
-        'Install or reselect the recommended INT8 alignment model in Settings, then retry.',
-    'alignment_problem_source_actions':
-        'Relink the original media file, then retry alignment.',
-    'alignment_problem_default_actions':
-        'Retry alignment. If the same problem repeats, switch to the recommended INT8 model or replace the subtitle file.',
-    'alignment_problem_technical_details': 'Technical details',
-    'alignment_problem_code': 'Error code: {code}',
-    'alignment_problem_model': 'Model: {model}',
-    'alignment_problem_no_details':
-        'The alignment worker did not report additional details.',
-    'alignment_problem_worker_no_exit_detail':
-        'The worker did not report why it stopped. The text below is its last captured diagnostic output, not necessarily the cause.',
-    'copy_diagnostics': 'Copy diagnostics',
-    'diagnostics_copied': 'Diagnostics copied',
-    'retry_alignment': 'Retry alignment',
     'replace_subtitle': 'Replace subtitle',
     'replace_subtitle_title': 'Replace this subtitle?',
     'replace_subtitle_body':
@@ -815,8 +759,6 @@ class AppStrings {
         'MOSS Local returned an incomplete tagged transcript.',
     'error_alignment_partial':
         'Some segments could not receive reliable word timing.',
-    'error_alignment_timeline_conflict':
-        'Aligned words crossed a neighboring subtitle, so both cues kept their original timing.',
     'error_alignment_segment_too_long':
         'A segment over 29 seconds was skipped during local alignment.',
     'error_alignment_failed':
@@ -1110,18 +1052,13 @@ class AppStrings {
     'new_session_body': '{count} 个尚未转写的文件将被移除。已完成的转写仍会保留在资料库中。',
     'start_new': '开始新批次',
     'transcribe': '开始转写',
-    'align_subtitles': '对齐字幕',
-    'process_all': '处理全部',
     'drop_title': '拖入媒体及同名字幕',
     'supported': '音视频 + SRT/WebVTT · 单文件最长 5 小时',
     'subtitle_import_review_title': '确认媒体与字幕',
-    'subtitle_import_local_alignment': '本地对齐',
     'subtitle_import_stays_local': '音频保留在此 Mac',
     'subtitle_import_no_stt_charge': '不产生转写 API 费用',
     'subtitle_import_translation_disclosure':
         '可选的 LLM 翻译仍可能把字幕文本发送到你配置的服务商，并产生费用。',
-    'subtitle_alignment_platform_required':
-        '本地字幕对齐需要运行 macOS 15 或更高版本的 Apple Silicon Mac。',
     'subtitle_import_media_required': '请添加支持的音频或视频文件与这些字幕配对。',
     'subtitle_import_unmatched_count': '有 {count} 个字幕未能自动匹配；如有需要，请在媒体行中手动选择。',
     'subtitle_import_duplicate_selection': '每个字幕文件只能分配给一个媒体。',
@@ -1132,48 +1069,7 @@ class AppStrings {
     'language': '语言',
     'subtitle_import_cue_summary': '{format} · {count} 条定时字幕',
     'subtitle_import_ignored_cues': '将忽略 {count} 条格式错误或超出范围的字幕。',
-    'subtitle_import_long_cues': '有 {count} 条字幕超过 29 秒，将保留原始时间。',
     'subtitle_import_failed': '无法导入媒体和字幕。',
-    'subtitle_alignment_ready_count': '{count} 项将使用现有字幕进行本地对齐',
-    'subtitle_alignment_model_ready': '所选词级时间模型已安装并可用。',
-    'subtitle_alignment_model_required': '开始对齐前，请安装或选择词级时间模型。',
-    'install_recommended_alignment_model': '安装推荐的 INT8 模型',
-    'choose_another_model': '选择其他模型',
-    'existing_subtitles': '现有字幕',
-    'subtitle_alignment_ready': '可以开始对齐',
-    'subtitle_alignment_retry_available': '点击“对齐字幕”重试',
-    'subtitle_alignment_running': '正在本地对齐…',
-    'subtitle_alignment_coverage': '已对齐 {aligned}/{total} 条 · {kept} 条保留原始时间',
-    'subtitle_cue_original_timing': '未对齐 · 保留原始时间',
-    'mark_alignment_resolved': '标记为已解决',
-    'alignment_marked_resolved': '已标记为已解决',
-    'subtitle_alignment_completed': '导入 {format} · 已在本地对齐',
-    'subtitle_alignment_partial': '导入 {format} · 部分保留原始时间',
-    'subtitle_alignment_original_kept': '导入 {format} · 已保留原始时间',
-    'view_problem': '查看问题',
-    'subtitle_alignment_problem_title': '字幕对齐问题',
-    'alignment_problem_what_happened': '问题原因',
-    'alignment_problem_impact_title': '已保留的结果',
-    'alignment_problem_impact':
-        '{aligned}/{total} 条字幕已对齐。{kept} 条保留原始时间；字幕文本和顺序没有改变。',
-    'alignment_problem_actions_title': '手动处理方法',
-    'alignment_problem_worker_actions':
-        '关闭其他占用大量内存的应用，在“设置”中选择推荐的 INT8 对齐模型，然后重试。如果再次发生，请重新安装所选模型。',
-    'alignment_problem_language_actions':
-        '明确选择字幕语言，或替换为受支持语言的 SRT/WebVTT 文件，然后重试。',
-    'alignment_problem_model_actions': '请在“设置”中安装或重新选择推荐的 INT8 对齐模型，然后重试。',
-    'alignment_problem_source_actions': '重新关联原始媒体文件，然后重试对齐。',
-    'alignment_problem_default_actions':
-        '请重试对齐。如果同一问题反复发生，请改用推荐的 INT8 模型或替换字幕文件。',
-    'alignment_problem_technical_details': '技术详情',
-    'alignment_problem_code': '错误码：{code}',
-    'alignment_problem_model': '模型：{model}',
-    'alignment_problem_no_details': '对齐进程没有报告更多详情。',
-    'alignment_problem_worker_no_exit_detail':
-        '进程没有报告停止原因。下方内容只是最后捕获的诊断输出，不一定是故障原因。',
-    'copy_diagnostics': '复制诊断信息',
-    'diagnostics_copied': '诊断信息已复制',
-    'retry_alignment': '重试对齐',
     'replace_subtitle': '替换字幕',
     'replace_subtitle_title': '替换这个字幕？',
     'replace_subtitle_body': '这会清除当前词级时间、翻译和此项目的 AI 简报内容。原始媒体不会改变。',
@@ -1579,7 +1475,6 @@ class AppStrings {
     'error_local_audio_format': '准备好的本地音频格式不受支持。',
     'error_moss_truncated_output': 'MOSS Local 返回了不完整的标签化转写。',
     'error_alignment_partial': '部分片段无法生成可靠的词级时间。',
-    'error_alignment_timeline_conflict': '对齐词跨入相邻字幕，因此两条字幕均保留原始时间。',
     'error_alignment_segment_too_long': '本地对齐已跳过超过 29 秒的字幕片段。',
     'error_alignment_failed': '精确时间轴生成失败，已保留说话人段落稿。',
     'error_alignment_unsupported': '此 Mac 无法使用本地对齐。',

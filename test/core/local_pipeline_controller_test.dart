@@ -16,424 +16,344 @@ import 'package:listenook/state/app_controller.dart';
 
 void main() {
   test(
-    'imported subtitles align directly from their persisted snapshot',
+    'failed imported subtitles retry without provider credentials',
     () async {
       final fixture = await _Fixture.create();
       addTearDown(fixture.dispose);
-      final subtitle = File('${fixture.root.path}/meeting.srt');
-      await subtitle.writeAsString('''
+      final now = DateTime.now().toUtc();
+      await LocalJobRepository(fixture.paths).save(
+        TranscriptionJob(
+          id: 'failed-import',
+          batchId: 'batch',
+          sourcePath: fixture.audio.path,
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.failed,
+          metadata: _metadata,
+          transcriptionProvider: TranscriptionProvider.mossPro,
+          transcriptAcquisitionMode:
+              TranscriptAcquisitionMode.importedSubtitles,
+          transcriptSource: TranscriptSource.importedSubtitle,
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: const [
+              TranscriptSegment(
+                id: 'cue',
+                startMs: 100,
+                endMs: 2000,
+                text: 'Saved subtitle',
+              ),
+            ],
+            speakers: const [],
+            updatedAt: now,
+          ),
+        ),
+      );
+      final alignment = _CountingAlignment();
+      final controller = await fixture.controller(
+        settings: const AppSettings(),
+        localStt: _CountingLocalStt(),
+        alignment: alignment,
+      );
+      addTearDown(controller.dispose);
+      await controller.retry('failed-import');
+      expect(controller.jobById('failed-import')!.status, JobStatus.completed);
+      expect(alignment.calls, 0);
+    },
+  );
+
+  for (final provider in TranscriptionProvider.values) {
+    test(
+      'imported subtitles reject alignment with ${provider.name} selected',
+      () async {
+        final fixture = await _Fixture.create();
+        addTearDown(fixture.dispose);
+        final now = DateTime.now().toUtc();
+        await LocalJobRepository(fixture.paths).save(
+          TranscriptionJob(
+            id: 'imported-provider',
+            batchId: 'batch',
+            sourcePath: fixture.audio.path,
+            createdAt: now,
+            updatedAt: now,
+            status: JobStatus.completed,
+            metadata: _metadata,
+            transcriptionProvider: provider,
+            transcriptAcquisitionMode:
+                TranscriptAcquisitionMode.importedSubtitles,
+            transcriptSource: TranscriptSource.importedSubtitle,
+            document: TranscriptDocument(
+              tokens: const [],
+              segments: const [
+                TranscriptSegment(
+                  id: 'cue',
+                  startMs: 100,
+                  endMs: 2000,
+                  text: 'Imported text',
+                ),
+              ],
+              speakers: const [],
+              updatedAt: now,
+            ),
+          ),
+        );
+        final alignment = _CountingAlignment();
+        final controller = await fixture.controller(
+          settings: const AppSettings(),
+          localStt: _CountingLocalStt(),
+          alignment: alignment,
+        );
+        addTearDown(controller.dispose);
+        await controller.retryForcedAlignment('imported-provider');
+        expect(alignment.calls, 0);
+        final job = controller.jobById('imported-provider')!;
+        expect(job.forcedAlignment.status, ForcedAlignmentStatus.notRequested);
+        expect(job.document!.segments.single.startMs, 100);
+        expect(job.document!.segments.single.endMs, 2000);
+      },
+    );
+  }
+
+  test('imported subtitles complete immediately with cue timing', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.dispose);
+    final subtitle = File('${fixture.root.path}/meeting.srt');
+    await subtitle.writeAsString('''
 1
 00:00:00,000 --> 00:00:02,000
 Hello imported
 ''');
-      final localStt = _CountingLocalStt();
-      final alignment = _ImportedAlignment();
-      final controller = await fixture.controller(
-        settings: const AppSettings(
-          defaultTranscriptionProvider: TranscriptionProvider.soniox,
-          defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlInt8,
-          automaticWordTiming: false,
-        ),
-        localStt: localStt,
-        alignment: alignment,
-      );
+    final localStt = _CountingLocalStt();
+    final alignment = _CountingAlignment();
+    final controller = await fixture.controller(
+      settings: const AppSettings(
+        defaultTranscriptionProvider: TranscriptionProvider.soniox,
+        automaticWordTiming: false,
+      ),
+      localStt: localStt,
+      alignment: alignment,
+    );
 
-      final review = await controller.previewSourceImports([
-        fixture.audio.path,
-        subtitle.path,
-      ]);
-      final match = review!.media.single;
-      await controller.enqueueReviewedImports([
-        SubtitleImportSelection(
-          media: match.media,
-          subtitle: match.automaticCandidate,
-          languageCode: 'en',
-        ),
-      ]);
-      await subtitle.writeAsString('changed after import');
+    final review = await controller.previewSourceImports([
+      fixture.audio.path,
+      subtitle.path,
+    ]);
+    final match = review!.media.single;
+    await controller.enqueueReviewedImports([
+      SubtitleImportSelection(
+        media: match.media,
+        subtitle: match.automaticCandidate,
+      ),
+    ]);
+    await subtitle.writeAsString('changed after import');
 
-      var job = controller.inboxJobs.single;
-      expect(job.status, JobStatus.ready);
-      expect(
-        job.transcriptAcquisitionMode,
-        TranscriptAcquisitionMode.importedSubtitles,
-      );
-      expect(job.transcriptSource, TranscriptSource.importedSubtitle);
-      expect(job.document!.segments.single.text, 'Hello imported');
-      expect(job.importedSubtitleProvenance!.displayName, 'meeting.srt');
+    var job = controller.inboxJobs.single;
+    expect(job.status, JobStatus.completed);
+    expect(
+      job.transcriptAcquisitionMode,
+      TranscriptAcquisitionMode.importedSubtitles,
+    );
+    expect(job.transcriptSource, TranscriptSource.importedSubtitle);
+    expect(job.document!.segments.single.text, 'Hello imported');
+    expect(job.document!.segments.single.startMs, 0);
+    expect(job.document!.segments.single.endMs, 2000);
+    expect(job.document!.tokens, isEmpty);
+    expect(job.importedSubtitleProvenance!.displayName, 'meeting.srt');
+    expect(job.forcedAlignment.status, ForcedAlignmentStatus.notRequested);
+    expect(localStt.calls, 0);
+    expect(alignment.calls, 0);
 
-      await controller.startReady();
+    await controller.startReady();
+    expect(alignment.calls, 0);
 
-      job = controller.inboxJobs.single;
-      expect(localStt.calls, 0);
-      expect(alignment.requests, hasLength(1));
-      expect(
-        alignment.requests.single.document.segments.single.text,
-        'Hello imported',
-      );
-      expect(job.status, JobStatus.completed);
-      expect(job.forcedAlignment.status, ForcedAlignmentStatus.completed);
-      expect(job.document!.segments.single.text, 'Hello imported');
-      expect(job.document!.segments.single.startMs, 250);
-      expect(job.document!.segments.single.endMs, 1750);
-      expect(job.document!.segments.single.alignmentWindowStartMs, 0);
-      expect(job.document!.segments.single.alignmentWindowEndMs, 2000);
-
-      await subtitle.writeAsString('''
+    await subtitle.writeAsString('''
 1
 00:00:00,300 --> 00:00:01,600
 Replacement text
 ''');
-      expect(
-        await controller.replaceImportedSubtitle(job.id, subtitle.path),
-        isNull,
-      );
-      job = controller.inboxJobs.single;
-      expect(job.status, JobStatus.ready);
-      expect(job.document!.tokens, isEmpty);
-      expect(job.document!.segments.single.text, 'Replacement text');
-      expect(job.document!.segments.single.startMs, 300);
-      expect(job.document!.segments.single.endMs, 1600);
-      expect(job.forcedAlignment.status, ForcedAlignmentStatus.notRequested);
-    },
-  );
+    expect(
+      await controller.replaceImportedSubtitle(job.id, subtitle.path),
+      isNull,
+    );
+    job = controller.inboxJobs.single;
+    expect(job.status, JobStatus.completed);
+    expect(job.document!.tokens, isEmpty);
+    expect(job.document!.segments.single.text, 'Replacement text');
+    expect(job.document!.segments.single.startMs, 300);
+    expect(job.document!.segments.single.endMs, 1600);
+    expect(job.forcedAlignment.status, ForcedAlignmentStatus.notRequested);
+    expect(alignment.calls, 0);
+  });
 
   test(
-    'imported alignment persists a checkpoint before interruption',
+    'a persisted ready imported job migrates to completed on load',
     () async {
       final fixture = await _Fixture.create();
       addTearDown(fixture.dispose);
-      final subtitle = File('${fixture.root.path}/meeting.srt');
-      await subtitle.writeAsString('''
-1
-00:00:00,000 --> 00:00:01,000
-First.
-
-2
-00:00:01,000 --> 00:00:02,000
-Second
-''');
-      final controller = await fixture.controller(
-        settings: const AppSettings(
-          defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlInt8,
-        ),
-        localStt: _CountingLocalStt(),
-        alignment: _CheckpointThenCancelAlignment(),
-      );
-      final review = await controller.previewSourceImports([
-        fixture.audio.path,
-        subtitle.path,
-      ]);
-      await controller.enqueueReviewedImports([
-        SubtitleImportSelection(
-          media: review!.media.single.media,
-          subtitle: review.media.single.automaticCandidate,
-          languageCode: 'en',
-        ),
-      ]);
-
-      await controller.startReady();
-
-      final job = controller.inboxJobs.single;
-      expect(job.forcedAlignment.status, ForcedAlignmentStatus.cancelled);
-      expect(job.forcedAlignment.alignedSegments, 1);
-      expect(
-        job.document!.tokens.single.segmentId,
-        job.document!.segments.first.id,
-      );
-      expect(job.document!.segments.first.startMs, 100);
-      expect(job.document!.segments.first.endMs, 800);
-      final persisted = (await LocalJobRepository(
-        fixture.paths,
-      ).loadAll()).single;
-      expect(
-        persisted.document!.tokens.single.segmentId,
-        persisted.document!.segments.first.id,
-      );
-    },
-  );
-
-  test(
-    'conflicting imported alignment keeps only affected cues at original timing',
-    () async {
-      final fixture = await _Fixture.create();
-      addTearDown(fixture.dispose);
-      final subtitle = File('${fixture.root.path}/meeting.srt');
-      await subtitle.writeAsString('''
-1
-00:00:00,000 --> 00:00:02,500
-First sentence.
-
-2
-00:00:01,500 --> 00:00:04,000
-Second sentence.
-
-3
-00:00:04,000 --> 00:00:06,000
-Third sentence.
-''');
-      final controller = await fixture.controller(
-        settings: const AppSettings(
-          defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlInt8,
-        ),
-        localStt: _CountingLocalStt(),
-        alignment: _ConflictingImportedAlignment(),
-        media: _FixedMetadataMedia(
-          const MediaMetadata(
-            sizeBytes: 64,
-            durationMs: 6000,
-            hasAudio: true,
-            hasVideo: false,
-            formatName: 'wav',
+      final now = DateTime.now().toUtc();
+      await LocalJobRepository(fixture.paths).save(
+        TranscriptionJob(
+          id: 'ready-imported',
+          batchId: 'batch',
+          sourcePath: fixture.audio.path,
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.ready,
+          metadata: _metadata,
+          transcriptionProvider: TranscriptionProvider.soniox,
+          transcriptAcquisitionMode:
+              TranscriptAcquisitionMode.importedSubtitles,
+          transcriptSource: TranscriptSource.importedSubtitle,
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: const [
+              TranscriptSegment(
+                id: 'subtitle-cue-1',
+                startMs: 0,
+                endMs: 2000,
+                text: 'Hello imported',
+              ),
+            ],
+            speakers: const [],
+            updatedAt: now,
+          ),
+          importedSubtitleProvenance: ImportedSubtitleProvenance(
+            sourcePath: '${fixture.root.path}/meeting.srt',
+            displayName: 'meeting.srt',
+            format: SubtitleFormat.srt,
+            importedAt: now,
+          ),
+          forcedAlignment: const ForcedAlignmentState(
+            status: ForcedAlignmentStatus.partial,
+            alignedSegments: 1,
+            totalSegments: 1,
+            warningCode: 'alignment_partial',
           ),
         ),
       );
-      final review = await controller.previewSourceImports([
-        fixture.audio.path,
-        subtitle.path,
-      ]);
-      await controller.enqueueReviewedImports([
-        SubtitleImportSelection(
-          media: review!.media.single.media,
-          subtitle: review.media.single.automaticCandidate,
-          languageCode: 'en',
-        ),
-      ]);
-      await _waitFor(
-        () => controller.inboxJobs.single.status == JobStatus.ready,
+
+      final controller = await fixture.controller(
+        settings: const AppSettings(),
+        localStt: _LocalStt(),
+        alignment: _CountingAlignment(),
       );
 
-      await controller.startReady();
-
-      final job = controller.inboxJobs.single;
+      final recovered = controller.jobById('ready-imported')!;
+      expect(recovered.status, JobStatus.completed);
+      expect(recovered.progress.stage, 'complete');
+      expect(recovered.progress.fraction, 1);
+      expect(recovered.document!.segments.single.text, 'Hello imported');
       expect(
-        (job.errorCode, job.errorMessage),
-        (null, null),
-        reason: 'alignment should complete without a job-level failure',
+        recovered.forcedAlignment.status,
+        ForcedAlignmentStatus.notRequested,
       );
-      expect(job.status, JobStatus.completed);
-      expect(job.document!.tokens.map((token) => token.text), [
-        'Third ',
-        'sentence.',
-      ]);
-      expect(job.document!.segments, hasLength(3));
-      expect(
-        job.document!.segments.map(
-          (segment) => (segment.startMs, segment.endMs),
-        ),
-        [(0, 2500), (1500, 4000), (4300, 5700)],
-      );
-      expect(
-        job.document!.segments.map((segment) => segment.alignmentIncomplete),
-        [true, true, false],
-      );
-      expect(job.forcedAlignment.status, ForcedAlignmentStatus.partial);
-      expect(job.forcedAlignment.alignedSegments, 1);
-      expect(job.forcedAlignment.totalSegments, 3);
-      expect(job.forcedAlignment.warningCode, 'alignment_timeline_conflict');
+      expect(recovered.forcedAlignment.warningCode, isNull);
     },
   );
 
   test(
-    'rolling subtitles align normalized sentence text without mass fallback',
+    'a persisted aligning imported job migrates to completed on load',
     () async {
       final fixture = await _Fixture.create();
       addTearDown(fixture.dispose);
-      final subtitle = File('${fixture.root.path}/meeting.srt');
-      await subtitle.writeAsString('''
-1
-00:00:00,000 --> 00:00:05,000
-Sentence zero.
-
-2
-00:00:01,000 --> 00:00:06,000
-Sentence one.
-
-3
-00:00:02,000 --> 00:00:07,000
-Sentence two.
-
-4
-00:00:03,000 --> 00:00:08,000
-Sentence three.
-
-5
-00:00:04,000 --> 00:00:09,000
-Sentence four.
-
-6
-00:00:05,000 --> 00:00:10,000
-Sentence five.
-
-7
-00:00:06,000 --> 00:00:11,000
-Sentence six.
-
-8
-00:00:07,000 --> 00:00:12,000
-Sentence seven.
-''');
-      final alignment = _RollingImportedAlignment();
-      final controller = await fixture.controller(
-        settings: const AppSettings(
-          defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlInt8,
-        ),
-        localStt: _CountingLocalStt(),
-        alignment: alignment,
-        media: _FixedMetadataMedia(
-          const MediaMetadata(
-            sizeBytes: 64,
-            durationMs: 12000,
-            hasAudio: true,
-            hasVideo: false,
-            formatName: 'wav',
+      final now = DateTime.now().toUtc();
+      await LocalJobRepository(fixture.paths).save(
+        TranscriptionJob(
+          id: 'aligning-imported',
+          batchId: 'batch',
+          sourcePath: fixture.audio.path,
+          createdAt: now,
+          updatedAt: now,
+          status: JobStatus.aligning,
+          metadata: _metadata,
+          transcriptionProvider: TranscriptionProvider.soniox,
+          transcriptAcquisitionMode:
+              TranscriptAcquisitionMode.importedSubtitles,
+          transcriptSource: TranscriptSource.importedSubtitle,
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: const [
+              TranscriptSegment(
+                id: 'subtitle-cue-1',
+                startMs: 0,
+                endMs: 2000,
+                text: 'Hello imported',
+              ),
+            ],
+            speakers: const [],
+            updatedAt: now,
+          ),
+          importedSubtitleProvenance: ImportedSubtitleProvenance(
+            sourcePath: '${fixture.root.path}/meeting.srt',
+            displayName: 'meeting.srt',
+            format: SubtitleFormat.srt,
+            importedAt: now,
+          ),
+          forcedAlignment: const ForcedAlignmentState(
+            status: ForcedAlignmentStatus.running,
+            alignedSegments: 0,
+            totalSegments: 1,
           ),
         ),
       );
-      final review = await controller.previewSourceImports([
-        fixture.audio.path,
-        subtitle.path,
-      ]);
-      await controller.enqueueReviewedImports([
-        SubtitleImportSelection(
-          media: review!.media.single.media,
-          subtitle: review.media.single.automaticCandidate,
-          languageCode: 'en',
-        ),
-      ]);
-      await _waitFor(
-        () => controller.inboxJobs.single.status == JobStatus.ready,
-      );
 
-      await controller.startReady();
-
-      final request = alignment.requests.single;
-      expect(request.timelineMode, ForcedAlignmentTimelineMode.orderedText);
-      expect(
-        request.document.segments.every(
-          (segment) => segment.id.startsWith('imported-sentence-'),
-        ),
-        isTrue,
-      );
-      final job = controller.inboxJobs.single;
-      expect(job.forcedAlignment.status, ForcedAlignmentStatus.completed);
-      expect(job.forcedAlignment.alignedSegments, 8);
-      expect(job.document!.segments, hasLength(8));
-      expect(
-        job.document!.segments.any((segment) => segment.alignmentIncomplete),
-        isFalse,
-      );
-      expect(
-        job.document!.segments.map((segment) => segment.text),
-        request.document.segments.map((segment) => segment.text),
-      );
-    },
-  );
-
-  test(
-    'retry realigns persisted cross-cue conflicts instead of reusing them',
-    () async {
-      final fixture = await _Fixture.create();
-      addTearDown(fixture.dispose);
-      final subtitle = File('${fixture.root.path}/meeting.srt');
-      await subtitle.writeAsString('''
-1
-00:00:00,000 --> 00:00:02,500
-First sentence.
-
-2
-00:00:01,500 --> 00:00:04,000
-Second sentence.
-''');
-      const settings = AppSettings(
-        defaultForcedAlignmentModel: ForcedAlignmentModel.qwen3CoreMlInt8,
-      );
-      const metadata = MediaMetadata(
-        sizeBytes: 64,
-        durationMs: 4000,
-        hasAudio: true,
-        hasVideo: false,
-        formatName: 'wav',
-      );
       final controller = await fixture.controller(
-        settings: settings,
-        localStt: _CountingLocalStt(),
-        alignment: _ImportedAlignment(),
-        media: _FixedMetadataMedia(metadata),
+        settings: const AppSettings(),
+        localStt: _LocalStt(),
+        alignment: _CountingAlignment(),
       );
-      final review = await controller.previewSourceImports([
-        fixture.audio.path,
-        subtitle.path,
-      ]);
-      await controller.enqueueReviewedImports([
-        SubtitleImportSelection(
-          media: review!.media.single.media,
-          subtitle: review.media.single.automaticCandidate,
-          languageCode: 'en',
-        ),
-      ]);
-      await _waitFor(
-        () => controller.inboxJobs.single.status == JobStatus.ready,
-      );
-      final imported = controller.inboxJobs.single;
-      final first = imported.document!.segments.first;
-      final second = imported.document!.segments.last;
-      final persistedConflict = imported.copyWith(
-        status: JobStatus.completed,
-        document: imported.document!.copyWith(
-          segments: [
-            first.copyWith(startMs: 400, endMs: 2100),
-            second.copyWith(startMs: 1800, endMs: 3600),
-          ],
-          tokens: [
-            TranscriptToken(
-              text: 'First sentence.',
-              startMs: 400,
-              endMs: 2100,
-              segmentId: first.id,
-            ),
-            TranscriptToken(
-              text: 'Second sentence.',
-              startMs: 1800,
-              endMs: 3600,
-              segmentId: second.id,
-            ),
-          ],
-        ),
-        importedSubtitleProvenance: imported.importedSubtitleProvenance!
-            .copyWith(sentenceBreaksNormalized: true),
-        forcedAlignment: ForcedAlignmentState(
-          status: ForcedAlignmentStatus.partial,
-          modelId: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
-          modelRevision:
-              LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.revision,
-          alignedSegments: 2,
-          totalSegments: 2,
-          warningCode: 'alignment_partial',
-        ),
-      );
-      await LocalJobRepository(fixture.paths).save(persistedConflict);
 
-      final repair = _RepairingImportedAlignment();
-      final reloaded = await fixture.controller(
-        settings: settings,
-        localStt: _CountingLocalStt(),
-        alignment: repair,
-        media: _FixedMetadataMedia(metadata),
-      );
-      await reloaded.retryForcedAlignment(imported.id);
-
-      expect(repair.requests.single.document.tokens, isEmpty);
-      final repaired = reloaded.jobById(imported.id)!;
-      expect(repaired.forcedAlignment.status, ForcedAlignmentStatus.completed);
+      final recovered = controller.jobById('aligning-imported')!;
+      expect(recovered.status, JobStatus.completed);
       expect(
-        repaired.document!.segments.map(
-          (segment) => (segment.startMs, segment.endMs),
-        ),
-        [(400, 1400), (1600, 3600)],
+        recovered.forcedAlignment.status,
+        ForcedAlignmentStatus.notRequested,
       );
+      expect(recovered.forcedAlignment.warningCode, isNull);
     },
   );
+
+  test('an imported job without segments migrates to empty on load', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.dispose);
+    final now = DateTime.now().toUtc();
+    await LocalJobRepository(fixture.paths).save(
+      TranscriptionJob(
+        id: 'empty-imported',
+        batchId: 'batch',
+        sourcePath: fixture.audio.path,
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.ready,
+        metadata: _metadata,
+        transcriptionProvider: TranscriptionProvider.soniox,
+        transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+        transcriptSource: TranscriptSource.importedSubtitle,
+        document: TranscriptDocument(
+          tokens: const [],
+          segments: const [],
+          speakers: const [],
+          updatedAt: now,
+        ),
+        importedSubtitleProvenance: ImportedSubtitleProvenance(
+          sourcePath: '${fixture.root.path}/meeting.srt',
+          displayName: 'meeting.srt',
+          format: SubtitleFormat.srt,
+          importedAt: now,
+        ),
+      ),
+    );
+
+    final controller = await fixture.controller(
+      settings: const AppSettings(),
+      localStt: _LocalStt(),
+      alignment: _CountingAlignment(),
+    );
+
+    final recovered = controller.jobById('empty-imported')!;
+    expect(recovered.status, JobStatus.empty);
+    expect(recovered.progress.stage, 'complete');
+  });
 
   test('startup does not wait for full local-model verification', () async {
     final fixture = await _Fixture.create();
@@ -2198,197 +2118,6 @@ class _CountingAlignment implements ForcedAlignmentService {
       alignedSegments: 0,
       totalSegments: 1,
     );
-  }
-}
-
-class _ImportedAlignment implements ForcedAlignmentService {
-  final requests = <ForcedAlignmentRequest>[];
-
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<AlignmentResult> align(
-    ForcedAlignmentRequest request, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    requests.add(request);
-    final segment = request.document.segments.single;
-    return AlignmentResult(
-      tokens: [
-        TranscriptToken(
-          text: 'Hello',
-          startMs: 250,
-          endMs: 900,
-          segmentId: segment.id,
-        ),
-        TranscriptToken(
-          text: 'imported',
-          startMs: 950,
-          endMs: 1750,
-          segmentId: segment.id,
-        ),
-      ],
-      status: ForcedAlignmentStatus.completed,
-      alignedSegments: 1,
-      totalSegments: 1,
-    );
-  }
-}
-
-class _ConflictingImportedAlignment implements ForcedAlignmentService {
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<AlignmentResult> align(
-    ForcedAlignmentRequest request, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    final first = request.document.segments.first;
-    final second = request.document.segments[1];
-    final third = request.document.segments[2];
-    return AlignmentResult(
-      tokens: [
-        TranscriptToken(
-          text: 'First ',
-          startMs: 400,
-          endMs: 1000,
-          segmentId: first.id,
-        ),
-        TranscriptToken(
-          text: 'sentence.',
-          startMs: 1000,
-          endMs: 2100,
-          segmentId: first.id,
-        ),
-        TranscriptToken(
-          text: 'Second ',
-          startMs: 1800,
-          endMs: 2600,
-          segmentId: second.id,
-        ),
-        TranscriptToken(
-          text: 'sentence.',
-          startMs: 2600,
-          endMs: 3600,
-          segmentId: second.id,
-        ),
-        TranscriptToken(
-          text: 'Third ',
-          startMs: 4300,
-          endMs: 5000,
-          segmentId: third.id,
-        ),
-        TranscriptToken(
-          text: 'sentence.',
-          startMs: 5000,
-          endMs: 5700,
-          segmentId: third.id,
-        ),
-      ],
-      status: ForcedAlignmentStatus.completed,
-      alignedSegments: 3,
-      totalSegments: 3,
-    );
-  }
-}
-
-class _RepairingImportedAlignment implements ForcedAlignmentService {
-  final requests = <ForcedAlignmentRequest>[];
-
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<AlignmentResult> align(
-    ForcedAlignmentRequest request, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    requests.add(request);
-    final first = request.document.segments.first;
-    final second = request.document.segments.last;
-    return AlignmentResult(
-      tokens: [
-        TranscriptToken(
-          text: 'First sentence.',
-          startMs: 400,
-          endMs: 1400,
-          segmentId: first.id,
-        ),
-        TranscriptToken(
-          text: 'Second sentence.',
-          startMs: 1600,
-          endMs: 3600,
-          segmentId: second.id,
-        ),
-      ],
-      status: ForcedAlignmentStatus.completed,
-      alignedSegments: 2,
-      totalSegments: 2,
-    );
-  }
-}
-
-class _RollingImportedAlignment implements ForcedAlignmentService {
-  final requests = <ForcedAlignmentRequest>[];
-
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<AlignmentResult> align(
-    ForcedAlignmentRequest request, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    requests.add(request);
-    return AlignmentResult(
-      tokens: [
-        for (var index = 0; index < request.document.segments.length; index++)
-          TranscriptToken(
-            text: request.document.segments[index].text,
-            startMs: index * 1000 + 100,
-            endMs: index * 1000 + 900,
-            segmentId: request.document.segments[index].id,
-          ),
-      ],
-      status: ForcedAlignmentStatus.completed,
-      alignedSegments: request.document.segments.length,
-      totalSegments: request.document.segments.length,
-    );
-  }
-}
-
-class _CheckpointThenCancelAlignment implements ForcedAlignmentService {
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<AlignmentResult> align(
-    ForcedAlignmentRequest request, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    request.onCheckpoint?.call(
-      AlignmentResult(
-        tokens: [
-          TranscriptToken(
-            text: 'First',
-            startMs: 100,
-            endMs: 800,
-            segmentId: request.document.segments.first.id,
-          ),
-        ],
-        status: ForcedAlignmentStatus.partial,
-        alignedSegments: 1,
-        totalSegments: 2,
-      ),
-    );
-    throw const OperationCancelledException();
   }
 }
 

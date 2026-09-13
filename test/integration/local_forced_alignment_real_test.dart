@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:listenook/core/contracts.dart';
-import 'package:listenook/core/imported_subtitle_alignment.dart';
 import 'package:listenook/core/local_speech.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/local_speech_process.dart';
@@ -51,21 +50,6 @@ void main() {
               .cast<String, dynamic>();
       final job = TranscriptionJob.fromJson(manifest);
       final savedDocument = job.document!;
-      final importedPlan =
-          job.transcriptAcquisitionMode ==
-              TranscriptAcquisitionMode.importedSubtitles
-          ? const ImportedSubtitleAlignmentPlanner().prepare(
-              savedDocument,
-              sentenceBreaksNormalized:
-                  job.importedSubtitleProvenance?.sentenceBreaksNormalized ??
-                  false,
-            )
-          : null;
-      final alignmentDocument = importedPlan?.document ?? savedDocument;
-      final timelineMode =
-          importedPlan?.timelineMode == ImportedSubtitleTimelineMode.orderedText
-          ? ForcedAlignmentTimelineMode.orderedText
-          : ForcedAlignmentTimelineMode.segmentBounded;
       var selectedSegmentIds = requestedSegmentIds;
       if (requestedSegmentIds != null && !useExactSegments) {
         final captureWorker = _RequestCapturingWorker();
@@ -78,10 +62,9 @@ void main() {
         await planningService.align(
           ForcedAlignmentRequest(
             sourcePath: job.sourcePath,
-            document: alignmentDocument.copyWith(tokens: const []),
+            document: savedDocument.copyWith(tokens: const []),
             model: alignmentModel,
             languageHints: job.options.languageHints,
-            timelineMode: timelineMode,
           ),
         );
         selectedSegmentIds = captureWorker.windowSegmentIdsContaining(
@@ -90,13 +73,13 @@ void main() {
         );
       }
       final document = selectedSegmentIds == null
-          ? alignmentDocument.copyWith(
-              tokens: resumeSavedTokens ? alignmentDocument.tokens : const [],
+          ? savedDocument.copyWith(
+              tokens: resumeSavedTokens ? savedDocument.tokens : const [],
               preserveUpdatedAt: true,
             )
-          : alignmentDocument.copyWith(
+          : savedDocument.copyWith(
               tokens: resumeSavedTokens
-                  ? alignmentDocument.tokens
+                  ? savedDocument.tokens
                         .where(
                           (token) =>
                               token.segmentId != null &&
@@ -136,29 +119,12 @@ void main() {
           document: document,
           model: alignmentModel,
           languageHints: job.options.languageHints,
-          timelineMode: timelineMode,
         ),
       );
       final covered = result.tokens
           .map((token) => token.segmentId)
           .whereType<String>()
           .toSet();
-      final timelineConflicts = <Map<String, Object?>>[];
-      if (timelineMode == ForcedAlignmentTimelineMode.orderedText) {
-        for (var index = 0; index + 1 < result.tokens.length; index++) {
-          final left = result.tokens[index];
-          final right = result.tokens[index + 1];
-          if (left.endMs <= right.startMs) continue;
-          timelineConflicts.add({
-            'left_segment_id': left.segmentId,
-            'left_start_ms': left.startMs,
-            'left_end_ms': left.endMs,
-            'right_segment_id': right.segmentId,
-            'right_start_ms': right.startMs,
-            'right_end_ms': right.endMs,
-          });
-        }
-      }
 
       final missing = document.segments
           .map((segment) => segment.id)
@@ -174,14 +140,6 @@ void main() {
           'raw_tokens': worker.tokensFor(missing),
         });
       }
-      if (timelineConflicts.isNotEmpty) {
-        // ignore: avoid_print
-        print({
-          'timeline_conflicts': timelineConflicts,
-          'last_worker_windows': worker.windowSummaries(),
-        });
-      }
-      expect(timelineConflicts, isEmpty);
       if (requestedSegmentIds != null || requireComplete) {
         expect(missing, isEmpty);
       } else {
@@ -207,25 +165,6 @@ class _RecordingWorker implements LocalSpeechWorker {
   final LocalSpeechWorker delegate;
   Map<String, dynamic>? lastOutput;
   Map<String, dynamic>? lastRequest;
-
-  List<Map<String, Object?>> windowSummaries() {
-    final windows = lastRequest?['windows'];
-    if (windows is! List) return const [];
-    return windows.whereType<Map>().map((window) {
-      final segments = window['segments'];
-      return <String, Object?>{
-        'start_ms': window['start_ms'],
-        'end_ms': window['end_ms'],
-        'segment_ids': segments is List
-            ? segments
-                  .whereType<Map>()
-                  .map((segment) => segment['id']?.toString())
-                  .whereType<String>()
-                  .toList()
-            : const <String>[],
-      };
-    }).toList();
-  }
 
   List<Map<String, Object?>> windowsFor(Iterable<String> segmentIds) {
     final requested = segmentIds.toSet();

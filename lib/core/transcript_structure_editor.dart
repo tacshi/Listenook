@@ -210,10 +210,6 @@ class TranscriptStructureEditor {
       speaker: segment.speaker,
       language: segment.language,
       preserveBoundaryBefore: segment.preserveBoundaryBefore,
-      alignmentWindowStartMs: segment.alignmentWindowStartMs ?? segment.startMs,
-      alignmentWindowEndMs: timing.$1,
-      alignmentIncomplete: segment.alignmentIncomplete,
-      alignmentManuallyResolved: segment.alignmentManuallyResolved,
     );
     final right = TranscriptSegment(
       id: newId,
@@ -223,10 +219,6 @@ class TranscriptStructureEditor {
       speaker: segment.speaker,
       language: segment.language,
       preserveBoundaryBefore: true,
-      alignmentWindowStartMs: timing.$2,
-      alignmentWindowEndMs: segment.alignmentWindowEndMs ?? segment.endMs,
-      alignmentIncomplete: segment.alignmentIncomplete,
-      alignmentManuallyResolved: segment.alignmentManuallyResolved,
     );
     final rightTokenIndexes = {
       for (final item in owned.skip(edit.rightTokenIndex)) item.documentIndex,
@@ -303,18 +295,6 @@ class TranscriptStructureEditor {
       language: left.language ?? right.language,
       translatedText: translated,
       preserveBoundaryBefore: left.preserveBoundaryBefore,
-      alignmentWindowStartMs: min(
-        left.alignmentWindowStartMs ?? left.startMs,
-        right.alignmentWindowStartMs ?? right.startMs,
-      ),
-      alignmentWindowEndMs: max(
-        left.alignmentWindowEndMs ?? left.endMs,
-        right.alignmentWindowEndMs ?? right.endMs,
-      ),
-      alignmentIncomplete:
-          left.alignmentIncomplete || right.alignmentIncomplete,
-      alignmentManuallyResolved:
-          left.alignmentManuallyResolved && right.alignmentManuallyResolved,
     );
     final rightTokenIndexes = {
       for (final item in _ownedTokens(document, right, leftIndex + 1))

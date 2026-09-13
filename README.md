@@ -32,9 +32,8 @@ Supported media: MP3, WAV, M4A, OGG, MP4, MKV, and AVI, up to 300 minutes per fi
   follow shows, preview episodes, and download episodes for further study.
   Word-level publisher transcripts can be imported when available.
 - **Import subtitles:** pair SRT or WebVTT files with local media and review
-  matches before import. On supported Macs, imported subtitles can be aligned
-  locally with Qwen3 ForcedAligner without cloud transcription; original subtitle
-  files remain unchanged.
+  matches before import. Imported subtitles use their parsed cue timings;
+  they do not run speech recognition or forced alignment.
 - **Transcribe recordings:** batch files with speaker labels where supported,
   language hints, context terms, progress, cancellation, and recovery after
   interruption.

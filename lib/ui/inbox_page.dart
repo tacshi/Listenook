@@ -1,17 +1,13 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../core/models.dart';
-import '../core/local_speech.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
-import 'app_notice.dart';
 import 'job_actions.dart';
 import 'inbox_monitor_setup_dialog.dart';
 import 'subtitle_import_review_dialog.dart';
@@ -292,12 +288,8 @@ class _InboxActions extends StatelessWidget {
                   dimension: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : Icon(
-                  _primaryActionKey(controller) == 'align_subtitles'
-                      ? Icons.auto_fix_high_rounded
-                      : Icons.auto_awesome_rounded,
-                ),
-          label: Text(context.strings.t(_primaryActionKey(controller))),
+              : const Icon(Icons.auto_awesome_rounded),
+          label: Text(context.strings.t('transcribe')),
         ),
         if (controller.completedCount >= 2)
           _ExportCompletedButton(
@@ -317,29 +309,6 @@ class _InboxActions extends StatelessWidget {
     );
   }
 
-  String _primaryActionKey(AppController controller) {
-    final relevant = controller.inboxJobs
-        .where(
-          (job) =>
-              job.status.isActive ||
-              job.status.canTranscribe ||
-              (job.transcriptAcquisitionMode ==
-                      TranscriptAcquisitionMode.importedSubtitles &&
-                  job.forcedAlignment.canRequest),
-        )
-        .toList(growable: false);
-    if (relevant.isEmpty) return 'transcribe';
-    final imported = relevant
-        .where(
-          (job) =>
-              job.transcriptAcquisitionMode ==
-              TranscriptAcquisitionMode.importedSubtitles,
-        )
-        .length;
-    if (imported == relevant.length) return 'align_subtitles';
-    if (imported > 0) return 'process_all';
-    return 'transcribe';
-  }
 }
 
 class _EmptyDropZone extends StatelessWidget {
@@ -532,16 +501,11 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
     final providerConfigured = controller.isTranscriptionProviderConfigured(
       provider,
     );
-    final importedJobs = controller.inboxJobs
-        .where(
-          (job) =>
-              job.transcriptAcquisitionMode ==
-              TranscriptAcquisitionMode.importedSubtitles,
-        )
-        .toList(growable: false);
-    final hasImportedJobs = importedJobs.isNotEmpty;
-    final hasTranscriptionJobs =
-        importedJobs.length != controller.inboxJobs.length;
+    final hasTranscriptionJobs = controller.inboxJobs.any(
+      (job) =>
+          job.transcriptAcquisitionMode !=
+          TranscriptAcquisitionMode.importedSubtitles,
+    );
     return Card(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -566,13 +530,6 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
             ],
           ),
           const SizedBox(height: 12),
-          if (hasImportedJobs) ...[
-            _SubtitleAlignmentPanel(
-              importedCount: importedJobs.length,
-              controller: controller,
-            ),
-            if (hasTranscriptionJobs) const Divider(height: 20),
-          ],
           if (hasTranscriptionJobs) ...[
             DropdownButtonFormField<TranscriptionProvider>(
               key: const Key('session-transcription-provider'),
@@ -740,95 +697,6 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
       .where((item) => item.isNotEmpty)
       .toSet()
       .toList();
-}
-
-class _SubtitleAlignmentPanel extends StatelessWidget {
-  const _SubtitleAlignmentPanel({
-    required this.importedCount,
-    required this.controller,
-  });
-
-  final int importedCount;
-  final AppController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final recommended = LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8;
-    final downloading = controller.localModelDownloading(recommended.id);
-    final progress = controller.localModelDownloadProgress(recommended.id);
-    final ready = controller.defaultForcedAlignerReady;
-    final supported = controller.localForcedAlignmentSupported;
-    return Container(
-      key: const Key('subtitle-alignment-panel'),
-      decoration: BoxDecoration(
-        color: Theme.of(
-          context,
-        ).colorScheme.primaryContainer.withValues(alpha: .35),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-      ),
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.auto_fix_high_rounded,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  context.strings
-                      .t('subtitle_alignment_ready_count')
-                      .replaceFirst('{count}', '$importedCount'),
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            context.strings.t(
-              !supported
-                  ? 'subtitle_alignment_platform_required'
-                  : ready
-                  ? 'subtitle_alignment_model_ready'
-                  : 'subtitle_alignment_model_required',
-            ),
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          if (downloading) ...[
-            const SizedBox(height: 10),
-            LinearProgressIndicator(value: progress),
-          ] else if (supported && !ready) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton.icon(
-                  key: const Key('install-subtitle-alignment-model'),
-                  onPressed: () =>
-                      controller.downloadLocalModel(recommended.id),
-                  icon: const Icon(Icons.download_rounded),
-                  label: Text(
-                    context.strings.t('install_recommended_alignment_model'),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () =>
-                      controller.setDestination(AppDestination.settings),
-                  child: Text(context.strings.t('choose_another_model')),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
 }
 
 class _LanguageHintsPicker extends StatefulWidget {
@@ -1177,33 +1045,11 @@ class _JobTile extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color:
-                          job.status == JobStatus.failed ||
-                              _hasAlignmentProblem(job)
+                      color: job.status == JobStatus.failed
                           ? color.error
                           : color.onSurfaceVariant,
                     ),
                   ),
-                  if (_hasAlignmentProblem(job)) ...[
-                    const SizedBox(height: 2),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        key: ValueKey('alignment-problem-${job.id}'),
-                        style: TextButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          foregroundColor: color.error,
-                        ),
-                        onPressed: () =>
-                            _showSubtitleAlignmentProblem(context, job),
-                        icon: const Icon(Icons.info_outline_rounded, size: 16),
-                        label: Text(context.strings.t('view_problem')),
-                      ),
-                    ),
-                  ],
                   if (_canOfferPublisherCaptions(job)) ...[
                     const SizedBox(height: 2),
                     Align(
@@ -1300,35 +1146,6 @@ class _JobTile extends StatelessWidget {
     final duration = job.metadata == null
         ? ''
         : formatClock(job.metadata!.durationMs);
-    if (job.transcriptAcquisitionMode ==
-        TranscriptAcquisitionMode.importedSubtitles) {
-      final alignment = job.forcedAlignment;
-      final alignmentSummary = switch (alignment.status) {
-        ForcedAlignmentStatus.completed || ForcedAlignmentStatus.partial =>
-          context.strings
-              .t('subtitle_alignment_coverage')
-              .replaceFirst('{aligned}', '${alignment.alignedSegments}')
-              .replaceFirst('{total}', '${alignment.totalSegments}')
-              .replaceFirst(
-                '{kept}',
-                '${alignment.totalSegments - alignment.alignedSegments}',
-              ),
-        ForcedAlignmentStatus.unavailable ||
-        ForcedAlignmentStatus.failed ||
-        ForcedAlignmentStatus.cancelled ||
-        ForcedAlignmentStatus.interrupted =>
-          '${context.strings.error(alignment.warningCode, englishFallback: alignment.warningMessage)} · ${context.strings.t('subtitle_alignment_retry_available')}',
-        _ => context.strings.t(
-          job.status == JobStatus.aligning
-              ? 'subtitle_alignment_running'
-              : 'subtitle_alignment_ready',
-        ),
-      };
-      return [
-        alignmentSummary,
-        duration,
-      ].where((part) => part.trim().isNotEmpty).join(' · ');
-    }
     final transcript = switch (job.transcriptAcquisitionMode) {
       TranscriptAcquisitionMode.publisherCaptions => context.strings.t(
         'podcast_captions_selected',
@@ -1348,199 +1165,6 @@ class _JobTile extends StatelessWidget {
       transcript,
     ].where((part) => part.trim().isNotEmpty).join(' · ');
   }
-}
-
-bool _hasAlignmentProblem(TranscriptionJob job) {
-  if (job.transcriptAcquisitionMode !=
-      TranscriptAcquisitionMode.importedSubtitles) {
-    return false;
-  }
-  return switch (job.forcedAlignment.status) {
-    ForcedAlignmentStatus.partial =>
-      job.forcedAlignment.alignedSegments < job.forcedAlignment.totalSegments,
-    ForcedAlignmentStatus.unavailable ||
-    ForcedAlignmentStatus.failed ||
-    ForcedAlignmentStatus.cancelled ||
-    ForcedAlignmentStatus.interrupted => true,
-    _ => false,
-  };
-}
-
-Future<void> _showSubtitleAlignmentProblem(
-  BuildContext context,
-  TranscriptionJob job,
-) async {
-  final strings = context.strings;
-  final controller = context.read<AppController>();
-  final alignment = job.forcedAlignment;
-  final code = alignment.warningCode ?? 'alignment_failed';
-  final detail = alignment.warningMessage?.trim();
-  final kept = max(0, alignment.totalSegments - alignment.alignedSegments);
-  final impact = strings
-      .t('alignment_problem_impact')
-      .replaceFirst('{aligned}', '${alignment.alignedSegments}')
-      .replaceFirst('{total}', '${alignment.totalSegments}')
-      .replaceFirst('{kept}', '$kept');
-  final actionKey = switch (code) {
-    'local_worker_failed' ||
-    'local_worker_invalid_output' => 'alignment_problem_worker_actions',
-    'alignment_language_unsupported' => 'alignment_problem_language_actions',
-    'alignment_model_missing' ||
-    'alignment_model_not_selected' ||
-    'alignment_model_invalid' ||
-    'alignment_model_head_invalid' => 'alignment_problem_model_actions',
-    'alignment_source_missing' ||
-    'local_audio_missing' ||
-    'local_audio_format' => 'alignment_problem_source_actions',
-    _ => 'alignment_problem_default_actions',
-  };
-  final model = alignment.modelId;
-  final diagnostic = [
-    strings.t('subtitle_alignment_problem_title'),
-    strings.t('alignment_problem_code').replaceFirst('{code}', code),
-    if (model != null)
-      strings.t('alignment_problem_model').replaceFirst('{model}', model),
-    impact,
-    if (detail?.isNotEmpty == true) detail!,
-  ].join('\n');
-
-  await showDialog<void>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      key: ValueKey('alignment-problem-dialog-${job.id}'),
-      icon: Icon(
-        Icons.error_outline_rounded,
-        color: Theme.of(dialogContext).colorScheme.error,
-      ),
-      title: Text(strings.t('subtitle_alignment_problem_title')),
-      content: SizedBox(
-        width: 520,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _AlignmentProblemSection(
-                title: strings.t('alignment_problem_what_happened'),
-                child: Text(
-                  strings.error(code, englishFallback: detail),
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-              const SizedBox(height: 16),
-              _AlignmentProblemSection(
-                title: strings.t('alignment_problem_impact_title'),
-                child: Text(impact),
-              ),
-              const SizedBox(height: 16),
-              _AlignmentProblemSection(
-                title: strings.t('alignment_problem_actions_title'),
-                child: Text(strings.t(actionKey)),
-              ),
-              const SizedBox(height: 16),
-              _AlignmentProblemSection(
-                title: strings.t('alignment_problem_technical_details'),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Theme.of(
-                      dialogContext,
-                    ).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      SelectableText(
-                        strings
-                            .t('alignment_problem_code')
-                            .replaceFirst('{code}', code),
-                      ),
-                      if (model != null)
-                        SelectableText(
-                          strings
-                              .t('alignment_problem_model')
-                              .replaceFirst('{model}', model),
-                        ),
-                      if (code == 'local_worker_failed' &&
-                          detail?.contains('Worker exited with code') != true &&
-                          detail?.contains('terminated by signal') != true) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          strings.t('alignment_problem_worker_no_exit_detail'),
-                        ),
-                      ],
-                      const SizedBox(height: 8),
-                      SelectableText(
-                        detail?.isNotEmpty == true
-                            ? detail!
-                            : strings.t('alignment_problem_no_details'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton.icon(
-          onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: diagnostic));
-            if (!dialogContext.mounted) return;
-            showAppNotice(
-              dialogContext,
-              message: strings.t('diagnostics_copied'),
-              tone: AppNoticeTone.success,
-            );
-          },
-          icon: const Icon(Icons.copy_rounded),
-          label: Text(strings.t('copy_diagnostics')),
-        ),
-        TextButton(
-          onPressed: () {
-            Navigator.of(dialogContext).pop();
-            controller.setDestination(AppDestination.settings);
-          },
-          child: Text(strings.t('choose_another_model')),
-        ),
-        TextButton(
-          onPressed: () => Navigator.of(dialogContext).pop(),
-          child: Text(strings.t('close')),
-        ),
-        if (alignment.canRetry)
-          FilledButton(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-              unawaited(controller.retryForcedAlignment(job.id));
-            },
-            child: Text(strings.t('retry_alignment')),
-          ),
-      ],
-    ),
-  );
-}
-
-class _AlignmentProblemSection extends StatelessWidget {
-  const _AlignmentProblemSection({required this.title, required this.child});
-
-  final String title;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Text(
-        title,
-        style: Theme.of(
-          context,
-        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-      ),
-      const SizedBox(height: 6),
-      child,
-    ],
-  );
 }
 
 bool _canOfferPublisherCaptions(TranscriptionJob job) {
@@ -1563,14 +1187,6 @@ class _StatusIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = Theme.of(context).colorScheme;
-    if (_hasAlignmentProblem(job)) {
-      return Icon(
-        Icons.error_rounded,
-        key: ValueKey('alignment-problem-icon-${job.id}'),
-        color: color.error,
-        size: 25,
-      );
-    }
     final (icon, tint) = switch (job.status) {
       JobStatus.completed => (Icons.check_circle_rounded, Colors.green),
       JobStatus.failed ||
@@ -1587,7 +1203,6 @@ class _StatusIcon extends StatelessWidget {
 
 enum _JobAction {
   retry,
-  retryAlignment,
   replaceSubtitle,
   cancel,
   relink,
@@ -1607,14 +1222,6 @@ class _JobMenu extends StatelessWidget {
         PopupMenuItem(
           value: _JobAction.retry,
           child: Text(context.strings.t('retry')),
-        ),
-      if (job.transcriptAcquisitionMode ==
-              TranscriptAcquisitionMode.importedSubtitles &&
-          !job.isBusy &&
-          (job.forcedAlignment.canRetry || job.forcedAlignment.hasWordTiming))
-        PopupMenuItem(
-          value: _JobAction.retryAlignment,
-          child: Text(context.strings.t('retry_local_alignment')),
         ),
       if (job.transcriptAcquisitionMode ==
               TranscriptAcquisitionMode.importedSubtitles &&
@@ -1647,9 +1254,6 @@ class _JobMenu extends StatelessWidget {
     switch (action) {
       case _JobAction.retry:
         await controller.retry(job.id);
-        return;
-      case _JobAction.retryAlignment:
-        await controller.retryForcedAlignment(job.id);
         return;
       case _JobAction.replaceSubtitle:
         await chooseAndReplaceSubtitle(context, job);

@@ -75,16 +75,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     );
   }
 
-  bool _showsAlignment(TranscriptionJob job) =>
-      job.transcriptSource == TranscriptSource.importedSubtitle ||
-      job.transcriptAcquisitionMode ==
-          TranscriptAcquisitionMode.importedSubtitles ||
-      job.transcriptSource == TranscriptSource.mossPro ||
-      job.transcriptSource == TranscriptSource.mossLocal ||
-      job.transcriptSource == TranscriptSource.qwen3Local ||
-      job.transcriptionProvider == TranscriptionProvider.mossPro ||
-      job.transcriptionProvider == TranscriptionProvider.mossLocal ||
-      job.transcriptionProvider == TranscriptionProvider.qwen3Local;
+  bool _showsAlignment(TranscriptionJob job) => job.supportsLocalWordAlignment;
 
   bool _shouldShowAlignmentNotice(TranscriptionJob? job) {
     final jobId = job?.id;
@@ -142,33 +133,23 @@ class _MossTimingBar extends StatelessWidget {
     final qwen =
         job.transcriptSource == TranscriptSource.qwen3Local ||
         job.transcriptionProvider == TranscriptionProvider.qwen3Local;
-    final imported =
-        job.transcriptAcquisitionMode ==
-            TranscriptAcquisitionMode.importedSubtitles ||
-        job.transcriptSource == TranscriptSource.importedSubtitle;
     final labelKey = switch (alignment.status) {
       ForcedAlignmentStatus.completed =>
-        imported
-            ? 'subtitle_alignment_completed'
-            : qwen
+        qwen
             ? 'qwen_local_word_level'
             : local
             ? 'moss_local_word_level'
             : 'moss_pro_local_alignment',
       ForcedAlignmentStatus.partial =>
-        imported
-            ? 'subtitle_alignment_partial'
-            : qwen
+        qwen
             ? 'qwen_local_partial_alignment'
             : local
             ? 'moss_local_partial_alignment'
             : 'moss_pro_partial_alignment',
-      ForcedAlignmentStatus.queued || ForcedAlignmentStatus.running =>
-        imported ? 'subtitle_alignment_running' : 'moss_alignment_running',
+      ForcedAlignmentStatus.queued ||
+      ForcedAlignmentStatus.running => 'moss_alignment_running',
       _ =>
-        imported
-            ? 'subtitle_alignment_original_kept'
-            : qwen
+        qwen
             ? 'qwen_local_segment_level'
             : local
             ? 'moss_local_segment_level'
@@ -186,14 +167,7 @@ class _MossTimingBar extends StatelessWidget {
               .replaceFirst('{total}', '${alignment.totalSegments}')
         : null;
     final visibleWarning = alignment.warningCode;
-    final formatName = switch (job.importedSubtitleProvenance?.format) {
-      SubtitleFormat.srt => 'SRT',
-      SubtitleFormat.webVtt => 'WebVTT',
-      null => context.strings.t('subtitles'),
-    };
-    final provenanceLabel = context.strings
-        .t(labelKey)
-        .replaceFirst('{format}', formatName);
+    final provenanceLabel = context.strings.t(labelKey);
     return Material(
       key: const Key('workspace-moss-timing-status'),
       color: colors.surfaceContainerHigh,

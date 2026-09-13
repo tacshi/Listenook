@@ -19,13 +19,11 @@ Silero VAD for segment timing and does not identify speakers. Installing an
 optional speech model is the only time that model connects to Hugging Face;
 inference uses verified offline Core ML or MLX files under Application Support.
 
-When you pair an existing SRT or WebVTT file with media, Listenook stores an
-immutable parsed snapshot of its timed cues and sends that snapshot directly to
-the local Qwen3 ForcedAligner. It does not call a transcription provider,
-upload media, or fall back to cloud transcription. Successful cues receive
-locally generated word timing and tighter cue boundaries; unsuccessful cues
-keep their imported timing. The original subtitle file is never modified or
-silently re-read on retry. Replacing it is an explicit action. Optional LLM
+When you pair an existing SRT or WebVTT file with media, Listenook parses its
+timed cues locally and plays them back using the cue timings as written. It
+does not call a transcription provider, upload media, run a local speech
+model, or fall back to cloud transcription. The original subtitle file is
+never modified. Replacing it is an explicit action. Optional LLM
 translation remains separate and sends subtitle text—not media—to the configured
 text endpoint when enabled.
 

@@ -277,26 +277,13 @@ void main() {
     },
   );
 
-  test('imported subtitle snapshot provenance and cue windows round-trip', () {
+  test('imported subtitle provenance round-trips', () {
     final now = DateTime.utc(2026, 8, 24, 9, 30);
     final fingerprint = SourceFingerprint(
       identity: '/media/movie.en.srt',
       path: '/media/movie.en.srt',
       sizeBytes: 128,
       modifiedAt: now,
-    );
-    final snapshot = TranscriptDocument(
-      tokens: const [],
-      segments: const [
-        TranscriptSegment(
-          id: 'subtitle-cue-1',
-          startMs: 1000,
-          endMs: 3000,
-          text: 'Unchanged subtitle text',
-        ),
-      ],
-      speakers: const [],
-      updatedAt: now,
     );
     final restored = TranscriptionJob.fromJson(
       TranscriptionJob(
@@ -305,7 +292,7 @@ void main() {
         sourcePath: '/media/movie.mp4',
         createdAt: now,
         updatedAt: now,
-        status: JobStatus.ready,
+        status: JobStatus.completed,
         transcriptionProvider: TranscriptionProvider.soniox,
         transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
         transcriptSource: TranscriptSource.importedSubtitle,
@@ -315,8 +302,6 @@ void main() {
           format: SubtitleFormat.srt,
           importedAt: now,
           sourceFingerprint: fingerprint,
-          sourceDocumentSnapshot: snapshot,
-          sentenceBreaksNormalized: true,
         ),
         document: TranscriptDocument(
           tokens: const [],
@@ -325,11 +310,7 @@ void main() {
               id: 'subtitle-cue-1',
               startMs: 1250,
               endMs: 2800,
-              alignmentWindowStartMs: 1000,
-              alignmentWindowEndMs: 3000,
               text: 'Unchanged subtitle text',
-              alignmentIncomplete: true,
-              alignmentManuallyResolved: true,
             ),
           ],
           speakers: const [],
@@ -346,31 +327,13 @@ void main() {
     expect(restored.transcriptionProvider, TranscriptionProvider.soniox);
     expect(restored.importedSubtitleProvenance!.format, SubtitleFormat.srt);
     expect(
-      restored
-          .importedSubtitleProvenance!
-          .sourceDocumentSnapshot!
-          .segments
-          .single
-          .text,
-      'Unchanged subtitle text',
-    );
-    expect(
-      restored.importedSubtitleProvenance!.sentenceBreaksNormalized,
-      isTrue,
-    );
-    expect(restored.document!.segments.single.alignmentIncomplete, isTrue);
-    expect(
-      restored.document!.segments.single.alignmentManuallyResolved,
-      isTrue,
-    );
-    expect(
       restored.importedSubtitleProvenance!.sourceFingerprint!.sameVersion(
         fingerprint,
       ),
       isTrue,
     );
-    expect(restored.document!.segments.single.alignmentWindowStartMs, 1000);
-    expect(restored.document!.segments.single.alignmentWindowEndMs, 3000);
+    expect(restored.document!.segments.single.startMs, 1250);
+    expect(restored.document!.segments.single.endMs, 2800);
     expect(restored.toJson()['manifest_version'], manifestVersion);
   });
 

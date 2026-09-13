@@ -1472,240 +1472,6 @@ void main() {
     );
   });
 
-  testWidgets('partial imported alignment highlights cues kept unchanged', (
-    tester,
-  ) async {
-    _setTestWindow(tester, const Size(800, 700));
-    final controller = await _controllerForDocument(
-      TranscriptDocument(
-        tokens: const [
-          TranscriptToken(
-            text: 'Aligned',
-            startMs: 120,
-            endMs: 820,
-            segmentId: 'aligned',
-          ),
-        ],
-        segments: const [
-          TranscriptSegment(
-            id: 'aligned',
-            startMs: 120,
-            endMs: 820,
-            text: 'Aligned cue',
-            alignmentWindowStartMs: 100,
-            alignmentWindowEndMs: 900,
-          ),
-          TranscriptSegment(
-            id: 'failed',
-            startMs: 1000,
-            endMs: 1900,
-            text: 'Cue with original timing',
-            alignmentWindowStartMs: 1000,
-            alignmentWindowEndMs: 1900,
-          ),
-        ],
-        speakers: const [],
-        updatedAt: DateTime.now().toUtc(),
-      ),
-      transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
-      transcriptSource: TranscriptSource.importedSubtitle,
-      forcedAlignment: const ForcedAlignmentState(
-        status: ForcedAlignmentStatus.partial,
-        alignedSegments: 1,
-        totalSegments: 2,
-        warningCode: 'alignment_partial',
-      ),
-    );
-    addTearDown(controller.dispose);
-
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: const MaterialApp(
-          locale: Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [AppStrings.delegate],
-          home: Scaffold(body: TranscriptReview(jobId: 'job')),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(
-      find.byKey(const ValueKey('segment-alignment-failed-failed')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('segment-alignment-failed-aligned')),
-      findsNothing,
-    );
-
-    final resolve = find.byKey(
-      const ValueKey('mark-alignment-resolved-failed'),
-    );
-    expect(resolve, findsOneWidget);
-    await tester.tap(resolve);
-    await tester.pumpAndSettle();
-
-    expect(
-      find.byKey(const ValueKey('segment-alignment-failed-failed')),
-      findsNothing,
-    );
-    expect(
-      controller.allJobs.single.document!.segments
-          .singleWhere((segment) => segment.id == 'failed')
-          .alignmentManuallyResolved,
-      isTrue,
-    );
-    expect(find.text('Marked as resolved'), findsOneWidget);
-    final noticeRect = tester.getRect(find.byKey(const Key('app-notice')));
-    expect(noticeRect.width, lessThan(520));
-    expect(noticeRect.bottom, lessThan(700));
-
-    await tester.tap(find.text('Undo'));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('segment-alignment-failed-failed')),
-      findsOneWidget,
-    );
-    expect(
-      controller.allJobs.single.document!.segments
-          .singleWhere((segment) => segment.id == 'failed')
-          .alignmentManuallyResolved,
-      isFalse,
-    );
-  });
-
-  testWidgets('imported subtitle cues read as complete sentences', (
-    tester,
-  ) async {
-    _setTestWindow(tester, const Size(800, 700));
-    final source = TranscriptDocument(
-      tokens: const [],
-      segments: const [
-        TranscriptSegment(
-          id: 'cue-1',
-          startMs: 0,
-          endMs: 900,
-          text: "To get us started, I'm going to try",
-        ),
-        TranscriptSegment(
-          id: 'cue-2',
-          startMs: 1000,
-          endMs: 1900,
-          text: "something. >> So, I'm going to ask ChatGPT [noise]",
-        ),
-        TranscriptSegment(
-          id: 'cue-3',
-          startMs: 2000,
-          endMs: 2900,
-          text: 'what it truly believes.',
-        ),
-      ],
-      speakers: const [],
-      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
-    );
-    final controller = await _controllerForDocument(
-      TranscriptDocument(
-        tokens: const [
-          TranscriptToken(
-            text: 'To',
-            startMs: 0,
-            endMs: 100,
-            segmentId: 'cue-1',
-          ),
-          TranscriptToken(
-            text: 'try',
-            startMs: 700,
-            endMs: 850,
-            segmentId: 'cue-1',
-          ),
-          TranscriptToken(
-            text: 'something',
-            startMs: 1000,
-            endMs: 1200,
-            segmentId: 'cue-2',
-          ),
-          TranscriptToken(
-            text: 'So',
-            startMs: 1250,
-            endMs: 1350,
-            segmentId: 'cue-2',
-          ),
-          TranscriptToken(
-            text: 'ChatGPT',
-            startMs: 1700,
-            endMs: 1850,
-            segmentId: 'cue-2',
-          ),
-          TranscriptToken(
-            text: 'what',
-            startMs: 2000,
-            endMs: 2100,
-            segmentId: 'cue-3',
-          ),
-          TranscriptToken(
-            text: 'believes',
-            startMs: 2700,
-            endMs: 2850,
-            segmentId: 'cue-3',
-          ),
-        ],
-        segments: source.segments,
-        speakers: const [],
-        updatedAt: DateTime.now().toUtc(),
-      ),
-      transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
-      transcriptSource: TranscriptSource.importedSubtitle,
-      importedSubtitleProvenance: ImportedSubtitleProvenance(
-        sourcePath: '/missing/subtitle.srt',
-        displayName: 'subtitle.srt',
-        format: SubtitleFormat.srt,
-        importedAt: DateTime.fromMillisecondsSinceEpoch(0),
-        sourceDocumentSnapshot: source,
-      ),
-      forcedAlignment: const ForcedAlignmentState(
-        status: ForcedAlignmentStatus.completed,
-        alignedSegments: 3,
-        totalSegments: 3,
-      ),
-    );
-    addTearDown(controller.dispose);
-
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
-        child: const MaterialApp(
-          locale: Locale('en'),
-          supportedLocales: AppStrings.supportedLocales,
-          localizationsDelegates: [AppStrings.delegate],
-          home: Scaffold(body: TranscriptReview(jobId: 'job')),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text("To get us started, I'm going to try something."),
-      findsOneWidget,
-    );
-    expect(
-      find.text("So, I'm going to ask ChatGPT what it truly believes."),
-      findsOneWidget,
-    );
-    expect(controller.allJobs.single.document!.segments, hasLength(2));
-    expect(
-      controller
-          .allJobs
-          .single
-          .importedSubtitleProvenance!
-          .sourceDocumentSnapshot!
-          .segments[1]
-          .text,
-      "something. So, I'm going to ask ChatGPT",
-    );
-  });
-
   testWidgets(
     'large Workspace transcript opens and scrolls without a UI stall',
     (tester) async {
@@ -5716,6 +5482,36 @@ void main() {
     );
   });
 
+  for (final provider in TranscriptionProvider.values) {
+    testWidgets('imported subtitle menu hides alignment for ${provider.name}', (
+      tester,
+    ) async {
+      final controller = await _controllerForDocument(
+        _simpleDocument(),
+        transcriptionProvider: provider,
+        transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+        transcriptSource: TranscriptSource.importedSubtitle,
+      );
+      addTearDown(controller.dispose);
+      controller.openInWorkspace('job');
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const MaterialApp(
+            locale: Locale('en'),
+            supportedLocales: AppStrings.supportedLocales,
+            localizationsDelegates: [AppStrings.delegate],
+            home: Scaffold(body: WorkspacePage()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('review-toolbar-more')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('retry-forced-alignment')), findsNothing);
+    });
+  }
+
   testWidgets('legacy MOSS transcripts expose manual local alignment', (
     tester,
   ) async {
@@ -8771,6 +8567,7 @@ Future<AppController> _controllerForDocument(
   AiGenerationState aiGenerationState = const AiGenerationState(),
   JobSourceOrigin sourceOrigin = JobSourceOrigin.manual,
   PodcastEpisodeProvenance? podcastProvenance,
+  TranscriptionProvider transcriptionProvider = TranscriptionProvider.soniox,
   TranscriptAcquisitionMode transcriptAcquisitionMode =
       TranscriptAcquisitionMode.soniox,
   TranscriptSource? transcriptSource,
@@ -8797,6 +8594,7 @@ Future<AppController> _controllerForDocument(
         aiGenerationState: aiGenerationState,
         sourceOrigin: sourceOrigin,
         podcastProvenance: podcastProvenance,
+        transcriptionProvider: transcriptionProvider,
         transcriptAcquisitionMode: transcriptAcquisitionMode,
         transcriptSource: transcriptSource,
         importedSubtitleProvenance: importedSubtitleProvenance,

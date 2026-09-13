@@ -465,8 +465,6 @@ class ImportedSubtitleProvenance {
     required this.format,
     required this.importedAt,
     this.sourceFingerprint,
-    this.sourceDocumentSnapshot,
-    this.sentenceBreaksNormalized = false,
   });
 
   final String sourcePath;
@@ -474,23 +472,8 @@ class ImportedSubtitleProvenance {
   final SubtitleFormat format;
   final DateTime importedAt;
   final SourceFingerprint? sourceFingerprint;
-  final TranscriptDocument? sourceDocumentSnapshot;
-  final bool sentenceBreaksNormalized;
 
-  ImportedSubtitleProvenance copyWith({
-    TranscriptDocument? sourceDocumentSnapshot,
-    bool? sentenceBreaksNormalized,
-  }) => ImportedSubtitleProvenance(
-    sourcePath: sourcePath,
-    displayName: displayName,
-    format: format,
-    importedAt: importedAt,
-    sourceFingerprint: sourceFingerprint,
-    sourceDocumentSnapshot:
-        sourceDocumentSnapshot ?? this.sourceDocumentSnapshot,
-    sentenceBreaksNormalized:
-        sentenceBreaksNormalized ?? this.sentenceBreaksNormalized,
-  );
+  ImportedSubtitleProvenance copyWith() => this;
 
   Map<String, dynamic> toJson() => {
     'source_path': sourcePath,
@@ -499,9 +482,6 @@ class ImportedSubtitleProvenance {
     'imported_at': importedAt.toUtc().toIso8601String(),
     if (sourceFingerprint case final value?)
       'source_fingerprint': value.toJson(),
-    if (sourceDocumentSnapshot case final value?)
-      'source_document_snapshot': value.toJson(),
-    if (sentenceBreaksNormalized) 'sentence_breaks_normalized': true,
   };
 
   factory ImportedSubtitleProvenance.fromJson(Map<String, dynamic> json) =>
@@ -517,14 +497,6 @@ class ImportedSubtitleProvenance {
                 (json['source_fingerprint'] as Map).cast<String, dynamic>(),
               )
             : null,
-        sourceDocumentSnapshot: json['source_document_snapshot'] is Map
-            ? TranscriptDocument.fromJson(
-                (json['source_document_snapshot'] as Map)
-                    .cast<String, dynamic>(),
-              )
-            : null,
-        sentenceBreaksNormalized:
-            json['sentence_breaks_normalized'] as bool? ?? false,
       );
 }
 
@@ -660,10 +632,6 @@ class TranscriptSegment {
     this.language,
     this.translatedText,
     this.preserveBoundaryBefore = false,
-    this.alignmentWindowStartMs,
-    this.alignmentWindowEndMs,
-    this.alignmentIncomplete = false,
-    this.alignmentManuallyResolved = false,
   });
 
   final String id;
@@ -674,10 +642,6 @@ class TranscriptSegment {
   final String? language;
   final String? translatedText;
   final bool preserveBoundaryBefore;
-  final int? alignmentWindowStartMs;
-  final int? alignmentWindowEndMs;
-  final bool alignmentIncomplete;
-  final bool alignmentManuallyResolved;
 
   bool get hasTranslation => translatedText?.trim().isNotEmpty ?? false;
 
@@ -690,10 +654,6 @@ class TranscriptSegment {
     String? translatedText,
     bool clearTranslatedText = false,
     bool? preserveBoundaryBefore,
-    int? alignmentWindowStartMs,
-    int? alignmentWindowEndMs,
-    bool? alignmentIncomplete,
-    bool? alignmentManuallyResolved,
   }) => TranscriptSegment(
     id: id,
     startMs: startMs ?? this.startMs,
@@ -706,12 +666,6 @@ class TranscriptSegment {
         : translatedText ?? this.translatedText,
     preserveBoundaryBefore:
         preserveBoundaryBefore ?? this.preserveBoundaryBefore,
-    alignmentWindowStartMs:
-        alignmentWindowStartMs ?? this.alignmentWindowStartMs,
-    alignmentWindowEndMs: alignmentWindowEndMs ?? this.alignmentWindowEndMs,
-    alignmentIncomplete: alignmentIncomplete ?? this.alignmentIncomplete,
-    alignmentManuallyResolved:
-        alignmentManuallyResolved ?? this.alignmentManuallyResolved,
   );
 
   Map<String, dynamic> toJson() => {
@@ -723,32 +677,20 @@ class TranscriptSegment {
     if (language case final value?) 'language': value,
     if (translatedText case final value?) 'translated_text': value,
     if (preserveBoundaryBefore) 'preserve_boundary_before': true,
-    if (alignmentWindowStartMs case final value?)
-      'alignment_window_start_ms': value,
-    if (alignmentWindowEndMs case final value?)
-      'alignment_window_end_ms': value,
-    if (alignmentIncomplete) 'alignment_incomplete': true,
-    if (alignmentManuallyResolved) 'alignment_manually_resolved': true,
   };
 
-  factory TranscriptSegment.fromJson(
-    Map<String, dynamic> json,
-  ) => TranscriptSegment(
-    id: json['id'] as String? ?? '${json['start_ms'] ?? 0}',
-    startMs: (json['start_ms'] as num?)?.toInt() ?? 0,
-    endMs: (json['end_ms'] as num?)?.toInt() ?? 0,
-    text: json['text'] as String? ?? '',
-    speaker: json['speaker']?.toString(),
-    language: json['language'] as String?,
-    translatedText: json['translated_text'] as String?,
-    preserveBoundaryBefore: json['preserve_boundary_before'] as bool? ?? false,
-    alignmentWindowStartMs: (json['alignment_window_start_ms'] as num?)
-        ?.toInt(),
-    alignmentWindowEndMs: (json['alignment_window_end_ms'] as num?)?.toInt(),
-    alignmentIncomplete: json['alignment_incomplete'] as bool? ?? false,
-    alignmentManuallyResolved:
-        json['alignment_manually_resolved'] as bool? ?? false,
-  );
+  factory TranscriptSegment.fromJson(Map<String, dynamic> json) =>
+      TranscriptSegment(
+        id: json['id'] as String? ?? '${json['start_ms'] ?? 0}',
+        startMs: (json['start_ms'] as num?)?.toInt() ?? 0,
+        endMs: (json['end_ms'] as num?)?.toInt() ?? 0,
+        text: json['text'] as String? ?? '',
+        speaker: json['speaker']?.toString(),
+        language: json['language'] as String?,
+        translatedText: json['translated_text'] as String?,
+        preserveBoundaryBefore:
+            json['preserve_boundary_before'] as bool? ?? false,
+      );
 }
 
 class SpeakerProfile {
@@ -2242,6 +2184,20 @@ class TranscriptionJob {
   final TranscriptSource? transcriptSource;
   final TranscriptionModelReference? transcriptionModel;
   final ForcedAlignmentState forcedAlignment;
+
+  bool get usesImportedSubtitles =>
+      transcriptAcquisitionMode ==
+          TranscriptAcquisitionMode.importedSubtitles ||
+      transcriptSource == TranscriptSource.importedSubtitle;
+
+  bool get supportsLocalWordAlignment =>
+      !usesImportedSubtitles &&
+      (transcriptSource == TranscriptSource.mossPro ||
+          transcriptSource == TranscriptSource.mossLocal ||
+          transcriptSource == TranscriptSource.qwen3Local ||
+          transcriptionProvider == TranscriptionProvider.mossPro ||
+          transcriptionProvider == TranscriptionProvider.mossLocal ||
+          transcriptionProvider == TranscriptionProvider.qwen3Local);
 
   bool get isBusy =>
       status.isActive ||
