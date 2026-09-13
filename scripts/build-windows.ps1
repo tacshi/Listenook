@@ -102,6 +102,15 @@ try {
     throw "Missing native build product: $Build\Listenook.exe"
   }
 
+  # Incremental builds retain the old runner; keep it out of portable packages
+  # and installers, which copy every file in the build directory.
+  foreach ($LegacyBinary in @("MeowSTT.exe", "MeowSTT.pdb")) {
+    $LegacyBinaryPath = Join-Path $Build $LegacyBinary
+    if (Test-Path -LiteralPath $LegacyBinaryPath -PathType Leaf) {
+      Remove-Item -LiteralPath $LegacyBinaryPath -Force
+    }
+  }
+
   $Encoder = & (Join-Path $PSScriptRoot "fetch-flac.ps1") -Arch $Arch
   $EncoderDest = Join-Path $Build "flac"
   $LegacyHelperDest = Join-Path $Build "ffmpeg"
