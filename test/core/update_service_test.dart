@@ -5,9 +5,9 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:meow_stt/core/update_models.dart';
-import 'package:meow_stt/data/update_installer.dart';
-import 'package:meow_stt/data/update_service.dart';
+import 'package:listenook/core/update_models.dart';
+import 'package:listenook/data/update_installer.dart';
+import 'package:listenook/data/update_service.dart';
 
 class _FakeInstaller extends UpdateInstaller {
   final launched = <File>[];
@@ -24,7 +24,7 @@ void main() {
   late Directory temporary;
 
   setUp(() async {
-    temporary = await Directory.systemTemp.createTemp('meowstt-update-test-');
+    temporary = await Directory.systemTemp.createTemp('listenook-update-test-');
   });
 
   tearDown(() async {
@@ -57,12 +57,12 @@ void main() {
     expect(service.release?.version.name, '2.0.0');
     expect(manifestRequests, 1);
     expect(assetRequests, 1);
-    expect(await File('${temporary.path}/MeowSTT.zip').readAsBytes(), bytes);
+    expect(await File('${temporary.path}/Listenook.zip').readAsBytes(), bytes);
   });
 
   test('reuses a checksum-valid cached package', () async {
     final bytes = <int>[4, 3, 2, 1];
-    await File('${temporary.path}/MeowSTT.zip').writeAsBytes(bytes);
+    await File('${temporary.path}/Listenook.zip').writeAsBytes(bytes);
     var assetRequests = 0;
     final service = _service(
       temporary,
@@ -111,8 +111,8 @@ void main() {
 
       expect(service.phase, UpdatePhase.failed);
       expect(service.scheduledDelay, const Duration(hours: 1));
-      expect(File('${temporary.path}/MeowSTT.zip').existsSync(), isFalse);
-      expect(File('${temporary.path}/MeowSTT.zip.part').existsSync(), isFalse);
+      expect(File('${temporary.path}/Listenook.zip').existsSync(), isFalse);
+      expect(File('${temporary.path}/Listenook.zip.part').existsSync(), isFalse);
     },
   );
 
@@ -178,7 +178,7 @@ void main() {
   });
 
   test('removes installed and superseded update packages', () async {
-    final oldPackage = File('${temporary.path}/MeowSTT-old.zip');
+    final oldPackage = File('${temporary.path}/Listenook-old.zip');
     await oldPackage.writeAsBytes([1]);
     final bytes = <int>[2];
     final newer = _service(
@@ -193,7 +193,7 @@ void main() {
 
     await newer.checkAndDownloadNow();
     expect(oldPackage.existsSync(), isFalse);
-    expect(File('${temporary.path}/MeowSTT.zip').existsSync(), isTrue);
+    expect(File('${temporary.path}/Listenook.zip').existsSync(), isTrue);
 
     final current = UpdateService(
       client: MockClient(
@@ -211,7 +211,7 @@ void main() {
     );
     addTearDown(current.dispose);
     await current.checkAndDownloadNow();
-    expect(File('${temporary.path}/MeowSTT.zip').existsSync(), isFalse);
+    expect(File('${temporary.path}/Listenook.zip').existsSync(), isFalse);
   });
 
   test('launch failure retains the verified package for retry', () async {
@@ -270,10 +270,10 @@ Map<String, Object?> _manifest(
       'version': version,
       'build': build,
       'kind': 'appZip',
-      'fileName': 'MeowSTT.zip',
+      'fileName': 'Listenook.zip',
       'size': bytes.length,
       'sha256': sha256.convert(bytes).toString(),
-      'url': 'https://example.com/MeowSTT.zip',
+      'url': 'https://example.com/Listenook.zip',
     },
   },
 };

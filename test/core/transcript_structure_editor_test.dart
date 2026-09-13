@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/transcript_parser.dart';
-import 'package:meow_stt/core/transcript_structure_editor.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/transcript_parser.dart';
+import 'package:listenook/core/transcript_structure_editor.dart';
 
 void main() {
   test('split preserves punctuation, timing gap, and token ownership', () {

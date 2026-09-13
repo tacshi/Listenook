@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/environment.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGE="$ROOT/native/speech_worker"
 SPEECH_SWIFT_COMMIT="13643ab4361da8f33c8002026c9d357ded0b6896"
-SCRATCH="${MEOWSTT_COREML_BUILD_CACHE:-$ROOT/.dart_tool/meowstt-coreml-worker-$SPEECH_SWIFT_COMMIT}"
-OUTPUT="${1:-$ROOT/build/native/speech_worker/MeowSTTSpeechWorker}"
+SCRATCH="${LISTENOOK_COREML_BUILD_CACHE:-$ROOT/.dart_tool/listenook-coreml-worker-$SPEECH_SWIFT_COMMIT}"
+OUTPUT="${1:-$ROOT/build/native/speech_worker/ListenookSpeechWorker}"
 MODULE_CACHE="$SCRATCH/module-cache"
 XDG_CACHE="$SCRATCH/xdg-cache"
 
 [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || {
-  echo "MeowSTTSpeechWorker can only be built on Apple Silicon macOS." >&2
+  echo "ListenookSpeechWorker can only be built on Apple Silicon macOS." >&2
   exit 1
 }
 rg --fixed-strings --quiet "$SPEECH_SWIFT_COMMIT" "$PACKAGE/Package.swift" || {
@@ -26,7 +27,7 @@ swift build \
   --package-path "$PACKAGE" \
   --scratch-path "$SCRATCH" \
   --configuration release \
-  --product MeowSTTSpeechWorker \
+  --product ListenookSpeechWorker \
   --disable-sandbox
 
 BIN_DIR="$(
@@ -36,13 +37,13 @@ BIN_DIR="$(
     --configuration release \
     --show-bin-path
 )"
-BINARY="$BIN_DIR/MeowSTTSpeechWorker"
+BINARY="$BIN_DIR/ListenookSpeechWorker"
 [[ -x "$BINARY" ]] || {
   echo "The Core ML speech worker was not produced at $BINARY." >&2
   exit 1
 }
 SPEECH_SWIFT_CHECKOUT="$SCRATCH/checkouts/speech-swift"
-METAL_BUILD_ROOT="$SCRATCH/meowstt-metal-build"
+METAL_BUILD_ROOT="$SCRATCH/listenook-metal-build"
 mkdir -p "$METAL_BUILD_ROOT"
 ln -sfn "$SCRATCH/checkouts" "$METAL_BUILD_ROOT/checkouts"
 ln -sfn "$BIN_DIR" "$METAL_BUILD_ROOT/release"

@@ -106,7 +106,7 @@ class MacosUpdateInstaller extends UpdateInstaller {
     final target = installedBundlePath();
     if (target == null) {
       throw const UpdateInstallException(
-        'MeowSTT must be installed in a writable folder before it can update.',
+        'Listenook must be installed in a writable folder before it can update.',
       );
     }
 
@@ -127,7 +127,7 @@ class MacosUpdateInstaller extends UpdateInstaller {
     final bundle = await _findBundle(staging);
     if (bundle == null) {
       throw const UpdateInstallException(
-        'The update does not contain MeowSTT.app.',
+        'The update does not contain Listenook.app.',
       );
     }
     final codesign = await _run('/usr/bin/codesign', [
@@ -173,7 +173,7 @@ class MacosUpdateInstaller extends UpdateInstaller {
 
   Future<String?> _findBundle(Directory staging) async {
     await for (final entry in staging.list()) {
-      if (entry is Directory && p.basename(entry.path) == 'MeowSTT.app') {
+      if (entry is Directory && p.basename(entry.path) == 'Listenook.app') {
         return entry.path;
       }
     }
@@ -183,12 +183,12 @@ class MacosUpdateInstaller extends UpdateInstaller {
   @visibleForTesting
   String? installedBundlePath() {
     final bundle = p.dirname(p.dirname(p.dirname(_executablePath)));
-    if (p.basename(bundle) != 'MeowSTT.app' || p.isWithin('/Volumes', bundle)) {
+    if (p.basename(bundle) != 'Listenook.app' || p.isWithin('/Volumes', bundle)) {
       return null;
     }
     final parent = Directory(p.dirname(bundle));
     try {
-      final probe = File(p.join(parent.path, '.meowstt-update-probe'));
+      final probe = File(p.join(parent.path, '.listenook-update-probe'));
       probe.writeAsStringSync('');
       probe.deleteSync();
     } on Object {

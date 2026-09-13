@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/local_speech.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/local_speech_services.dart';
+import 'package:listenook/core/local_speech.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/local_speech_services.dart';
 
 void main() {
   const alignmentModel = LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8;
@@ -127,7 +127,7 @@ void main() {
         const LocalSttRequest(
           sourcePath: '/meeting.mp4',
           durationMs: 10 * 60 * 1000,
-          options: TranscriptionOptions(contextTerms: ['MeowSTT']),
+          options: TranscriptionOptions(contextTerms: ['Listenook']),
         ),
       );
 
@@ -141,7 +141,7 @@ void main() {
       expect(worker.request?['chunk_seconds'], 30);
       expect(worker.request?['parallel_chunks'], 2);
       expect(worker.request?['max_new_tokens_per_chunk'], 640);
-      expect(worker.request?['hotwords'], ['MeowSTT']);
+      expect(worker.request?['hotwords'], ['Listenook']);
       expect(worker.request?['audio_path'], '/tmp/local.wav');
       expect(worker.request?['model_directory'], contains('coreml-int8'));
       expect(worker.request, isNot(contains('model_path')));
@@ -206,7 +206,7 @@ void main() {
           durationMs: 3000,
           options: TranscriptionOptions(
             languageHints: ['en'],
-            contextTerms: ['MeowSTT', 'Qwen'],
+            contextTerms: ['Listenook', 'Qwen'],
           ),
           engine: LocalSttEngine.qwen3Asr,
         ),
@@ -215,7 +215,7 @@ void main() {
       expect(worker.command, SpeechWorkerCommand.transcribeQwen3);
       expect(worker.request?['max_segment_seconds'], 10);
       expect(worker.request?['language_hints'], ['en']);
-      expect(worker.request?['context_terms'], ['MeowSTT', 'Qwen']);
+      expect(worker.request?['context_terms'], ['Listenook', 'Qwen']);
       expect(worker.request?['model_directory'], contains('qwen3-asr'));
       expect(worker.request?['vad_model_directory'], contains('silero-vad'));
       expect(models.statusRequests, [

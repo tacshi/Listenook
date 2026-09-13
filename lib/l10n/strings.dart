@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
+import '../core/app_identity.dart';
 import '../core/models.dart';
 
 class AppStrings {
@@ -8,6 +9,7 @@ class AppStrings {
 
   final Locale locale;
   bool get isZh => locale.languageCode == 'zh';
+  String get appName => AppIdentity.displayName(locale.languageCode);
 
   static const supportedLocales = [Locale('en'), Locale('zh', 'CN')];
   static const delegate = _AppStringsDelegate();
@@ -96,6 +98,33 @@ class AppStrings {
       _zh.keys.toSet()..removeAll(_en.keys);
 
   static const _en = <String, String>{
+    'startup_loading': 'Starting Listenook…',
+    'startup_failed':
+        'Listenook could not start. Please retry or reopen the app.',
+    'migration_loading': 'Migrating your MeowSTT library…',
+    'migration_legacy_running':
+        'Quit MeowSTT, including its menu bar or tray app, then retry.',
+    'migration_check_failed':
+        'Could not check whether MeowSTT is running. Quit it and retry.',
+    'migration_source_changed':
+        'MeowSTT data changed during migration. Quit MeowSTT and retry.',
+    'migration_destination_changed':
+        'Listenook data changed during migration. Close the other instance and retry.',
+    'migration_copy_failed':
+        'Could not migrate your library. Check available disk space and folder access, then retry. Your MeowSTT data is unchanged.',
+    'migration_link_found':
+        'The old library contains a linked file or folder. Replace the link with a local copy, then retry.',
+    'migration_credentials_failed':
+        'Could not read the previous API keys. Allow Keychain access and retry, or enter the keys again.',
+    'migration_enter_keys': 'Enter API keys again',
+    'migration_save_continue': 'Save and continue',
+    'migration_key_save_failed':
+        'Could not save the keys. Check secure storage access and retry.',
+    'migration_login_title': 'Update your login items',
+    'migration_login_body':
+        'Disable MeowSTT in Login Items so only Listenook starts at login.',
+    'migration_open_login': 'Open Login Items',
+    'migration_later': 'Later',
     'inbox': 'Inbox',
     'podcast': 'Podcast',
     'workspace': 'Workspace',
@@ -109,7 +138,7 @@ class AppStrings {
     'settings_system_about': 'About',
     'inbox_monitor_title': 'Turn a folder into your Inbox',
     'inbox_monitor_body':
-        'MeowSTT can watch one folder and add matching audio and video files here automatically.',
+        'Listenook can watch one folder and add matching audio and video files here automatically.',
     'inbox_monitor_review_hint':
         'Nothing is uploaded or transcribed until you press Transcribe.',
     'inbox_monitor_supported':
@@ -214,10 +243,11 @@ class AppStrings {
         'Subfolders are included. Hidden folders and symbolic links are ignored.',
     'inbox_monitor_podcast_downloads_hint':
         'Downloaded podcast audio is stored in the app cache. Export it from an episode when you want a copy.',
-    'inbox_monitor_launch_at_login': 'Launch MeowSTT at login',
+    'inbox_monitor_launch_at_login': 'Launch Listenook at login',
     'desktop_menu_bar_icon': 'Show menu bar icon',
     'desktop_tray_icon': 'Show system tray icon',
-    'desktop_icon_hint': 'Keeps MeowSTT available after its window is closed.',
+    'desktop_icon_hint':
+        'Keeps Listenook available after its window is closed.',
     'desktop_menu_bar_launch_hint': 'Starts hidden in the menu bar.',
     'desktop_tray_launch_hint': 'Starts hidden in the system tray.',
     'inbox_monitor_file_type_required': 'Select at least one file type.',
@@ -241,7 +271,7 @@ class AppStrings {
     'inbox_monitor_source': 'Monitored folder',
     'tray_open_main_window': 'Open Main Window',
     'tray_open_settings': 'Settings',
-    'tray_quit': 'Quit MeowSTT',
+    'tray_quit': 'Quit Listenook',
     'monitor_notification_title': 'Files added to Inbox',
     'monitor_notification_body': '{count} files are ready for review.',
     'add_files': 'Add files',
@@ -344,18 +374,18 @@ class AppStrings {
     'processing': 'Processing',
     'paused': 'Paused for next run',
     'cancel': 'Cancel',
-    'update_ready': 'MeowSTT {version} is ready to install.',
+    'update_ready': 'Listenook {version} is ready to install.',
     'restart_to_update': 'Restart to Update',
     'restarting_to_update': 'Restarting…',
     'update_active_title': 'Restart while work is active?',
     'update_active_body':
-        'MeowSTT will close to install the update. Persisted transcription work will resume the next time it opens.',
+        'Listenook will close to install the update. Persisted transcription work will resume the next time it opens.',
     'update_restart_failed': 'Could not restart for the update.',
     'app_version': 'Version {version}',
     'check_for_updates': 'Check for Updates',
     'update_checking': 'Checking for updates…',
     'update_downloading': 'Downloading the update…',
-    'update_up_to_date': 'MeowSTT is up to date.',
+    'update_up_to_date': 'Listenook is up to date.',
     'update_check_failed': 'Could not check for updates.',
     'update_not_supported': 'Updates are not available for this build.',
     'retry': 'Retry',
@@ -669,13 +699,13 @@ class AppStrings {
         'Could not save the key securely. Check Keychain access and try again.',
     'privacy': 'Privacy',
     'privacy_body':
-        'Cloud transcription uploads media directly to the Soniox or MOSI provider selected for the job. Imported SRT/WebVTT alignment stays on this Mac and never calls a transcription provider. MeowSTT deletes the supported remote resources it created; MOSI task records follow the provider retention policy. Optional LLM translation and AI Briefs send transcript text—not media—to your configured AI endpoint.',
+        'Cloud transcription uploads media directly to the Soniox or MOSI provider selected for the job. Imported SRT/WebVTT alignment stays on this Mac and never calls a transcription provider. Listenook deletes the supported remote resources it created; MOSI task records follow the provider retention policy. Optional LLM translation and AI Briefs send transcript text—not media—to your configured AI endpoint.',
     'notices': 'Third-party notices',
     'notices_body':
         'Playback and extraction use bundled libmpv components. Windows distributions also include the compact FLAC encoder. Soniox and MOSI are third-party transcription providers. Podcast search uses Apple’s public iTunes Search API; episode media and publisher transcripts are fetched from the show’s public RSS feed. Provenance and license texts are included with each distribution.',
     'welcome_title': 'Your recordings stay yours',
     'welcome_body':
-        'MeowSTT is a bring-your-own-key desktop app. Media is sent to your selected Soniox or MOSI provider only when you start cloud transcription; imported subtitle alignment stays local. LLM translation and AI Briefs send transcript text separately to your configured AI endpoint only when requested. Local history contains file paths, transcripts, and brief drafts—not media copies.',
+        'Listenook is a bring-your-own-key desktop app. Media is sent to your selected Soniox or MOSI provider only when you start cloud transcription; imported subtitle alignment stays local. LLM translation and AI Briefs send transcript text separately to your configured AI endpoint only when requested. Local history contains file paths, transcripts, and brief drafts—not media copies.',
     'continue': 'Continue',
     'add_to_inbox': 'Add to Inbox',
     'add_to_inbox_tooltip': 'Adds this file to the Inbox transcription queue.',
@@ -684,7 +714,7 @@ class AppStrings {
     'quit_resume': 'Quit & resume later',
     'cancel_quit': 'Cancel remote jobs & quit',
     'quit_title': 'Transcription is still active',
-    'quit_body': 'MeowSTT can safely resume remote processing next time.',
+    'quit_body': 'Listenook can safely resume remote processing next time.',
     'source_missing': 'Source missing',
     'relink': 'Relink',
     'delete_history': 'Remove from library',
@@ -919,6 +949,23 @@ class AppStrings {
   };
 
   static const _zh = <String, String>{
+    'startup_loading': '正在启动聆页…',
+    'startup_failed': '聆页无法启动。请重试或重新打开应用。',
+    'migration_loading': '正在迁移 MeowSTT 资料库…',
+    'migration_legacy_running': '请退出 MeowSTT（包括菜单栏或托盘中的程序），然后重试。',
+    'migration_check_failed': '无法检查 MeowSTT 是否正在运行。请退出旧版后重试。',
+    'migration_source_changed': '迁移期间旧数据发生变化。请退出 MeowSTT 后重试。',
+    'migration_destination_changed': '迁移期间聆页数据发生变化。请关闭另一个实例后重试。',
+    'migration_copy_failed': '资料库迁移失败。请检查磁盘剩余空间和文件夹权限后重试。MeowSTT 原数据已保留。',
+    'migration_link_found': '旧资料库中包含文件或文件夹链接。请将链接替换为本地副本后重试。',
+    'migration_credentials_failed': '无法读取原有 API 密钥。请允许钥匙串访问后重试，或重新输入密钥。',
+    'migration_enter_keys': '重新输入 API 密钥',
+    'migration_save_continue': '保存并继续',
+    'migration_key_save_failed': '密钥保存失败。请检查安全存储访问权限后重试。',
+    'migration_login_title': '更新登录启动项',
+    'migration_login_body': '请在登录项中关闭 MeowSTT，避免旧版与聆页同时启动。',
+    'migration_open_login': '打开登录项',
+    'migration_later': '稍后',
     'inbox': '收件箱',
     'podcast': '播客',
     'workspace': '工作区',
@@ -931,7 +978,7 @@ class AppStrings {
     'settings_shortcuts': '快捷键',
     'settings_system_about': '关于',
     'inbox_monitor_title': '将文件夹设为收件箱',
-    'inbox_monitor_body': 'MeowSTT 可以监控一个文件夹，并自动将匹配的音频和视频文件添加到这里。',
+    'inbox_monitor_body': '聆页可以监控一个文件夹，并自动将匹配的音频和视频文件添加到这里。',
     'inbox_monitor_review_hint': '只有在你点击“转写”后，文件才会上传或开始转写。',
     'inbox_monitor_supported': '递归监控 · MP3、WAV、M4A、OGG、MP4、MKV、AVI',
     'inbox_monitor_inline_hint': '自动将文件夹中的媒体添加到收件箱；不会自动开始转写。',
@@ -1025,10 +1072,10 @@ class AppStrings {
     'inbox_monitor_select_all': '全选',
     'inbox_monitor_recursive_hint': '包含所有子文件夹；隐藏文件夹和符号链接会被忽略。',
     'inbox_monitor_podcast_downloads_hint': '下载的播客音频保存在应用缓存中。需要副本时，从单集导出即可。',
-    'inbox_monitor_launch_at_login': '登录时启动 MeowSTT',
+    'inbox_monitor_launch_at_login': '登录时启动聆页',
     'desktop_menu_bar_icon': '显示菜单栏图标',
     'desktop_tray_icon': '显示系统托盘图标',
-    'desktop_icon_hint': '窗口关闭后仍可使用 MeowSTT。',
+    'desktop_icon_hint': '窗口关闭后仍可使用聆页。',
     'desktop_menu_bar_launch_hint': '启动后隐藏在菜单栏中。',
     'desktop_tray_launch_hint': '启动后隐藏在系统托盘中。',
     'inbox_monitor_file_type_required': '请至少选择一种文件类型。',
@@ -1050,7 +1097,7 @@ class AppStrings {
     'inbox_monitor_source': '监控文件夹',
     'tray_open_main_window': '打开主窗口',
     'tray_open_settings': '设置',
-    'tray_quit': '退出 MeowSTT',
+    'tray_quit': '退出聆页',
     'monitor_notification_title': '文件已添加到收件箱',
     'monitor_notification_body': '{count} 个文件可供确认。',
     'add_files': '添加文件',
@@ -1137,17 +1184,17 @@ class AppStrings {
     'processing': '处理中',
     'paused': '等待下次开始',
     'cancel': '取消',
-    'update_ready': 'MeowSTT {version} 已下载完成。',
+    'update_ready': '聆页 {version} 已下载完成。',
     'restart_to_update': '重启并更新',
     'restarting_to_update': '正在重启…',
     'update_active_title': '正在处理任务，仍要重启吗？',
-    'update_active_body': 'MeowSTT 将关闭并安装更新。已保存的转写任务会在下次启动时继续。',
+    'update_active_body': '聆页将关闭并安装更新。已保存的转写任务会在下次启动时继续。',
     'update_restart_failed': '无法重启并安装更新。',
     'app_version': '版本 {version}',
     'check_for_updates': '检查更新',
     'update_checking': '正在检查更新…',
     'update_downloading': '正在下载更新…',
-    'update_up_to_date': 'MeowSTT 已是最新版本。',
+    'update_up_to_date': '聆页已是最新版本。',
     'update_check_failed': '检查更新失败。',
     'update_not_supported': '当前版本不支持自动更新。',
     'retry': '重试',
@@ -1435,13 +1482,13 @@ class AppStrings {
     'key_save_failed': '无法安全保存密钥。请检查“钥匙串”访问权限后重试。',
     'privacy': '隐私',
     'privacy_body':
-        '云端转写会将媒体直接上传到任务所选的 Soniox 或 MOSI。导入 SRT/WebVTT 的对齐完全在本机进行，且不会调用转写服务。MeowSTT 只删除自己创建且 API 支持删除的远程资源；MOSI 任务记录遵循服务方的保留政策。可选的 LLM 翻译和 AI 简报只会把文本（不包含媒体）发送到你配置的 AI 端点。',
+        '云端转写会将媒体直接上传到任务所选的 Soniox 或 MOSI。导入 SRT/WebVTT 的对齐完全在本机进行，且不会调用转写服务。聆页只删除自己创建且 API 支持删除的远程资源；MOSI 任务记录遵循服务方的保留政策。可选的 LLM 翻译和 AI 简报只会把文本（不包含媒体）发送到你配置的 AI 端点。',
     'notices': '第三方声明',
     'notices_body':
         '播放和音频提取使用随附的 libmpv 组件。Windows 发行包还包含精简的 FLAC 编码器。Soniox 与 MOSI 是第三方转写服务提供商。播客搜索使用 Apple 公开的 iTunes Search API；单集音频和官方文稿从节目公开 RSS 获取。每个发行包均包含来源信息和许可证文本。',
     'welcome_title': '你的录音始终属于你',
     'welcome_body':
-        'MeowSTT 使用你自己的 API 密钥。只有开始云端转写后媒体才会发送到所选的 Soniox 或 MOSI；导入字幕的对齐始终留在本机。仅在你请求 LLM 翻译或 AI 简报时，文本才会另行发送到你配置的 AI 端点。历史记录只保存文件路径、转写数据和简报草稿，不复制原始媒体。',
+        '聆页使用你自己的 API 密钥。只有开始云端转写后媒体才会发送到所选的 Soniox 或 MOSI；导入字幕的对齐始终留在本机。仅在你请求 LLM 翻译或 AI 简报时，文本才会另行发送到你配置的 AI 端点。历史记录只保存文件路径、转写数据和简报草稿，不复制原始媒体。',
     'continue': '继续',
     'add_to_inbox': '添加到收件箱',
     'add_to_inbox_tooltip': '将此文件添加到收件箱的转写队列。',
@@ -1450,7 +1497,7 @@ class AppStrings {
     'quit_resume': '退出并稍后继续',
     'cancel_quit': '取消远程任务并退出',
     'quit_title': '转写仍在进行',
-    'quit_body': 'MeowSTT 下次启动时可以安全地继续远程处理。',
+    'quit_body': '聆页下次启动时可以安全地继续远程处理。',
     'source_missing': '源文件丢失',
     'relink': '重新关联',
     'delete_history': '从资料库移除',

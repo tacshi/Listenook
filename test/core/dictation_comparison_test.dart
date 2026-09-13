@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/dictation_comparison.dart';
+import 'package:listenook/core/dictation_comparison.dart';
 
 void main() {
   test('ignores case, whitespace, punctuation and apostrophe style', () {

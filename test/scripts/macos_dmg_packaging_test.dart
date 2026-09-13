@@ -15,7 +15,7 @@ void main() {
         'create',
         'from',
         '--volumeName',
-        'MeowSTT',
+        'Listenook',
         '--format',
         'UDZO',
         invocation.stagePath,
@@ -36,7 +36,7 @@ void main() {
         'hdiutil',
         'create',
         '-volname',
-        'MeowSTT',
+        'Listenook',
         '-srcfolder',
         invocation.stagePath,
         '-ov',
@@ -51,12 +51,12 @@ void main() {
 
 Future<_PackagingInvocation> _runPackagingFixture(String macOSVersion) async {
   final temporary = await Directory.systemTemp.createTemp(
-    'meowstt-dmg-packaging-',
+    'listenook-dmg-packaging-',
   );
   addTearDown(() => temporary.delete(recursive: true));
   final bin = await Directory('${temporary.path}/bin').create();
   final stage = await Directory('${temporary.path}/stage').create();
-  final dmg = File('${temporary.path}/MeowSTT.dmg');
+  final dmg = File('${temporary.path}/Listenook.dmg');
   final log = File('${temporary.path}/command.log');
   await _writeExecutable(
     '${bin.path}/sw_vers',
@@ -72,7 +72,7 @@ Future<_PackagingInvocation> _runPackagingFixture(String macOSVersion) async {
     environment: {
       ...Platform.environment,
       'PATH': '${bin.path}:${Platform.environment['PATH'] ?? ''}',
-      'MEOWSTT_DMG_TEST_LOG': log.path,
+      'LISTENOOK_DMG_TEST_LOG': log.path,
     },
   );
   final buildSource = await File(
@@ -91,7 +91,7 @@ Future<_PackagingInvocation> _runPackagingFixture(String macOSVersion) async {
 
 Future<void> _writeCommandRecorder(String path, String command) =>
     _writeExecutable(path, '''#!/usr/bin/env bash
-printf '%s\\n' '$command' "\$@" > "\$MEOWSTT_DMG_TEST_LOG"
+printf '%s\\n' '$command' "\$@" > "\$LISTENOOK_DMG_TEST_LOG"
 ''');
 
 Future<void> _writeExecutable(String path, String contents) async {

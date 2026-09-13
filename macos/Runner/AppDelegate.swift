@@ -4,11 +4,17 @@ import Darwin
 import FlutterMacOS
 import ServiceManagement
 
+enum ApplicationIdentity {
+  static let bundleIdentifier = "app.capyvibe.listenook"
+  static let legacyBundleIdentifier = "app.meowstt.desktop"
+  static var displayName = "Listenook"
+}
+
 @main
 class AppDelegate: FlutterAppDelegate {
-  private let navigationChannelName = "app.meowstt.desktop/navigation"
+  private let navigationChannelName = "app.capyvibe.listenook/navigation"
   private let instanceActivationNotification = Notification.Name(
-    "app.meowstt.desktop.activate-existing-instance"
+    "app.capyvibe.listenook.activate-existing-instance"
   )
   private var instanceLockDescriptor: Int32 = -1
   private var ownsInstanceLock = false
@@ -43,7 +49,7 @@ class AppDelegate: FlutterAppDelegate {
 
   private func claimInstanceLock() -> Bool {
     let lockURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "app.meowstt.desktop.instance.lock",
+      "app.capyvibe.listenook.instance.lock",
       isDirectory: false
     )
     let descriptor = Darwin.open(
@@ -74,7 +80,7 @@ class AppDelegate: FlutterAppDelegate {
     )
     let currentPID = ProcessInfo.processInfo.processIdentifier
     if let existing = NSRunningApplication.runningApplications(
-      withBundleIdentifier: Bundle.main.bundleIdentifier ?? "app.meowstt.desktop"
+      withBundleIdentifier: Bundle.main.bundleIdentifier ?? "app.capyvibe.listenook"
     ).first(where: { $0.processIdentifier != currentPID }) {
       existing.activate(options: [.activateAllWindows])
     }
@@ -83,6 +89,12 @@ class AppDelegate: FlutterAppDelegate {
   @objc private func activatePrimaryInstance(_ notification: Notification) {
     guard ownsInstanceLock else { return }
     invokeNavigation("showWindow", sender: nil)
+  }
+
+  @IBAction func showAbout(_ sender: Any?) {
+    NSApp.orderFrontStandardAboutPanel(options: [
+      .applicationName: ApplicationIdentity.displayName
+    ])
   }
 
   @IBAction func showSettings(_ sender: Any?) {
@@ -139,10 +151,39 @@ final class ApplicationChannels {
 
   func register(with messenger: FlutterBinaryMessenger) {
     let launchAtLoginChannel = FlutterMethodChannel(
-      name: "app.meowstt.desktop/launch_at_login",
+      name: "app.capyvibe.listenook/launch_at_login",
       binaryMessenger: messenger
     )
     launchAtLoginChannel.setMethodCallHandler { call, result in
+      if call.method == "isLegacyRunning" {
+        result(!NSRunningApplication.runningApplications(
+          withBundleIdentifier: ApplicationIdentity.legacyBundleIdentifier
+        ).isEmpty)
+        return
+      }
+      if call.method == "setDisplayName",
+         let arguments = call.arguments as? [String: String],
+         let name = arguments["name"] {
+        ApplicationIdentity.displayName = name
+        let chinese = arguments["languageCode"] == "zh"
+        if let appItem = NSApp.mainMenu?.items.first,
+           let menu = appItem.submenu {
+          appItem.title = name
+          menu.title = name
+          for item in menu.items {
+            switch item.action.map(NSStringFromSelector) {
+            case "showAbout:", "orderFrontStandardAboutPanel:":
+              item.title = chinese ? "关于\(name)" : "About \(name)"
+            case "hide:": item.title = chinese ? "隐藏\(name)" : "Hide \(name)"
+            case "requestQuit:", "terminate:":
+              item.title = chinese ? "退出\(name)" : "Quit \(name)"
+            default: break
+            }
+          }
+        }
+        result(nil)
+        return
+      }
       guard call.method == "setEnabled", let enabled = call.arguments as? Bool else {
         result(FlutterMethodNotImplemented)
         return
@@ -165,7 +206,9 @@ final class ApplicationChannels {
           ))
         }
       } else {
-        let helperIdentifier = "app.meowstt.desktop.Launcher" as CFString
+        // The macOS 12 helper uses the old bundle identifier as a migration alias.
+        SMLoginItemSetEnabled("app.meowstt.desktop.Launcher" as CFString, false)
+        let helperIdentifier = "app.capyvibe.listenook.Launcher" as CFString
         if SMLoginItemSetEnabled(helperIdentifier, enabled) {
           result(nil)
         } else {
@@ -180,7 +223,7 @@ final class ApplicationChannels {
     self.launchAtLoginChannel = launchAtLoginChannel
 
     let audioEncoderChannel = FlutterMethodChannel(
-      name: "app.meowstt.desktop/audio_encoder",
+      name: "app.capyvibe.listenook/audio_encoder",
       binaryMessenger: messenger
     )
     audioEncoderChannel.setMethodCallHandler { [compactAudioEncoder] call, result in
@@ -216,7 +259,7 @@ final class ApplicationChannels {
 }
 
 final class CompactAudioEncoder {
-  private let queue = DispatchQueue(label: "app.meowstt.desktop.audio-encoder")
+  private let queue = DispatchQueue(label: "app.capyvibe.listenook.audio-encoder")
 
   func encodeAac(
     inputURL: URL,
@@ -289,7 +332,7 @@ final class CompactAudioEncoder {
 
   private func encodingError(_ message: String) -> NSError {
     NSError(
-      domain: "app.meowstt.desktop.audio-encoder",
+      domain: "app.capyvibe.listenook.audio-encoder",
       code: 1,
       userInfo: [NSLocalizedDescriptionKey: message]
     )

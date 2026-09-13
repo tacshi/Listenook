@@ -1,15 +1,29 @@
 # Release Steps
 
-MeowSTT is released locally from `main`. Public installers, updater archives,
-and `latest.json` live in the separate public repository
-`tacshi/MeowSTT-Release`; the source repository does not need to be public.
+Listenook is released locally from `main`. Public installers, updater archives,
+and `listenook-latest.json` live in the separate public repository
+`tacshi/Listenook-Release`; the source repository does not need to be public.
+
+## First Listenook installation and update feeds
+
+Existing MeowSTT users install Listenook manually once; first launch migrates
+local data. The public repository keeps its existing `latest.json` frozen for
+MeowSTT clients. Never replace it with a Listenook manifest or installer.
+Listenook reads `main/listenook-latest.json`, and the publisher writes only that
+file. Skipped platforms may retain an earlier **Listenook** package, never a
+MeowSTT package. Until the first Listenook release, the new feed is not published.
+Keep old release tags and assets intact so historical download links work.
+
+The publisher also recognizes an existing `../MeowSTT-Release` checkout when
+`../Listenook-Release` is absent. Its origin must point to
+`tacshi/Listenook-Release`; `RELEASE_REPO_DIR` can explicitly select another checkout.
 
 ## One-time setup
 
 Clone the release repository next to this checkout:
 
 ```sh
-git clone git@github.com:tacshi/MeowSTT-Release.git ../MeowSTT-Release
+git clone git@github.com:tacshi/Listenook-Release.git ../Listenook-Release
 ```
 
 Keep that checkout on its `main` branch; the updater's raw manifest URL points
@@ -28,9 +42,9 @@ gh auth login -h github.com
 gh auth status
 ```
 
-Configure the existing macOS Developer ID identity and `MeowSTT` notarytool
+Configure the existing macOS Developer ID identity and `Listenook` notarytool
 profile as described in `README.md`. Configure Windows signing through the
-existing `MEOWSTT_WINDOWS_*` environment variables when a certificate is
+existing `LISTENOOK_WINDOWS_*` environment variables when a certificate is
 available.
 
 ## Release
@@ -46,8 +60,8 @@ git pull
 
 Copy both generated files from `dist\` to `dist/` on the Mac:
 
-- `MeowSTT-1.2.0-windows-x64-release-setup.exe`
-- `MeowSTT-1.2.0-windows-x64-release-setup.exe.build.json`
+- `Listenook-1.2.0-windows-x64-release-setup.exe`
+- `Listenook-1.2.0-windows-x64-release-setup.exe.build.json`
 
 Then publish on the Mac:
 
@@ -59,11 +73,11 @@ git pull
 
 The script verifies that the Windows artifact came from the exact same commit,
 builds and notarizes both macOS architectures, uploads every asset, and only
-then pushes `latest.json`. Clients retry failed checks automatically and see a
+then pushes `listenook-latest.json`. Clients retry failed checks automatically and see a
 persistent **Restart to Update** action after the package is verified.
 
 Release notes are generated from commit subjects. To override them, create
-`release-notes/MeowSTT-1.2.0.md` before running the publisher.
+`release-notes/Listenook-1.2.0.md` before running the publisher.
 Before any build starts, the publisher displays the staged notes. Enter `e` to
 open them in `$EDITOR` (then `$VISUAL`, falling back to `vi`), save and exit,
 review the updated text, and enter `y` to continue.
@@ -73,13 +87,13 @@ review the updated text, and enter `y` to continue.
 An unsigned, non-publishing dry run that does not require the Windows artifact:
 
 ```sh
-MEOWSTT_MAC_SIGN_IDENTITY=- ./scripts/release.sh 1.2.0 --skip-windows --no-upload
+LISTENOOK_MAC_SIGN_IDENTITY=- ./scripts/release.sh 1.2.0 --skip-windows --no-upload
 ```
 
 Useful publisher options:
 
 - `--skip-windows` publishes only the new macOS entries and preserves the last
-  Windows entry in `latest.json`.
+  Windows entry in `listenook-latest.json`.
 - `--reuse-artifacts` reuses `dist/release/` after a late upload failure.
 - `--no-upload` builds the artifacts and manifest without changing GitHub.
 - `--no-tag` publishes without creating the source tag.

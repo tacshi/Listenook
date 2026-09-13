@@ -1,9 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
-import 'package:meow_stt/data/timed_subtitle_import.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/timed_subtitle_import.dart';
 
 void main() {
   late Directory directory;

@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "environment.ps1")
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Version = "1.5.0"
 $Destination = Join-Path $Root ".tools\flac\windows\$Arch"
@@ -76,10 +77,10 @@ if (Confirm-Encoder $Destination) {
   exit 0
 }
 
-if ($env:MEOWSTT_FLAC_DIR) {
-  $Override = (Resolve-Path -LiteralPath $env:MEOWSTT_FLAC_DIR).Path
+if ($env:LISTENOOK_FLAC_DIR) {
+  $Override = (Resolve-Path -LiteralPath $env:LISTENOOK_FLAC_DIR).Path
   if (-not (Confirm-Encoder $Override)) {
-    throw "MEOWSTT_FLAC_DIR does not contain a native $Arch flac.exe: $Override"
+    throw "LISTENOOK_FLAC_DIR does not contain a native $Arch flac.exe: $Override"
   }
   Copy-Encoder $Override
   Write-Output $Destination

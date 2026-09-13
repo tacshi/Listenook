@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/podcast_models.dart';
-import 'package:meow_stt/data/podcast/http_podcast_gateway.dart';
-import 'package:meow_stt/data/podcast/podcast_urls.dart';
-import 'package:meow_stt/data/podcast/rss_parser.dart';
+import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/data/podcast/http_podcast_gateway.dart';
+import 'package:listenook/data/podcast/podcast_urls.dart';
+import 'package:listenook/data/podcast/rss_parser.dart';
 
 void main() {
   const parser = PodcastRssParser();

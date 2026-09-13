@@ -3,13 +3,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
-import 'package:meow_stt/data/transcript_exporter.dart';
-import 'package:meow_stt/l10n/strings.dart';
-import 'package:meow_stt/state/app_controller.dart';
-import 'package:meow_stt/ui/library_page.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/transcript_exporter.dart';
+import 'package:listenook/l10n/strings.dart';
+import 'package:listenook/state/app_controller.dart';
+import 'package:listenook/ui/library_page.dart';
 import 'package:provider/provider.dart';
 
 void main() {

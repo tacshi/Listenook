@@ -2,9 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/soniox_api_client.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/soniox_api_client.dart';
 
 void main() {
   final key = Platform.environment['SONIOX_API_KEY']?.trim();

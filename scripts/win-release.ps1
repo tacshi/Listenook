@@ -50,7 +50,7 @@ if ($LASTEXITCODE -ne 0) { throw "Windows release build failed." }
 
 if (-not $Version) { exit 0 }
 
-$Installer = Join-Path $Root "dist\MeowSTT-$Version-windows-$Arch-release-setup.exe"
+$Installer = Join-Path $Root "dist\Listenook-$Version-windows-$Arch-release-setup.exe"
 if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
   throw "Missing installer: $Installer"
 }

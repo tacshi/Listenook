@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/podcast_models.dart';
-import 'package:meow_stt/data/local_repositories.dart';
-import 'package:meow_stt/state/podcast_player.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/data/local_repositories.dart';
+import 'package:listenook/state/podcast_player.dart';
 
 void main() {
   test('segment-owned tokens stay with overlapping speaker cues', () {

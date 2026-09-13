@@ -8,17 +8,17 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/local_speech.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/update_models.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
-import 'package:meow_stt/data/transcript_exporter.dart';
-import 'package:meow_stt/data/update_installer.dart';
-import 'package:meow_stt/data/update_service.dart';
-import 'package:meow_stt/l10n/strings.dart';
-import 'package:meow_stt/state/app_controller.dart';
-import 'package:meow_stt/ui/settings_page.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/local_speech.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/update_models.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/transcript_exporter.dart';
+import 'package:listenook/data/update_installer.dart';
+import 'package:listenook/data/update_service.dart';
+import 'package:listenook/l10n/strings.dart';
+import 'package:listenook/state/app_controller.dart';
+import 'package:listenook/ui/settings_page.dart';
 import 'package:provider/provider.dart';
 
 void main() {
@@ -684,7 +684,7 @@ void main() {
     expect(find.text('Background'), findsNothing);
     expect(find.text('Show menu bar icon'), findsOneWidget);
     expect(
-      find.text('Keeps MeowSTT available after its window is closed.'),
+      find.text('Keeps Listenook available after its window is closed.'),
       findsOneWidget,
     );
     expect(find.text('Starts hidden in the menu bar.'), findsOneWidget);
@@ -705,7 +705,7 @@ void main() {
     );
     expect(startupSwitch.onChanged, isNotNull);
     final startupTitle = tester.widget<Text>(
-      find.text('Launch MeowSTT at login'),
+      find.text('Launch Listenook at login'),
     );
     final themeTitle = tester.widget<Text>(find.text('Theme'));
     final languageTitle = tester.widget<Text>(find.text('Language'));
@@ -720,7 +720,7 @@ void main() {
       matching: find.byType(Card),
     );
     final startupCard = find.ancestor(
-      of: find.text('Launch MeowSTT at login'),
+      of: find.text('Launch Listenook at login'),
       matching: find.byType(Card),
     );
     final inboxMonitoringCard = find.ancestor(
@@ -1147,10 +1147,10 @@ void main() {
                 'version': '1.0.0',
                 'build': 1,
                 'kind': 'appZip',
-                'fileName': 'MeowSTT.zip',
+                'fileName': 'Listenook.zip',
                 'size': 3,
                 'sha256': sha256.convert(const [1, 2, 3]).toString(),
-                'url': 'https://example.com/MeowSTT.zip',
+                'url': 'https://example.com/Listenook.zip',
               },
             },
           }),
@@ -1193,7 +1193,7 @@ void main() {
 
     expect(updates.phase, UpdatePhase.upToDate);
     expect(find.byKey(const Key('about-update-up-to-date')), findsOneWidget);
-    expect(find.text('MeowSTT is up to date.'), findsOneWidget);
+    expect(find.text('Listenook is up to date.'), findsOneWidget);
   });
 
   testWidgets('About tab shows the version and checks for updates', (
@@ -1233,10 +1233,10 @@ void main() {
                   'version': releaseVersion,
                   'build': releaseBuild,
                   'kind': 'appZip',
-                  'fileName': 'MeowSTT.zip',
+                  'fileName': 'Listenook.zip',
                   'size': bytes.length,
                   'sha256': sha256.convert(bytes).toString(),
-                  'url': 'https://example.com/MeowSTT.zip',
+                  'url': 'https://example.com/Listenook.zip',
                 },
               },
             }),
@@ -1291,7 +1291,7 @@ void main() {
     await tester.runAsync(updates.checkAndDownloadNow);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('about-update-ready')), findsOneWidget);
-    expect(find.text('MeowSTT 2.0.0 is ready to install.'), findsOneWidget);
+    expect(find.text('Listenook 2.0.0 is ready to install.'), findsOneWidget);
     expect(
       find.byKey(const Key('about-check-for-updates')),
       findsNothing,

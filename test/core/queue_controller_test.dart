@@ -2,15 +2,15 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/transcript_structure_editor.dart';
-import 'package:meow_stt/data/inbox_folder_monitor.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
-import 'package:meow_stt/data/openai_translation_service.dart';
-import 'package:meow_stt/data/process_media_service.dart';
-import 'package:meow_stt/data/transcript_exporter.dart';
-import 'package:meow_stt/state/app_controller.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/transcript_structure_editor.dart';
+import 'package:listenook/data/inbox_folder_monitor.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/openai_translation_service.dart';
+import 'package:listenook/data/process_media_service.dart';
+import 'package:listenook/data/transcript_exporter.dart';
+import 'package:listenook/state/app_controller.dart';
 
 void main() {
   test(
@@ -649,13 +649,13 @@ void main() {
       await controller.updateSessionOptions(
         const TranscriptionOptions(
           languageHints: ['zh'],
-          contextTerms: ['MeowSTT'],
+          contextTerms: ['Listenook'],
         ),
       );
       await controller.enqueueSources([completedFile.path]);
       await _waitFor(() => controller.readyCount == 1);
       expect(controller.inboxJobs.single.options.languageHints, ['zh']);
-      expect(controller.inboxJobs.single.options.contextTerms, ['MeowSTT']);
+      expect(controller.inboxJobs.single.options.contextTerms, ['Listenook']);
       await controller.startReady();
       final completed = controller.inboxJobs.single;
       controller.openInWorkspace(completed.id);

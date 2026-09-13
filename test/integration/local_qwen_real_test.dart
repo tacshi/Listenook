@@ -1,20 +1,21 @@
+import 'package:listenook/core/app_identity.dart';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/local_speech.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/local_speech_process.dart';
-import 'package:meow_stt/data/local_speech_services.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/local_speech.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/local_speech_process.dart';
+import 'package:listenook/data/local_speech_services.dart';
 
 void main() {
-  final pcmPath = Platform.environment['MEOWSTT_TEST_QWEN_PCM'];
-  final qwenDirectory = Platform.environment['MEOWSTT_TEST_QWEN_MLX_DIRECTORY'];
+  final pcmPath = AppIdentity.environment('LISTENOOK_TEST_QWEN_PCM');
+  final qwenDirectory = AppIdentity.environment('LISTENOOK_TEST_QWEN_MLX_DIRECTORY');
   final vadDirectory =
-      Platform.environment['MEOWSTT_TEST_SILERO_COREML_DIRECTORY'];
+      AppIdentity.environment('LISTENOOK_TEST_SILERO_COREML_DIRECTORY');
   final alignmentDirectory =
-      Platform.environment['MEOWSTT_TEST_ALIGNMENT_COREML_DIRECTORY'];
-  final workerPath = Platform.environment['MEOWSTT_TEST_SPEECH_WORKER'];
+      AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_COREML_DIRECTORY');
+  final workerPath = AppIdentity.environment('LISTENOOK_TEST_SPEECH_WORKER');
   final configured =
       Platform.isMacOS &&
       [
@@ -101,9 +102,9 @@ void main() {
     },
     skip: configured
         ? false
-        : 'Set MEOWSTT_TEST_QWEN_PCM, MEOWSTT_TEST_QWEN_MLX_DIRECTORY, '
-              'MEOWSTT_TEST_SILERO_COREML_DIRECTORY, and '
-              'MEOWSTT_TEST_SPEECH_WORKER.',
+        : 'Set LISTENOOK_TEST_QWEN_PCM, LISTENOOK_TEST_QWEN_MLX_DIRECTORY, '
+              'LISTENOOK_TEST_SILERO_COREML_DIRECTORY, and '
+              'LISTENOOK_TEST_SPEECH_WORKER.',
     timeout: const Timeout(Duration(minutes: 30)),
   );
 }

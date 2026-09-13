@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/podcast_models.dart';
-import 'package:meow_stt/data/podcast/download_location.dart';
-import 'package:meow_stt/data/podcast/podcast_urls.dart';
+import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/data/podcast/download_location.dart';
+import 'package:listenook/data/podcast/podcast_urls.dart';
 
 void main() {
   const locator = PodcastDownloadLocator();
@@ -18,11 +18,11 @@ void main() {
     final location = locator.resolve(
       jobId: 'job-1',
       episode: episode,
-      managedRoot: '/tmp/MeowSTT',
+      managedRoot: '/tmp/Listenook',
     );
 
     expect(location.kind, PodcastDownloadLocationKind.managedCache);
-    expect(location.directory, '/tmp/MeowSTT/podcasts/job-1');
+    expect(location.directory, '/tmp/Listenook/podcasts/job-1');
     expect(location.fileName, contains('Listen Today Tomorrow'));
     expect(location.fileName, endsWith('.mp3'));
     expect(location.partPath, endsWith('.mp3.part'));

@@ -33,7 +33,7 @@ void main() {
     expect(delegate, contains('applicationShouldHandleReopen'));
     expect(delegate, contains('invokeNavigation("showWindow"'));
     expect(project, contains('Embed Login Items'));
-    expect(project, contains('app.meowstt.desktop.Launcher'));
+    expect(project, contains('app.capyvibe.listenook.Launcher'));
   }, skip: !Platform.isMacOS);
 
   test('macOS second launch activates the lock-owning instance', () {

@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/inbox_folder_monitor.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/inbox_folder_monitor.dart';
 import 'package:path/path.dart' as p;
 
 void main() {

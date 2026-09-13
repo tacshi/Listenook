@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
-const releaseRepository = 'tacshi/MeowSTT-Release';
+import 'package:listenook/core/app_identity.dart';
+
+const releaseRepository = AppIdentity.releaseRepository;
 
 Future<void> main(List<String> arguments) async {
   final options = _parseOptions(arguments);
@@ -63,7 +65,13 @@ Future<Map<String, Object?>> buildUpdateManifest({
     'releasedAt': releasedAtText,
     'notesUrl': notesUrl,
   };
-  final platforms = _previousPlatforms(previousManifest);
+  final platforms = _previousPlatforms(previousManifest)
+    ..removeWhere(
+      (_, value) =>
+          value is! Map ||
+          !(value['fileName'] is String &&
+              (value['fileName'] as String).startsWith('Listenook-')),
+    );
   for (final target in updateTargets) {
     final artifact = _findArtifact(artifactDirectory, target.fileSuffix);
     if (artifact == null) {
@@ -136,7 +144,11 @@ File? _findArtifact(Directory directory, String suffix) {
   final matches = directory
       .listSync()
       .whereType<File>()
-      .where((file) => p.basename(file.path).endsWith(suffix))
+      .where(
+        (file) =>
+            p.basename(file.path).startsWith('Listenook-') &&
+            p.basename(file.path).endsWith(suffix),
+      )
       .toList();
   if (matches.length > 1) {
     throw StateError(

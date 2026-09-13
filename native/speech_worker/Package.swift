@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "MeowSTTSpeechWorker",
+    name: "ListenookSpeechWorker",
     platforms: [.macOS("15.0")],
     dependencies: [
         .package(
@@ -12,7 +12,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "MeowSTTSpeechWorker",
+            name: "ListenookSpeechWorker",
             dependencies: [
                 .product(name: "MossTranscribe", package: "speech-swift"),
                 .product(name: "Qwen3ASR", package: "speech-swift"),
@@ -25,8 +25,8 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "MeowSTTSpeechWorkerTests",
-            dependencies: ["MeowSTTSpeechWorker"]
+            name: "ListenookSpeechWorkerTests",
+            dependencies: ["ListenookSpeechWorker"]
         ),
     ]
 )

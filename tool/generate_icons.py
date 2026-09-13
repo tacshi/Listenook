@@ -1,59 +1,37 @@
 #!/usr/bin/env python3
-"""Generate deterministic Flutter desktop icons from the MeowSTT brand mark."""
+"""Export the approved Listenook artwork at native desktop icon sizes."""
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageOps
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "assets" / "branding" / "meowstt-icon.png"
-MASTER = ROOT / "assets" / "branding" / "meowstt-app-icon.png"
+SOURCE = ROOT / "assets" / "branding" / "listenook-icon.png"
+MASTER = ROOT / "assets" / "branding" / "listenook-app-icon.png"
 MAC_DIR = ROOT / "macos" / "Runner" / "Assets.xcassets" / "AppIcon.appiconset"
 WINDOWS_ICON = ROOT / "windows" / "runner" / "resources" / "app_icon.ico"
 
 
 def make_master() -> Image.Image:
-    size = 1024
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    background = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    pixels = background.load()
-    for y in range(size):
-        mix = y / (size - 1)
-        for x in range(size):
-            edge = abs(x - size / 2) / (size / 2)
-            pixels[x, y] = (
-                int(249 - 36 * mix - 10 * edge),
-                int(240 - 48 * mix - 6 * edge),
-                int(255 - 15 * mix),
-                255,
-            )
-
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((45, 45, 979, 979), radius=215, fill=255)
-    shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    shadow_mask = mask.filter(ImageFilter.GaussianBlur(22))
-    shadow.putalpha(shadow_mask.point(lambda value: int(value * 0.26)))
-    shadow_color = Image.new("RGBA", (size, size), (83, 40, 120, 255))
-    shadow_color.putalpha(shadow.getchannel("A"))
-    canvas.alpha_composite(shadow_color, (0, 10))
-    background.putalpha(mask)
-    canvas.alpha_composite(background)
-
-    mark = Image.open(SOURCE).convert("RGBA")
-    mark.thumbnail((720, 720), Image.Resampling.LANCZOS)
-    x = (size - mark.width) // 2
-    y = (size - mark.height) // 2 + 12
-    canvas.alpha_composite(mark, (x, y))
-    return canvas
+    # The approved artwork includes its background and spacing. Do not add the
+    # old gradient plate, shadow, or a second inset around it.
+    with Image.open(SOURCE) as source:
+        source = ImageOps.exif_transpose(source).convert("RGBA")
+        if source.width != source.height:
+            raise ValueError("The Listenook icon source must be square.")
+        return source.resize((1024, 1024), Image.Resampling.LANCZOS)
 
 
 def main() -> None:
     master = make_master()
     master.save(MASTER, optimize=True)
+    MAC_DIR.mkdir(parents=True, exist_ok=True)
     for size in (16, 32, 64, 128, 256, 512, 1024):
-        resized = master.resize((size, size), Image.Resampling.LANCZOS)
-        resized.save(MAC_DIR / f"app_icon_{size}.png", optimize=True)
+        master.resize((size, size), Image.Resampling.LANCZOS).save(
+            MAC_DIR / f"app_icon_{size}.png", optimize=True
+        )
+    WINDOWS_ICON.parent.mkdir(parents=True, exist_ok=True)
     master.save(
         WINDOWS_ICON,
         format="ICO",

@@ -10,23 +10,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/local_speech.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/transcript_structure_editor.dart';
-import 'package:meow_stt/core/podcast_models.dart';
-import 'package:meow_stt/data/podcast/http_podcast_gateway.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
-import 'package:meow_stt/data/transcript_exporter.dart';
-import 'package:meow_stt/l10n/strings.dart';
-import 'package:meow_stt/state/app_controller.dart';
-import 'package:meow_stt/state/podcast_controller.dart';
-import 'package:meow_stt/state/podcast_player.dart';
-import 'package:meow_stt/ui/app_shell.dart';
-import 'package:meow_stt/ui/inbox_page.dart';
-import 'package:meow_stt/ui/review_fullscreen_controller.dart';
-import 'package:meow_stt/ui/transcript_review.dart';
-import 'package:meow_stt/ui/workspace_page.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/local_speech.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/transcript_structure_editor.dart';
+import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/data/podcast/http_podcast_gateway.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/transcript_exporter.dart';
+import 'package:listenook/l10n/strings.dart';
+import 'package:listenook/state/app_controller.dart';
+import 'package:listenook/state/podcast_controller.dart';
+import 'package:listenook/state/podcast_player.dart';
+import 'package:listenook/ui/app_shell.dart';
+import 'package:listenook/ui/inbox_page.dart';
+import 'package:listenook/ui/review_fullscreen_controller.dart';
+import 'package:listenook/ui/transcript_review.dart';
+import 'package:listenook/ui/workspace_page.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:tray_manager/tray_manager.dart' as tray;
@@ -4838,7 +4838,7 @@ void main() {
     expect(find.byKey(const Key('empty-add-files')), findsOneWidget);
 
     await messenger.handlePlatformMessage(
-      'app.meowstt.desktop/navigation',
+      'app.capyvibe.listenook/navigation',
       const StandardMethodCodec().encodeMethodCall(
         const MethodCall('showSettings'),
       ),
@@ -4849,7 +4849,7 @@ void main() {
     expect(find.byKey(const Key('settings-page-title')), findsOneWidget);
 
     await messenger.handlePlatformMessage(
-      'app.meowstt.desktop/navigation',
+      'app.capyvibe.listenook/navigation',
       const StandardMethodCodec().encodeMethodCall(
         const MethodCall('showInbox'),
       ),
@@ -4861,7 +4861,7 @@ void main() {
     controller.setDestination(AppDestination.library);
     await tester.pumpAndSettle();
     await messenger.handlePlatformMessage(
-      'app.meowstt.desktop/navigation',
+      'app.capyvibe.listenook/navigation',
       const StandardMethodCodec().encodeMethodCall(
         const MethodCall('showWindow'),
       ),
@@ -5500,7 +5500,7 @@ void main() {
         () => appShellState.onWindowClose() as Future<void>,
       );
       final restoreFuture = messenger.handlePlatformMessage(
-        'app.meowstt.desktop/navigation',
+        'app.capyvibe.listenook/navigation',
         const StandardMethodCodec().encodeMethodCall(
           const MethodCall('showWindow'),
         ),
@@ -6895,15 +6895,15 @@ void main() {
 
     await tester.enterText(
       find.byKey(const Key('session-context-terms-field')),
-      'MeowSTT, Soniox',
+      'Listenook, Soniox',
     );
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
 
-    expect(controller.sessionOptions.contextTerms, ['MeowSTT', 'Soniox']);
+    expect(controller.sessionOptions.contextTerms, ['Listenook', 'Soniox']);
     expect(controller.inboxJobs.single.options.languageHints, ['zh', 'en']);
     expect(controller.inboxJobs.single.options.contextTerms, [
-      'MeowSTT',
+      'Listenook',
       'Soniox',
     ]);
   });

@@ -156,7 +156,7 @@ Future<void> showTranscriptExportDialog(
   if (selected == null || !context.mounted) return;
   if (selected.zip) {
     final destination = await getSaveLocation(
-      suggestedName: 'MeowSTT-transcripts.zip',
+      suggestedName: 'Listenook-transcripts.zip',
       acceptedTypeGroups: [
         XTypeGroup(
           label: context.strings.t('zip_archive'),

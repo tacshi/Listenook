@@ -1,7 +1,7 @@
 import Cocoa
 import FlutterMacOS
 import XCTest
-@testable import MeowSTT
+@testable import Listenook
 
 private final class CursorHostView: NSView {
   private(set) var recordedCursor: NSCursor?

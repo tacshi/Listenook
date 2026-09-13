@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/update_models.dart';
-import 'package:meow_stt/data/update_installer.dart';
+import 'package:listenook/core/update_models.dart';
+import 'package:listenook/data/update_installer.dart';
 
 void main() {
   test(
@@ -52,30 +52,30 @@ void main() {
     );
   });
 
-  test('macOS locates only a writable installed MeowSTT bundle', () async {
-    final root = await Directory.systemTemp.createTemp('meowstt-installer-');
+  test('macOS locates only a writable installed Listenook bundle', () async {
+    final root = await Directory.systemTemp.createTemp('listenook-installer-');
     addTearDown(() => root.delete(recursive: true));
-    final executable = '${root.path}/MeowSTT.app/Contents/MacOS/MeowSTT';
+    final executable = '${root.path}/Listenook.app/Contents/MacOS/Listenook';
     await Directory(File(executable).parent.path).create(recursive: true);
 
     expect(
       MacosUpdateInstaller(executablePath: executable).installedBundlePath(),
-      '${root.path}/MeowSTT.app',
+      '${root.path}/Listenook.app',
     );
     expect(
       MacosUpdateInstaller(
-        executablePath: '${root.path}/NotAnApp/Contents/MacOS/MeowSTT',
+        executablePath: '${root.path}/NotAnApp/Contents/MacOS/Listenook',
       ).installedBundlePath(),
       isNull,
     );
   });
 
   test('macOS verifies and starts the rollback-capable swap helper', () async {
-    final root = await Directory.systemTemp.createTemp('meowstt-installer-');
+    final root = await Directory.systemTemp.createTemp('listenook-installer-');
     addTearDown(() => root.delete(recursive: true));
-    final executable = '${root.path}/MeowSTT.app/Contents/MacOS/MeowSTT';
+    final executable = '${root.path}/Listenook.app/Contents/MacOS/Listenook';
     await Directory(File(executable).parent.path).create(recursive: true);
-    final archive = File('${root.path}/update/MeowSTT.zip');
+    final archive = File('${root.path}/update/Listenook.zip');
     await archive.parent.create(recursive: true);
     await archive.writeAsBytes([1]);
     final commands = <String>[];
@@ -87,7 +87,7 @@ void main() {
         commands.add(command);
         if (command == '/usr/bin/ditto') {
           await Directory(
-            '${arguments.last}/MeowSTT.app',
+            '${arguments.last}/Listenook.app',
           ).create(recursive: true);
         }
         return ProcessResult(1, 0, '', '');
@@ -105,7 +105,7 @@ void main() {
       commands,
       containsAll(['/usr/bin/ditto', '/usr/bin/codesign', '/usr/sbin/spctl']),
     );
-    expect(helperArguments, containsAll(['123', '${root.path}/MeowSTT.app']));
+    expect(helperArguments, containsAll(['123', '${root.path}/Listenook.app']));
     expect(MacosUpdateInstaller.helperScript, contains('update-backup'));
     expect(
       MacosUpdateInstaller.helperScript,
@@ -114,11 +114,11 @@ void main() {
   });
 
   test('macOS refuses an archive whose signature fails', () async {
-    final root = await Directory.systemTemp.createTemp('meowstt-installer-');
+    final root = await Directory.systemTemp.createTemp('listenook-installer-');
     addTearDown(() => root.delete(recursive: true));
-    final executable = '${root.path}/MeowSTT.app/Contents/MacOS/MeowSTT';
+    final executable = '${root.path}/Listenook.app/Contents/MacOS/Listenook';
     await Directory(File(executable).parent.path).create(recursive: true);
-    final archive = File('${root.path}/update/MeowSTT.zip');
+    final archive = File('${root.path}/update/Listenook.zip');
     await archive.parent.create(recursive: true);
     await archive.writeAsBytes([1]);
     final installer = MacosUpdateInstaller(
@@ -126,7 +126,7 @@ void main() {
       run: (command, arguments) async {
         if (command == '/usr/bin/ditto') {
           await Directory(
-            '${arguments.last}/MeowSTT.app',
+            '${arguments.last}/Listenook.app',
           ).create(recursive: true);
         }
         return ProcessResult(
@@ -150,7 +150,7 @@ UpdateAsset _asset({
   List<String> silentArgs = const [],
 }) => UpdateAsset(
   kind: kind,
-  fileName: kind == UpdateInstallKind.appZip ? 'MeowSTT.zip' : 'setup.exe',
+  fileName: kind == UpdateInstallKind.appZip ? 'Listenook.zip' : 'setup.exe',
   size: 1,
   sha256: List.filled(64, '0').join(),
   url: Uri.parse('https://example.com/update'),

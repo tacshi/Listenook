@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "environment.ps1")
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $HostArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 $ExpectedHost = if ($Arch -eq "x64") { "AMD64" } else { "ARM64" }
@@ -21,11 +22,11 @@ $Version = if ($BuildName) { $BuildName } else { $VersionLine.Matches[0].Groups[
 $Configuration = if ($Mode -eq "release") { "Release" } else { "Debug" }
 
 function Resolve-InnoCompiler {
-  if ($env:MEOWSTT_ISCC) {
-    if (-not (Test-Path -LiteralPath $env:MEOWSTT_ISCC -PathType Leaf)) {
-      throw "MEOWSTT_ISCC does not point to ISCC.exe: $env:MEOWSTT_ISCC"
+  if ($env:LISTENOOK_ISCC) {
+    if (-not (Test-Path -LiteralPath $env:LISTENOOK_ISCC -PathType Leaf)) {
+      throw "LISTENOOK_ISCC does not point to ISCC.exe: $env:LISTENOOK_ISCC"
     }
-    return (Resolve-Path -LiteralPath $env:MEOWSTT_ISCC).Path
+    return (Resolve-Path -LiteralPath $env:LISTENOOK_ISCC).Path
   }
   $Command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
   if ($Command) { return $Command.Source }
@@ -41,15 +42,15 @@ function Resolve-InnoCompiler {
       return (Resolve-Path -LiteralPath $Candidate).Path
     }
   }
-  throw "Inno Setup 6 or 7 is required for Windows release builds. Install it, add ISCC.exe to PATH, or set MEOWSTT_ISCC."
+  throw "Inno Setup 6 or 7 is required for Windows release builds. Install it, add ISCC.exe to PATH, or set LISTENOOK_ISCC."
 }
 
 function Resolve-SignTool {
-  if ($env:MEOWSTT_SIGNTOOL) {
-    if (-not (Test-Path -LiteralPath $env:MEOWSTT_SIGNTOOL -PathType Leaf)) {
-      throw "MEOWSTT_SIGNTOOL does not point to signtool.exe: $env:MEOWSTT_SIGNTOOL"
+  if ($env:LISTENOOK_SIGNTOOL) {
+    if (-not (Test-Path -LiteralPath $env:LISTENOOK_SIGNTOOL -PathType Leaf)) {
+      throw "LISTENOOK_SIGNTOOL does not point to signtool.exe: $env:LISTENOOK_SIGNTOOL"
     }
-    return (Resolve-Path -LiteralPath $env:MEOWSTT_SIGNTOOL).Path
+    return (Resolve-Path -LiteralPath $env:LISTENOOK_SIGNTOOL).Path
   }
   $Command = Get-Command signtool.exe -ErrorAction SilentlyContinue
   if ($Command) { return $Command.Source }
@@ -63,22 +64,22 @@ function Resolve-SignTool {
       Select-Object -First 1
     if ($Candidate) { return $Candidate }
   }
-  throw "signtool.exe is required when MEOWSTT_WINDOWS_PFX is set. Install the Windows SDK, add signtool.exe to PATH, or set MEOWSTT_SIGNTOOL."
+  throw "signtool.exe is required when LISTENOOK_WINDOWS_PFX is set. Install the Windows SDK, add signtool.exe to PATH, or set LISTENOOK_SIGNTOOL."
 }
 
 $SignTool = $null
 function Invoke-CodeSign([string]$Path) {
-  if (-not $env:MEOWSTT_WINDOWS_PFX) { return }
-  if (-not (Test-Path -LiteralPath $env:MEOWSTT_WINDOWS_PFX -PathType Leaf)) {
-    throw "MEOWSTT_WINDOWS_PFX does not exist: $env:MEOWSTT_WINDOWS_PFX"
+  if (-not $env:LISTENOOK_WINDOWS_PFX) { return }
+  if (-not (Test-Path -LiteralPath $env:LISTENOOK_WINDOWS_PFX -PathType Leaf)) {
+    throw "LISTENOOK_WINDOWS_PFX does not exist: $env:LISTENOOK_WINDOWS_PFX"
   }
   if (-not $SignTool) { $SignTool = Resolve-SignTool }
-  $SignArgs = @("sign", "/fd", "SHA256", "/f", $env:MEOWSTT_WINDOWS_PFX)
-  if ($env:MEOWSTT_WINDOWS_PFX_PASSWORD) {
-    $SignArgs += @("/p", $env:MEOWSTT_WINDOWS_PFX_PASSWORD)
+  $SignArgs = @("sign", "/fd", "SHA256", "/f", $env:LISTENOOK_WINDOWS_PFX)
+  if ($env:LISTENOOK_WINDOWS_PFX_PASSWORD) {
+    $SignArgs += @("/p", $env:LISTENOOK_WINDOWS_PFX_PASSWORD)
   }
-  if ($env:MEOWSTT_WINDOWS_TIMESTAMP_URL) {
-    $SignArgs += @("/tr", $env:MEOWSTT_WINDOWS_TIMESTAMP_URL, "/td", "SHA256")
+  if ($env:LISTENOOK_WINDOWS_TIMESTAMP_URL) {
+    $SignArgs += @("/tr", $env:LISTENOOK_WINDOWS_TIMESTAMP_URL, "/td", "SHA256")
   }
   $SignArgs += $Path
   & $SignTool @SignArgs
@@ -97,8 +98,8 @@ try {
   if (-not (Test-Path $Build)) {
     $Build = Join-Path $Root "build\windows\runner\$Configuration"
   }
-  if (-not (Test-Path (Join-Path $Build "MeowSTT.exe"))) {
-    throw "Missing native build product: $Build\MeowSTT.exe"
+  if (-not (Test-Path (Join-Path $Build "Listenook.exe"))) {
+    throw "Missing native build product: $Build\Listenook.exe"
   }
 
   $Encoder = & (Join-Path $PSScriptRoot "fetch-flac.ps1") -Arch $Arch
@@ -138,7 +139,7 @@ try {
     }
   }
   $ExpectedMachine = if ($Arch -eq "x64") { 0x8664 } else { 0xAA64 }
-  $NativeBinaries = @("MeowSTT.exe", "flac\flac.exe")
+  $NativeBinaries = @("Listenook.exe", "flac\flac.exe")
   if (Test-Path -LiteralPath (Join-Path $Build "flac\libFLAC.dll") -PathType Leaf) {
     $NativeBinaries += "flac\libFLAC.dll"
   }
@@ -156,7 +157,7 @@ try {
 
   $Out = Join-Path $Root "dist"
   New-Item -ItemType Directory -Force -Path $Out | Out-Null
-  $Base = "MeowSTT-$Version-windows-$Arch-$Mode"
+  $Base = "Listenook-$Version-windows-$Arch-$Mode"
   $Zip = Join-Path $Out "$Base-portable.zip"
   if ($Mode -eq "debug") {
     $Portable = Join-Path $Out "$Base-portable"
@@ -178,7 +179,7 @@ try {
     $SetupBase = "$Base-setup"
     $Setup = Join-Path $Out "$SetupBase.exe"
     if (Test-Path $Setup) { Remove-Item $Setup -Force }
-    $Publisher = if ($env:MEOWSTT_WINDOWS_PUBLISHER) { $env:MEOWSTT_WINDOWS_PUBLISHER } else { "MeowSTT" }
+    $Publisher = if ($env:LISTENOOK_WINDOWS_PUBLISHER) { $env:LISTENOOK_WINDOWS_PUBLISHER } else { "Capyvibe" }
     $InnoArgs = @(
       "/Qp",
       "/DAppVersion=$Version",
@@ -188,7 +189,7 @@ try {
       "/DOutputDir=$Out",
       "/DOutputBaseName=$SetupBase",
       "/DSetupIcon=$(Join-Path $Root 'windows\runner\resources\app_icon.ico')",
-      (Join-Path $Root "packaging\windows\MeowSTT.iss")
+      (Join-Path $Root "packaging\windows\Listenook.iss")
     )
     & $InnoCompiler @InnoArgs
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup packaging failed." }

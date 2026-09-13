@@ -42,13 +42,13 @@ void main() {
 
   test('release notes expand squash-merge commit subjects', () async {
     final fixture = await Directory.systemTemp.createTemp(
-      'meowstt_release_notes_',
+      'listenook_release_notes_',
     );
     addTearDown(() => fixture.delete(recursive: true));
     final repository = Directory('${fixture.path}/repository')..createSync();
     await _git(repository, ['init', '--quiet']);
-    await _git(repository, ['config', 'user.name', 'MeowSTT Test']);
-    await _git(repository, ['config', 'user.email', 'test@meowstt.invalid']);
+    await _git(repository, ['config', 'user.name', 'Listenook Test']);
+    await _git(repository, ['config', 'user.email', 'test@listenook.invalid']);
     await _git(repository, ['config', 'commit.gpgsign', 'false']);
     await _git(repository, [
       'commit',
@@ -98,7 +98,7 @@ write_release_notes "$3" v1.0.0..HEAD
 
   test('platform packages contain updater artifacts and relaunch support', () {
     final macos = File('scripts/build-macos.sh').readAsStringSync();
-    final windows = File('packaging/windows/MeowSTT.iss').readAsStringSync();
+    final windows = File('packaging/windows/Listenook.iss').readAsStringSync();
     final windowsRelease = File('scripts/win-release.ps1').readAsStringSync();
 
     expect(macos, contains(r'ditto -c -k --keepParent "$APP" "$APP_ZIP"'));

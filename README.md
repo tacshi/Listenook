@@ -1,239 +1,233 @@
-# MeowSTT
+# Listenook / 聆页
 
-MeowSTT is a batch-first BYOK transcription app for macOS and Windows. Drop
-audio, video, or folders; review the queue before spending API credit; then edit
-speaker-aware transcripts beside synchronized playback and export TXT,
-Markdown, SRT, or WebVTT. Transcripts can optionally be translated during
-Soniox transcription or afterward through one user-configured
-OpenAI-compatible text endpoint. Remote transcription can use Soniox or MOSS
-Pro per batch.
+Listenook is a desktop app for listening to podcasts and local audio or video
+with synchronized transcripts. Read bilingual translations, replay sentences,
+practice English dictation, and organize recordings in a searchable library.
 
-The package name is `meow_stt`. Its permanent desktop identity is
-`app.meowstt.desktop`.
+The interface uses **聆页** in Chinese and **Listenook** in English. It runs on
+macOS and Windows. Cloud transcription and AI features use your own API keys;
+local transcription is available on supported Apple Silicon Macs.
 
-## What is implemented
+[Downloads](https://github.com/tacshi/Listenook-Release/releases) ·
+[Privacy](PRIVACY.md) · [Release instructions](Release_Steps.md)
 
-- Recursive folder and multi-file drag/drop with hidden-file filtering and
-  canonical-path deduplication.
-- Existing SRT or WebVTT files can be paired with local media in Inbox and sent
-  directly to Qwen3 ForcedAligner on Apple Silicon/macOS 15+. MeowSTT preserves
-  cue text and order, tightens successfully aligned cue edges, retains original
-  timing for unsuccessful cues, and never invokes or charges a transcription
-  provider for these jobs.
-- An optional Podcast tab that searches public Apple Podcasts results, opens
-  RSS feeds, previews episodes, and follows shows locally. Deep-listen
-  downloads an episode into Inbox for confirmation. Word-level publisher
-  transcripts can be imported; cue-level captions stay informational and
-  transcription still uses the selected remote transcription provider.
-- An optional monitored Inbox folder that recursively discovers stable matching
-  media for review without uploading or transcribing it. A durable fingerprint
-  ledger prevents unchanged files from being rediscovered after restart or
-  history deletion; changed versions become eligible again. Podcast downloads
-  land in that folder’s `Podcasts/` directory when monitoring is configured.
-- A macOS menu-bar/Windows tray companion that keeps monitoring and active work
-  running after the configured app window closes, with pause, restore, Settings,
-  notification, and explicit Quit actions. Optional launch at login starts in
-  the background and is off by default.
-- libmpv validation for readability, audio streams, supported media, and the
-  300-minute application limit. Inputs are limited to MP3, WAV, M4A, OGG, MP4, MKV,
-  and AVI.
-- A persisted queue that automatically runs one worker per queued job, capped
-  at four, with explicit start, determinate local progress, cancel/retry,
-  interrupted-upload recovery, remote-poll recovery, and scoped cleanup retries.
-- Streaming Soniox multipart upload with `stt-async-v5`, automatic language
-  identification, always-on diarization, language hints, context terms, stable
-  error mapping, and transient polling backoff.
-- Streaming MOSS asset upload with `moss-transcribe-diarize`, asynchronous task
-  recovery, speaker-labelled segments, server-directed polling, 512 MB upload
-  validation, owned-file cleanup, and compact 16 kHz mono AAC preparation on
-  macOS for video, lossless audio, or high-bitrate input.
-- Optional Apple Silicon/macOS 15+ local transcription: `MOSS Local` provides
-  diarization through a pinned Core ML INT8 model, while `Qwen3 Local (Beta)`
-  prioritizes multilingual text quality through pinned Qwen3 ASR 1.7B MLX
-  8-bit weights and Silero Core ML VAD. Qwen provides segment timing without
-  speaker labels. Both can optionally add fail-open word timing with the
-  independently downloadable Qwen3 ForcedAligner INT8 or FP16 Core ML model.
-- Optional one-way Soniox translation in the original async transcription job,
-  with provider-native language targets and no separate translation pass.
-- A local, searchable library; source relinking; editable segments and speaker
-  names; video/audio playback; timestamp seeking; transcript search; clipboard
-  copy; and batch re-export.
-- Manual or optional automatic LLM translation with editable bilingual review,
-  partial-result recovery, retry-missing and per-segment retranslation, and
-  Original/Translated/Bilingual copy and exports.
-- User-invoked AI Briefs with editable overviews, chapters, key ideas,
-  decisions, action items, open questions, and opt-in, level-aware language
-  notes. Generated items retain timestamped transcript evidence that seeks the
-  source media, and briefs can be copied or exported as Markdown.
-- A single editable AI-provider configuration shared by LLM translation and
-  AI Briefs, with VoiceTale-style provider templates. Custom starts blank;
-  templates only prefill the Base URL, and model selection is enabled after a
-  successful connection test.
-- System/light/dark themes and English/Simplified Chinese localization.
-- Separate secure Soniox, MOSS, and translation credentials in
-  Keychain/Credential Manager. `SONIOX_API_KEY` and `MOSS_API_KEY` are used only
-  as development fallbacks when their secure storage entries are empty.
+## Using Listenook
 
-## Privacy model
+1. Drop audio, video, or a folder into Inbox, or find an episode in Podcast.
+2. Choose a transcription provider, use available word-level publisher
+   transcripts, or pair local media with an existing SRT or WebVTT file.
+3. Open the transcript to listen, read, translate, edit, practice, or export.
 
-MeowSTT is BYOK and has no application backend. Starting a job uploads its
-media directly to the provider recorded on that job, except for imported
-subtitle jobs, which align against local media without an upload or
-transcription request. MOSS Pro may first create
-a compact temporary audio copy on macOS. Optional Soniox
-translation is performed within the Soniox request. Optional LLM translation is a separate operation;
-when requested, transcript text—not media—is sent to the single
-OpenAI-compatible endpoint saved in Settings. AI Brief generation also sends
-transcript text, timestamps, and speaker names—not media—to that endpoint only
-after an explicit user action. Manifests store paths, small metadata, raw
-transcript tokens, original and translated edits, AI Brief drafts and evidence,
-generation progress, and only the remote IDs owned by that job—never media
-copies or API keys. Cleanup deletes only provider resources created by that
-job. Soniox files and transcriptions are deleted; MOSS uploaded files are
-deleted, while MOSI task-record retention follows the provider policy because
-the public API exposes no task-delete endpoint.
-Inbox monitoring stores its folder configuration plus canonical path, byte
-size, modification time, disposition, and optional job ID in a separate atomic
-Application Support JSON file. It never moves, modifies, deletes, or uploads a
-monitored source. Discovery notifications are sent only while the window is
-hidden; pressing **Transcribe** remains the point at which media can leave the
-device. Imported SRT/WebVTT snapshots and local alignment never make media
-leave the device; optional LLM translation can still send transcript text to
-the configured text provider.
-See [PRIVACY.md](PRIVACY.md).
+Supported media: MP3, WAV, M4A, OGG, MP4, MKV, and AVI, up to 300 minutes per file.
+
+## Features
+
+- **Listen and read:** synchronized audio/video playback, timestamp seeking,
+  transcript search, sentence repetition, and blind listening.
+- **Practice:** type what you hear, replay the selected sentence, and compare
+  your answer with the transcript. Word checking currently supports English.
+- **Translate:** review and edit original, translated, or bilingual text.
+  Retry missing translations or translate individual segments again.
+- **Follow podcasts:** search public Apple Podcasts results, open RSS feeds,
+  follow shows, preview episodes, and download episodes for further study.
+  Word-level publisher transcripts can be imported when available.
+- **Import subtitles:** pair SRT or WebVTT files with local media and review
+  matches before import. On supported Macs, imported subtitles can be aligned
+  locally with Qwen3 ForcedAligner without cloud transcription; original subtitle
+  files remain unchanged.
+- **Transcribe recordings:** batch files with speaker labels where supported,
+  language hints, context terms, progress, cancellation, and recovery after
+  interruption.
+- **Create AI Briefs:** generate editable overviews, chapters, key ideas,
+  decisions, action items, open questions, and optional language notes.
+  Timestamped evidence links back to the source recording.
+- **Organize and export:** edit transcripts and speaker names, relink missing
+  media, and export TXT, Markdown, SRT, or WebVTT. Briefs export as Markdown.
+- **Monitor a folder:** discover new media for review, with an optional macOS
+  menu-bar or Windows tray companion and launch at login.
+
+System, light, and dark themes and English/Simplified Chinese interfaces are
+available. Keyboard shortcuts are listed in **Settings → Shortcuts**.
+
+## Transcription and AI providers
+
+| Provider | Availability | Notes |
+| --- | --- | --- |
+| Soniox | macOS and Windows; API key required | Speaker labels, word timing, language detection, and optional translation during transcription. |
+| MOSS Pro | macOS and Windows; API key required | Speaker-labelled transcription through MOSI. |
+| MOSS Local | Apple Silicon, macOS 15+ | Local Core ML transcription with speaker labels. |
+| Qwen3 Local (Beta) | Apple Silicon, macOS 15+ | Local multilingual transcription with segment timing, without speaker labels. |
+
+On supported Macs, a separately downloaded Qwen3 ForcedAligner can add word
+timing to eligible transcriptions. Local speech models are downloaded and
+verified separately; they are not bundled with the app.
+
+Text translation and AI Briefs share one configurable AI provider. Provider
+presets prefill connection details; model selection becomes available after a
+successful connection test.
+
+## Data and privacy
+
+Listenook has no application backend. Cloud transcription sends media directly
+to the selected Soniox or MOSI provider when you start the job. Local
+transcription and subtitle import do not upload media. Folder monitoring
+discovers files without uploading them.
+
+Manual or automatic LLM translation and user-requested AI Briefs send
+transcript text to your configured AI endpoint.
+Podcast search, feeds, streaming, and downloads contact the relevant public
+services. API keys use operating-system secure storage.
+
+Transcripts, settings, local models, and downloaded podcast episodes are stored
+locally. Imported source media stays in its original location. See
+[PRIVACY.md](PRIVACY.md) for provider cleanup and retention details.
+
+## Moving from MeowSTT
+
+Install Listenook manually for the first upgrade. Quit MeowSTT, including its
+menu-bar or tray process, before opening Listenook. First launch copies the old
+library, settings, completed local models, and downloaded podcasts into the new
+data directory, preserving the old data for recovery. Existing Listenook data
+takes priority.
+
+If copying fails, check disk space and folder access, then retry. API key
+migration can be retried, or you can enter the keys again. Keys you clear in
+Listenook are not restored from the old app. On macOS, disable the old MeowSTT
+login item if prompted.
+
+| Item | Value |
+| --- | --- |
+| Dart package | `listenook` |
+| Main bundle ID | `app.capyvibe.listenook` |
+| Login helper bundle ID | `app.capyvibe.listenook.Launcher` |
+| macOS data directory | `~/Library/Application Support/app.capyvibe.listenook` |
+| Windows data directory | `%APPDATA%\Capyvibe\Listenook` |
+
+Executable and installer filenames use Listenook in every language. The Windows
+installer retains its upgrade identity and may reuse the old installation
+folder. Existing `MEOWSTT_*` environment variables remain compatibility
+fallbacks; `LISTENOOK_*` variables take priority.
+
+Later Listenook releases use `listenook-latest.json` in
+[tacshi/Listenook-Release](https://github.com/tacshi/Listenook-Release). The old
+`latest.json` remains the MeowSTT update feed. See
+[Release_Steps.md](Release_Steps.md) for publishing and feed separation.
 
 ## Development
 
-Requirements: Flutter stable with macOS and/or Windows desktop enabled. Building
-the Apple Silicon local speech worker also requires Xcode and its Metal
-toolchain; its Core ML and MLX model bundles are verified downloads and are
-never bundled. The
-existing `media_kit_libs_video` dependency supplies libmpv. Windows packaging
-fetches the pinned FLAC 1.5.0 encoder described in
-`packaging/flac/manifest.json`; macOS uses its built-in `afconvert` encoder.
+Use Flutter stable with the macOS or Windows desktop toolchain enabled. The
+Apple Silicon speech worker also requires Xcode and its Metal toolchain.
 
 ```sh
+git clone git@github.com:tacshi/Listenook.git
+cd Listenook
 flutter pub get
-flutter analyze
-flutter test
 flutter run -d macos
 ```
 
-Before `flutter run -d windows`, prepare the small native encoder once with
-`scripts\fetch-flac.ps1 -Arch x64` (or `arm64` on a native ARM64 development
-host). Packaging scripts do this automatically.
+For local speech during development on Apple Silicon, build the helper and
+point the app to it:
 
-Set `SONIOX_API_KEY` or `MOSS_API_KEY` only to opt into the corresponding
-billable live smoke test. Normal tests use fake local services and never consume
-provider credit.
+```sh
+scripts/build-speech-worker.sh
+LISTENOOK_SPEECH_WORKER="$PWD/build/native/speech_worker/ListenookSpeechWorker" flutter run -d macos
+```
 
-The real Qwen/Silero test is opt-in. Set `MEOWSTT_TEST_QWEN_PCM`,
-`MEOWSTT_TEST_QWEN_MLX_DIRECTORY`, `MEOWSTT_TEST_SILERO_COREML_DIRECTORY`, and
-`MEOWSTT_TEST_SPEECH_WORKER`; optionally set
-`MEOWSTT_TEST_ALIGNMENT_COREML_DIRECTORY`. For the two-hour M1 Pro gate, run
-`dart run scripts/benchmark_local_qwen.dart` with `--worker`,
-`--model-directory`, `--vad-directory`, and `--audio`. It fails at RTF `>= 0.7`,
-worker RSS `>= 8 GiB`, or invalid/non-monotonic timestamps. Qwen remains beta
-until the same curated corpus beats MOSS on English WER, Chinese CER, and
-mixed-language MER.
+Before `flutter run -d windows`, prepare the native FLAC encoder once:
 
-The complete keyboard shortcut reference is available in
-**Settings → Shortcuts**. All primary actions remain reachable without a mouse.
+```powershell
+scripts\fetch-flac.ps1 -Arch x64
+```
+
+Use `arm64` on a native ARM64 Windows host. Packaging scripts prepare the encoder
+automatically. macOS uses its built-in `afconvert` encoder.
+
+Run static analysis and tests relevant to the change. For example, to check
+application identity and startup:
+
+```sh
+flutter analyze
+flutter test test/core/app_identity_test.dart test/ui/bootstrap_test.dart
+```
+
+Native bundle identity, localized-name channel, and isolated Keychain migration
+checks run separately from packaging:
+
+```sh
+flutter test integration_test/secure_credential_store_test.dart -d macos
+```
+
+Cloud smoke tests are opt-in and may consume provider credit when
+`SONIOX_API_KEY` or `MOSS_API_KEY` is set. Normal tests use fake services.
+
+Real Qwen/Silero tests use `LISTENOOK_TEST_QWEN_PCM`,
+`LISTENOOK_TEST_QWEN_MLX_DIRECTORY`, `LISTENOOK_TEST_SILERO_COREML_DIRECTORY`, and
+`LISTENOOK_TEST_SPEECH_WORKER`; optionally set
+`LISTENOOK_TEST_ALIGNMENT_COREML_DIRECTORY`. The long-audio benchmark is
+`dart run scripts/benchmark_local_qwen.dart`, with `--worker`,
+`--model-directory`, `--vad-directory`, and `--audio`. Its two-hour M1 Pro gate
+requires RTF below 0.7, worker RSS below 8 GiB, and valid monotonic timestamps.
+Qwen remains beta pending comparison with MOSS on the same evaluation corpus.
 
 ## Packaging
 
-macOS (macOS 12+, arm64 or Intel):
+macOS supports macOS 12+ on Apple Silicon and Intel. Local speech requires
+Apple Silicon and macOS 15+.
 
 ```sh
 scripts/build-debug.sh --arch arm64
 scripts/build-release.sh --arch all
 ```
 
-Set `DEVELOPER_ID_APPLICATION` (or `MEOWSTT_MAC_SIGN_IDENTITY`) to the full
-Developer ID Application identity for production. The release script uses the
-`notarytool` keychain profile named `MeowSTT` by default; override it with
-`MEOWSTT_NOTARY_PROFILE`. Signed releases fail before building if that profile
-cannot be used, then notarize and staple both the app and DMG before packaging
-the final DMG. The app stores transcription API keys in the encrypted macOS login
-Keychain without opting into the entitlement-only Data Protection Keychain, so
-direct distributions do not require a provisioning profile or the restricted
-Keychain Sharing entitlement. macOS builds run a real Keychain round-trip
-integration test before packaging.
+For production signing, set `LISTENOOK_MAC_SIGN_IDENTITY` or
+`DEVELOPER_ID_APPLICATION` to the Developer ID Application identity. Notarization
+prefers the `Listenook` profile, with `MeowSTT` as a compatibility fallback when
+no profile is explicitly configured. `LISTENOOK_NOTARY_PROFILE` overrides the
+profile. Signed releases are notarized and stapled before distribution.
 
-Debug packages prefer the same Developer ID Application identity as releases:
-`MEOWSTT_MAC_DEBUG_SIGN_IDENTITY`, then `MEOWSTT_MAC_SIGN_IDENTITY`, then
-`DEVELOPER_ID_APPLICATION`. Without an explicit value, the script matches an
-available Developer ID identity to the Team ID of an existing release app, or
-uses the only available Developer ID identity. It warns and falls back to
-ad-hoc signing when no usable release identity exists or debug signing fails.
-Set `MEOWSTT_MAC_DEBUG_SIGN_IDENTITY=-` to force that fallback.
+Debug signing uses `LISTENOOK_MAC_DEBUG_SIGN_IDENTITY`, then
+`LISTENOOK_MAC_SIGN_IDENTITY`, then `DEVELOPER_ID_APPLICATION`. Otherwise it
+matches an existing release's Team ID or uses the only available Developer ID.
+It falls back to ad-hoc signing when needed; set
+`LISTENOOK_MAC_DEBUG_SIGN_IDENTITY=-` to request that explicitly.
 
-Windows (Windows 10 22H2+, matching native host):
+Windows requires Windows 10 22H2+ and a host matching the target architecture:
 
 ```powershell
 scripts\win-debug.ps1 -Arch x64
-scripts\win-release.ps1 -Arch arm64
+scripts\win-release.ps1 1.2.3 -Arch x64
 ```
 
-Pass a version such as `scripts\win-release.ps1 1.2.3` to produce the provenance
-sidecar required by the cross-platform publishing workflow. Debug builds produce
-an uncompressed portable directory. Release builds produce a portable ZIP and an
-Inno Setup installer. Install Inno
-Setup 6 or 7, or set `MEOWSTT_ISCC` to `ISCC.exe`. For production code signing,
-set `MEOWSTT_WINDOWS_PFX`, optionally `MEOWSTT_WINDOWS_PFX_PASSWORD`,
-`MEOWSTT_WINDOWS_PUBLISHER`, `MEOWSTT_WINDOWS_TIMESTAMP_URL`, and
-`MEOWSTT_SIGNTOOL`.
+Release builds require Inno Setup 6 or 7; use `LISTENOOK_ISCC` if it is not on
+PATH. Windows signing uses `LISTENOOK_WINDOWS_PFX`, with optional
+`LISTENOOK_WINDOWS_PFX_PASSWORD`, `LISTENOOK_WINDOWS_PUBLISHER`,
+`LISTENOOK_WINDOWS_TIMESTAMP_URL`, and `LISTENOOK_SIGNTOOL`.
+`LISTENOOK_FLAC_DIR` can select a pre-provisioned native encoder directory.
 
-Set `MEOWSTT_FLAC_DIR` to a pre-provisioned native Windows FLAC encoder
-directory to bypass the binary download. The matching FLAC source archive is
-still fetched and included for license compliance. Every script validates
-executable architecture and writes artifacts directly under `dist/`. Filenames
-include the platform, architecture, and build mode. Windows release builds and
-macOS builds also emit a matching `.sha256` manifest. For example:
+Artifacts are written to `dist/`, with platform, architecture, mode, and version
+in their filenames. macOS debug builds produce an app bundle; release builds
+produce a DMG and updater ZIP. Windows debug builds produce a portable folder;
+release builds produce a portable ZIP and Inno Setup installer. Checksum
+manifests accompany macOS builds and Windows releases.
 
-```text
-dist/MeowSTT-1.0.0-macos-arm64-release.dmg
-dist/MeowSTT-1.0.0-macos-arm64-release.zip
-dist/MeowSTT-1.0.0-macos-arm64-release.sha256
+Build scripts do not launch the macOS app. Run a launch check explicitly when
+needed:
+
+```sh
+scripts/verify-macos-app.sh build/macos/Build/Products/Debug/Listenook.app
 ```
 
-macOS release output contains a DMG for manual installation, a notarized app
-ZIP for automatic updates, and a checksum manifest. Windows
-debug output remains an uncompressed portable directory under `dist/`; Windows
-release output contains a portable ZIP and an Inno Setup `-setup.exe` installer.
+Publishing is a separate step described in [Release_Steps.md](Release_Steps.md).
 
-macOS debug output remains an uncompressed `.app` bundle under `dist/`.
+## Code structure and dependencies
 
-The macOS build scripts are non-interactive and do not launch the built app.
-Signed release builds access the Developer ID certificate and `notarytool`
-profile in Keychain. Run the app credential round-trip and launch checks
-explicitly when needed:
+Flutter controllers coordinate credentials, persisted jobs, transcription,
+translation, playback, and exports through injected interfaces. Networking,
+subprocesses, storage, and formatting live outside UI widgets. Persisted job
+transitions support recovery after restart.
 
-```bash
-flutter test integration_test/secure_credential_store_test.dart -d macos
-scripts/verify-macos-app.sh build/macos/Build/Products/Debug/MeowSTT.app
-```
-
-Production releases and the forced background updater use the separate public
-`tacshi/MeowSTT-Release` repository. See `Release_Steps.md` for the two-machine
-Windows/macOS publishing workflow and dry-run commands.
-
-## Architecture
-
-UI widgets depend on one Provider/ChangeNotifier controller. The controller
-orchestrates injected contracts for credentials, settings, manifests, media,
-transcription providers, OpenAI-compatible text translation, playback, and exports. Networking,
-subprocesses, persistence, and formatting live outside the UI. Every job
-transition is atomically persisted in an Application Support job directory,
-which is the restart-recovery boundary.
-
-## Third-party software
-
-Distribution artifacts retain the libmpv already supplied by
-`media_kit_libs_video`; there are no standalone FFmpeg or FFprobe programs.
-Windows adds the compact FLAC encoder and its corresponding source archive.
-Provenance, SHA-256 checksums, and license texts live in `packaging/flac/` and
-`assets/third_party/`. The optional arm64 local speech worker uses pinned
-speech-swift/Core ML/MLX code; MOSS, Qwen3, and Silero model bundles are downloaded
-separately, verified, and covered by the included notices. Soniox and MOSI are separate third-party transcription
-services and each requires a user-owned account and API key when selected.
+Playback uses libmpv from `media_kit_libs_video`; there are no standalone FFmpeg
+or FFprobe executables. Windows packages the native FLAC encoder and its source
+archive. The Apple Silicon speech worker uses pinned speech-swift, Core ML, and
+MLX dependencies. Provenance and licenses are in [packaging/flac](packaging/flac)
+and [assets/third_party](assets/third_party).

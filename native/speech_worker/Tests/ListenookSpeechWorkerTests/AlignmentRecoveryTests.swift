@@ -1,5 +1,5 @@
 import XCTest
-@testable import MeowSTTSpeechWorker
+@testable import ListenookSpeechWorker
 
 final class AlignmentRecoveryTests: XCTestCase {
     func testOrderedTextRecursiveSplitRetainsOverlappingCueAudio() {

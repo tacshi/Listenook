@@ -18,7 +18,7 @@ let fileManager = FileManager.default
 let appURL = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
 let executableName = (Bundle(url: appURL)?.object(
   forInfoDictionaryKey: "CFBundleExecutable"
-) as? String) ?? "MeowSTT"
+) as? String) ?? "Listenook"
 let executableURL = appURL
   .appendingPathComponent("Contents/MacOS")
   .appendingPathComponent(executableName)
@@ -29,15 +29,14 @@ guard fileManager.isExecutableFile(atPath: executableURL.path) else {
 }
 
 let testRoot = fileManager.temporaryDirectory.appendingPathComponent(
-  "meowstt-background-lifecycle-\(UUID().uuidString)",
+  "listenook-background-lifecycle-\(UUID().uuidString)",
   isDirectory: true
 )
 let home = testRoot.appendingPathComponent("home", isDirectory: true)
 let monitoredFolder = testRoot.appendingPathComponent("Inbox", isDirectory: true)
 let support = home
   .appendingPathComponent("Library/Application Support", isDirectory: true)
-  .appendingPathComponent("app.meowstt.desktop", isDirectory: true)
-  .appendingPathComponent("MeowSTT", isDirectory: true)
+  .appendingPathComponent("app.capyvibe.listenook", isDirectory: true)
 
 try fileManager.createDirectory(
   at: monitoredFolder,

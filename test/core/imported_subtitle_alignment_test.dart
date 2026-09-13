@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/imported_subtitle_alignment.dart';
-import 'package:meow_stt/core/models.dart';
+import 'package:listenook/core/imported_subtitle_alignment.dart';
+import 'package:listenook/core/models.dart';
 
 void main() {
   const planner = ImportedSubtitleAlignmentPlanner();

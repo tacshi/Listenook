@@ -5,7 +5,7 @@
   #error AppArch must be supplied by the build script.
 #endif
 #ifndef AppPublisher
-  #define AppPublisher "MeowSTT"
+  #define AppPublisher "Capyvibe"
 #endif
 #ifndef BuildDir
   #error BuildDir must be supplied by the build script.
@@ -30,14 +30,14 @@
 
 [Setup]
 AppId={{2CBD3B1E-8EC8-4BCF-9FB6-33AC6EFA2C16}
-AppName=MeowSTT
+AppName=Listenook
 AppVersion={#AppVersion}
-AppVerName=MeowSTT {#AppVersion}
+AppVerName=Listenook {#AppVersion}
 AppPublisher={#AppPublisher}
-UninstallDisplayName=MeowSTT
-UninstallDisplayIcon={app}\MeowSTT.exe
-DefaultDirName={localappdata}\Programs\MeowSTT
-DefaultGroupName=MeowSTT
+UninstallDisplayName=Listenook
+UninstallDisplayIcon={app}\Listenook.exe
+DefaultDirName={localappdata}\Programs\Listenook
+DefaultGroupName=Listenook
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed={#SupportedArchitecture}
@@ -50,8 +50,14 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
+CloseApplicationsFilter=*.exe,*.dll
 RestartApplications=no
 SetupLogging=yes
+
+[InstallDelete]
+Type: files; Name: "{app}\MeowSTT.exe"
+Type: files; Name: "{autoprograms}\MeowSTT.lnk"
+Type: files; Name: "{autodesktop}\MeowSTT.lnk"
 
 [Files]
 Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -60,12 +66,12 @@ Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Icons]
-Name: "{autoprograms}\MeowSTT"; Filename: "{app}\MeowSTT.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\MeowSTT"; Filename: "{app}\MeowSTT.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\Listenook"; Filename: "{app}\Listenook.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Listenook"; Filename: "{app}\Listenook.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\MeowSTT.exe"; Description: "Launch MeowSTT"; Flags: nowait postinstall skipifsilent
-Filename: "{app}\MeowSTT.exe"; Flags: nowait postinstall runasoriginaluser; Check: ShouldRelaunch
+Filename: "{app}\Listenook.exe"; Description: "Launch Listenook"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Listenook.exe"; Flags: nowait postinstall runasoriginaluser; Check: ShouldRelaunch
 
 [Code]
 function ShouldRelaunch: Boolean;

@@ -2,17 +2,17 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/contracts.dart';
-import 'package:meow_stt/core/local_speech.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/podcast_models.dart';
-import 'package:meow_stt/data/inbox_folder_monitor.dart';
-import 'package:meow_stt/data/local_media_source_resolver.dart';
-import 'package:meow_stt/data/local_repositories.dart';
-import 'package:meow_stt/data/podcast/http_podcast_gateway.dart';
-import 'package:meow_stt/data/timed_subtitle_import.dart';
-import 'package:meow_stt/data/transcript_exporter.dart';
-import 'package:meow_stt/state/app_controller.dart';
+import 'package:listenook/core/contracts.dart';
+import 'package:listenook/core/local_speech.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/data/inbox_folder_monitor.dart';
+import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/local_repositories.dart';
+import 'package:listenook/data/podcast/http_podcast_gateway.dart';
+import 'package:listenook/data/timed_subtitle_import.dart';
+import 'package:listenook/data/transcript_exporter.dart';
+import 'package:listenook/state/app_controller.dart';
 
 void main() {
   test(

@@ -2,9 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/l10n/strings.dart';
-import 'package:meow_stt/ui/podcast_media_export.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/l10n/strings.dart';
+import 'package:listenook/ui/podcast_media_export.dart';
 import 'package:path/path.dart' as p;
 
 void main() {

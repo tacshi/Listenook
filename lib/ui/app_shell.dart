@@ -1,3 +1,4 @@
+import '../core/app_identity.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -39,11 +40,12 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell>
     with WindowListener, tray.TrayListener, WidgetsBindingObserver {
   static const _nativeNavigationChannel = MethodChannel(
-    'app.meowstt.desktop/navigation',
+    AppIdentity.navigationChannel,
   );
   static const _compactSidebarWidth = 64.0;
   static const _extendedSidebarWidth = 184.0;
 
+  String? _lastDisplayName;
   bool _onboardingShown = false;
   bool _sidebarVisible = true;
   bool _closeDialogOpen = false;
@@ -79,10 +81,70 @@ class _AppShellState extends State<AppShell>
     unawaited(_syncWindowFullscreen());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showOnboarding();
+      unawaited(_showLegacyLoginNotice());
       unawaited(_updates?.start());
       unawaited(_initializeDesktopRuntime());
       _scheduleTraySync();
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final strings = context.strings;
+    if (_lastDisplayName == strings.appName) return;
+    _lastDisplayName = strings.appName;
+    unawaited(_syncDisplayName(strings));
+    _scheduleTraySync();
+  }
+
+  Future<void> _syncDisplayName(AppStrings strings) async {
+    try {
+      await windowManager.setTitle(strings.appName);
+      await _desktopRuntime?.setDisplayName(
+        strings.appName,
+        strings.locale.languageCode,
+      );
+    } on MissingPluginException {
+      // Native surfaces are unavailable in widget tests.
+    }
+  }
+
+  Future<void> _showLegacyLoginNotice() async {
+    final runtime = _desktopRuntime;
+    if (runtime == null ||
+        !await runtime.needsLegacyLoginNotice() ||
+        !mounted) {
+      return;
+    }
+    if (!_controller.inboxMonitorConfig.launchAtLogin) {
+      await runtime.dismissLegacyLoginNotice();
+      return;
+    }
+    final strings = context.strings;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(strings.t('migration_login_title')),
+        content: Text(strings.t('migration_login_body')),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await runtime.dismissLegacyLoginNotice();
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
+            },
+            child: Text(strings.t('migration_later')),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await runtime.dismissLegacyLoginNotice(openSettings: true);
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
+            },
+            child: Text(strings.t('migration_open_login')),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -214,13 +276,15 @@ class _AppShellState extends State<AppShell>
       if (!_trayReady) {
         await tray.trayManager.setIcon(
           Platform.isWindows
-              ? 'assets/branding/tray/meowstt-tray.ico'
-              : 'assets/branding/tray/meowstt-tray-template.png',
+              ? 'assets/branding/tray/listenook-tray.ico'
+              : Platform.isMacOS
+              ? 'assets/branding/tray/listenook-tray-template@2x.png'
+              : 'assets/branding/tray/listenook-tray-template.png',
           isTemplate: Platform.isMacOS,
           iconSize: 18,
         );
-        await tray.trayManager.setToolTip('MeowSTT');
       }
+      await tray.trayManager.setToolTip(strings.appName);
       await tray.trayManager.setContextMenu(
         tray.Menu(
           items: [
@@ -339,7 +403,7 @@ class _AppShellState extends State<AppShell>
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         icon: Image.asset(
-          'assets/branding/meowstt-icon.png',
+          'assets/branding/listenook-icon.png',
           width: 72,
           height: 72,
         ),
@@ -872,11 +936,16 @@ class _AppShellState extends State<AppShell>
                                                 bottom: 12,
                                               ),
                                               child: Tooltip(
-                                                message: 'MeowSTT',
-                                                child: Image.asset(
-                                                  'assets/branding/meowstt-icon.png',
-                                                  width: 38,
-                                                  height: 38,
+                                                message:
+                                                    context.strings.appName,
+                                                child: ClipRRect(
+                                                  borderRadius:
+                                                      BorderRadius.circular(9),
+                                                  child: Image.asset(
+                                                    'assets/branding/listenook-icon.png',
+                                                    width: 38,
+                                                    height: 38,
+                                                  ),
                                                 ),
                                               ),
                                             ),
@@ -1237,7 +1306,7 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
                 key: const Key('windows-app-icon'),
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: Image.asset(
-                  'assets/branding/meowstt-icon.png',
+                  'assets/branding/listenook-icon.png',
                   width: 20,
                   height: 20,
                 ),

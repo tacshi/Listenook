@@ -3,10 +3,10 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:archive/archive_io.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/core/transcript_parser.dart';
-import 'package:meow_stt/core/transcript_structure_editor.dart';
-import 'package:meow_stt/data/transcript_exporter.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/core/transcript_parser.dart';
+import 'package:listenook/core/transcript_structure_editor.dart';
+import 'package:listenook/data/transcript_exporter.dart';
 
 void main() {
   const parser = TranscriptParser();
@@ -558,7 +558,7 @@ void main() {
       ),
       title: '会议',
     );
-    expect(markdown, contains('- 由 MeowSTT 导出'));
+    expect(markdown, contains('- 由聆页导出'));
     expect(markdown, contains('- 时长：'));
     expect(markdown, contains('**说话人 1**'));
   });

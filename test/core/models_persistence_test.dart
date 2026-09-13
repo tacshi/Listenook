@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:meow_stt/core/models.dart';
-import 'package:meow_stt/data/local_repositories.dart';
+import 'package:listenook/core/models.dart';
+import 'package:listenook/data/local_repositories.dart';
 
 void main() {
   test('blind listening defaults off and persists independently', () {
@@ -548,7 +548,7 @@ void main() {
 
   test('Inbox monitor configuration and ledger persist atomically', () async {
     final temporary = await Directory.systemTemp.createTemp(
-      'meowstt-monitor-store-',
+      'listenook-monitor-store-',
     );
     addTearDown(() => temporary.delete(recursive: true));
     final paths = AppPaths.forTesting(temporary.path);
@@ -824,7 +824,7 @@ void main() {
   });
 
   test('job persistence is atomic and round-trips edits', () async {
-    final temporary = await Directory.systemTemp.createTemp('meowstt-test-');
+    final temporary = await Directory.systemTemp.createTemp('listenook-test-');
     addTearDown(() => temporary.delete(recursive: true));
     final repository = LocalJobRepository(AppPaths.forTesting(temporary.path));
     final now = DateTime.utc(2026, 1, 2);
@@ -865,7 +865,7 @@ void main() {
     'library catalog atomically persists reusable empty organizers',
     () async {
       final temporary = await Directory.systemTemp.createTemp(
-        'meowstt-library-catalog-',
+        'listenook-library-catalog-',
       );
       addTearDown(() => temporary.delete(recursive: true));
       final paths = AppPaths.forTesting(temporary.path);
@@ -892,7 +892,7 @@ void main() {
     'missing or corrupt catalogs do not prevent jobs from loading',
     () async {
       final temporary = await Directory.systemTemp.createTemp(
-        'meowstt-corrupt-library-catalog-',
+        'listenook-corrupt-library-catalog-',
       );
       addTearDown(() => temporary.delete(recursive: true));
       final paths = AppPaths.forTesting(temporary.path);
@@ -919,7 +919,7 @@ void main() {
   );
 
   test('concurrent progress and stage saves do not collide', () async {
-    final temporary = await Directory.systemTemp.createTemp('meowstt-race-');
+    final temporary = await Directory.systemTemp.createTemp('listenook-race-');
     addTearDown(() => temporary.delete(recursive: true));
     final repository = LocalJobRepository(AppPaths.forTesting(temporary.path));
     final now = DateTime.utc(2026, 8, 11);
