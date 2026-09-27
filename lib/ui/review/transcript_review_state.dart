@@ -12,6 +12,16 @@ class _TranscriptReviewState extends State<TranscriptReview>
   String? _dictationTargetId;
   TranscriptDocument? _dictationDocument;
 
+  bool _mimicOpen = false;
+  String? _mimicTargetId;
+  final _mimicReps = <String, int>{};
+  bool _mimicPassCounted = false;
+  Timer? _mimicRepeatTimer;
+  int _mimicWaitGeneration = 0;
+  bool _mimicWaiting = false;
+
+  bool get _playbackActive => _playing || _mimicWaiting;
+
   static const _reviewDividerWidth = 9.0;
   static const _minimumReviewPaneWidth = 280.0;
   static const _minimumCompanionPaneWidth = 420.0;
@@ -185,6 +195,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   void didUpdateWidget(covariant TranscriptReview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.jobId != widget.jobId) {
+      _cancelMimicWait();
       unawaited(TranscriptStructureCursors.deactivateAll());
       _resetStructureNotice();
       _cancelDictationReplay();
@@ -194,6 +205,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _dictationOpen = false;
       _dictationText.clear();
       _dictationFocus.unfocus();
+      _mimicOpen = false;
+      _mimicTargetId = null;
+      _mimicReps.clear();
+      _mimicPassCounted = false;
       _rememberPlaybackPosition(oldWidget.jobId);
       _sourceRequest++;
       _clearPendingPlaybackRestore();
@@ -238,10 +253,13 @@ class _TranscriptReviewState extends State<TranscriptReview>
   void _handlePosition(Duration value) {
     if (!mounted ||
         _sentenceNavigationPending ||
+        _repeatRestartPending ||
+        _mimicWaiting ||
         (_seekDispatcher?.isBusy ?? false)) {
       return;
     }
     if (_consumePlaybackRestoreReset(value)) return;
+    final previousMs = _position.inMilliseconds;
     final document = _document;
     final previousIndex = document == null
         ? null
@@ -277,16 +295,40 @@ class _TranscriptReviewState extends State<TranscriptReview>
       unawaited(_player?.pause());
     }
     final repeatedSegment = _repeatingSegment;
-    if (_playing &&
-        repeatedSegment != null &&
-        !_nativeSentenceRepeatActive &&
-        shouldRestartRepeatedSentence(
+    if (_playing && repeatedSegment != null) {
+      final previousSegment = _previousSegmentFor(repeatedSegment);
+      final nextSegment = _nextSegmentFor(repeatedSegment);
+      if (_nativeSentenceRepeatActive) {
+        if (isRepeatLoopWrap(
           repeatedSegment,
-          value.inMilliseconds,
-          previousSegment: _previousSegmentFor(repeatedSegment),
-          nextSegment: _nextSegmentFor(repeatedSegment),
+          previousMs: previousMs,
+          currentMs: value.inMilliseconds,
+          previousSegment: previousSegment,
+          nextSegment: nextSegment,
         )) {
-      _queueRepeatRestart(resumeAfterSeek: true);
+          _mimicPassCounted = false;
+          _countMimicRep(repeatedSegment);
+        }
+      } else {
+        if (isRepeatLoopEndCrossing(
+          repeatedSegment,
+          previousMs: previousMs,
+          currentMs: value.inMilliseconds,
+          previousSegment: previousSegment,
+          nextSegment: nextSegment,
+        )) {
+          _countMimicRep(repeatedSegment);
+        }
+        if (_repeatingSegmentId == repeatedSegment.id &&
+            shouldRestartRepeatedSentence(
+              repeatedSegment,
+              value.inMilliseconds,
+              previousSegment: previousSegment,
+              nextSegment: nextSegment,
+            )) {
+          _queueRepeatRestart(resumeAfterSeek: true);
+        }
+      }
     }
     if (shouldAutoFollowPlaybackSegment(
       playing: _playing,
@@ -352,6 +394,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   void _handlePlaying(bool value) {
     if (!mounted || value == _playing) return;
+    if (value && _mimicWaiting) _cancelMimicWait();
     final resumed = value && !_playing;
     setState(() {
       _playing = value;
@@ -381,12 +424,48 @@ class _TranscriptReviewState extends State<TranscriptReview>
     final player = _player;
     if (!mounted ||
         !value ||
+        _repeatRestartPending ||
+        _mimicWaiting ||
         player == null ||
         !player.state.completed ||
         _repeatingSegment == null) {
       return;
     }
-    _queueRepeatRestart(resumeAfterSeek: true);
+    final segment = _repeatingSegment!;
+    if (!_nativeSentenceRepeatActive &&
+        _position.inMilliseconds >=
+            sentenceRepeatStartMs(
+              segment,
+              previousSegment: _previousSegmentFor(segment),
+            )) {
+      _countMimicRep(segment);
+    }
+    if (_repeatingSegmentId == segment.id) {
+      _queueRepeatRestart(resumeAfterSeek: true);
+    }
+  }
+
+  /// Counts one pass of the mimic target; [_mimicPassCounted] keeps the end
+  /// crossing and the completion event of the same pass from both counting.
+  void _countMimicRep(TranscriptSegment segment) {
+    if (!_mimicOpen ||
+        segment.id != _mimicTargetId ||
+        _mimicPassCounted ||
+        _mimicWaiting) {
+      return;
+    }
+    _mimicPassCounted = true;
+    setState(() {
+      _mimicReps[segment.id] = min(
+        (_mimicReps[segment.id] ?? 0) + 1,
+        _appController.settings.mimicRepGoal,
+      );
+    });
+    if (_mimicGoalReached(segment.id) && _nextSegmentFor(segment) == null) {
+      _stopMimicLoop();
+    } else {
+      unawaited(_waitBeforeMimicRepeat(segment.id));
+    }
   }
 
   TranslationViewMode _defaultViewMode(TranscriptionJob? job) {
@@ -500,6 +579,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (job.sourcePath == _openedPath && _player != null && _video != null) {
       return;
     }
+    _cancelMimicWait();
     final request = ++_sourceRequest;
     final sourceExists = debugTranscriptReviewSourceExists;
     if (await (sourceExists == null
@@ -595,6 +675,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
 
   @override
   void dispose() {
+    _cancelMimicWait();
     _endSentenceRepeatHold(notify: false);
     HardwareKeyboard.instance.removeHandler(_handleReviewShortcut);
     _rememberPlaybackPosition(widget.jobId);
@@ -623,6 +704,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   Future<void> _disposeMediaResources() async {
+    _cancelMimicWait();
     _cancelDictationReplay();
     _sourceRequest++;
     _clearPendingPlaybackRestore();
@@ -711,6 +793,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
           dictationOpen: _dictationOpen,
           onToggleDictation: _dictationOpen || _currentSentenceId != null
               ? _toggleDictation
+              : null,
+          mimicOpen: _mimicOpen,
+          onToggleMimic: _mimicOpen || _currentSentenceId != null
+              ? _toggleMimic
               : null,
           blindListening: _blindListening,
           sentenceRevealed: _sentenceRevealed,
@@ -1211,12 +1297,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
         : Duration(milliseconds: job.metadata?.durationMs ?? 0);
     final audio = AudioTransport(
       sentenceNavigation: _sentenceNavigationControls(),
-      playing: _playing,
+      playing: _playbackActive,
       position: _position,
       duration: mediaDuration,
       waveformPath: _waveformPath,
       waveformLoading: _waveformLoading,
-      onPlayPause: _player!.playOrPause,
+      onPlayPause: _togglePlayback,
       onSeek: _seek,
       onSwitchToVideoMode: audioMode ? () => _toggleMediaMode(job) : null,
     );
@@ -1231,11 +1317,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
         videoAspectRatio: _videoAspectRatio,
         maxVideoHeight: videoHeight,
         centerInAvailableHeight: fillHeight,
-        playing: _playing,
+        playing: _playbackActive,
         playbackRate: _playbackRate,
         position: _position,
         duration: _duration,
-        onPlayPause: _player!.playOrPause,
+        onPlayPause: _togglePlayback,
         onSeek: _seek,
         onFullscreen: _toggleFullscreen,
         onPlaybackRateChanged: _setPlaybackRate,
@@ -1365,12 +1451,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
                       onToggleRepeat: _canRepeat(segment)
                           ? () => _toggleSentenceRepeat(segment)
                           : null,
-                      onSeek: ({required reason}) => unawaited(
-                        _seek(
-                          Duration(milliseconds: segment.startMs),
-                          reason: reason,
-                        ),
-                      ),
+                      onSeek: ({required reason}) =>
+                          _seekTranscriptSegment(segment, reason: reason),
                       onEditOriginal: () => _startEditing(segment.id),
                       onCancelOriginal: () => _cancelEditing(segment.id),
                       onSaveOriginal: (text) => _saveSegment(segment.id, text),
@@ -1411,6 +1493,10 @@ class _TranscriptReviewState extends State<TranscriptReview>
           dictationOpen: _dictationOpen,
           onToggleDictation: _dictationOpen || _currentSentenceId != null
               ? _toggleDictation
+              : null,
+          mimicOpen: _mimicOpen,
+          onToggleMimic: _mimicOpen || _currentSentenceId != null
+              ? _toggleMimic
               : null,
           blindListening: _blindListening,
           sentenceRevealed: _sentenceRevealed,
@@ -1505,6 +1591,8 @@ class _TranscriptReviewState extends State<TranscriptReview>
             _dictationOpen &&
             !_fullscreenController.isActive)
           _buildDictationPanel(document),
+        if (_mimicOpen && !_fullscreenController.isActive)
+          _buildMimicPanel(document),
       ],
     );
   }
@@ -1638,12 +1726,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
         _viewMode,
         pinnedSegmentId: _repeatingSegment?.id,
       ),
-      playing: _playing,
+      playing: _playbackActive,
       position: _position,
       duration: mediaDuration,
       onExit: () => unawaited(_fullscreenController.exit()),
-      onPlayPause: () =>
-          unawaited(_player?.playOrPause() ?? Future<void>.value()),
+      onPlayPause: () => unawaited(_togglePlayback()),
       onSeek: (value) => unawaited(_seek(value)),
       onSeekBackward: () =>
           unawaited(_seekRelative(-const Duration(seconds: 5))),
@@ -1682,14 +1769,29 @@ class _TranscriptReviewState extends State<TranscriptReview>
     await defaultExitNativeFullscreen();
   }
 
+  void _seekTranscriptSegment(
+    TranscriptSegment segment, {
+    required TranscriptSeekReason reason,
+  }) {
+    if (_mimicOpen && reason == TranscriptSeekReason.sentenceClick) {
+      _selectMimicTarget(segment, resetReps: true);
+      return;
+    }
+    unawaited(_seek(Duration(milliseconds: segment.startMs), reason: reason));
+  }
+
   Future<void> _seek(
     Duration position, {
     TranscriptSeekReason reason = TranscriptSeekReason.standard,
   }) async {
-    if (reason != TranscriptSeekReason.repeatRestart) _cancelDictationReplay();
+    if (reason != TranscriptSeekReason.repeatRestart) {
+      _cancelMimicWait();
+      _cancelDictationReplay();
+    }
     final seekDispatcher = _seekDispatcher;
     if (seekDispatcher == null) return;
     _clearPendingPlaybackRestore();
+    _mimicPassCounted = false;
     setState(() {
       final index = currentListeningSegmentIndex(
         _document?.segments ?? const [],
@@ -1720,6 +1822,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
           segment.startMs;
 
   void _toggleSentenceRepeat(TranscriptSegment segment) {
+    if (_mimicOpen) {
+      if (_mimicTargetId == segment.id) {
+        _toggleMimicLoop();
+      } else {
+        _selectMimicTarget(segment, resetReps: true);
+      }
+      return;
+    }
     _cancelDictationReplay();
     if (_manualRepeatingSegmentId == segment.id) {
       setState(() {
@@ -1803,6 +1913,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
   }
 
   void _pauseForDictation() {
+    _cancelMimicWait();
     _cancelDictationReplay();
     // A pending repeat seek must not resume after opening/checking an answer.
     _dictationPauseGeneration++;
@@ -1820,6 +1931,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       return;
     }
     if (_currentSentenceId == null) return;
+    if (_mimicOpen) _closeMimic();
     _pauseForDictation();
     setState(() {
       _dictationOpen = true;
@@ -1872,6 +1984,224 @@ class _TranscriptReviewState extends State<TranscriptReview>
           ? null
           : () => unawaited(_replayDictationOnce(segment)),
       onClose: _toggleDictation,
+    );
+  }
+
+  TranscriptSegment? get _mimicTargetSegment {
+    final targetId = _mimicTargetId;
+    if (targetId == null) return null;
+    return _document?.segments
+        .where((segment) => segment.id == targetId)
+        .firstOrNull;
+  }
+
+  void _toggleMimic() {
+    if (_mimicOpen) {
+      _closeMimic();
+      return;
+    }
+    final target = _document?.segments
+        .where((segment) => segment.id == _currentSentenceId)
+        .firstOrNull;
+    if (target == null || !_canRepeat(target)) return;
+    _pauseForDictation();
+    _dictationFocus.unfocus();
+    setState(() {
+      _dictationOpen = false;
+      _mimicOpen = true;
+      _mimicTargetId = target.id;
+      _manualRepeatingSegmentId = target.id;
+      _revealedSegmentId = null;
+    });
+    _queueRepeatRestart(resumeAfterSeek: true);
+  }
+
+  void _closeMimic() {
+    _stopMimicLoop();
+    setState(() {
+      _mimicOpen = false;
+      _mimicTargetId = null;
+    });
+  }
+
+  bool _mimicGoalReached(String? segmentId) =>
+      _mimicOpen &&
+      segmentId != null &&
+      segmentId == _mimicTargetId &&
+      (_mimicReps[segmentId] ?? 0) >= _appController.settings.mimicRepGoal;
+
+  void _cancelMimicWait() {
+    _mimicWaitGeneration++;
+    _mimicRepeatTimer?.cancel();
+    _mimicRepeatTimer = null;
+    _mimicWaiting = false;
+  }
+
+  Future<void> _waitBeforeMimicRepeat(String segmentId) async {
+    final player = _player;
+    final segment = _mimicTargetSegment;
+    if (player == null || segment == null || segment.id != segmentId) return;
+    final sentenceMs =
+        sentenceRepeatEndMs(segment, nextSegment: _nextSegmentFor(segment)) -
+        segment.startMs;
+    final pauseSeconds = _appController.settings.mimicPauseSeconds;
+    final pause = pauseSeconds > 0
+        ? Duration(seconds: pauseSeconds)
+        : Duration(
+            milliseconds: max(1500, (sentenceMs / _playbackRate).ceil() + 500),
+          );
+    _cancelMimicWait();
+    final generation = _mimicWaitGeneration;
+    bool current() =>
+        mounted &&
+        generation == _mimicWaitGeneration &&
+        identical(player, _player) &&
+        _mimicOpen &&
+        _mimicTargetId == segmentId &&
+        _repeatingSegmentId == segmentId;
+    setState(() => _mimicWaiting = true);
+    await player.pause();
+    if (!current()) return;
+    _mimicRepeatTimer = Timer(pause, () {
+      if (!current()) return;
+      setState(_cancelMimicWait);
+      if (_mimicGoalReached(segmentId)) {
+        _finishMimicTarget();
+      } else {
+        _queueRepeatRestart(resumeAfterSeek: true);
+      }
+    });
+  }
+
+  Future<void> _setMimicPauseSeconds(int seconds) {
+    final save = _appController.updateSettings(
+      _appController.settings.copyWith(mimicPauseSeconds: seconds),
+    );
+    final targetId = _mimicTargetId;
+    if (_mimicWaiting && targetId != null) {
+      unawaited(_waitBeforeMimicRepeat(targetId));
+    }
+    return save;
+  }
+
+  void _finishMimicTarget() {
+    if (!_moveMimicTarget(1, resetReps: true)) _stopMimicLoop();
+  }
+
+  void _stopMimicLoop() {
+    _pauseForDictation();
+    setState(() {
+      if (_manualRepeatingSegmentId == _mimicTargetId) {
+        _manualRepeatingSegmentId = null;
+      }
+      if (_heldRepeatingSegmentId == _mimicTargetId) {
+        _heldRepeatingSegmentId = null;
+      }
+    });
+    unawaited(_setNativeSentenceRepeat(_repeatingSegment));
+  }
+
+  Future<void> _setMimicRepGoal(int goal) {
+    final save = _appController.updateSettings(
+      _appController.settings.copyWith(mimicRepGoal: goal),
+    );
+    setState(() => _mimicReps.updateAll((_, reps) => min(reps, goal)));
+    if (_mimicGoalReached(_mimicTargetId)) {
+      if (_playing) {
+        _finishMimicTarget();
+      } else if (!_mimicWaiting) {
+        _stopMimicLoop();
+      }
+    }
+    return save;
+  }
+
+  void _toggleMimicLoop() {
+    final segment = _mimicTargetSegment;
+    if (segment == null) return;
+    if (_manualRepeatingSegmentId == segment.id &&
+        (_playbackActive || _repeatRestartPending)) {
+      _stopMimicLoop();
+      return;
+    }
+    if (!_canRepeat(segment) || _mimicGoalReached(segment.id)) return;
+    setState(() => _manualRepeatingSegmentId = segment.id);
+    _queueRepeatRestart(resumeAfterSeek: true);
+  }
+
+  bool _moveMimicTarget(int delta, {bool resetReps = false}) {
+    final segments = _document?.segments ?? const <TranscriptSegment>[];
+    final index = segments.indexWhere(
+      (segment) => segment.id == _mimicTargetId,
+    );
+    final nextIndex = index + delta;
+    if (index < 0 || nextIndex < 0 || nextIndex >= segments.length) {
+      return false;
+    }
+    return _selectMimicTarget(segments[nextIndex], resetReps: resetReps);
+  }
+
+  bool _selectMimicTarget(TranscriptSegment segment, {bool resetReps = false}) {
+    if (!_canRepeat(segment)) return false;
+    _pauseForDictation();
+    setState(() {
+      _mimicTargetId = segment.id;
+      if (resetReps) _mimicReps.remove(segment.id);
+      _revealedSegmentId = null;
+      _heldRepeatingSegmentId = null;
+      _manualRepeatingSegmentId = segment.id;
+    });
+    _queueRepeatRestart(resumeAfterSeek: true);
+    return true;
+  }
+
+  void _toggleMimicReveal() {
+    final targetId = _mimicTargetId;
+    if (targetId == null) return;
+    setState(
+      () =>
+          _revealedSegmentId = _revealedSegmentId == targetId ? null : targetId,
+    );
+  }
+
+  Widget _buildMimicPanel(TranscriptDocument document) {
+    final index = document.segments.indexWhere(
+      (segment) => segment.id == _mimicTargetId,
+    );
+    final segment = index < 0 ? null : document.segments[index];
+    final looping =
+        segment != null &&
+        _playbackActive &&
+        _manualRepeatingSegmentId == segment.id;
+    return _MimicPanel(
+      targetLabel: segment == null
+          ? null
+          : '${context.strings.t('dictation_sentence')} ${index + 1} · ${formatClock(segment.startMs)}',
+      text: segment?.text,
+      translation: segment?.translatedText,
+      blindListening: _blindListening,
+      revealed: segment != null && _revealedSegmentId == segment.id,
+      onReveal: !_blindListening || segment == null ? null : _toggleMimicReveal,
+      looping: looping,
+      onToggleLoop:
+          segment == null || (_mimicGoalReached(segment.id) && !_mimicWaiting)
+          ? null
+          : _toggleMimicLoop,
+      reps: segment == null ? 0 : _mimicReps[segment.id] ?? 0,
+      repGoal: _appController.settings.mimicRepGoal,
+      onRepGoalChanged: _setMimicRepGoal,
+      pauseSeconds: _appController.settings.mimicPauseSeconds,
+      onPauseSecondsChanged: _setMimicPauseSeconds,
+      onResetReps: segment == null || (_mimicReps[segment.id] ?? 0) == 0
+          ? null
+          : () => setState(() => _mimicReps.remove(segment.id)),
+      playbackRate: _playbackRate,
+      onPlaybackRateChanged: _setPlaybackRate,
+      onPrevious: index > 0 ? () => _moveMimicTarget(-1) : null,
+      onNext: index >= 0 && index + 1 < document.segments.length
+          ? () => _moveMimicTarget(1)
+          : null,
+      onClose: _toggleMimic,
     );
   }
 
@@ -1932,6 +2262,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
         );
 
   Future<void> _navigateSentence(bool forward) async {
+    if (_mimicOpen && _mimicTargetId != null) {
+      // Keep the mimic panel, loop, and rep count on the same sentence.
+      _moveMimicTarget(forward ? 1 : -1);
+      return;
+    }
     final target = _sentenceTarget(forward);
     final player = _player;
     if (target == null || player == null) return;
@@ -2063,13 +2398,14 @@ class _TranscriptReviewState extends State<TranscriptReview>
       return false;
     }
     if (event is KeyDownEvent) {
-      unawaited(player.playOrPause());
+      unawaited(_togglePlayback());
       return true;
     }
     return event is KeyRepeatEvent || event is KeyUpEvent;
   }
 
   bool _beginHoldingCurrentSentence() {
+    if (_mimicWaiting) return true;
     if (_heldRepeatingSegmentId != null) return true;
     final document = _document;
     final player = _player;
@@ -2081,6 +2417,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (index == null) return false;
     final segment = document.segments[index];
     if (!_canRepeat(segment)) return false;
+    if (_mimicGoalReached(segment.id)) return true;
     _cancelDictationReplay();
     setState(() => _heldRepeatingSegmentId = segment.id);
     unawaited(_setNativeSentenceRepeat(segment));
@@ -2121,6 +2458,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
       return;
     }
     if (!mounted ||
+        _mimicWaiting ||
         navigationRequest != _sentenceNavigationRequest ||
         pauseGeneration != _dictationPauseGeneration ||
         !identical(_player, player) ||
@@ -2134,7 +2472,16 @@ class _TranscriptReviewState extends State<TranscriptReview>
     }
   }
 
+  Future<void> _togglePlayback() async {
+    if (_mimicOpen) {
+      _toggleMimicLoop();
+      return;
+    }
+    await _player?.playOrPause();
+  }
+
   void _queueRepeatRestart({bool resumeAfterSeek = false}) {
+    if (_mimicWaiting) return;
     if (_repeatRestartPending) {
       _repeatRestartQueued = true;
       _repeatRestartQueuedResume |= resumeAfterSeek;
@@ -2150,6 +2497,17 @@ class _TranscriptReviewState extends State<TranscriptReview>
       return;
     }
     final segmentId = segment.id;
+    final start = Duration(
+      milliseconds: sentenceRepeatStartMs(
+        segment,
+        previousSegment: _previousSegmentFor(segment),
+      ),
+    );
+    if (_mimicGoalReached(segmentId)) {
+      _stopMimicLoop();
+      await _seek(start, reason: TranscriptSeekReason.repeatRestart);
+      return;
+    }
     final pauseGeneration = _dictationPauseGeneration;
     final shouldResume = resumeAfterSeek || player.state.playing;
     _repeatRestartPending = true;
@@ -2166,15 +2524,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
           _repeatingSegmentId != segmentId) {
         return;
       }
-      await _seek(
-        Duration(
-          milliseconds: sentenceRepeatStartMs(
-            segment,
-            previousSegment: _previousSegmentFor(segment),
-          ),
-        ),
-        reason: TranscriptSeekReason.repeatRestart,
-      );
+      await _seek(start, reason: TranscriptSeekReason.repeatRestart);
       if (!mounted || _repeatingSegmentId != segmentId) return;
     } finally {
       if (shouldResume &&
@@ -2352,6 +2702,11 @@ class _TranscriptReviewState extends State<TranscriptReview>
     if (_heldRepeatingSegmentId != null &&
         !currentIds.contains(_heldRepeatingSegmentId)) {
       _heldRepeatingSegmentId = null;
+    }
+    _mimicReps.removeWhere((id, _) => !currentIds.contains(id));
+    if (_mimicTargetId != null && !currentIds.contains(_mimicTargetId)) {
+      _mimicOpen = false;
+      _mimicTargetId = null;
     }
     await _setNativeSentenceRepeat(_repeatingSegment);
     await _player?.pause();
@@ -2531,4 +2886,3 @@ class _TranscriptReviewState extends State<TranscriptReview>
     };
   }
 }
-

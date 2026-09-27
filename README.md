@@ -24,8 +24,13 @@ Supported media: MP3, WAV, M4A, OGG, MP4, MKV, and AVI, up to 300 minutes per fi
 
 - **Listen and read:** synchronized audio/video playback, timestamp seeking,
   transcript search, sentence repetition, and blind listening.
-- **Practice:** type what you hear, replay the selected sentence, and compare
-  your answer with the transcript. Word checking currently supports English.
+- **Practice:** type what you hear and compare your answer with the transcript,
+  or mimic each sentence for a chosen number of repetitions before automatically
+  moving to the next. Choose an automatic pause or a fixed interval of 1–10
+  seconds. Automatic pauses match the sentence at the selected speed, plus half
+  a second, with a 1.5-second minimum. Click a sentence to start practicing it.
+  Blind listening can optionally hide the original text during mimic practice.
+  Word checking currently supports English.
 - **Translate:** review and edit original, translated, or bilingual text.
   Retry missing translations or translate individual segments again.
 - **Follow podcasts:** search public Apple Podcasts results, open RSS feeds,

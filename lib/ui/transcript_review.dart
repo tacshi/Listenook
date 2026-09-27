@@ -32,6 +32,7 @@ part 'review/ai_brief_pane.dart';
 part 'review/highlighted_text.dart';
 part 'review/listening_widgets.dart';
 part 'review/media_pane.dart';
+part 'review/mimic_panel.dart';
 part 'review/review_scaffold.dart';
 part 'review/review_toolbar.dart';
 part 'review/seek_helpers.dart';
@@ -124,4 +125,3 @@ class _DictationAttempt {
   String draft = '';
   DictationResult? result;
 }
-

@@ -1,6 +1,7 @@
 part of '../transcript_review.dart';
 
 enum _TranscriptMoreAction {
+  toggleMimic,
   toggleBlindListening,
   toggleStructure,
   toggleSpeakers,
@@ -38,6 +39,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     this.onToggleBlindListening,
     this.dictationOpen = false,
     this.onToggleDictation,
+    this.mimicOpen = false,
+    this.onToggleMimic,
     this.showFilename = true,
     this.structureMode = false,
     this.structureEnabled = false,
@@ -56,6 +59,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   final VoidCallback? onToggleBlindListening;
   final bool dictationOpen;
   final VoidCallback? onToggleDictation;
+  final bool mimicOpen;
+  final VoidCallback? onToggleMimic;
   final _ReviewToolbarRole role;
   final TranscriptionJob job;
   final TranslationViewMode viewMode;
@@ -152,6 +157,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
               _buildTranscriptActions(
                 context,
                 controller,
+                full: full,
                 medium: medium,
                 showDirectActions: showDirectActions,
               ),
@@ -246,6 +252,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   Widget _buildTranscriptActions(
     BuildContext context,
     AppController controller, {
+    required bool full,
     required bool medium,
     required bool showDirectActions,
   }) {
@@ -320,6 +327,17 @@ class _UnifiedReviewToolbar extends StatelessWidget {
             icon: const Icon(Icons.keyboard_outlined),
           ),
         ],
+        if (full)
+          IconButton(
+            key: const Key('toggle-mimic'),
+            tooltip: context.strings.t('mimic'),
+            isSelected: mimicOpen,
+            onPressed: onToggleMimic,
+            constraints: const BoxConstraints.tightFor(width: 32, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.record_voice_over_outlined),
+            selectedIcon: const Icon(Icons.record_voice_over_rounded),
+          ),
         _focusButton(context),
         if (showDirectActions) ...[
           IconButton(
@@ -356,6 +374,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           includeViewToggles: !showDirectActions,
           includeViewMode: !medium,
           includeDocumentActions: !showDirectActions,
+          includeMimic: !full,
         ),
       ],
     );
@@ -377,6 +396,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     required bool includeViewToggles,
     required bool includeViewMode,
     required bool includeDocumentActions,
+    required bool includeMimic,
   }) {
     final settings = controller.settings;
     final translationAction = _translationToolbarAction(
@@ -398,6 +418,14 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         enabled: onToggleBlindListening != null,
         child: Text(context.strings.t('blind_listening')),
       ),
+      if (includeMimic)
+        CheckedPopupMenuItem(
+          key: const Key('more-toggle-mimic'),
+          value: _TranscriptMoreAction.toggleMimic,
+          checked: mimicOpen,
+          enabled: onToggleMimic != null,
+          child: Text(context.strings.t('mimic')),
+        ),
     ];
     void addSection(List<PopupMenuEntry<_TranscriptMoreAction>> section) {
       if (section.isEmpty) return;
@@ -562,6 +590,8 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     switch (action) {
       case _TranscriptMoreAction.toggleBlindListening:
         onToggleBlindListening?.call();
+      case _TranscriptMoreAction.toggleMimic:
+        onToggleMimic?.call();
       case _TranscriptMoreAction.toggleStructure:
         onToggleStructure?.call();
       case _TranscriptMoreAction.toggleSpeakers:
@@ -1054,4 +1084,3 @@ Future<bool?> _confirmTranslationReplacement(BuildContext context) =>
         ],
       ),
     );
-

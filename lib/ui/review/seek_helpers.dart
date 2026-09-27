@@ -124,6 +124,46 @@ int sentenceRepeatEndMs(
   return nextStartMs;
 }
 
+/// Detects playback wrapping from near the loop end back to the loop start,
+/// which marks one completed repetition of the segment.
+bool isRepeatLoopWrap(
+  TranscriptSegment segment, {
+  required int previousMs,
+  required int currentMs,
+  TranscriptSegment? previousSegment,
+  TranscriptSegment? nextSegment,
+}) {
+  if (currentMs >= previousMs) return false;
+  final startMs = sentenceRepeatStartMs(
+    segment,
+    previousSegment: previousSegment,
+  );
+  final restartMs = sentenceRepeatRestartMs(segment, nextSegment: nextSegment);
+  const wrapToleranceMs = 1200;
+  return previousMs >= restartMs - wrapToleranceMs &&
+      currentMs <= startMs + wrapToleranceMs &&
+      previousMs - currentMs >= max(1, (restartMs - startMs) ~/ 2);
+}
+
+/// Detects playback running from inside the loop past its restart point,
+/// which marks one completed repetition when the loop is driven in Dart.
+bool isRepeatLoopEndCrossing(
+  TranscriptSegment segment, {
+  required int previousMs,
+  required int currentMs,
+  TranscriptSegment? previousSegment,
+  TranscriptSegment? nextSegment,
+}) {
+  final startMs = sentenceRepeatStartMs(
+    segment,
+    previousSegment: previousSegment,
+  );
+  final restartMs = sentenceRepeatRestartMs(segment, nextSegment: nextSegment);
+  return previousMs >= startMs &&
+      previousMs < restartMs &&
+      currentMs >= restartMs;
+}
+
 int? currentTranscriptSegmentIndex(
   List<TranscriptSegment> segments,
   int positionMs, {
@@ -218,4 +258,3 @@ TextRange? fullscreenTranscriptWordRange(
     segmentEndMs: segment.endMs,
   );
 }
-

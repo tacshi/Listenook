@@ -5,6 +5,50 @@ import 'package:listenook/core/models.dart';
 import 'package:listenook/data/local_repositories.dart';
 
 void main() {
+  test('mimic pause defaults to automatic for missing or invalid settings', () {
+    expect(const AppSettings().mimicPauseSeconds, 0);
+    expect(AppSettings.fromJson({}).mimicPauseSeconds, 0);
+    for (final invalid in [null, -1, 15, 20, 30, 31, '5', 2.5, true]) {
+      expect(
+        AppSettings.fromJson({
+          'mimic_pause_seconds': invalid,
+        }).mimicPauseSeconds,
+        0,
+      );
+    }
+  });
+
+  test('mimic rep goal defaults to three for missing or invalid settings', () {
+    expect(const AppSettings().mimicRepGoal, 3);
+    expect(AppSettings.fromJson({}).mimicRepGoal, 3);
+    for (final invalid in [null, 0, -1, '5', 2.5]) {
+      expect(AppSettings.fromJson({'mimic_rep_goal': invalid}).mimicRepGoal, 3);
+    }
+  });
+
+  test(
+    'mimic practice settings persist through saves and unrelated edits',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'listenook-mimic-',
+      );
+      addTearDown(() => temporary.delete(recursive: true));
+      final paths = AppPaths.forTesting(temporary.path);
+      final settings = const AppSettings()
+          .copyWith(mimicRepGoal: 5, mimicPauseSeconds: 10)
+          .copyWith(showTimestamps: true);
+      await JsonSettingsRepository(paths).save(settings);
+      final restored = await JsonSettingsRepository(paths).load();
+      expect(restored.mimicRepGoal, 5);
+      expect(restored.mimicPauseSeconds, 10);
+      expect(restored.showTimestamps, isTrue);
+      await JsonSettingsRepository(
+        paths,
+      ).save(restored.copyWith(mimicPauseSeconds: 0));
+      expect((await JsonSettingsRepository(paths).load()).mimicPauseSeconds, 0);
+    },
+  );
+
   test('blind listening defaults off and persists independently', () {
     expect(AppSettings.fromJson({}).blindListeningEnabled, isFalse);
     final settings = const AppSettings().copyWith(blindListeningEnabled: true);
