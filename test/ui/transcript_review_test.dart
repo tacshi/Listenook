@@ -732,6 +732,92 @@ void main() {
     },
   );
 
+  for (final source in [
+    (
+      name: 'video with imported subtitles',
+      format: 'mp4',
+      hasVideo: true,
+      origin: JobSourceOrigin.manual,
+      transcriptSource: TranscriptSource.importedSubtitle,
+      acquisition: TranscriptAcquisitionMode.importedSubtitles,
+    ),
+    (
+      name: 'transcribed audio',
+      format: 'wav',
+      hasVideo: false,
+      origin: JobSourceOrigin.manual,
+      transcriptSource: TranscriptSource.soniox,
+      acquisition: TranscriptAcquisitionMode.soniox,
+    ),
+    (
+      name: 'podcast with publisher transcript',
+      format: 'mp3',
+      hasVideo: false,
+      origin: JobSourceOrigin.podcast,
+      transcriptSource: TranscriptSource.publisher,
+      acquisition: TranscriptAcquisitionMode.publisherCaptions,
+    ),
+  ]) {
+    for (final width in [650.0, 1800.0]) {
+      testWidgets('mimic menu plays ${source.name} at $width', (tester) async {
+        final loop = _RecordingSentenceRepeatLoopController();
+        final platform = await _pumpMimicReview(
+          tester,
+          loop,
+          size: Size(width, 1000),
+          settings: const AppSettings(mimicRepGoal: 1),
+          metadata: MediaMetadata(
+            sizeBytes: 4,
+            durationMs: 5000,
+            hasAudio: true,
+            hasVideo: source.hasVideo,
+            formatName: source.format,
+          ),
+          sourceOrigin: source.origin,
+          transcriptSource: source.transcriptSource,
+          transcriptAcquisitionMode: source.acquisition,
+        );
+
+        await tester.tap(find.byKey(const Key('review-toolbar-more')));
+        await tester.pumpAndSettle();
+        final menuItem = find.byKey(const Key('more-toggle-mimic'));
+        expect(menuItem, findsOneWidget);
+        expect(tester.widget<CheckedPopupMenuItem>(menuItem).enabled, isTrue);
+        await tester.tap(menuItem);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('mimic-panel')), findsOneWidget);
+        expect(platform.state.playing, isTrue);
+        expect(loop.events.last, 'range:0:1000');
+
+        platform.emitPosition(const Duration(milliseconds: 950));
+        await tester.pump();
+        platform.emitPosition(const Duration(milliseconds: 10));
+        await tester.pump();
+        expect(_mimicReps(tester), 'Reps 1/1');
+        expect(platform.state.playing, isFalse);
+        await tester.pump(const Duration(milliseconds: 1500));
+        await tester.pumpAndSettle();
+        expect(platform.state.playing, isTrue);
+        expect(loop.events.last, 'range:1650:3000');
+        expect(
+          tester.widget<Text>(find.byKey(const Key('mimic-text'))).data,
+          'Second sentence.',
+        );
+        expect(_mimicReps(tester), 'Reps 0/1');
+
+        await tester.tap(find.byKey(const Key('review-toolbar-more')));
+        await tester.pumpAndSettle();
+        expect(tester.widget<CheckedPopupMenuItem>(menuItem).checked, isTrue);
+        await tester.tap(menuItem);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('mimic-panel')), findsNothing);
+        expect(platform.state.playing, isFalse);
+        expect(loop.events.last, 'clear');
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+
   for (final width in [1400.0, 1800.0]) {
     testWidgets('mimic and blind listening toggle independently at $width', (
       tester,
@@ -750,10 +836,6 @@ void main() {
         matching: find.byType(BlindListeningBlur),
       );
 
-      expect(
-        find.byKey(const Key('toggle-mimic')),
-        width == 1800 ? findsOneWidget : findsNothing,
-      );
       await _openMimic(tester);
       expect(controller.settings.blindListeningEnabled, isFalse);
       expect(find.byKey(const Key('mimic-panel')), findsOneWidget);
@@ -9461,6 +9543,17 @@ Future<_ReviewFakePlatformPlayer> _pumpMimicReview(
   Size size = const Size(1400, 1000),
   List<TranscriptSegment>? segments,
   Locale locale = const Locale('en'),
+  MediaMetadata metadata = const MediaMetadata(
+    sizeBytes: 4,
+    durationMs: 5000,
+    hasAudio: true,
+    hasVideo: true,
+    formatName: 'mp4',
+  ),
+  JobSourceOrigin sourceOrigin = JobSourceOrigin.manual,
+  TranscriptSource transcriptSource = TranscriptSource.importedSubtitle,
+  TranscriptAcquisitionMode transcriptAcquisitionMode =
+      TranscriptAcquisitionMode.importedSubtitles,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -9468,7 +9561,7 @@ Future<_ReviewFakePlatformPlayer> _pumpMimicReview(
     () => Directory.systemTemp.createTemp('meow-mimic-'),
   ))!;
   addTearDown(() => directory.delete(recursive: true));
-  final source = File('${directory.path}/listen.mp4');
+  final source = File('${directory.path}/listen.${metadata.formatName}');
   await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
   late _ReviewFakePlatformPlayer platform;
   debugTranscriptReviewPlayerFactory = () => Player(
@@ -9515,15 +9608,10 @@ Future<_ReviewFakePlatformPlayer> _pumpMimicReview(
       updatedAt: DateTime.utc(2026),
     ),
     sourcePath: source.path,
-    metadata: const MediaMetadata(
-      sizeBytes: 4,
-      durationMs: 5000,
-      hasAudio: true,
-      hasVideo: true,
-      formatName: 'mp4',
-    ),
-    transcriptSource: TranscriptSource.importedSubtitle,
-    transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+    metadata: metadata,
+    sourceOrigin: sourceOrigin,
+    transcriptSource: transcriptSource,
+    transcriptAcquisitionMode: transcriptAcquisitionMode,
     settings: settings,
   );
   addTearDown(controller.dispose);
@@ -9552,14 +9640,9 @@ Future<_ReviewFakePlatformPlayer> _pumpMimicReview(
 }
 
 Future<void> _openMimic(WidgetTester tester) async {
-  final toolbarButton = find.byKey(const Key('toggle-mimic'));
-  if (toolbarButton.evaluate().isNotEmpty) {
-    await tester.tap(toolbarButton);
-  } else {
-    await tester.tap(find.byKey(const Key('review-toolbar-more')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('more-toggle-mimic')));
-  }
+  await tester.tap(find.byKey(const Key('review-toolbar-more')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('more-toggle-mimic')));
   await tester.pumpAndSettle();
 }
 

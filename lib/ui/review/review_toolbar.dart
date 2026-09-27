@@ -157,7 +157,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
               _buildTranscriptActions(
                 context,
                 controller,
-                full: full,
                 medium: medium,
                 showDirectActions: showDirectActions,
               ),
@@ -252,7 +251,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   Widget _buildTranscriptActions(
     BuildContext context,
     AppController controller, {
-    required bool full,
     required bool medium,
     required bool showDirectActions,
   }) {
@@ -327,17 +325,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
             icon: const Icon(Icons.keyboard_outlined),
           ),
         ],
-        if (full)
-          IconButton(
-            key: const Key('toggle-mimic'),
-            tooltip: context.strings.t('mimic'),
-            isSelected: mimicOpen,
-            onPressed: onToggleMimic,
-            constraints: const BoxConstraints.tightFor(width: 32, height: 40),
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.record_voice_over_outlined),
-            selectedIcon: const Icon(Icons.record_voice_over_rounded),
-          ),
         _focusButton(context),
         if (showDirectActions) ...[
           IconButton(
@@ -374,7 +361,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           includeViewToggles: !showDirectActions,
           includeViewMode: !medium,
           includeDocumentActions: !showDirectActions,
-          includeMimic: !full,
         ),
       ],
     );
@@ -396,7 +382,6 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     required bool includeViewToggles,
     required bool includeViewMode,
     required bool includeDocumentActions,
-    required bool includeMimic,
   }) {
     final settings = controller.settings;
     final translationAction = _translationToolbarAction(
@@ -418,14 +403,13 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         enabled: onToggleBlindListening != null,
         child: Text(context.strings.t('blind_listening')),
       ),
-      if (includeMimic)
-        CheckedPopupMenuItem(
-          key: const Key('more-toggle-mimic'),
-          value: _TranscriptMoreAction.toggleMimic,
-          checked: mimicOpen,
-          enabled: onToggleMimic != null,
-          child: Text(context.strings.t('mimic')),
-        ),
+      CheckedPopupMenuItem(
+        key: const Key('more-toggle-mimic'),
+        value: _TranscriptMoreAction.toggleMimic,
+        checked: mimicOpen,
+        enabled: onToggleMimic != null,
+        child: Text(context.strings.t('mimic')),
+      ),
     ];
     void addSection(List<PopupMenuEntry<_TranscriptMoreAction>> section) {
       if (section.isEmpty) return;
