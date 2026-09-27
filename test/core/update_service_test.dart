@@ -112,7 +112,10 @@ void main() {
       expect(service.phase, UpdatePhase.failed);
       expect(service.scheduledDelay, const Duration(hours: 1));
       expect(File('${temporary.path}/Listenook.zip').existsSync(), isFalse);
-      expect(File('${temporary.path}/Listenook.zip.part').existsSync(), isFalse);
+      expect(
+        File('${temporary.path}/Listenook.zip.part').existsSync(),
+        isFalse,
+      );
     },
   );
 

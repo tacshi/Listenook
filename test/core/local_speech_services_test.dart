@@ -400,55 +400,42 @@ void main() {
     },
   );
 
-  test(
-    'forced alignment clamps worker tokens to the segment bounds',
-    () async {
-      final worker = _Worker({
-        'tokens': [
-          {
-            'segment_id': 'cue',
-            'text': 'Hello',
-            'start_ms': 100,
-            'end_ms': 1900,
-          },
-        ],
-      });
-      final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
-        worker: worker,
-        platformSupported: true,
-      );
-      final document = TranscriptDocument(
-        tokens: const [],
-        segments: const [
-          TranscriptSegment(
-            id: 'cue',
-            startMs: 250,
-            endMs: 1750,
-            text: 'Hello',
-          ),
-        ],
-        speakers: const [],
-        updatedAt: DateTime.utc(2026, 8, 24),
-      );
+  test('forced alignment clamps worker tokens to the segment bounds', () async {
+    final worker = _Worker({
+      'tokens': [
+        {'segment_id': 'cue', 'text': 'Hello', 'start_ms': 100, 'end_ms': 1900},
+      ],
+    });
+    final service = ProcessForcedAlignmentService(
+      models: _Models(ready: true),
+      pcm: _Pcm(),
+      worker: worker,
+      platformSupported: true,
+    );
+    final document = TranscriptDocument(
+      tokens: const [],
+      segments: const [
+        TranscriptSegment(id: 'cue', startMs: 250, endMs: 1750, text: 'Hello'),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.utc(2026, 8, 24),
+    );
 
-      final result = await service.align(
-        ForcedAlignmentRequest(
-          model: alignmentModel,
-          sourcePath: '/meeting.wav',
-          document: document,
-          languageHints: const ['en'],
-        ),
-      );
+    final result = await service.align(
+      ForcedAlignmentRequest(
+        model: alignmentModel,
+        sourcePath: '/meeting.wav',
+        document: document,
+        languageHints: const ['en'],
+      ),
+    );
 
-      final requested = (worker.request!['segments'] as List).single as Map;
-      expect(requested['start_ms'], 250);
-      expect(requested['end_ms'], 1750);
-      expect(result.tokens.single.startMs, 250);
-      expect(result.tokens.single.endMs, 1750);
-    },
-  );
+    final requested = (worker.request!['segments'] as List).single as Map;
+    expect(requested['start_ms'], 250);
+    expect(requested['end_ms'], 1750);
+    expect(result.tokens.single.startMs, 250);
+    expect(result.tokens.single.endMs, 1750);
+  });
 
   test(
     'alignment keeps reliable neighbors when one segment has a count mismatch',
@@ -648,68 +635,65 @@ void main() {
     },
   );
 
-  test(
-    'retry realigns every cue against fresh worker output',
-    () async {
-      final document = TranscriptDocument(
-        tokens: const [
-          TranscriptToken(
-            text: 'Alpha',
-            startMs: 100,
-            endMs: 700,
-            segmentId: 'cue-0',
-          ),
-          TranscriptToken(
-            text: 'Beta',
-            startMs: 1100,
-            endMs: 1700,
-            segmentId: 'cue-1',
-          ),
-        ],
-        segments: const [
-          TranscriptSegment(id: 'cue-0', startMs: 0, endMs: 900, text: 'Alpha'),
-          TranscriptSegment(
-            id: 'cue-1',
-            startMs: 1000,
-            endMs: 1900,
-            text: 'Beta',
-          ),
-          TranscriptSegment(
-            id: 'cue-2',
-            startMs: 2000,
-            endMs: 2900,
-            text: 'Gamma',
-          ),
-        ],
-        speakers: const [],
-        updatedAt: DateTime.utc(2026, 8, 25),
-      );
-      final worker = _ResumeAlignmentWorker();
-      final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
-        worker: worker,
-        platformSupported: true,
-      );
-
-      final result = await service.align(
-        ForcedAlignmentRequest(
-          model: alignmentModel,
-          sourcePath: '/resume.wav',
-          document: document,
-          languageHints: const ['en'],
+  test('retry realigns every cue against fresh worker output', () async {
+    final document = TranscriptDocument(
+      tokens: const [
+        TranscriptToken(
+          text: 'Alpha',
+          startMs: 100,
+          endMs: 700,
+          segmentId: 'cue-0',
         ),
-      );
+        TranscriptToken(
+          text: 'Beta',
+          startMs: 1100,
+          endMs: 1700,
+          segmentId: 'cue-1',
+        ),
+      ],
+      segments: const [
+        TranscriptSegment(id: 'cue-0', startMs: 0, endMs: 900, text: 'Alpha'),
+        TranscriptSegment(
+          id: 'cue-1',
+          startMs: 1000,
+          endMs: 1900,
+          text: 'Beta',
+        ),
+        TranscriptSegment(
+          id: 'cue-2',
+          startMs: 2000,
+          endMs: 2900,
+          text: 'Gamma',
+        ),
+      ],
+      speakers: const [],
+      updatedAt: DateTime.utc(2026, 8, 25),
+    );
+    final worker = _ResumeAlignmentWorker();
+    final service = ProcessForcedAlignmentService(
+      models: _Models(ready: true),
+      pcm: _Pcm(),
+      worker: worker,
+      platformSupported: true,
+    );
 
-      expect(worker.requestedSegmentIds, ['cue-0', 'cue-1', 'cue-2']);
-      expect(result.status, ForcedAlignmentStatus.completed);
-      expect(result.alignedSegments, 3);
-      expect(result.tokens, hasLength(3));
-      expect(result.tokens[0].startMs, 0);
-      expect(result.tokens[1].startMs, 1000);
-      expect(result.tokens[2].segmentId, 'cue-2');
-    },
-  );
+    final result = await service.align(
+      ForcedAlignmentRequest(
+        model: alignmentModel,
+        sourcePath: '/resume.wav',
+        document: document,
+        languageHints: const ['en'],
+      ),
+    );
+
+    expect(worker.requestedSegmentIds, ['cue-0', 'cue-1', 'cue-2']);
+    expect(result.status, ForcedAlignmentStatus.completed);
+    expect(result.alignedSegments, 3);
+    expect(result.tokens, hasLength(3));
+    expect(result.tokens[0].startMs, 0);
+    expect(result.tokens[1].startMs, 1000);
+    expect(result.tokens[2].segmentId, 'cue-2');
+  });
 
   test(
     'retry realigns an edited cue instead of reusing stale tokens',
@@ -736,12 +720,7 @@ void main() {
               ),
             ],
             segments: const [
-              TranscriptSegment(
-                id: 'cue',
-                startMs: 0,
-                endMs: 900,
-                text: 'New',
-              ),
+              TranscriptSegment(id: 'cue', startMs: 0, endMs: 900, text: 'New'),
             ],
             speakers: const [],
             updatedAt: DateTime.utc(2026, 8, 25),

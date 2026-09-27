@@ -78,4 +78,3 @@ class _ReviewContentTabs extends StatelessWidget {
     ),
   );
 }
-

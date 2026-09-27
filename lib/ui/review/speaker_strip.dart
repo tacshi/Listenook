@@ -181,4 +181,3 @@ class _RenameSpeakerDialogState extends State<_RenameSpeakerDialog> {
     ],
   );
 }
-

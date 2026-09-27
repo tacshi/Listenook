@@ -564,4 +564,3 @@ class _TranscriptMergeBoundaryState extends State<_TranscriptMergeBoundary> {
     ),
   );
 }
-

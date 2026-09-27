@@ -16,11 +16,9 @@ void main() {
     await directory.delete(recursive: true);
   });
 
-  test(
-    'SRT parsing preserves cue order and line breaks',
-    () async {
-      final file = File('${directory.path}/movie.srt');
-      await file.writeAsString('''
+  test('SRT parsing preserves cue order and line breaks', () async {
+    final file = File('${directory.path}/movie.srt');
+    await file.writeAsString('''
 1
 00:00:01,000 --> 00:00:03,000
 <i>Hello</i>
@@ -34,22 +32,21 @@ broken cue
 no timing
 ''');
 
-      final result = await const TimedSubtitleImportService().parseFile(
-        file.path,
-      );
+    final result = await const TimedSubtitleImportService().parseFile(
+      file.path,
+    );
 
-      expect(result.format, SubtitleFormat.srt);
-      expect(result.document.segments, hasLength(2));
-      expect(result.document.segments.first.id, 'subtitle-cue-1');
-      expect(result.document.segments.first.text, 'Hello\nworld');
-      expect(result.document.segments.first.startMs, 1000);
-      expect(result.document.segments.first.endMs, 3000);
-      expect(result.document.segments.last.id, 'subtitle-cue-2');
-      expect(result.document.segments.last.startMs, 1000);
-      expect(result.document.segments.last.endMs, 32500);
-      expect(result.ignoredCueCount, 1);
-    },
-  );
+    expect(result.format, SubtitleFormat.srt);
+    expect(result.document.segments, hasLength(2));
+    expect(result.document.segments.first.id, 'subtitle-cue-1');
+    expect(result.document.segments.first.text, 'Hello\nworld');
+    expect(result.document.segments.first.startMs, 1000);
+    expect(result.document.segments.first.endMs, 3000);
+    expect(result.document.segments.last.id, 'subtitle-cue-2');
+    expect(result.document.segments.last.startMs, 1000);
+    expect(result.document.segments.last.endMs, 32500);
+    expect(result.ignoredCueCount, 1);
+  });
 
   test('WebVTT voice labels become speaker metadata', () async {
     final file = File('${directory.path}/meeting.vtt');

@@ -10,11 +10,15 @@ import 'package:listenook/data/local_speech_services.dart';
 
 void main() {
   final pcmPath = AppIdentity.environment('LISTENOOK_TEST_QWEN_PCM');
-  final qwenDirectory = AppIdentity.environment('LISTENOOK_TEST_QWEN_MLX_DIRECTORY');
-  final vadDirectory =
-      AppIdentity.environment('LISTENOOK_TEST_SILERO_COREML_DIRECTORY');
-  final alignmentDirectory =
-      AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_COREML_DIRECTORY');
+  final qwenDirectory = AppIdentity.environment(
+    'LISTENOOK_TEST_QWEN_MLX_DIRECTORY',
+  );
+  final vadDirectory = AppIdentity.environment(
+    'LISTENOOK_TEST_SILERO_COREML_DIRECTORY',
+  );
+  final alignmentDirectory = AppIdentity.environment(
+    'LISTENOOK_TEST_ALIGNMENT_COREML_DIRECTORY',
+  );
   final workerPath = AppIdentity.environment('LISTENOOK_TEST_SPEECH_WORKER');
   final configured =
       Platform.isMacOS &&

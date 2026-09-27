@@ -181,32 +181,30 @@ class _DictationDiff extends StatelessWidget {
     final spans = <TextSpan>[];
     for (final word in words) {
       if (spans.isNotEmpty) spans.add(const TextSpan(text: ' '));
-      spans.add(
-        switch (word.kind) {
-          DictationWordKind.matching => TextSpan(text: word.actual),
-          DictationWordKind.different => TextSpan(
-            text: word.actual,
-            style: TextStyle(
-              color: error,
-              decoration: TextDecoration.underline,
-              decorationStyle: TextDecorationStyle.wavy,
-              decorationColor: error,
-            ),
+      spans.add(switch (word.kind) {
+        DictationWordKind.matching => TextSpan(text: word.actual),
+        DictationWordKind.different => TextSpan(
+          text: word.actual,
+          style: TextStyle(
+            color: error,
+            decoration: TextDecoration.underline,
+            decorationStyle: TextDecorationStyle.wavy,
+            decorationColor: error,
           ),
-          DictationWordKind.missing => TextSpan(
-            text: '…',
-            style: TextStyle(color: error, fontWeight: FontWeight.bold),
+        ),
+        DictationWordKind.missing => TextSpan(
+          text: '…',
+          style: TextStyle(color: error, fontWeight: FontWeight.bold),
+        ),
+        DictationWordKind.extra => TextSpan(
+          text: word.actual,
+          style: TextStyle(
+            color: error,
+            decoration: TextDecoration.lineThrough,
+            decorationColor: error,
           ),
-          DictationWordKind.extra => TextSpan(
-            text: word.actual,
-            style: TextStyle(
-              color: error,
-              decoration: TextDecoration.lineThrough,
-              decorationColor: error,
-            ),
-          ),
-        },
-      );
+        ),
+      });
     }
     return Text.rich(
       TextSpan(style: base, children: spans),

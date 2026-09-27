@@ -1471,4 +1471,3 @@ String _learningLevelLabel(BuildContext context, AiLearningLevel level) =>
 
 String _languageNoteKindLabel(BuildContext context, AiLanguageNoteKind kind) =>
     context.strings.t('ai_language_note_kind_${kind.name}');
-

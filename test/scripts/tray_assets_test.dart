@@ -13,7 +13,9 @@ void main() {
 
   test('macOS tray template has native alpha-only 1x and 2x assets', () {
     final oneX = image.decodePng(
-      File('assets/branding/tray/listenook-tray-template.png').readAsBytesSync(),
+      File(
+        'assets/branding/tray/listenook-tray-template.png',
+      ).readAsBytesSync(),
     )!;
     final twoX = image.decodePng(
       File(

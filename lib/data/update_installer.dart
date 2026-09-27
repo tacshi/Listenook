@@ -183,7 +183,8 @@ class MacosUpdateInstaller extends UpdateInstaller {
   @visibleForTesting
   String? installedBundlePath() {
     final bundle = p.dirname(p.dirname(p.dirname(_executablePath)));
-    if (p.basename(bundle) != 'Listenook.app' || p.isWithin('/Volumes', bundle)) {
+    if (p.basename(bundle) != 'Listenook.app' ||
+        p.isWithin('/Volumes', bundle)) {
       return null;
     }
     final parent = Directory(p.dirname(bundle));

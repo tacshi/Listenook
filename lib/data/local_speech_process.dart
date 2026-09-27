@@ -55,7 +55,9 @@ class ProcessLocalSpeechWorker implements LocalSpeechWorker {
   String get executablePath {
     final override = _executablePath?.trim();
     if (override != null && override.isNotEmpty) return override;
-    final environment = AppIdentity.environment('LISTENOOK_SPEECH_WORKER')?.trim();
+    final environment = AppIdentity.environment(
+      'LISTENOOK_SPEECH_WORKER',
+    )?.trim();
     if (environment != null && environment.isNotEmpty) return environment;
     final executable = File(Platform.resolvedExecutable);
     return p.join(

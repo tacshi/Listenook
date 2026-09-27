@@ -540,10 +540,7 @@ class ProcessForcedAlignmentService implements ForcedAlignmentService {
     if (eligible.isEmpty) {
       if (skippedUnsupportedLanguage > 0) {
         return mergeRetained(
-          _unavailable(
-            total,
-            'alignment_language_unsupported',
-          ),
+          _unavailable(total, 'alignment_language_unsupported'),
         );
       }
       if (skippedTooLong > 0) {
@@ -589,8 +586,7 @@ class ProcessForcedAlignmentService implements ForcedAlignmentService {
             'start_ms': windowBounds[index].startMs,
             'end_ms': windowBounds[index].endMs,
             'segments': [
-              for (final entry in windows[index])
-                _segmentRequest(entry),
+              for (final entry in windows[index]) _segmentRequest(entry),
             ],
           },
       ];

@@ -960,4 +960,3 @@ class _WaveformProgressClipper extends CustomClipper<Rect> {
   bool shouldReclip(_WaveformProgressClipper oldClipper) =>
       oldClipper.progress != progress;
 }
-

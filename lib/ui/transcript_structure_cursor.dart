@@ -45,9 +45,7 @@ abstract final class TranscriptStructureCursors {
 class TranscriptStructureMouseCursor extends MouseCursor {
   const TranscriptStructureMouseCursor._(this.kind, this.fallback);
 
-  static const _channel = MethodChannel(
-    AppIdentity.cursorChannel,
-  );
+  static const _channel = MethodChannel(AppIdentity.cursorChannel);
   static int _nextSessionId = 1;
 
   final TranscriptStructureCursorKind kind;

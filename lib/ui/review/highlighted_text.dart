@@ -235,4 +235,3 @@ List<TextRange?> _alignTokenRanges(String text, List<TranscriptToken> tokens) {
   }
   return result;
 }
-

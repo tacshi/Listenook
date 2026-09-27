@@ -308,7 +308,6 @@ class _InboxActions extends StatelessWidget {
       ),
     );
   }
-
 }
 
 class _EmptyDropZone extends StatelessWidget {
@@ -1201,13 +1200,7 @@ class _StatusIcon extends StatelessWidget {
   }
 }
 
-enum _JobAction {
-  retry,
-  replaceSubtitle,
-  cancel,
-  relink,
-  remove,
-}
+enum _JobAction { retry, replaceSubtitle, cancel, relink, remove }
 
 class _JobMenu extends StatelessWidget {
   const _JobMenu({required this.job});
