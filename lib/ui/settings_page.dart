@@ -2217,9 +2217,7 @@ class _AboutAppSectionState extends State<_AboutAppSection> {
           const SizedBox(height: 8),
           LinearProgressIndicator(
             key: const Key('about-update-progress'),
-            value: phase == UpdatePhase.downloading
-                ? updates?.progress
-                : null,
+            value: phase == UpdatePhase.downloading ? updates?.progress : null,
           ),
         ],
       );

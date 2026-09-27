@@ -10,10 +10,12 @@ import 'package:listenook/data/local_speech_services.dart';
 
 void main() {
   final pcmPath = AppIdentity.environment('LISTENOOK_TEST_MOSS_PCM');
-  final modelDirectory =
-      AppIdentity.environment('LISTENOOK_TEST_MOSS_COREML_DIRECTORY');
-  final alignmentModelDirectory =
-      AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_COREML_DIRECTORY');
+  final modelDirectory = AppIdentity.environment(
+    'LISTENOOK_TEST_MOSS_COREML_DIRECTORY',
+  );
+  final alignmentModelDirectory = AppIdentity.environment(
+    'LISTENOOK_TEST_ALIGNMENT_COREML_DIRECTORY',
+  );
   final sourcePath =
       AppIdentity.environment('LISTENOOK_TEST_SOURCE_PATH') ?? pcmPath ?? '';
   final workerPath = AppIdentity.environment('LISTENOOK_TEST_SPEECH_WORKER');

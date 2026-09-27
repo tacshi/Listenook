@@ -732,6 +732,685 @@ void main() {
     },
   );
 
+  for (final width in [1400.0, 1800.0]) {
+    testWidgets('mimic and blind listening toggle independently at $width', (
+      tester,
+    ) async {
+      final loop = _RecordingSentenceRepeatLoopController();
+      final platform = await _pumpMimicReview(
+        tester,
+        loop,
+        size: Size(width, 1000),
+      );
+      final controller = tester
+          .element(find.byType(TranscriptReview))
+          .read<AppController>();
+      Finder panelBlur() => find.descendant(
+        of: find.byKey(const Key('mimic-panel')),
+        matching: find.byType(BlindListeningBlur),
+      );
+
+      expect(
+        find.byKey(const Key('toggle-mimic')),
+        width == 1800 ? findsOneWidget : findsNothing,
+      );
+      await _openMimic(tester);
+      expect(controller.settings.blindListeningEnabled, isFalse);
+      expect(find.byKey(const Key('mimic-panel')), findsOneWidget);
+      expect(tester.widget<BlindListeningBlur>(panelBlur()).blurred, isFalse);
+      expect(find.byKey(const Key('mimic-reveal')), findsNothing);
+      expect(loop.events.last, 'range:0:1000');
+      expect(platform.state.playing, isTrue);
+
+      platform.emitPosition(const Duration(milliseconds: 950));
+      await tester.pump();
+      platform.emitPosition(const Duration(milliseconds: 10));
+      await tester.pump();
+      expect(_mimicReps(tester), 'Reps 1/3');
+      await tester.pump(const Duration(milliseconds: 1500));
+      await tester.pumpAndSettle();
+      final loopEvents = List<String>.of(loop.events);
+
+      for (final enabled in [true, false, true]) {
+        await tester.tap(find.byKey(const Key('review-toolbar-more')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('toggle-blind-listening')));
+        await tester.pumpAndSettle();
+        expect(controller.settings.blindListeningEnabled, enabled);
+        expect(find.byKey(const Key('mimic-panel')), findsOneWidget);
+        expect(tester.widget<BlindListeningBlur>(panelBlur()).blurred, enabled);
+        expect(
+          find.byKey(const Key('mimic-reveal')),
+          enabled ? findsOneWidget : findsNothing,
+        );
+        expect(_mimicReps(tester), 'Reps 1/3');
+        expect(loop.events, loopEvents);
+        expect(platform.state.playing, isTrue);
+      }
+
+      await tester.tap(find.byKey(const Key('close-mimic')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('mimic-panel')), findsNothing);
+      expect(controller.settings.blindListeningEnabled, isTrue);
+      expect(loop.events.last, 'clear');
+      expect(platform.state.playing, isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('mimic follows the clicked sentence immediately', (tester) async {
+    final loop = _RecordingSentenceRepeatLoopController();
+    final platform = await _pumpMimicReview(tester, loop);
+    await _openMimic(tester);
+
+    await tester.tap(find.text('Second sentence.').first);
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<Text>(find.byKey(const Key('mimic-text'))).data,
+      'Second sentence.',
+    );
+    expect(_mimicReps(tester), 'Reps 0/3');
+    expect(loop.events.last, 'range:1650:3000');
+    expect(platform.state.playing, isTrue);
+
+    platform.emitPosition(const Duration(milliseconds: 2950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 1700));
+    await tester.pump();
+    expect(_mimicReps(tester), 'Reps 1/3');
+    expect(platform.state.playing, isFalse);
+    await tester.tap(find.text('Third sentence.').first);
+    await tester.pumpAndSettle();
+    expect(loop.events.last, 'range:3650:5000');
+    final seeks = platform.seekDurations.length;
+    await tester.pump(const Duration(seconds: 2));
+    expect(platform.seekDurations, hasLength(seeks));
+    expect(
+      tester.widget<Text>(find.byKey(const Key('mimic-text'))).data,
+      'Third sentence.',
+    );
+    expect(platform.state.playing, isTrue);
+    await tester.tap(find.text('Second sentence.').first);
+    await tester.pumpAndSettle();
+    expect(_mimicReps(tester), 'Reps 0/3');
+    expect(loop.events.last, 'range:1650:3000');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mimic leaves a 1.5 second pause between repetitions', (
+    tester,
+  ) async {
+    final platform = await _pumpMimicReview(
+      tester,
+      _RecordingSentenceRepeatLoopController(),
+    );
+    await _openMimic(tester);
+    platform.emitPosition(const Duration(milliseconds: 950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 10));
+    await tester.pump();
+    expect(_mimicReps(tester), 'Reps 1/3');
+    expect(platform.state.playing, isFalse);
+    await tester.pump(const Duration(milliseconds: 1400));
+    expect(platform.state.playing, isFalse);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle();
+    expect(platform.state.playing, isTrue);
+    expect(_mimicReps(tester), 'Reps 1/3');
+  });
+
+  for (final (sentenceMs, rate, pauseMs) in [
+    (4000, 1.0, 4500),
+    (4000, 0.5, 8500),
+    (4000, 2.0, 2500),
+    (500, 2.0, 1500),
+  ]) {
+    testWidgets(
+      'mimic allows time to follow a ${sentenceMs}ms sentence at $rate',
+      (tester) async {
+        final platform = await _pumpMimicReview(
+          tester,
+          _RecordingSentenceRepeatLoopController(),
+          segments: [
+            TranscriptSegment(
+              id: 'a',
+              startMs: 0,
+              endMs: sentenceMs,
+              text: 'A sentence to repeat aloud.',
+            ),
+          ],
+        );
+        platform.emitRate(rate);
+        await tester.pump();
+        await _openMimic(tester);
+        platform.emitPosition(Duration(milliseconds: sentenceMs - 50));
+        await tester.pump();
+        platform.emitPosition(const Duration(milliseconds: 10));
+        await tester.pump();
+        expect(_mimicReps(tester), 'Reps 1/3');
+        expect(platform.state.playing, isFalse);
+        await tester.pump(Duration(milliseconds: pauseMs - 1));
+        expect(platform.state.playing, isFalse);
+        await tester.pump(const Duration(milliseconds: 1));
+        await tester.pumpAndSettle();
+        expect(platform.state.playing, isTrue);
+        expect(_mimicReps(tester), 'Reps 1/3');
+      },
+    );
+  }
+
+  testWidgets('mimic pause selection replaces the pending wait and persists', (
+    tester,
+  ) async {
+    final platform = await _pumpMimicReview(
+      tester,
+      _RecordingSentenceRepeatLoopController(),
+    );
+    await _openMimic(tester);
+    platform.emitPosition(const Duration(milliseconds: 950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 10));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('mimic-pause')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<CheckedPopupMenuItem<int>>(
+            find.byKey(const ValueKey('mimic-pause-0')),
+          )
+          .checked,
+      isTrue,
+    );
+    await tester.tap(find.byKey(const ValueKey('mimic-pause-5')));
+    await tester.pumpAndSettle();
+    expect(find.text('Pause 5s'), findsOneWidget);
+    expect(_mimicReps(tester), 'Reps 1/3');
+    final controller = tester
+        .element(find.byType(TranscriptReview))
+        .read<AppController>();
+    expect(controller.settings.mimicPauseSeconds, 5);
+    await tester.pump(const Duration(seconds: 2));
+    expect(platform.state.playing, isFalse);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    expect(platform.state.playing, isTrue);
+    expect(_mimicReps(tester), 'Reps 1/3');
+
+    await tester.tap(find.byKey(const Key('close-mimic')));
+    await tester.pumpAndSettle();
+    await _openMimic(tester);
+    expect(find.text('Pause 5s'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('mimic-pause')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<CheckedPopupMenuItem<int>>(
+            find.byKey(const ValueKey('mimic-pause-5')),
+          )
+          .checked,
+      isTrue,
+    );
+    await tester.tap(find.byKey(const ValueKey('mimic-pause-0')));
+    await tester.pumpAndSettle();
+    expect(find.text('Pause Auto'), findsOneWidget);
+    expect(controller.settings.mimicPauseSeconds, 0);
+    platform.emitPosition(const Duration(milliseconds: 950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 10));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1499));
+    expect(platform.state.playing, isFalse);
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pumpAndSettle();
+    expect(platform.state.playing, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mimic pause uses the saved fixed duration regardless of speed', (
+    tester,
+  ) async {
+    final platform = await _pumpMimicReview(
+      tester,
+      _RecordingSentenceRepeatLoopController(),
+      settings: const AppSettings(mimicPauseSeconds: 3),
+    );
+    platform.emitRate(0.5);
+    await tester.pump();
+    await _openMimic(tester);
+    expect(find.text('Pause 3s'), findsOneWidget);
+    platform.emitPosition(const Duration(milliseconds: 950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 10));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 2999));
+    expect(platform.state.playing, isFalse);
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pumpAndSettle();
+    expect(platform.state.playing, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final locale in [const Locale('en'), const Locale('zh', 'CN')]) {
+    testWidgets('mimic controls fit the minimum pane width in $locale', (
+      tester,
+    ) async {
+      await _pumpMimicReview(
+        tester,
+        _RecordingSentenceRepeatLoopController(),
+        locale: locale,
+      );
+      await _openMimic(tester);
+      await tester.drag(
+        find.byKey(const ValueKey('vertical-divider-slot')),
+        const Offset(2000, 0),
+      );
+      await tester.pumpAndSettle();
+      final panel = tester.getRect(find.byKey(const Key('mimic-panel')));
+      expect(panel.width, 280);
+      for (final key in [
+        'mimic-rep-goal',
+        'mimic-pause',
+        'mimic-reset-reps',
+        'close-mimic',
+      ]) {
+        final bounds = tester.getRect(find.byKey(Key(key)));
+        expect(bounds.left, greaterThanOrEqualTo(panel.left));
+        expect(bounds.right, lessThanOrEqualTo(panel.right));
+      }
+      await tester.tap(find.byKey(const Key('mimic-pause')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widgetList<CheckedPopupMenuItem<int>>(
+              find.byType(CheckedPopupMenuItem<int>),
+            )
+            .map((item) => item.value),
+        [0, 1, 2, 3, 5, 10],
+      );
+      await tester.tap(find.byKey(const ValueKey('mimic-pause-10')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(locale.languageCode == 'zh' ? '间隔 10 秒' : 'Pause 10s'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final action in ['panel', 'transport', 'space', 'close', 'dispose']) {
+    testWidgets('mimic cancels its pending replay on $action', (tester) async {
+      final platform = await _pumpMimicReview(
+        tester,
+        _RecordingSentenceRepeatLoopController(),
+      );
+      await _openMimic(tester);
+      platform.emitPosition(const Duration(milliseconds: 950));
+      await tester.pump();
+      platform.emitPosition(const Duration(milliseconds: 10));
+      await tester.pump();
+      expect(platform.state.playing, isFalse);
+      expect(_mimicReps(tester), 'Reps 1/3');
+
+      switch (action) {
+        case 'panel':
+          await tester.tap(find.byKey(const Key('mimic-loop-toggle')));
+        case 'transport':
+          await tester.tap(find.byKey(const Key('video-play-pause')));
+        case 'space':
+          await tester.sendKeyEvent(LogicalKeyboardKey.space);
+        case 'close':
+          await tester.tap(find.byKey(const Key('close-mimic')));
+        case 'dispose':
+          await tester.pumpWidget(const SizedBox.shrink());
+      }
+      await tester.pumpAndSettle();
+      final operations = List<String>.of(platform.operations);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(platform.operations, operations);
+      expect(platform.state.playing, isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('mimic mode loops the target sentence and counts reps', (
+    tester,
+  ) async {
+    final loop = _RecordingSentenceRepeatLoopController();
+    final platform = await _pumpMimicReview(
+      tester,
+      loop,
+      settings: const AppSettings(blindListeningEnabled: true),
+    );
+
+    Finder panelBlur() => find.descendant(
+      of: find.byKey(const Key('mimic-panel')),
+      matching: find.byType(BlindListeningBlur),
+    );
+
+    await _openMimic(tester);
+    expect(find.byKey(const Key('mimic-panel')), findsOneWidget);
+    expect(loop.events, contains('range:0:1000'));
+    expect(_mimicReps(tester), 'Reps 0/3');
+    expect(tester.widget<BlindListeningBlur>(panelBlur()).blurred, isTrue);
+    expect(find.byKey(const Key('mimic-translation')), findsOneWidget);
+    expect(platform.state.playing, isTrue);
+
+    platform.emitPosition(const Duration(milliseconds: 950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 10));
+    await tester.pump();
+    expect(_mimicReps(tester), 'Reps 1/3');
+
+    await tester.tap(find.byKey(const Key('mimic-reveal')));
+    await tester.pump();
+    expect(tester.widget<BlindListeningBlur>(panelBlur()).blurred, isFalse);
+
+    await tester.tap(find.byKey(const Key('mimic-next')));
+    await tester.pumpAndSettle();
+    expect(loop.events.last, 'range:1650:3000');
+    expect(_mimicReps(tester), 'Reps 0/3');
+    expect(tester.widget<BlindListeningBlur>(panelBlur()).blurred, isTrue);
+
+    await tester.tap(find.byKey(const Key('mimic-loop-toggle')));
+    await tester.pump();
+    expect(loop.events.last, 'clear');
+    expect(platform.state.playing, isFalse);
+
+    await tester.tap(find.byKey(const Key('close-mimic')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('mimic-panel')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'mimic rep goal changes without losing counts and survives reopening',
+    (tester) async {
+      final platform = await _pumpMimicReview(
+        tester,
+        _RecordingSentenceRepeatLoopController(),
+      );
+      await _openMimic(tester);
+      platform.emitPosition(const Duration(milliseconds: 950));
+      await tester.pump();
+      platform.emitPosition(const Duration(milliseconds: 10));
+      await tester.pump();
+      expect(_mimicReps(tester), 'Reps 1/3');
+
+      await tester.tap(find.byKey(const Key('mimic-rep-goal')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<CheckedPopupMenuItem<int>>(
+              find.byKey(const ValueKey('mimic-rep-goal-3')),
+            )
+            .checked,
+        isTrue,
+      );
+      await tester.tap(find.byKey(const ValueKey('mimic-rep-goal-5')));
+      await tester.pumpAndSettle();
+      expect(_mimicReps(tester), 'Reps 1/5');
+      await tester.pump(const Duration(milliseconds: 1500));
+      await tester.pumpAndSettle();
+      expect(platform.state.playing, isTrue);
+      final controller = tester
+          .element(find.byType(TranscriptReview))
+          .read<AppController>();
+      expect(controller.settings.mimicRepGoal, 5);
+
+      await tester.tap(find.byKey(const Key('mimic-next')));
+      await tester.pumpAndSettle();
+      expect(_mimicReps(tester), 'Reps 0/5');
+      await tester.tap(find.byKey(const Key('mimic-previous')));
+      await tester.pumpAndSettle();
+      expect(_mimicReps(tester), 'Reps 1/5');
+
+      await tester.tap(find.byKey(const Key('close-mimic')));
+      await tester.pumpAndSettle();
+      await _openMimic(tester);
+      expect(_mimicReps(tester), 'Reps 1/5');
+      await tester.tap(find.byKey(const Key('mimic-reset-reps')));
+      await tester.pump();
+      expect(_mimicReps(tester), 'Reps 0/5');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  for (final nativeLoop in [true, false]) {
+    testWidgets('mimic advances at its rep goal with native loop $nativeLoop', (
+      tester,
+    ) async {
+      final loop = _RecordingSentenceRepeatLoopController();
+      final platform = await _pumpMimicReview(
+        tester,
+        nativeLoop ? loop : _FailingSentenceRepeatLoopController(),
+      );
+      await _openMimic(tester);
+
+      const texts = ['First sentence.', 'Second sentence.', 'Third sentence.'];
+      const starts = [0, 1650, 3650];
+      for (var sentence = 0; sentence < 3; sentence++) {
+        expect(
+          tester.widget<Text>(find.byKey(const Key('mimic-text'))).data,
+          texts[sentence],
+        );
+        expect(_mimicReps(tester), 'Reps 0/3');
+        expect(platform.state.playing, isTrue);
+        final end = sentence * 2000 + 1000;
+        if (nativeLoop) {
+          expect(loop.events.last, 'range:${starts[sentence]}:$end');
+        }
+        for (var pass = 1; pass <= 3; pass++) {
+          if (!nativeLoop) platform.emitCompleted(completed: false);
+          if (nativeLoop && sentence == 0 && pass == 3) {
+            await tester.sendKeyDownEvent(LogicalKeyboardKey.keyR);
+            await tester.pump();
+          }
+          platform.emitPosition(Duration(milliseconds: end - 50));
+          await tester.pump();
+          if (nativeLoop || sentence < 2) {
+            platform.emitPosition(
+              Duration(
+                milliseconds: nativeLoop ? starts[sentence] + 10 : end + 10,
+              ),
+            );
+          }
+          if (!nativeLoop) platform.emitCompleted();
+          await tester.pumpAndSettle();
+          expect(_mimicReps(tester), 'Reps $pass/3');
+          expect(platform.state.playing, isFalse);
+          if (nativeLoop && sentence == 0 && pass == 3) {
+            await tester.sendKeyUpEvent(LogicalKeyboardKey.keyR);
+            await tester.pumpAndSettle();
+            expect(platform.state.playing, isFalse);
+          }
+          await tester.pump(const Duration(milliseconds: 1500));
+          await tester.pumpAndSettle();
+          if (nativeLoop && sentence == 0 && pass == 3) {
+            expect(loop.events.last, 'range:1650:3000');
+          }
+          if (pass < 3) expect(_mimicReps(tester), 'Reps $pass/3');
+        }
+      }
+
+      expect(_mimicReps(tester), 'Reps 3/3');
+      expect(platform.state.playing, isFalse);
+      if (nativeLoop) expect(loop.events.last, 'clear');
+      expect(
+        tester
+            .widget<IconButton>(find.byKey(const Key('mimic-loop-toggle')))
+            .isSelected,
+        isFalse,
+      );
+      // Late playback callbacks cannot count or restart the completed target.
+      platform.emitPosition(const Duration(milliseconds: 4950));
+      await tester.pump();
+      platform.emitPosition(Duration(milliseconds: nativeLoop ? 3660 : 5010));
+      platform.emitCompleted();
+      await tester.pumpAndSettle();
+      expect(_mimicReps(tester), 'Reps 3/3');
+      expect(platform.state.playing, isFalse);
+
+      await tester.tap(find.byKey(const Key('mimic-reset-reps')));
+      await tester.pump();
+      expect(_mimicReps(tester), 'Reps 0/3');
+      await tester.tap(find.byKey(const Key('mimic-loop-toggle')));
+      await tester.pumpAndSettle();
+      expect(platform.state.playing, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('mimic lowering the rep goal caps counts and advances playback', (
+    tester,
+  ) async {
+    final loop = _RecordingSentenceRepeatLoopController();
+    final platform = await _pumpMimicReview(tester, loop);
+    await _openMimic(tester);
+    for (var pass = 0; pass < 2; pass++) {
+      platform.emitPosition(const Duration(milliseconds: 950));
+      await tester.pump();
+      platform.emitPosition(const Duration(milliseconds: 10));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1500));
+      await tester.pumpAndSettle();
+    }
+    expect(_mimicReps(tester), 'Reps 2/3');
+
+    await tester.tap(find.byKey(const Key('mimic-rep-goal')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('mimic-rep-goal-1')));
+    await tester.pumpAndSettle();
+    expect(_mimicReps(tester), 'Reps 0/1');
+    expect(
+      tester.widget<Text>(find.byKey(const Key('mimic-text'))).data,
+      'Second sentence.',
+    );
+    expect(platform.state.playing, isTrue);
+    expect(loop.events.last, 'range:1650:3000');
+
+    await tester.tap(find.byKey(const Key('mimic-previous')));
+    await tester.pumpAndSettle();
+    expect(_mimicReps(tester), 'Reps 1/1');
+    expect(platform.state.playing, isFalse);
+    expect(loop.events.last, 'clear');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mimic ignores stale completion during automatic advancement', (
+    tester,
+  ) async {
+    final loop = _GatedSentenceRepeatLoopController();
+    final platform = await _pumpMimicReview(
+      tester,
+      loop,
+      settings: const AppSettings(mimicRepGoal: 1),
+    );
+    await _openMimic(tester);
+    loop.hold();
+    platform.emitPosition(const Duration(milliseconds: 950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 10));
+    await tester.pump();
+
+    await tester.pump(const Duration(milliseconds: 1500));
+    await tester.pump();
+
+    platform.emitPosition(const Duration(milliseconds: 5000));
+    platform.emitCompleted();
+    await tester.pump();
+    expect(_mimicReps(tester), 'Reps 0/1');
+    expect(
+      tester.widget<Text>(find.byKey(const Key('mimic-text'))).data,
+      'Second sentence.',
+    );
+    loop.release();
+    await tester.pumpAndSettle();
+    expect(_mimicReps(tester), 'Reps 0/1');
+    expect(platform.state.playing, isTrue);
+
+    platform.emitPosition(const Duration(milliseconds: 2950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 1700));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 1500));
+    await tester.pumpAndSettle();
+    expect(_mimicReps(tester), 'Reps 0/1');
+    expect(
+      tester.widget<Text>(find.byKey(const Key('mimic-text'))).data,
+      'Third sentence.',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mimic panel uses the saved rep goal on first open', (
+    tester,
+  ) async {
+    await _pumpMimicReview(
+      tester,
+      _RecordingSentenceRepeatLoopController(),
+      settings: const AppSettings(mimicRepGoal: 10),
+    );
+    await _openMimic(tester);
+    expect(_mimicReps(tester), 'Reps 0/10');
+  });
+
+  testWidgets('mimic target change does not count the old sentence', (
+    tester,
+  ) async {
+    final loop = _GatedSentenceRepeatLoopController();
+    final platform = await _pumpMimicReview(tester, loop);
+    await _openMimic(tester);
+    expect(_mimicReps(tester), 'Reps 0/3');
+
+    // Playback is still inside sentence a while the native loop for b is
+    // being installed; none of that audio is a rep of b.
+    loop.hold();
+    await tester.tap(find.byKey(const Key('mimic-next')));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 400));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 500));
+    await tester.pump();
+    loop.release();
+    await tester.pumpAndSettle();
+    expect(_mimicReps(tester), 'Reps 0/3');
+
+    platform.emitPosition(const Duration(milliseconds: 2950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 1700));
+    await tester.pump();
+    expect(_mimicReps(tester), 'Reps 1/3');
+    await tester.pump(const Duration(milliseconds: 1500));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('mimic counts one rep per pass without a native loop', (
+    tester,
+  ) async {
+    final platform = await _pumpMimicReview(
+      tester,
+      _FailingSentenceRepeatLoopController(),
+    );
+    await _openMimic(tester);
+    expect(_mimicReps(tester), 'Reps 0/3');
+
+    // Seeking back before the sentence restarts the loop but is not a rep.
+    platform.emitPosition(const Duration(milliseconds: 500));
+    await tester.pump();
+    expect(_mimicReps(tester), 'Reps 0/3');
+
+    platform.emitPosition(const Duration(milliseconds: 950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 1010));
+    platform.emitPosition(const Duration(milliseconds: 1060));
+    platform.emitCompleted();
+    await tester.pumpAndSettle();
+    expect(_mimicReps(tester), 'Reps 1/3');
+    await tester.pump(const Duration(milliseconds: 1500));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('blur excludes hidden text from semantics and selection', (
     tester,
   ) async {
@@ -8775,6 +9454,118 @@ Future<AppController> _pumpSpeakerStrip(WidgetTester tester) async {
   return controller;
 }
 
+Future<_ReviewFakePlatformPlayer> _pumpMimicReview(
+  WidgetTester tester,
+  SentenceRepeatLoopController loop, {
+  AppSettings settings = const AppSettings(),
+  Size size = const Size(1400, 1000),
+  List<TranscriptSegment>? segments,
+  Locale locale = const Locale('en'),
+}) async {
+  await tester.binding.setSurfaceSize(size);
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  final directory = (await tester.runAsync(
+    () => Directory.systemTemp.createTemp('meow-mimic-'),
+  ))!;
+  addTearDown(() => directory.delete(recursive: true));
+  final source = File('${directory.path}/listen.mp4');
+  await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+  late _ReviewFakePlatformPlayer platform;
+  debugTranscriptReviewPlayerFactory = () => Player(
+    platformPlayer: platform = _ReviewFakePlatformPlayer(
+      updatePlayingStateOnControls: true,
+    ),
+  );
+  debugTranscriptReviewSourceExists = (_) async => true;
+  debugTranscriptReviewSentenceRepeatLoopFactory = (_) => loop;
+  addTearDown(() {
+    debugTranscriptReviewPlayerFactory = null;
+    debugTranscriptReviewSourceExists = null;
+    debugTranscriptReviewSentenceRepeatLoopFactory = null;
+  });
+  final controller = await _controllerForDocument(
+    TranscriptDocument(
+      tokens: const [],
+      segments:
+          segments ??
+          const [
+            TranscriptSegment(
+              id: 'a',
+              startMs: 0,
+              endMs: 1000,
+              text: 'First sentence.',
+              translatedText: '第一句',
+            ),
+            TranscriptSegment(
+              id: 'b',
+              startMs: 2000,
+              endMs: 3000,
+              text: 'Second sentence.',
+              translatedText: '第二句',
+            ),
+            TranscriptSegment(
+              id: 'c',
+              startMs: 4000,
+              endMs: 5000,
+              text: 'Third sentence.',
+              translatedText: '第三句',
+            ),
+          ],
+      speakers: const [],
+      updatedAt: DateTime.utc(2026),
+    ),
+    sourcePath: source.path,
+    metadata: const MediaMetadata(
+      sizeBytes: 4,
+      durationMs: 5000,
+      hasAudio: true,
+      hasVideo: true,
+      formatName: 'mp4',
+    ),
+    transcriptSource: TranscriptSource.importedSubtitle,
+    transcriptAcquisitionMode: TranscriptAcquisitionMode.importedSubtitles,
+    settings: settings,
+  );
+  addTearDown(controller.dispose);
+  controller.openInWorkspace('job');
+  await tester.pumpWidget(
+    ChangeNotifierProvider.value(
+      value: controller,
+      child: MaterialApp(
+        locale: locale,
+        supportedLocales: AppStrings.supportedLocales,
+        localizationsDelegates: const [
+          AppStrings.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        home: const Scaffold(body: TranscriptReview(jobId: 'job')),
+      ),
+    ),
+  );
+  await tester.pump();
+  await tester.pump();
+  await tester.pumpAndSettle();
+
+  return platform;
+}
+
+Future<void> _openMimic(WidgetTester tester) async {
+  final toolbarButton = find.byKey(const Key('toggle-mimic'));
+  if (toolbarButton.evaluate().isNotEmpty) {
+    await tester.tap(toolbarButton);
+  } else {
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('more-toggle-mimic')));
+  }
+  await tester.pumpAndSettle();
+}
+
+String _mimicReps(WidgetTester tester) =>
+    tester.widget<Text>(find.byKey(const Key('mimic-rep-count'))).data!;
+
 class _ReviewFakePlatformPlayer extends PlatformPlayer {
   _ReviewFakePlatformPlayer({
     this.emitPositionResetOnOpen = false,
@@ -8839,6 +9630,16 @@ class _ReviewFakePlatformPlayer extends PlatformPlayer {
     state = state.copyWith(playing: playing);
     playingController.add(playing);
   }
+
+  void emitRate(double rate) {
+    state = state.copyWith(rate: rate);
+    rateController.add(rate);
+  }
+
+  void emitCompleted({bool completed = true}) {
+    state = state.copyWith(completed: completed);
+    completedController.add(completed);
+  }
 }
 
 class _RecordingSentenceRepeatLoopController
@@ -8852,6 +9653,33 @@ class _RecordingSentenceRepeatLoopController
   Future<void> setRange({required int startMs, required int endMs}) async {
     events.add('range:$startMs:$endMs');
   }
+}
+
+class _GatedSentenceRepeatLoopController
+    implements SentenceRepeatLoopController {
+  Completer<void>? _gate;
+
+  void hold() => _gate = Completer<void>();
+
+  void release() => _gate?.complete();
+
+  @override
+  Future<void> clear() async {}
+
+  @override
+  Future<void> setRange({required int startMs, required int endMs}) async {
+    await _gate?.future;
+  }
+}
+
+class _FailingSentenceRepeatLoopController
+    implements SentenceRepeatLoopController {
+  @override
+  Future<void> clear() async {}
+
+  @override
+  Future<void> setRange({required int startMs, required int endMs}) =>
+      Future.error(StateError('native loop unavailable'));
 }
 
 class _Credentials implements CredentialStore {

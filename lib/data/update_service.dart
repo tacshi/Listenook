@@ -45,7 +45,8 @@ class UpdateService extends ChangeNotifier {
        _platformKey = platformKey ?? currentUpdatePlatformKey,
        _automaticEnabled = automaticEnabled ?? kReleaseMode;
 
-  static const releaseRepoUrl = 'https://github.com/${AppIdentity.releaseRepository}';
+  static const releaseRepoUrl =
+      'https://github.com/${AppIdentity.releaseRepository}';
   static const defaultManifestUrl =
       'https://raw.githubusercontent.com/${AppIdentity.releaseRepository}/main/${AppIdentity.manifestName}';
 

@@ -1674,6 +1674,8 @@ class AppSettings {
     this.showSpeakers = true,
     this.showTimestamps = false,
     this.blindListeningEnabled = false,
+    this.mimicRepGoal = 3,
+    this.mimicPauseSeconds = 0,
     this.exportOptions = const ExportOptions(),
     this.onboardingComplete = false,
     LlmProviderSettings llmProviderSettings = const LlmProviderSettings(),
@@ -1697,6 +1699,10 @@ class AppSettings {
   final bool showSpeakers;
   final bool showTimestamps;
   final bool blindListeningEnabled;
+  final int mimicRepGoal;
+
+  /// Zero selects a pause based on the sentence's playback duration.
+  final int mimicPauseSeconds;
   final ExportOptions exportOptions;
   final bool onboardingComplete;
   final LlmProviderSettings _llmProviderSettings;
@@ -1728,6 +1734,8 @@ class AppSettings {
     bool? showSpeakers,
     bool? showTimestamps,
     bool? blindListeningEnabled,
+    int? mimicRepGoal,
+    int? mimicPauseSeconds,
     ExportOptions? exportOptions,
     bool? onboardingComplete,
     LlmProviderSettings? llmProviderSettings,
@@ -1748,6 +1756,8 @@ class AppSettings {
     showSpeakers: showSpeakers ?? this.showSpeakers,
     showTimestamps: showTimestamps ?? this.showTimestamps,
     blindListeningEnabled: blindListeningEnabled ?? this.blindListeningEnabled,
+    mimicRepGoal: mimicRepGoal ?? this.mimicRepGoal,
+    mimicPauseSeconds: mimicPauseSeconds ?? this.mimicPauseSeconds,
     exportOptions: exportOptions ?? this.exportOptions,
     onboardingComplete: onboardingComplete ?? this.onboardingComplete,
     llmProviderSettings:
@@ -1780,6 +1790,8 @@ class AppSettings {
     'show_speakers': showSpeakers,
     'show_timestamps': showTimestamps,
     'blind_listening_enabled': blindListeningEnabled,
+    'mimic_rep_goal': mimicRepGoal,
+    'mimic_pause_seconds': mimicPauseSeconds,
     'export_options': exportOptions.toJson(),
     'onboarding_complete': onboardingComplete,
     'llm_provider_settings': llmProviderSettings.toJson(),
@@ -1811,6 +1823,14 @@ class AppSettings {
       showSpeakers: json['show_speakers'] as bool? ?? true,
       showTimestamps: json['show_timestamps'] as bool? ?? false,
       blindListeningEnabled: json['blind_listening_enabled'] as bool? ?? false,
+      mimicRepGoal: switch (json['mimic_rep_goal']) {
+        int value when value > 0 => value,
+        _ => const AppSettings().mimicRepGoal,
+      },
+      mimicPauseSeconds: switch (json['mimic_pause_seconds']) {
+        int value when value >= 0 && value <= 10 => value,
+        _ => const AppSettings().mimicPauseSeconds,
+      },
       exportOptions: ExportOptions.fromJson(
         (json['export_options'] as Map?)?.cast<String, dynamic>(),
       ),

@@ -13,7 +13,8 @@ void main() {
       expect(
         source,
         contains(r'NOTARY_PROFILE="${LISTENOOK_NOTARY_PROFILE:-Listenook}"'),
-        reason: 'A stored `Listenook` notarytool profile should work by default.',
+        reason:
+            'A stored `Listenook` notarytool profile should work by default.',
       );
       expect(source, contains(r'xcrun stapler staple "$APP"'));
       expect(source, contains(r'xcrun stapler validate "$APP"'));

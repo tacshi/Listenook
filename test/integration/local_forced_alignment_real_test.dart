@@ -10,26 +10,32 @@ import 'package:listenook/data/local_speech_process.dart';
 import 'package:listenook/data/local_speech_services.dart';
 
 void main() {
-  final manifestPath = AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_MANIFEST');
+  final manifestPath = AppIdentity.environment(
+    'LISTENOOK_TEST_ALIGNMENT_MANIFEST',
+  );
   final pcmPath = AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_PCM');
-  final modelDirectory =
-      AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_COREML_DIRECTORY');
+  final modelDirectory = AppIdentity.environment(
+    'LISTENOOK_TEST_ALIGNMENT_COREML_DIRECTORY',
+  );
   final alignmentModel =
       AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_MODEL') == 'fp16'
       ? LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16
       : LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8;
   final workerPath = AppIdentity.environment('LISTENOOK_TEST_SPEECH_WORKER');
-  final requestedSegmentIds = AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_SEGMENT_IDS')
-      ?.split(',')
-      .map((value) => value.trim())
-      .where((value) => value.isNotEmpty)
-      .toSet();
+  final requestedSegmentIds =
+      AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_SEGMENT_IDS')
+          ?.split(',')
+          .map((value) => value.trim())
+          .where((value) => value.isNotEmpty)
+          .toSet();
   final requireComplete =
-      AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_REQUIRE_COMPLETE') == '1';
+      AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_REQUIRE_COMPLETE') ==
+      '1';
   final useExactSegments =
       AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_EXACT_SEGMENTS') == '1';
   final resumeSavedTokens =
-      AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_RESUME_SAVED_TOKENS') == '1';
+      AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_RESUME_SAVED_TOKENS') ==
+      '1';
   final requestedWindowRadius =
       int.tryParse(
         AppIdentity.environment('LISTENOOK_TEST_ALIGNMENT_WINDOW_RADIUS') ?? '',

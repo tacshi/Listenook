@@ -1271,9 +1271,7 @@ void main() {
             GlobalWidgetsLocalizations.delegate,
             GlobalCupertinoLocalizations.delegate,
           ],
-          home: Scaffold(
-            body: SettingsPage(onRestartUpdate: () => restarts++),
-          ),
+          home: Scaffold(body: SettingsPage(onRestartUpdate: () => restarts++)),
         ),
       ),
     );
@@ -1292,10 +1290,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('about-update-ready')), findsOneWidget);
     expect(find.text('Listenook 2.0.0 is ready to install.'), findsOneWidget);
-    expect(
-      find.byKey(const Key('about-check-for-updates')),
-      findsNothing,
-    );
+    expect(find.byKey(const Key('about-check-for-updates')), findsNothing);
 
     await tester.tap(find.byKey(const Key('about-restart-to-update')));
     expect(restarts, 1);
