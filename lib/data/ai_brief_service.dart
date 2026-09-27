@@ -156,7 +156,7 @@ class DefaultAiBriefService implements AiBriefService {
     required int chunkIndex,
     required int chunkCount,
   }) {
-    final requested = sections.map((item) => item.name).join(', ');
+    final requested = _requestedSections(sections);
     final learningInstructions = _learningInstructions(
       sections: sections,
       learningLanguage: learningLanguage,
@@ -189,7 +189,7 @@ $lines
     required String? learningLanguage,
     required AiLearningLevel learningLevel,
   }) {
-    final requested = sections.map((item) => item.name).join(', ');
+    final requested = _requestedSections(sections);
     final learningInstructions = _learningInstructions(
       sections: sections,
       learningLanguage: learningLanguage,
@@ -209,6 +209,23 @@ Return exactly this JSON shape:
 Candidates:
 ${jsonEncode(candidates)}
 ''';
+  }
+
+  String _requestedSections(Set<AiBriefSection> sections) {
+    final names = sections.map((item) => item.name).join(', ');
+    final types = <String>[
+      if (sections.contains(AiBriefSection.keyIdeas)) ...[
+        'keyIdea',
+        'notableMoment',
+      ],
+      if (sections.contains(AiBriefSection.decisions)) 'decision',
+      if (sections.contains(AiBriefSection.actionItems)) 'actionItem',
+      if (sections.contains(AiBriefSection.openQuestions)) 'openQuestion',
+    ];
+    final insightRule = types.isEmpty
+        ? 'Return insights as an empty array'
+        : 'Use only these insight types: ${types.join(', ')}';
+    return '$names. $insightRule';
   }
 
   String _renderSegment(
