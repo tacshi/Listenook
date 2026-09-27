@@ -47,6 +47,10 @@ METAL_BUILD_ROOT="$SCRATCH/listenook-metal-build"
 mkdir -p "$METAL_BUILD_ROOT"
 ln -sfn "$SCRATCH/checkouts" "$METAL_BUILD_ROOT/checkouts"
 ln -sfn "$BIN_DIR" "$METAL_BUILD_ROOT/release"
+# Match the worker's platforms: [.macOS("15.0")] so the Metal compiler targets
+# Metal 3.2, as MLX's own build does. Newer Xcode defaults to Metal 4.x, whose
+# address-space rules reject MLX kernels and whose metallib needs a newer OS.
+export MACOSX_DEPLOYMENT_TARGET=15.0
 METAL_TOOLCHAIN_ID=""
 if ! xcrun metal --version >/dev/null 2>&1; then
   METAL_COMPONENT_JSON="$(xcodebuild -showComponent MetalToolchain -json 2>/dev/null)" || {
