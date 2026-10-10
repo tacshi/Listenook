@@ -208,15 +208,6 @@ try {
     Invoke-CodeSign $Setup
   }
 
-  $Checksums = Join-Path $Out "$Base.sha256"
-  if ($Mode -eq "debug") {
-    if (Test-Path $Checksums) { Remove-Item $Checksums -Force }
-  } else {
-    Get-ChildItem $Out -File -Filter "$Base*" | Where-Object { $_.FullName -ne $Checksums } | ForEach-Object {
-      $Hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-      "$Hash  $($_.Name)"
-    } | Set-Content $Checksums -Encoding ascii
-  }
   Write-Output "Artifacts: $Out"
 } finally {
   Pop-Location

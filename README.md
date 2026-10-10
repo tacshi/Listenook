@@ -211,8 +211,7 @@ PATH. Windows signing uses `LISTENOOK_WINDOWS_PFX`, with optional
 Artifacts are written to `dist/`, with platform, architecture, mode, and version
 in their filenames. macOS debug builds produce an app bundle; release builds
 produce a DMG and updater ZIP. Windows debug builds produce a portable folder;
-release builds produce a portable ZIP and Inno Setup installer. Checksum
-manifests accompany macOS builds and Windows releases.
+release builds produce a portable ZIP and Inno Setup installer.
 
 Build scripts do not launch the macOS app. Run a launch check explicitly when
 needed:
