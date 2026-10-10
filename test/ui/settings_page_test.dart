@@ -871,13 +871,35 @@ void main() {
       'decrease-speed',
       'increase-speed',
       'exit-fullscreen',
+      'previous-sentence',
+      'next-sentence',
+      'reveal-sentence',
+      'check-dictation',
+      'undo-structure',
+      'redo-structure',
+      'exit-structure',
     ]) {
       expect(find.byKey(ValueKey('shortcut-row-$id')), findsOneWidget);
     }
+    expect(find.text('Transcript editing').hitTestable(), findsOneWidget);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('shortcut-row-open-media')),
         matching: find.text('⌘'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('shortcut-row-previous-sentence')),
+        matching: find.text('⌥'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('shortcut-row-redo-structure')),
+        matching: find.text('⇧'),
       ),
       findsOneWidget,
     );
@@ -938,10 +960,26 @@ void main() {
     expect(find.text('播放').hitTestable(), findsOneWidget);
     expect(find.text('全屏播放').hitTestable(), findsOneWidget);
     expect(find.text('按住以重复当前句'), findsOneWidget);
+    expect(find.text('转写编辑').hitTestable(), findsOneWidget);
+    expect(find.text('检查听写答案'), findsOneWidget);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('shortcut-row-open-media')),
         matching: find.text('Ctrl'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('shortcut-row-previous-sentence')),
+        matching: find.text('Alt'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('shortcut-row-redo-structure')),
+        matching: find.text('Y'),
       ),
       findsOneWidget,
     );

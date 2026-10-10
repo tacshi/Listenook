@@ -795,9 +795,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
               ? _toggleDictation
               : null,
           mimicOpen: _mimicOpen,
-          onToggleMimic: _mimicOpen || _currentSentenceId != null
-              ? _toggleMimic
-              : null,
+          onToggleMimic: _canToggleMimic ? _toggleMimic : null,
           blindListening: _blindListening,
           sentenceRevealed: _sentenceRevealed,
           onReveal: _currentSentenceId == null ? null : _toggleReveal,
@@ -1495,9 +1493,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
               ? _toggleDictation
               : null,
           mimicOpen: _mimicOpen,
-          onToggleMimic: _mimicOpen || _currentSentenceId != null
-              ? _toggleMimic
-              : null,
+          onToggleMimic: _canToggleMimic ? _toggleMimic : null,
           blindListening: _blindListening,
           sentenceRevealed: _sentenceRevealed,
           onReveal: _currentSentenceId == null ? null : _toggleReveal,
@@ -1987,6 +1983,18 @@ class _TranscriptReviewState extends State<TranscriptReview>
     );
   }
 
+  /// The menu entry stays enabled only when opening mimic will do something:
+  /// the panel is already open, or the current sentence can be looped.
+  bool get _canToggleMimic {
+    if (_mimicOpen) return true;
+    final currentId = _currentSentenceId;
+    if (currentId == null) return false;
+    final segment = _document?.segments
+        .where((segment) => segment.id == currentId)
+        .firstOrNull;
+    return segment != null && _canRepeat(segment);
+  }
+
   TranscriptSegment? get _mimicTargetSegment {
     final targetId = _mimicTargetId;
     if (targetId == null) return null;
@@ -2012,6 +2020,12 @@ class _TranscriptReviewState extends State<TranscriptReview>
       _mimicTargetId = target.id;
       _manualRepeatingSegmentId = target.id;
       _revealedSegmentId = null;
+      // Reopening on a finished sentence starts a fresh round instead of
+      // landing on a stopped loop with a disabled play button.
+      if ((_mimicReps[target.id] ?? 0) >=
+          _appController.settings.mimicRepGoal) {
+        _mimicReps.remove(target.id);
+      }
     });
     _queueRepeatRestart(resumeAfterSeek: true);
   }

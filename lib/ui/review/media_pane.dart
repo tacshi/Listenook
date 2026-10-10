@@ -603,69 +603,80 @@ class _VideoFullscreenKeyboardRegionState
         child: SafeArea(
           top: false,
           minimum: const EdgeInsets.fromLTRB(16, 28, 12, 10),
-          child: Row(
-            key: const Key('fullscreen-controls-bar'),
-            children: [
-              IconButton(
-                key: const Key('fullscreen-play-pause'),
-                tooltip: context.strings.t(widget.playing ? 'pause' : 'play'),
-                onPressed: () => _runWithVisibleControls(widget.onPlayPause),
-                color: Colors.white,
-                iconSize: 30,
-                icon: Icon(
-                  widget.playing
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                ),
+          // Every control sits on the dark gradient, so the sentence and
+          // reveal buttons must not fall back to the light theme's dark icons.
+          child: IconButtonTheme(
+            data: IconButtonThemeData(
+              style: IconButton.styleFrom(
+                foregroundColor: Colors.white,
+                disabledForegroundColor: Colors.white38,
               ),
-              if (widget.sentenceNavigation != null) widget.sentenceNavigation!,
-              if (widget.blindListening)
-                SentenceRevealButton(
-                  revealed: widget.sentenceRevealed,
-                  onPressed: widget.onReveal,
-                ),
-              const SizedBox(width: 4),
-              Text(
-                formatClock(positionMs.round()),
-                key: const Key('fullscreen-position'),
-                style: const TextStyle(color: Colors.white),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: colors.primaryContainer,
-                    inactiveTrackColor: Colors.white38,
-                    thumbColor: Colors.white,
-                    overlayColor: Colors.white24,
-                    trackHeight: 3,
-                  ),
-                  child: Slider(
-                    key: const Key('fullscreen-seek'),
-                    value: positionMs,
-                    max: hasDuration ? durationMs.toDouble() : 1,
-                    onChangeStart: hasDuration ? _beginScrubbing : null,
-                    onChanged: hasDuration ? _seekTo : null,
-                    onChangeEnd: hasDuration ? _finishScrubbing : null,
+            ),
+            child: Row(
+              key: const Key('fullscreen-controls-bar'),
+              children: [
+                IconButton(
+                  key: const Key('fullscreen-play-pause'),
+                  tooltip: context.strings.t(widget.playing ? 'pause' : 'play'),
+                  onPressed: () => _runWithVisibleControls(widget.onPlayPause),
+                  color: Colors.white,
+                  iconSize: 30,
+                  icon: Icon(
+                    widget.playing
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                formatClock(hasDuration ? durationMs : 0),
-                key: const Key('fullscreen-duration'),
-                style: const TextStyle(color: Colors.white),
-              ),
-              const SizedBox(width: 4),
-              IconButton(
-                key: const Key('fullscreen-exit'),
-                tooltip: context.strings.t('exit_fullscreen'),
-                onPressed: () => _runWithVisibleControls(_exit),
-                color: Colors.white,
-                iconSize: 30,
-                icon: const Icon(Icons.fullscreen_exit_rounded),
-              ),
-            ],
+                if (widget.sentenceNavigation != null)
+                  widget.sentenceNavigation!,
+                if (widget.blindListening)
+                  SentenceRevealButton(
+                    revealed: widget.sentenceRevealed,
+                    onPressed: widget.onReveal,
+                  ),
+                const SizedBox(width: 4),
+                Text(
+                  formatClock(positionMs.round()),
+                  key: const Key('fullscreen-position'),
+                  style: const TextStyle(color: Colors.white),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: colors.primaryContainer,
+                      inactiveTrackColor: Colors.white38,
+                      thumbColor: Colors.white,
+                      overlayColor: Colors.white24,
+                      trackHeight: 3,
+                    ),
+                    child: Slider(
+                      key: const Key('fullscreen-seek'),
+                      value: positionMs,
+                      max: hasDuration ? durationMs.toDouble() : 1,
+                      onChangeStart: hasDuration ? _beginScrubbing : null,
+                      onChanged: hasDuration ? _seekTo : null,
+                      onChangeEnd: hasDuration ? _finishScrubbing : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  formatClock(hasDuration ? durationMs : 0),
+                  key: const Key('fullscreen-duration'),
+                  style: const TextStyle(color: Colors.white),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  key: const Key('fullscreen-exit'),
+                  tooltip: context.strings.t('exit_fullscreen'),
+                  onPressed: () => _runWithVisibleControls(_exit),
+                  color: Colors.white,
+                  iconSize: 30,
+                  icon: const Icon(Icons.fullscreen_exit_rounded),
+                ),
+              ],
+            ),
           ),
         ),
       ),

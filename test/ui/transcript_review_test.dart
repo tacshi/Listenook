@@ -1072,6 +1072,128 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('mimic menu stays disabled while the source is missing', (
+    tester,
+  ) async {
+    await _pumpMimicReview(
+      tester,
+      _RecordingSentenceRepeatLoopController(),
+      sourceExists: false,
+    );
+    expect(find.text('Source missing'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('review-toolbar-more')));
+    await tester.pumpAndSettle();
+    final menuItem = find.byKey(const Key('more-toggle-mimic'));
+    expect(tester.widget<CheckedPopupMenuItem>(menuItem).enabled, isFalse);
+    expect(
+      tester
+          .widget<CheckedPopupMenuItem>(
+            find.byKey(const Key('toggle-blind-listening')),
+          )
+          .enabled,
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('reopening mimic on a finished sentence starts a fresh round', (
+    tester,
+  ) async {
+    final loop = _RecordingSentenceRepeatLoopController();
+    final platform = await _pumpMimicReview(
+      tester,
+      loop,
+      settings: const AppSettings(mimicRepGoal: 1),
+      segments: const [
+        TranscriptSegment(
+          id: 'only',
+          startMs: 0,
+          endMs: 1000,
+          text: 'Only sentence.',
+        ),
+      ],
+    );
+    await _openMimic(tester);
+    expect(platform.state.playing, isTrue);
+    platform.emitPosition(const Duration(milliseconds: 950));
+    await tester.pump();
+    platform.emitPosition(const Duration(milliseconds: 10));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(_mimicReps(tester), 'Reps 1/1');
+    expect(platform.state.playing, isFalse);
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const Key('mimic-loop-toggle')))
+          .onPressed,
+      isNull,
+    );
+
+    await tester.tap(find.byKey(const Key('close-mimic')));
+    await tester.pumpAndSettle();
+    await _openMimic(tester);
+    expect(_mimicReps(tester), 'Reps 0/1');
+    expect(platform.state.playing, isTrue);
+    expect(loop.events.last, 'range:0:1000');
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const Key('mimic-loop-toggle')))
+          .onPressed,
+      isNotNull,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('fullscreen controls keep white icons in the light theme', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(brightness: Brightness.light),
+        locale: const Locale('en'),
+        supportedLocales: AppStrings.supportedLocales,
+        localizationsDelegates: const [AppStrings.delegate],
+        home: VideoFullscreenKeyboardRegion(
+          blindListening: true,
+          sentenceRevealed: false,
+          onReveal: () {},
+          sentenceNavigation: SentenceNavigationControls(
+            onPrevious: () {},
+            onNext: null,
+          ),
+          playing: false,
+          position: const Duration(seconds: 2),
+          duration: const Duration(seconds: 10),
+          onExit: _noop,
+          onPlayPause: _noop,
+          onSeek: (_) {},
+          onSeekBackward: _noop,
+          onSeekForward: _noop,
+          onDecreaseSpeed: _noop,
+          onIncreaseSpeed: _noop,
+          onRepeatHoldStart: _noop,
+          onRepeatHoldEnd: _noop,
+          child: const ColoredBox(color: Colors.black),
+        ),
+      ),
+    );
+    Color? foreground(String key, Set<WidgetState> states) =>
+        IconButtonTheme.of(
+          tester.element(find.byKey(Key(key))),
+        ).style?.foregroundColor?.resolve(states);
+    for (final key in [
+      'reveal-current-sentence',
+      'previous-sentence',
+      'next-sentence',
+    ]) {
+      expect(foreground(key, const {}), Colors.white, reason: key);
+    }
+    expect(
+      foreground('next-sentence', const {WidgetState.disabled}),
+      Colors.white38,
+    );
+  });
+
   for (final locale in [const Locale('en'), const Locale('zh', 'CN')]) {
     testWidgets('mimic controls fit the minimum pane width in $locale', (
       tester,
@@ -9554,6 +9676,7 @@ Future<_ReviewFakePlatformPlayer> _pumpMimicReview(
   TranscriptSource transcriptSource = TranscriptSource.importedSubtitle,
   TranscriptAcquisitionMode transcriptAcquisitionMode =
       TranscriptAcquisitionMode.importedSubtitles,
+  bool sourceExists = true,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -9562,14 +9685,16 @@ Future<_ReviewFakePlatformPlayer> _pumpMimicReview(
   ))!;
   addTearDown(() => directory.delete(recursive: true));
   final source = File('${directory.path}/listen.${metadata.formatName}');
-  await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+  if (sourceExists) {
+    await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+  }
   late _ReviewFakePlatformPlayer platform;
   debugTranscriptReviewPlayerFactory = () => Player(
     platformPlayer: platform = _ReviewFakePlatformPlayer(
       updatePlayingStateOnControls: true,
     ),
   );
-  debugTranscriptReviewSourceExists = (_) async => true;
+  debugTranscriptReviewSourceExists = (_) async => sourceExists;
   debugTranscriptReviewSentenceRepeatLoopFactory = (_) => loop;
   addTearDown(() {
     debugTranscriptReviewPlayerFactory = null;
@@ -9636,6 +9761,8 @@ Future<_ReviewFakePlatformPlayer> _pumpMimicReview(
   await tester.pump();
   await tester.pumpAndSettle();
 
+  // A missing source never creates a player, so there is nothing to control.
+  if (!sourceExists) return _ReviewFakePlatformPlayer();
   return platform;
 }
 
