@@ -198,17 +198,5 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
     ditto -c -k --keepParent "$APP" "$APP_ZIP"
   fi
 
-  CHECKSUMS="$OUT/$BASE.sha256"
-  rm -f "$CHECKSUMS"
-  if [[ "$MODE" == "debug" ]]; then
-    (
-      cd "$OUT"
-      find "$BASE.app" -type f -exec shasum -a 256 {} + \
-        | LC_ALL=C sort \
-        > "$BASE.sha256"
-    )
-  else
-    (cd "$OUT" && shasum -a 256 "$BASE"* > "$BASE.sha256")
-  fi
   echo "Artifacts: $OUT"
 done

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -300,6 +301,10 @@ class JsonPodcastRepository implements PodcastRepository {
 
 final _atomicFileWriter = _AtomicFileWriter();
 
+/// Completes once every repository file write started so far has finished.
+@visibleForTesting
+Future<void> pendingFileWrites() => _atomicFileWriter.idle();
+
 class _AtomicFileWriter {
   final Map<String, Future<void>> _pendingWrites = {};
 
@@ -312,6 +317,16 @@ class _AtomicFileWriter {
         _pendingWrites.remove(key);
       }
     });
+  }
+
+  Future<void> idle() async {
+    while (_pendingWrites.isNotEmpty) {
+      try {
+        await Future.wait(_pendingWrites.values.toList());
+      } on Object {
+        // Callers of write() own its errors.
+      }
+    }
   }
 
   Future<void> _writeAfter(
@@ -329,7 +344,8 @@ class _AtomicFileWriter {
     await target.parent.create(recursive: true);
     final temporary = File('${target.path}.tmp');
     await temporary.writeAsString(contents, flush: true);
-    if (await target.exists()) await target.delete();
+    // rename replaces an existing target in one step, so readers never see
+    // the file missing.
     await temporary.rename(target.path);
   }
 }

@@ -1607,6 +1607,82 @@ void main() {
     },
   );
 
+  testWidgets('Removing a single transcript asks for confirmation first', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final jobs = _Jobs([
+      TranscriptionJob(
+        id: 'meeting',
+        batchId: 'batch',
+        sourcePath: '/recordings/meeting.wav',
+        createdAt: now,
+        updatedAt: now,
+        status: JobStatus.completed,
+        displayTitle: 'Weekly meeting',
+      ),
+    ]);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: jobs,
+      libraryCatalogRepository: _Catalog(),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+
+    final context = tester.element(find.byType(LibraryPage));
+    final localizations = MaterialLocalizations.of(context);
+    final summary = tester
+        .widget<Text>(
+          find.byKey(const ValueKey('library-item-summary-meeting')),
+        )
+        .data!;
+    expect(summary, contains(localizations.formatShortDate(now.toLocal())));
+    expect(summary, isNot(contains(now.toLocal().toString().substring(0, 10))));
+
+    await tester.tap(find.byKey(const ValueKey('library-item-menu-meeting')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove from library'));
+    await tester.pumpAndSettle();
+    expect(find.text('Remove selected items?'), findsOneWidget);
+    expect(controller.allJobs, hasLength(1));
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Remove selected items?'), findsNothing);
+    expect(controller.allJobs, hasLength(1));
+    expect(find.text('Weekly meeting'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('library-item-menu-meeting')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove from library'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-remove-library-jobs')));
+    await tester.pumpAndSettle();
+    expect(controller.allJobs, isEmpty);
+    expect(jobs.saved, isEmpty);
+    expect(find.text('Weekly meeting'), findsNothing);
+  });
+
   testWidgets('Changing the visible search scope clears hidden selections', (
     tester,
   ) async {

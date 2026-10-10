@@ -548,10 +548,12 @@ class _SettingsPageState extends State<SettingsPage> {
   ]);
 
   Widget _shortcutsTab(BuildContext context) {
-    final commandKey = Theme.of(context).platform == TargetPlatform.macOS
-        ? '⌘'
-        : 'Ctrl';
+    final macOS = Theme.of(context).platform == TargetPlatform.macOS;
+    final commandKey = macOS ? '⌘' : 'Ctrl';
+    final altKey = macOS ? '⌥' : context.strings.t('shortcut_key_alt');
+    final shiftKey = macOS ? '⇧' : context.strings.t('shortcut_key_shift');
     final enterKey = context.strings.t('shortcut_key_enter');
+    final escapeKey = context.strings.t('shortcut_key_escape');
     return _tabList([
       _ShortcutSection(
         title: context.strings.t('shortcut_section_application'),
@@ -619,6 +621,47 @@ class _SettingsPageState extends State<SettingsPage> {
             description: context.strings.t('shortcut_hold_repeat'),
             keys: const ['R'],
           ),
+          _ShortcutDefinition(
+            id: 'previous-sentence',
+            description: context.strings.t('previous_sentence'),
+            keys: [altKey, '←'],
+          ),
+          _ShortcutDefinition(
+            id: 'next-sentence',
+            description: context.strings.t('next_sentence'),
+            keys: [altKey, '→'],
+          ),
+          _ShortcutDefinition(
+            id: 'reveal-sentence',
+            description: context.strings.t('shortcut_reveal_sentence'),
+            keys: const ['S'],
+          ),
+          _ShortcutDefinition(
+            id: 'check-dictation',
+            description: context.strings.t('shortcut_check_dictation'),
+            keys: [commandKey, enterKey],
+          ),
+        ],
+      ),
+      _ShortcutSection(
+        title: context.strings.t('shortcut_section_transcript_editing'),
+        icon: Icons.call_split_rounded,
+        shortcuts: [
+          _ShortcutDefinition(
+            id: 'undo-structure',
+            description: context.strings.t('shortcut_undo_structure'),
+            keys: [commandKey, 'Z'],
+          ),
+          _ShortcutDefinition(
+            id: 'redo-structure',
+            description: context.strings.t('shortcut_redo_structure'),
+            keys: macOS ? [shiftKey, commandKey, 'Z'] : [commandKey, 'Y'],
+          ),
+          _ShortcutDefinition(
+            id: 'exit-structure',
+            description: context.strings.t('shortcut_exit_structure'),
+            keys: [escapeKey],
+          ),
         ],
       ),
       _ShortcutSection(
@@ -648,7 +691,7 @@ class _SettingsPageState extends State<SettingsPage> {
           _ShortcutDefinition(
             id: 'exit-fullscreen',
             description: context.strings.t('exit_fullscreen'),
-            keys: [context.strings.t('shortcut_key_escape')],
+            keys: [escapeKey],
           ),
         ],
       ),

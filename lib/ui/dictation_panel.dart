@@ -33,6 +33,10 @@ class DictationPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final strings = context.strings;
+    final theme = Theme.of(context);
+    final shortcutModifier = theme.platform == TargetPlatform.macOS
+        ? '⌘'
+        : 'Ctrl+';
     final matches = result?.matches == true;
     final feedbackLabel = strings.t(
       matches ? 'dictation_matches' : 'dictation_retry',
@@ -65,6 +69,11 @@ class DictationPanel extends StatelessWidget {
                     key: const Key('close-dictation'),
                     tooltip: strings.t('close'),
                     onPressed: onClose,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 40,
+                      height: 40,
+                    ),
+                    padding: EdgeInsets.zero,
                     icon: const Icon(Icons.close),
                   ),
                 ],
@@ -151,10 +160,14 @@ class DictationPanel extends StatelessWidget {
                       icon: const Icon(Icons.replay),
                       label: Text(strings.t('dictation_replay')),
                     ),
-                    FilledButton(
-                      key: const Key('dictation-check'),
-                      onPressed: onCheck == null ? null : check,
-                      child: Text(strings.t('dictation_check')),
+                    Tooltip(
+                      message:
+                          '${strings.t('dictation_check')} ($shortcutModifier↩)',
+                      child: FilledButton(
+                        key: const Key('dictation-check'),
+                        onPressed: onCheck == null ? null : check,
+                        child: Text(strings.t('dictation_check')),
+                      ),
                     ),
                   ],
                 ),

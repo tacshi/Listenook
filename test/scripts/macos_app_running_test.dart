@@ -91,6 +91,15 @@ void main() {
     await fakeExecutable.parent.create(recursive: true);
     final copy = await Process.run('cp', ['/bin/sleep', fakeExecutable.path]);
     expect(copy.exitCode, 0, reason: '${copy.stderr}');
+    // macOS kills relocated copies of Apple platform binaries on launch, so
+    // replace the copy's signature with an ad-hoc one.
+    final resign = await Process.run('codesign', [
+      '--force',
+      '--sign',
+      '-',
+      fakeExecutable.path,
+    ]);
+    expect(resign.exitCode, 0, reason: '${resign.stderr}');
     final process = await Process.start(fakeExecutable.path, ['30']);
     addTearDown(() => process.kill(ProcessSignal.sigkill));
 

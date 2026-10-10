@@ -74,6 +74,47 @@ void main() {
     },
   );
 
+  testWidgets('check button advertises its shortcut per platform', (
+    tester,
+  ) async {
+    final controller = TextEditingController(text: 'draft');
+    final focus = FocusNode();
+    addTearDown(controller.dispose);
+    addTearDown(focus.dispose);
+    for (final (platform, modifier) in [
+      (TargetPlatform.macOS, '⌘'),
+      (TargetPlatform.windows, 'Ctrl+'),
+    ]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(platform: platform),
+          localizationsDelegates: [AppStrings.delegate],
+          home: Scaffold(
+            body: DictationPanel(
+              controller: controller,
+              focusNode: focus,
+              targetLabel: 'Sentence 1',
+              eligible: true,
+              result: null,
+              onChanged: (_) {},
+              onCheck: () {},
+              onReplay: () {},
+              onClose: () {},
+            ),
+          ),
+        ),
+      );
+      // Let the theme transition finish so the platform is not lerped.
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Check ($modifier↩)'), findsOneWidget);
+    }
+    expect(
+      tester.getSize(find.byKey(const Key('close-dictation'))),
+      const Size(40, 40),
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('incorrect answer feedback keeps missing words hidden', (
     tester,
   ) async {

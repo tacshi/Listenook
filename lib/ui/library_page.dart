@@ -770,9 +770,10 @@ class _HistoryListItem extends StatelessWidget {
                 ],
                 const SizedBox(height: 4),
                 Text(
-                  '${job.createdAt.toLocal().toString().substring(0, 16)} · '
+                  '${_formatCreatedAt(context, job.createdAt)} · '
                   '${formatClock(job.metadata?.durationMs ?? 0)} · '
                   '${context.strings.t('job_${job.status.name}')}',
+                  key: ValueKey('library-item-summary-${job.id}'),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -818,13 +819,7 @@ class _HistoryListItem extends StatelessWidget {
                 case 'tags':
                   await onManageTags?.call();
                 case 'delete':
-                  if (controller.podcastJobs.any(
-                    (podcastJob) => podcastJob.id == job.id,
-                  )) {
-                    await confirmAndRemoveLibraryJobs(context, [job]);
-                  } else {
-                    await controller.deleteHistory(job.id);
-                  }
+                  await confirmAndRemoveLibraryJobs(context, [job]);
               }
             },
             itemBuilder: (context) => [
@@ -851,6 +846,17 @@ class _HistoryListItem extends StatelessWidget {
       ),
     );
   }
+}
+
+String _formatCreatedAt(BuildContext context, DateTime createdAt) {
+  final local = createdAt.toLocal();
+  final localizations = MaterialLocalizations.of(context);
+  final date = localizations.formatShortDate(local);
+  final time = localizations.formatTimeOfDay(
+    TimeOfDay.fromDateTime(local),
+    alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+  );
+  return '$date $time';
 }
 
 class _LibraryOrganizerPill extends StatelessWidget {

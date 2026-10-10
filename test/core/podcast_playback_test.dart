@@ -55,6 +55,9 @@ void main() {
 
     final player = PodcastPlayer(repository: repository);
     addTearDown(player.dispose);
+    // Tear-downs run in reverse, so the progress save on shutdown finishes
+    // before dispose and before the directory is deleted.
+    addTearDown(player.shutdown);
     await player.initialize();
 
     final progress = player.progressFor(episodeId);
