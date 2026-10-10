@@ -4,8 +4,8 @@ import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:flutter_html/flutter_html.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/core/podcast_models.dart';
@@ -82,13 +82,15 @@ void main() {
       ),
     );
 
-    final html = tester.widget<Html>(
+    final html = tester.widget<HtmlWidget>(
       find.byKey(const Key('podcast-episode-description-html')),
     );
-    expect(html.data, contains('<strong>Sponsors:</strong>'));
+    expect(html.html, contains('<strong>Sponsors:</strong>'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Deals', findRichText: true), findsOneWidget);
 
-    html.onLinkTap?.call('javascript:alert(1)', const {}, null);
-    html.onLinkTap?.call('https://example.com', const {}, null);
+    expect(await html.onTapUrl?.call('javascript:alert(1)'), isTrue);
+    expect(await html.onTapUrl?.call('https://example.com'), isTrue);
     await tester.pump();
 
     expect(opened, [Uri.parse('https://example.com')]);
