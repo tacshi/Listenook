@@ -1651,7 +1651,13 @@ class _Fixture {
     return controller;
   }
 
-  Future<void> dispose() => root.delete(recursive: true);
+  Future<void> dispose() async {
+    // Tests stop waiting once a job's in-memory state settles; its save to
+    // disk may still be queued or running.
+    await pumpEventQueue();
+    await pendingFileWrites();
+    await root.delete(recursive: true);
+  }
 }
 
 class _BlockingVerificationModels implements LocalModelManager {
