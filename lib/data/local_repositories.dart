@@ -29,6 +29,7 @@ class AppPaths {
   File get inboxMonitor => File(p.join(root.path, 'inbox_monitor.json'));
   File get podcastCatalog => File(p.join(root.path, 'podcast_catalog.json'));
   File get podcastPlayback => File(p.join(root.path, 'podcast_playback.json'));
+  File get videoPlayback => File(p.join(root.path, 'video_playback.json'));
   Directory get podcasts => Directory(p.join(root.path, 'podcasts'));
 
   static Future<AppPaths> create({
@@ -297,6 +298,109 @@ class JsonPodcastRepository implements PodcastRepository {
       jsonEncode({'version': 1, 'entries': entries}),
     );
   }
+}
+
+/// Where the standalone video player left a file: its subtitle choice and
+/// position. Kept apart from jobs so watching never touches the Library.
+class VideoPlaybackEntry {
+  const VideoPlaybackEntry({
+    required this.positionMs,
+    required this.updatedAt,
+    this.subtitleId,
+  });
+
+  final int positionMs;
+  final String? subtitleId;
+  final DateTime updatedAt;
+
+  Map<String, dynamic> toJson() => {
+    'position_ms': positionMs,
+    if (subtitleId case final value?) 'subtitle_id': value,
+    'updated_at': updatedAt.toUtc().toIso8601String(),
+  };
+
+  static VideoPlaybackEntry? fromJson(Map<String, dynamic> json) {
+    final updatedAt = DateTime.tryParse(json['updated_at'] as String? ?? '');
+    if (updatedAt == null) return null;
+    return VideoPlaybackEntry(
+      positionMs: (json['position_ms'] as num?)?.toInt() ?? 0,
+      subtitleId: json['subtitle_id'] as String?,
+      updatedAt: updatedAt,
+    );
+  }
+}
+
+abstract interface class VideoPlaybackRepository {
+  Future<VideoPlaybackEntry?> load(String mediaPath);
+
+  Future<void> save(String mediaPath, VideoPlaybackEntry entry);
+}
+
+class JsonVideoPlaybackRepository implements VideoPlaybackRepository {
+  JsonVideoPlaybackRepository(this.paths);
+
+  static const maxEntries = 200;
+
+  final AppPaths paths;
+  Map<String, VideoPlaybackEntry>? _entries;
+
+  @override
+  Future<VideoPlaybackEntry?> load(String mediaPath) async =>
+      (await _load())[_key(mediaPath)];
+
+  @override
+  Future<void> save(String mediaPath, VideoPlaybackEntry entry) async {
+    final entries = await _load();
+    entries.remove(_key(mediaPath));
+    entries[_key(mediaPath)] = entry;
+    while (entries.length > maxEntries) {
+      entries.remove(entries.keys.first);
+    }
+    await _atomicFileWriter.write(
+      paths.videoPlayback,
+      jsonEncode({
+        'version': 1,
+        'entries': [
+          for (final item in entries.entries)
+            {'path': item.key, ...item.value.toJson()},
+        ],
+      }),
+    );
+  }
+
+  Future<Map<String, VideoPlaybackEntry>> _load() async {
+    final cached = _entries;
+    if (cached != null) return cached;
+    final entries = <String, VideoPlaybackEntry>{};
+    try {
+      final data = jsonDecode(await paths.videoPlayback.readAsString());
+      final items = data is Map ? data['entries'] : null;
+      if (items is List) {
+        final sorted =
+            [
+              for (final item in items)
+                if (item is Map && item['path'] is String)
+                  (
+                    item['path'] as String,
+                    VideoPlaybackEntry.fromJson(item.cast<String, dynamic>()),
+                  ),
+            ]..sort((left, right) {
+              final leftTime = left.$2?.updatedAt;
+              final rightTime = right.$2?.updatedAt;
+              if (leftTime == null || rightTime == null) return 0;
+              return leftTime.compareTo(rightTime);
+            });
+        for (final (path, entry) in sorted) {
+          if (entry != null) entries[path] = entry;
+        }
+      }
+    } on Object {
+      // A missing or damaged file only loses resume positions.
+    }
+    return _entries = entries;
+  }
+
+  String _key(String mediaPath) => p.normalize(p.absolute(mediaPath));
 }
 
 final _atomicFileWriter = _AtomicFileWriter();

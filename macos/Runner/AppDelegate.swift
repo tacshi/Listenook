@@ -18,6 +18,32 @@ class AppDelegate: FlutterAppDelegate {
   )
   private var instanceLockDescriptor: Int32 = -1
   private var ownsInstanceLock = false
+  private let applicationChannels = ApplicationChannels()
+
+  /// The app's one engine. It has no window of its own: every window — the
+  /// main window and each video player — is created from Dart through
+  /// Flutter's windowing API as another view of this engine
+  /// (lib/core/windowing/). Multi-view has to be enabled before any view
+  /// controller is attached, which is why this is not the template's
+  /// `MainFlutterWindow`.
+  private(set) var engine: FlutterEngine?
+
+  /// Files opened at launch arrive before this; `OpenFileInbox` queues them
+  /// until Dart asks.
+  override func applicationDidFinishLaunching(_ notification: Notification) {
+    if engine != nil { return }
+    // Launched to open documents (a video double-clicked in Finder): Dart
+    // keeps the main window hidden while the files arrive.
+    let defaultLaunch =
+      notification.userInfo?["NSApplicationLaunchIsDefaultLaunchKey"] as? Bool ?? true
+    OpenFileInbox.shared.launchedForFiles = !defaultLaunch
+    let engine = FlutterEngine(name: "Listenook", project: nil)
+    RegisterGeneratedPlugins(registry: engine)
+    applicationChannels.register(with: engine.binaryMessenger)
+    WindowHandleChannel.shared.attach(engine: engine)
+    engine.run(withEntrypoint: nil)
+    self.engine = engine
+  }
 
   override func applicationWillFinishLaunching(_ notification: Notification) {
     DistributedNotificationCenter.default().addObserver(
@@ -86,6 +112,17 @@ class AppDelegate: FlutterAppDelegate {
     }
   }
 
+  override func application(_ application: NSApplication, open urls: [URL]) {
+    let files = urls.filter(\.isFileURL)
+    let others = urls.filter { !$0.isFileURL }
+    if !others.isEmpty {
+      super.application(application, open: others)
+    }
+    guard !files.isEmpty else { return }
+    // Videos open in their own window; the main window stays as it is.
+    OpenFileInbox.shared.receive(files.map(\.path))
+  }
+
   @objc private func activatePrimaryInstance(_ notification: Notification) {
     guard ownsInstanceLock else { return }
     invokeNavigation("showWindow", sender: nil)
@@ -111,18 +148,12 @@ class AppDelegate: FlutterAppDelegate {
 
   private func invokeNavigation(_ method: String, sender: Any?) {
     if method != "requestQuit" {
-      mainFlutterWindow?.makeKeyAndOrderFront(sender)
-      NSApp.activate(ignoringOtherApps: true)
+      WindowHandleChannel.shared.showMainWindow()
     }
-
-    guard let flutterViewController =
-      mainFlutterWindow?.contentViewController as? FlutterViewController
-    else {
-      return
-    }
+    guard let engine else { return }
     let channel = FlutterMethodChannel(
       name: navigationChannelName,
-      binaryMessenger: flutterViewController.engine.binaryMessenger
+      binaryMessenger: engine.binaryMessenger
     )
     channel.invokeMethod(method, arguments: nil)
   }
@@ -144,12 +175,53 @@ class AppDelegate: FlutterAppDelegate {
   }
 }
 
+/// Holds files Finder asked the app to open until Dart takes them, so a
+/// double-click that launches the app is not lost while Flutter starts.
+final class OpenFileInbox {
+  static let shared = OpenFileInbox()
+
+  private var pending: [String] = []
+  private var channel: FlutterMethodChannel?
+  var launchedForFiles = false
+
+  func attach(_ channel: FlutterMethodChannel) {
+    self.channel = channel
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      if call.method == "launchedForFiles" {
+        result(self.launchedForFiles)
+        return
+      }
+      guard call.method == "takePendingOpenFiles" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let files = self.pending
+      self.pending.removeAll()
+      result(files)
+    }
+  }
+
+  func receive(_ paths: [String]) {
+    pending.append(contentsOf: paths)
+    channel?.invokeMethod("openFilesAvailable", arguments: nil)
+  }
+}
+
 final class ApplicationChannels {
   private let compactAudioEncoder = CompactAudioEncoder()
   private var launchAtLoginChannel: FlutterMethodChannel?
   private var audioEncoderChannel: FlutterMethodChannel?
 
   func register(with messenger: FlutterBinaryMessenger) {
+    OpenFileInbox.shared.attach(FlutterMethodChannel(
+      name: "app.capyvibe.listenook/open_files",
+      binaryMessenger: messenger
+    ))
+
     let launchAtLoginChannel = FlutterMethodChannel(
       name: "app.capyvibe.listenook/launch_at_login",
       binaryMessenger: messenger

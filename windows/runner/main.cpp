@@ -2,8 +2,6 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
-#include <algorithm>
-
 #include "flutter_window.h"
 #include "utils.h"
 
@@ -23,18 +21,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
-  const bool start_hidden =
-      std::find(command_line_arguments.begin(), command_line_arguments.end(),
-                "--background") != command_line_arguments.end();
 
+  // Dart decides whether the main window starts hidden (--background, or a
+  // launch that only opens a video).
   project.set_dart_entrypoint_arguments(command_line_arguments);
 
-  FlutterWindow window(project, start_hidden);
+  // The hidden host of the engine (see FlutterWindow). It never renders, so
+  // its implicit view needs no real surface; the app's windows come from Dart.
+  FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
-  Win32Window::Size size(1280, 720);
+  Win32Window::Size size(64, 64);
   if (!window.Create(L"Listenook", origin, size)) {
     return EXIT_FAILURE;
   }
+  // Destroying the host (only ever on the way out) ends the message loop.
   window.SetQuitOnClose(true);
 
   ::MSG msg;

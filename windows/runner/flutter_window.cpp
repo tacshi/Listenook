@@ -61,15 +61,11 @@ double DistanceToLine(double x, double y, const CursorLine& line) {
 
 }  // namespace
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project,
-                             bool start_hidden)
-    : project_(project), start_hidden_(start_hidden) {}
+FlutterWindow::FlutterWindow(const flutter::DartProject& project)
+    : project_(project) {}
 
 FlutterWindow::~FlutterWindow() {
-  if (flutter_view_window_ && transcript_cursor_subclassed_) {
-    RemoveWindowSubclass(flutter_view_window_, TranscriptCursorSubclassProc,
-                         kTranscriptCursorSubclassId);
-  }
+  DetachTranscriptCursor();
   DestroyTranscriptStructureCursors();
 }
 
@@ -88,34 +84,45 @@ bool FlutterWindow::OnCreate() {
   if (!flutter_controller_->engine() || !flutter_controller_->view()) {
     return false;
   }
+  // One engine for every window, so plugins register once, here.
   RegisterPlugins(flutter_controller_->engine());
-  flutter_view_window_ = flutter_controller_->view()->GetNativeWindow();
-  SetChildContent(flutter_view_window_);
+  SetChildContent(flutter_controller_->view()->GetNativeWindow());
   RegisterTranscriptStructureCursor();
+  window_handles_ = std::make_unique<WindowHandleChannel>(
+      flutter_controller_->engine(),
+      [this](HWND main_window) { AttachTranscriptCursor(main_window); });
 
-  flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    if (!start_hidden_) {
-      this->Show();
-    }
-  });
-
-  // Flutter can complete the first frame before the "show window" callback is
-  // registered. The following call ensures a frame is pending to ensure the
-  // window is shown. It is a no-op if the first frame hasn't completed yet.
-  flutter_controller_->ForceRedraw();
-
+  // Never shown (see the class comment). The app does not render the implicit
+  // view, so no first frame would come to show it anyway.
   return true;
+}
+
+void FlutterWindow::AttachTranscriptCursor(HWND main_window) {
+  DetachTranscriptCursor();
+  HWND view = FindWindowExW(main_window, nullptr, L"FLUTTERVIEW", nullptr);
+  flutter_view_window_ = view ? view : GetWindow(main_window, GW_CHILD);
+  if (!flutter_view_window_) return;
+  transcript_cursor_subclassed_ =
+      SetWindowSubclass(flutter_view_window_, TranscriptCursorSubclassProc,
+                        kTranscriptCursorSubclassId,
+                        reinterpret_cast<DWORD_PTR>(this)) != FALSE;
+}
+
+void FlutterWindow::DetachTranscriptCursor() {
+  if (flutter_view_window_ && transcript_cursor_subclassed_ &&
+      IsWindow(flutter_view_window_)) {
+    RemoveWindowSubclass(flutter_view_window_, TranscriptCursorSubclassProc,
+                         kTranscriptCursorSubclassId);
+  }
+  transcript_cursor_subclassed_ = false;
+  flutter_view_window_ = nullptr;
 }
 
 void FlutterWindow::OnDestroy() {
   DeactivateAllTranscriptStructureCursors();
   transcript_cursor_channel_.reset();
-  if (flutter_view_window_ && transcript_cursor_subclassed_) {
-    RemoveWindowSubclass(flutter_view_window_, TranscriptCursorSubclassProc,
-                         kTranscriptCursorSubclassId);
-    transcript_cursor_subclassed_ = false;
-  }
-  flutter_view_window_ = nullptr;
+  window_handles_ = nullptr;
+  DetachTranscriptCursor();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -204,11 +211,8 @@ void FlutterWindow::RegisterTranscriptStructureCursor() {
         }
         result->Success();
       });
-
-  transcript_cursor_subclassed_ =
-      SetWindowSubclass(flutter_view_window_, TranscriptCursorSubclassProc,
-                        kTranscriptCursorSubclassId,
-                        reinterpret_cast<DWORD_PTR>(this)) != FALSE;
+  // The cursor attaches to Dart's main window once it is registered
+  // (AttachTranscriptCursor); this host window is never shown.
 }
 
 bool FlutterWindow::ActivateTranscriptStructureCursor(
@@ -357,6 +361,8 @@ LRESULT CALLBACK FlutterWindow::TranscriptCursorSubclassProc(
     owner->DeactivateAllTranscriptStructureCursors();
   } else if (message == WM_NCDESTROY) {
     RemoveWindowSubclass(window, TranscriptCursorSubclassProc, subclass_id);
+    owner->transcript_cursor_subclassed_ = false;
+    owner->flutter_view_window_ = nullptr;
   }
   return DefSubclassProc(window, message, wparam, lparam);
 }

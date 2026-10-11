@@ -5,18 +5,26 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:tray_manager/tray_manager.dart' as tray;
-import 'package:window_manager/window_manager.dart';
 
 import '../core/models.dart';
+import '../core/windowing/app_window.dart';
+import '../core/windowing/desktop_windows.dart';
+import '../core/windowing/main_window_host.dart';
+import '../core/windowing/window_caption_button.dart';
+import '../core/windowing/window_drag_area.dart';
 import '../data/desktop_runtime.dart';
+import '../data/local_repositories.dart';
 import '../l10n/strings.dart';
+import '../theme.dart';
 import '../data/update_service.dart';
 import '../state/app_controller.dart';
 import '../state/podcast_controller.dart';
 import '../state/podcast_player.dart';
+import '../state/video_open_requests.dart';
 import 'app_notice.dart';
 import 'inbox_page.dart';
 import 'keyboard_shortcuts.dart';
@@ -26,6 +34,8 @@ import 'podcast_page.dart';
 import 'review_fullscreen_controller.dart';
 import 'settings_page.dart';
 import 'subtitle_import_review_dialog.dart';
+import 'video_player/video_player_page.dart';
+import 'video_player/video_player_windows.dart';
 import 'workspace_page.dart';
 
 class AppShell extends StatefulWidget {
@@ -38,7 +48,7 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell>
-    with WindowListener, tray.TrayListener, WidgetsBindingObserver {
+    with tray.TrayListener, WidgetsBindingObserver {
   static const _nativeNavigationChannel = MethodChannel(
     AppIdentity.navigationChannel,
   );
@@ -62,6 +72,8 @@ class _AppShellState extends State<AppShell>
   late final AppController _controller;
   DesktopRuntime? _desktopRuntime;
   UpdateService? _updates;
+  VideoOpenRequests? _videoRequests;
+  Route<void>? _videoPlayerRoute;
 
   @override
   void initState() {
@@ -71,20 +83,35 @@ class _AppShellState extends State<AppShell>
     _controller = context.read<AppController>();
     _desktopRuntime = Provider.of<DesktopRuntime?>(context, listen: false);
     _updates = Provider.of<UpdateService?>(context, listen: false);
+    _videoRequests = Provider.of<VideoOpenRequests?>(context, listen: false);
+    final playerWindows = VideoPlayerWindows.instance;
+    if (playerWindows == null) {
+      // Without windowing the player is a route over this shell.
+      _videoRequests?.addListener(_handleVideoRequests);
+    } else {
+      // Player windows open from main() even while this window is hidden and
+      // not painting; the shell only steps its own playback aside.
+      playerWindows
+        ..beforeOpen = _pauseForVideoPlayer
+        ..afterAllClosed = () {
+          if (mounted) unawaited(_fullscreenController.resumeMedia());
+        };
+    }
     _knownMonitoredJobs = _monitoredJobIds();
     _controller.addListener(_handleControllerChange);
     WidgetsBinding.instance.addObserver(this);
-    windowManager.addListener(this);
+    _mainWindow?.mainListenable.addListener(_syncWindowFullscreen);
+    _mainWindow?.mainCloseHandler = _onMainWindowClose;
     tray.trayManager.addListener(this);
     _nativeNavigationChannel.setMethodCallHandler(_handleNativeNavigation);
-    unawaited(windowManager.setPreventClose(true));
-    unawaited(_syncWindowFullscreen());
+    _syncWindowFullscreen();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showOnboarding();
       unawaited(_showLegacyLoginNotice());
       unawaited(_updates?.start());
       unawaited(_initializeDesktopRuntime());
       _scheduleTraySync();
+      if (VideoPlayerWindows.instance == null) _handleVideoRequests();
     });
   }
 
@@ -100,7 +127,7 @@ class _AppShellState extends State<AppShell>
 
   Future<void> _syncDisplayName(AppStrings strings) async {
     try {
-      await windowManager.setTitle(strings.appName);
+      _mainWindow?.setMainTitle(strings.appName);
       await _desktopRuntime?.setDisplayName(
         strings.appName,
         strings.locale.languageCode,
@@ -152,11 +179,61 @@ class _AppShellState extends State<AppShell>
     _traySyncTimer?.cancel();
     _notificationTimer?.cancel();
     _controller.removeListener(_handleControllerChange);
+    _videoRequests?.removeListener(_handleVideoRequests);
     WidgetsBinding.instance.removeObserver(this);
-    windowManager.removeListener(this);
+    _mainWindow?.mainListenable.removeListener(_syncWindowFullscreen);
+    _mainWindow?.mainCloseHandler = null;
     tray.trayManager.removeListener(this);
     _nativeNavigationChannel.setMethodCallHandler(null);
     super.dispose();
+  }
+
+  void _handleVideoRequests() {
+    final path = _videoRequests?.takeLatest();
+    if (path != null && mounted) unawaited(_openVideoPlayer(path));
+  }
+
+  /// Pauses review and podcast playback while a video plays.
+  Future<void> _pauseForVideoPlayer() async {
+    await _fullscreenController.exit();
+    await _fullscreenController.shutdownMedia();
+    await _podcastController(listen: false)?.playback.pause();
+  }
+
+  Future<void> _openVideoPlayer(String path) async {
+    await _pauseForVideoPlayer();
+    if (mounted) await _openVideoPlayerRoute(path);
+  }
+
+  /// Without windowing (widget tests), the player covers the main window.
+  Future<void> _openVideoPlayerRoute(String path) async {
+    await _showAndFocusWindow();
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    final route = VideoPlayerPage.route(path);
+    final previous = _videoPlayerRoute;
+    _videoPlayerRoute = route;
+    if (previous != null && previous.isActive) {
+      navigator.replace(oldRoute: previous, newRoute: route);
+    } else {
+      unawaited(navigator.push(route));
+    }
+    await route.popped;
+    if (!identical(_videoPlayerRoute, route)) return;
+    _videoPlayerRoute = null;
+    if (mounted) await _fullscreenController.resumeMedia();
+  }
+
+  Future<void> _watchVideo() async {
+    final file = await openFile(
+      acceptedTypeGroups: [
+        XTypeGroup(
+          label: context.strings.t('video_files'),
+          extensions: supportedPlayerVideoExtensions.toList(growable: false),
+        ),
+      ],
+    );
+    if (file != null) _videoRequests?.addAll([file.path]);
   }
 
   Future<Object?> _handleNativeNavigation(MethodCall call) async {
@@ -222,11 +299,7 @@ class _AppShellState extends State<AppShell>
 
   Future<void> _initializeDesktopRuntime() async {
     await _desktopRuntime?.initialize(onNotificationSelected: _restoreInbox);
-    try {
-      _windowHidden = !await windowManager.isVisible();
-    } on Object {
-      // The window channel is unavailable in widget tests.
-    }
+    _windowHidden = !(_mainWindow?.mainVisible ?? true);
   }
 
   void _scheduleTraySync() {
@@ -374,24 +447,15 @@ class _AppShellState extends State<AppShell>
     }
   }
 
-  Future<void> _syncWindowFullscreen() async {
-    try {
-      _setWindowFullscreen(await windowManager.isFullScreen());
-    } on Object {
-      // The window channel is unavailable in widget tests and early startup.
-    }
-  }
+  final MainWindowHost? _mainWindow = MainWindowHost.instance;
+
+  void _syncWindowFullscreen() =>
+      _setWindowFullscreen(_mainWindow?.mainFullscreen ?? false);
 
   void _setWindowFullscreen(bool value) {
     if (!mounted || _windowFullscreen == value) return;
     setState(() => _windowFullscreen = value);
   }
-
-  @override
-  void onWindowEnterFullScreen() => _setWindowFullscreen(true);
-
-  @override
-  void onWindowLeaveFullScreen() => _setWindowFullscreen(false);
 
   Future<void> _showOnboarding() async {
     if (!mounted || _onboardingShown) return;
@@ -425,9 +489,10 @@ class _AppShellState extends State<AppShell>
     );
   }
 
-  @override
-  Future<void> onWindowClose() async {
-    if (_controller.inboxMonitorConfig.showTrayIcon) {
+  Future<void> _onMainWindowClose() async {
+    // Closing the main window while a video plays leaves the player open.
+    if (_controller.inboxMonitorConfig.showTrayIcon ||
+        (VideoPlayerWindows.instance?.hasOpenWindows ?? false)) {
       await _hideToTray();
       return;
     }
@@ -438,8 +503,7 @@ class _AppShellState extends State<AppShell>
     try {
       await _fullscreenController.exit();
       await _fullscreenController.shutdownMedia();
-      await windowManager.setSkipTaskbar(true);
-      await windowManager.hide();
+      await _mainWindow?.hideMain();
       _windowHidden = true;
       _scheduleTraySync();
     } on Object {
@@ -458,9 +522,7 @@ class _AppShellState extends State<AppShell>
 
   Future<void> _showAndFocusWindow() async {
     try {
-      await windowManager.setSkipTaskbar(false);
-      await windowManager.show();
-      await windowManager.focus();
+      await _mainWindow?.showMain();
       _windowHidden = false;
       if (_controller.destination == AppDestination.workspace) {
         await _fullscreenController.resumeMedia();
@@ -478,6 +540,12 @@ class _AppShellState extends State<AppShell>
     }
     if (!mounted || _closeDialogOpen) return;
     _closeDialogOpen = true;
+    // The confirmation lives in the main window, which may be hidden while
+    // only a video player is open.
+    if (!(_mainWindow?.mainVisible ?? true)) {
+      await _showAndFocusWindow();
+    }
+    if (!mounted) return;
     final choice = await showDialog<int>(
       context: context,
       builder: (context) => AlertDialog(
@@ -523,9 +591,9 @@ class _AppShellState extends State<AppShell>
         _fullscreenController.shutdownMedia(),
         _podcastController(listen: false)?.shutdown() ?? Future<void>.value(),
         _controller.shutdown(),
+        VideoPlayerWindows.instance?.shutdown() ?? Future<void>.value(),
       ]);
-      await windowManager.setPreventClose(false);
-      await windowManager.destroy();
+      await _mainWindow?.quit();
     } on Object {
       _windowClosing = false;
       rethrow;
@@ -849,6 +917,16 @@ class _AppShellState extends State<AppShell>
               _setDestination(AppDestination.settings),
           const SingleActivator(LogicalKeyboardKey.comma, control: true): () =>
               _setDestination(AppDestination.settings),
+          const SingleActivator(
+            LogicalKeyboardKey.keyO,
+            meta: true,
+            shift: true,
+          ): _watchVideo,
+          const SingleActivator(
+            LogicalKeyboardKey.keyO,
+            control: true,
+            shift: true,
+          ): _watchVideo,
           const SingleActivator(LogicalKeyboardKey.keyO, meta: true): _addFiles,
           const SingleActivator(LogicalKeyboardKey.keyO, control: true):
               _addFiles,
@@ -1010,6 +1088,9 @@ class _AppShellState extends State<AppShell>
                                     key: const ValueKey('inbox'),
                                     onAddFiles: _addFiles,
                                     onImportFolder: _importFolder,
+                                    onWatchVideo: _videoRequests == null
+                                        ? null
+                                        : _watchVideo,
                                   ),
                                   AppDestination.podcast =>
                                     podcast == null
@@ -1240,27 +1321,30 @@ class AppWindowToolbar extends StatefulWidget {
   State<AppWindowToolbar> createState() => _AppWindowToolbarState();
 }
 
-class _AppWindowToolbarState extends State<AppWindowToolbar>
-    with WindowListener {
-  bool _maximized = false;
+class _AppWindowToolbarState extends State<AppWindowToolbar> {
+  AppWindow? _window;
+
+  bool get _maximized => _window?.isMaximized ?? false;
 
   @override
-  void initState() {
-    super.initState();
-    windowManager.addListener(this);
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final window = AppWindow.maybeOf(context);
+    if (identical(window, _window)) return;
+    _window?.listenable.removeListener(_changed);
+    _window = window;
+    _window?.listenable.addListener(_changed);
   }
 
   @override
   void dispose() {
-    windowManager.removeListener(this);
+    _window?.listenable.removeListener(_changed);
     super.dispose();
   }
 
-  @override
-  void onWindowMaximize() => setState(() => _maximized = true);
-
-  @override
-  void onWindowUnmaximize() => setState(() => _maximized = false);
+  void _changed() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1350,14 +1434,14 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
               ),
               const SizedBox(width: 4),
             ],
-            const Expanded(child: DragToMoveArea(child: SizedBox.expand())),
+            const Expanded(child: WindowDragArea(child: SizedBox.expand())),
             if (windows) ...[
               Tooltip(
                 message: context.strings.t('minimize_window'),
                 child: WindowCaptionButton.minimize(
                   key: const Key('window-minimize'),
                   brightness: brightness,
-                  onPressed: () => unawaited(windowManager.minimize()),
+                  onPressed: () => _window?.setMinimized(true),
                 ),
               ),
               Tooltip(
@@ -1368,12 +1452,12 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
                     ? WindowCaptionButton.unmaximize(
                         key: const Key('window-restore'),
                         brightness: brightness,
-                        onPressed: () => unawaited(windowManager.unmaximize()),
+                        onPressed: () => _window?.setMaximized(false),
                       )
                     : WindowCaptionButton.maximize(
                         key: const Key('window-maximize'),
                         brightness: brightness,
-                        onPressed: () => unawaited(windowManager.maximize()),
+                        onPressed: () => _window?.setMaximized(true),
                       ),
               ),
               Tooltip(
@@ -1381,7 +1465,9 @@ class _AppWindowToolbarState extends State<AppWindowToolbar>
                 child: WindowCaptionButton.close(
                   key: const Key('window-close'),
                   brightness: brightness,
-                  onPressed: () => unawaited(windowManager.close()),
+                  onPressed: () => unawaited(
+                    DesktopWindows.instance?.requestMainClose(),
+                  ),
                 ),
               ),
             ],
