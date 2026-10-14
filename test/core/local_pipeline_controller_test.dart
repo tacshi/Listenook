@@ -435,7 +435,7 @@ Replacement text
       preserveUnselectedAlignmentModel: true,
     );
 
-    await controller.downloadLocalModel(
+    await controller.localModels.download(
       LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16.id,
     );
 
@@ -727,8 +727,8 @@ Replacement text
         localModelManager: models,
       );
       final aggregateProgress = <double>[];
-      controller.addListener(() {
-        final progress = controller.localModelDownloadProgress(
+      controller.localModels.addListener(() {
+        final progress = controller.localModels.downloadProgress(
           LocalSpeechModels.qwen3AsrBundle.id,
         );
         if (progress != null) aggregateProgress.add(progress);
@@ -741,11 +741,11 @@ Replacement text
         isFalse,
       );
       await expectLater(
-        controller.downloadLocalModelBundle(LocalSpeechModels.qwen3AsrBundle),
+        controller.localModels.downloadBundle(LocalSpeechModels.qwen3AsrBundle),
         throwsA(isA<LocalModelException>()),
       );
       expect(
-        controller.localModelBundleAvailability(
+        controller.localModels.bundleAvailability(
           LocalSpeechModels.qwen3AsrBundle,
         ),
         LocalModelAvailability.partial,
@@ -756,7 +756,7 @@ Replacement text
       ]);
 
       models.failId = null;
-      await controller.downloadLocalModelBundle(
+      await controller.localModels.downloadBundle(
         LocalSpeechModels.qwen3AsrBundle,
       );
       expect(models.downloads.last, LocalSpeechModels.sileroVadCoreMl.id);
@@ -777,10 +777,43 @@ Replacement text
         ),
       );
       expect(aggregateProgress.last, 1);
-      await controller.deleteLocalModelBundle(LocalSpeechModels.qwen3AsrBundle);
+      await controller.localModels.deleteBundle(
+        LocalSpeechModels.qwen3AsrBundle,
+      );
       expect(models.installed, isEmpty);
     },
   );
+
+  test('model download progress does not notify app listeners', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.dispose);
+    final controller = await fixture.controller(
+      settings: const AppSettings(),
+      localStt: _QwenLocalStt(),
+      alignment: _Alignment(),
+      localModelManager: _QwenModels(),
+    );
+    // Let the startup integrity check finish first.
+    await pumpEventQueue();
+    var appNotifications = 0;
+    final progress = <double?>[];
+    controller.addListener(() => appNotifications++);
+    controller.localModels.addListener(
+      () => progress.add(
+        controller.localModels.downloadProgress(
+          LocalSpeechModels.qwen3AsrBundle.id,
+        ),
+      ),
+    );
+
+    await controller.localModels.downloadBundle(
+      LocalSpeechModels.qwen3AsrBundle,
+    );
+
+    expect(progress.whereType<double>(), hasLength(greaterThan(1)));
+    // Only the finished install reaches the app controller's listeners.
+    expect(appNotifications, 1);
+  });
 
   test('restart returns an interrupted Qwen transcription to ready', () async {
     final fixture = await _Fixture.create();
@@ -1042,7 +1075,7 @@ Replacement text
     await _waitFor(() => controller.inboxJobs.single.status == JobStatus.ready);
     expect(localStt.calls, 0);
 
-    await controller.downloadLocalModel(
+    await controller.localModels.download(
       LocalSpeechModels.mossDiarizeCoreMlInt8.id,
     );
     await _waitFor(

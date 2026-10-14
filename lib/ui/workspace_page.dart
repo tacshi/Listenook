@@ -34,7 +34,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   @override
   Widget build(BuildContext context) {
-    final job = context.watch<AppController>().activeWorkspaceJob;
+    final job = context.select((AppController c) => c.activeWorkspaceJob);
     final showAlignmentNotice = _shouldShowAlignmentNotice(job);
     return SafeArea(
       child: job == null

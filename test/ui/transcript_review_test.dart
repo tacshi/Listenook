@@ -16,6 +16,7 @@ import 'package:listenook/core/models.dart';
 import 'package:listenook/core/transcript_structure_editor.dart';
 import 'package:listenook/core/windowing/main_window_host.dart';
 import 'package:listenook/core/podcast_models.dart';
+import 'package:listenook/data/desktop_tray.dart';
 import 'package:listenook/data/podcast/http_podcast_gateway.dart';
 import 'package:listenook/data/local_media_source_resolver.dart';
 import 'package:listenook/data/transcript_exporter.dart';
@@ -30,7 +31,6 @@ import 'package:listenook/ui/transcript_review.dart';
 import 'package:listenook/ui/workspace_page.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
-import 'package:tray_manager/tray_manager.dart' as tray;
 
 void main() {
   testWidgets('blur toggle preserves selectable widget ancestry', (
@@ -5636,75 +5636,74 @@ void main() {
     expect(tester.getSize(media).width, greaterThan(mediaWidth));
   });
 
-  testWidgets(
-    'window close runs cleanup concurrently before quitting',
-    (tester) async {
-      final events = <String>[];
-      final mainWindow = _installFakeMainWindow(events);
-      final controller = AppController(
-        credentialStore: _Credentials(),
-        settingsRepository: _Settings(),
-        jobRepository: _Jobs([]),
-        mediaService: _Media(),
-        sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
-        exporter: const DefaultTranscriptExporter(),
-      );
-      addTearDown(controller.dispose);
-      await controller.initialize();
-      await controller.updateSettings(
-        controller.settings.copyWith(onboardingComplete: true),
-      );
-      await controller.setDesktopTrayIconVisible(false);
-      final reviewController = ReviewFullscreenController();
-      final podcastRepository = _PlaybackFlushRepository(events);
-      final podcastPlayer = PodcastPlayer(repository: podcastRepository);
-      final podcastController = PodcastController(
-        gateway: MemoryPodcastGateway(),
-        repository: podcastRepository,
-        player: podcastPlayer,
-      );
-      addTearDown(podcastPlayer.dispose);
-      addTearDown(podcastController.dispose);
-      await podcastController.initialize();
-      final mediaReleased = Completer<void>();
-      final mediaOwner = Object();
-      reviewController.registerMediaShutdown(mediaOwner, () async {
-        events.add('media-start');
-        await mediaReleased.future;
-        events.add('media-done');
-      });
+  testWidgets('window close runs cleanup concurrently before quitting', (
+    tester,
+  ) async {
+    final events = <String>[];
+    final mainWindow = _installFakeMainWindow(events);
+    final controller = AppController(
+      credentialStore: _Credentials(),
+      settingsRepository: _Settings(),
+      jobRepository: _Jobs([]),
+      mediaService: _Media(),
+      sourceResolver: const LocalMediaSourceResolver(),
+      sonioxClient: _Soniox(),
+      exporter: const DefaultTranscriptExporter(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.updateSettings(
+      controller.settings.copyWith(onboardingComplete: true),
+    );
+    await controller.setDesktopTrayIconVisible(false);
+    final reviewController = ReviewFullscreenController();
+    final podcastRepository = _PlaybackFlushRepository(events);
+    final podcastPlayer = PodcastPlayer(repository: podcastRepository);
+    final podcastController = PodcastController(
+      gateway: MemoryPodcastGateway(),
+      repository: podcastRepository,
+      player: podcastPlayer,
+    );
+    addTearDown(podcastPlayer.dispose);
+    addTearDown(podcastController.dispose);
+    await podcastController.initialize();
+    final mediaReleased = Completer<void>();
+    final mediaOwner = Object();
+    reviewController.registerMediaShutdown(mediaOwner, () async {
+      events.add('media-start');
+      await mediaReleased.future;
+      events.add('media-done');
+    });
 
-      await tester.pumpWidget(
-        MultiProvider(
-          providers: [
-            ChangeNotifierProvider.value(value: controller),
-            ChangeNotifierProvider.value(value: podcastController),
-          ],
-          child: MaterialApp(
-            locale: const Locale('en'),
-            supportedLocales: AppStrings.supportedLocales,
-            localizationsDelegates: const [AppStrings.delegate],
-            home: AppShell(reviewController: reviewController),
-          ),
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: controller),
+          ChangeNotifierProvider.value(value: podcastController),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: AppShell(reviewController: reviewController),
         ),
-      );
-      await tester.pumpAndSettle();
-      expect(mainWindow.closeHandler, isNotNull);
-      events.clear();
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(mainWindow.closeHandler, isNotNull);
+    events.clear();
 
-      final close = mainWindow.requestClose();
-      await tester.pump();
-      expect(events, ['media-start', 'podcast-save']);
+    final close = mainWindow.requestClose();
+    await tester.pump();
+    expect(events, ['media-start', 'podcast-save']);
 
-      mediaReleased.complete();
-      await close;
-      expect(events, ['media-start', 'podcast-save', 'media-done', 'quit']);
+    mediaReleased.complete();
+    await close;
+    expect(events, ['media-start', 'podcast-save', 'media-done', 'quit']);
 
-      await mainWindow.requestClose();
-      expect(events, ['media-start', 'podcast-save', 'media-done', 'quit']);
-    },
-  );
+    await mainWindow.requestClose();
+    expect(events, ['media-start', 'podcast-save', 'media-done', 'quit']);
+  });
 
   testWidgets('Open Main Window tray action preserves the current tab', (
     tester,
@@ -5724,9 +5723,14 @@ void main() {
       controller.settings.copyWith(onboardingComplete: true),
     );
 
+    final tray = _FakeTray([]);
+
     await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: controller,
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: controller),
+          Provider<DesktopTray>.value(value: tray),
+        ],
         child: const MaterialApp(
           locale: Locale('en'),
           supportedLocales: AppStrings.supportedLocales,
@@ -5738,10 +5742,7 @@ void main() {
     await tester.pumpAndSettle();
     controller.setDestination(AppDestination.library);
 
-    final dynamic appShellState = tester.state(find.byType(AppShell));
-    appShellState.onTrayMenuItemClick(
-      tray.MenuItem(key: 'open-main-window', label: 'Open Main Window'),
-    );
+    tray.listener!.onTrayMenuItemSelected('open-main-window');
     await tester.pumpAndSettle();
 
     expect(controller.destination, AppDestination.library);
@@ -5750,16 +5751,9 @@ void main() {
   testWidgets(
     'menu bar item and close-to-menu-bar work without an Inbox folder',
     (tester) async {
-      const trayChannel = MethodChannel('tray_manager');
-      final messenger =
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       final events = <String>[];
       final mainWindow = _installFakeMainWindow(events);
-      messenger.setMockMethodCallHandler(trayChannel, (call) async {
-        events.add('tray:${call.method}');
-        return null;
-      });
-      addTearDown(() => messenger.setMockMethodCallHandler(trayChannel, null));
+      final tray = _FakeTray(events);
       final controller = AppController(
         credentialStore: _Credentials(),
         settingsRepository: _Settings(),
@@ -5779,8 +5773,11 @@ void main() {
       expect(controller.inboxMonitorConfig.showTrayIcon, isFalse);
 
       await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: controller,
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: controller),
+            Provider<DesktopTray>.value(value: tray),
+          ],
           child: const MaterialApp(
             locale: Locale('en'),
             supportedLocales: AppStrings.supportedLocales,
@@ -5790,26 +5787,14 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(events, isNot(contains('tray:setIcon')));
+      expect(events, isNot(contains('tray:show')));
 
       await controller.setDesktopTrayIconVisible(true);
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pumpAndSettle();
-      expect(events, contains('tray:setIcon'));
+      expect(events, contains('tray:show'));
+      expect(tray.menuKeys, ['status', 'open-main-window', 'settings', 'quit']);
       events.clear();
-
-      if (Platform.isWindows) {
-        await messenger.handlePlatformMessage(
-          'tray_manager',
-          const StandardMethodCodec().encodeMethodCall(
-            const MethodCall('onTrayIconRightMouseDown'),
-          ),
-          null,
-        );
-        await tester.pump();
-        expect(events, contains('tray:popUpContextMenu'));
-        events.clear();
-      }
 
       await mainWindow.requestClose();
 
@@ -5817,8 +5802,14 @@ void main() {
       expect(events, isNot(contains('quit')));
 
       events.clear();
-      await controller.setDesktopTrayIconVisible(false);
+      tray.listener!.onTrayIconClicked();
       await tester.pump();
+      expect(events, contains('show'));
+
+      events.clear();
+      await controller.setDesktopTrayIconVisible(false);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(events, contains('tray:remove'));
       await mainWindow.requestClose();
 
       expect(events, contains('quit'));
@@ -10186,6 +10177,31 @@ class _FakeMainWindow extends ChangeNotifier implements MainWindowHost {
 
   @override
   Future<void> quit() async => events.add('quit');
+}
+
+class _FakeTray implements DesktopTray {
+  _FakeTray(this.events);
+
+  final List<String> events;
+  List<String> menuKeys = const [];
+
+  @override
+  DesktopTrayListener? listener;
+
+  @override
+  void show({
+    required String tooltip,
+    required List<DesktopTrayMenuItem?> menu,
+  }) {
+    events.add('tray:show');
+    menuKeys = [
+      for (final item in menu)
+        if (item != null) item.key,
+    ];
+  }
+
+  @override
+  void remove() => events.add('tray:remove');
 }
 
 _FakeMainWindow _installFakeMainWindow([List<String>? events]) {

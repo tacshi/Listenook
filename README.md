@@ -188,6 +188,10 @@ Real Qwen/Silero tests use `LISTENOOK_TEST_QWEN_PCM`,
 `dart run scripts/benchmark_local_qwen.dart`, with `--worker`,
 `--model-directory`, `--vad-directory`, and `--audio`. Its two-hour M1 Pro gate
 requires RTF below 0.7, worker RSS below 8 GiB, and valid monotonic timestamps.
+Both local benchmarks accept `--reference` with a human-reviewed transcript
+(text, SRT, or WebVTT) and then also print mixed, word, and character error
+rates. `dart run tool/score_transcripts.dart` scores existing transcripts, one
+pair or two folders of matching file names at a time.
 Qwen remains beta pending comparison with MOSS on the same evaluation corpus.
 
 ## Packaging

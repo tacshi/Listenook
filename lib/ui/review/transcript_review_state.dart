@@ -1,6 +1,52 @@
-part of '../transcript_review.dart';
+import 'dart:async';
+import 'dart:io';
+import 'dart:math';
 
-class _TranscriptReviewState extends State<TranscriptReview> {
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
+import 'package:provider/provider.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+
+import '../../core/dictation_comparison.dart';
+import '../../core/models.dart';
+import '../../core/windowing/app_window.dart';
+import '../../core/transcript_structure_editor.dart';
+import '../../data/transcript_exporter.dart';
+import '../../l10n/strings.dart';
+import '../../state/app_controller.dart';
+import '../app_notice.dart';
+import '../dictation_panel.dart';
+import '../job_actions.dart';
+import '../keyboard_shortcuts.dart';
+import '../review_fullscreen_controller.dart';
+import '../transcript_structure_cursor.dart';
+import '../transcript_review.dart';
+import 'ai_brief_pane.dart';
+import 'media_pane.dart';
+import 'mimic_panel.dart';
+import 'review_scaffold.dart';
+import 'review_toolbar.dart';
+import 'transcript_editing.dart';
+import 'transcript_segments.dart';
+
+@visibleForTesting
+Player Function()? debugTranscriptReviewPlayerFactory;
+
+@visibleForTesting
+Future<bool> Function(String path)? debugTranscriptReviewSourceExists;
+
+@visibleForTesting
+VoidCallback? debugTranscriptReviewScheduleMediaFrame;
+
+@visibleForTesting
+SentenceRepeatLoopController? Function(Player player)?
+debugTranscriptReviewSentenceRepeatLoopFactory;
+
+class TranscriptReviewState extends State<TranscriptReview> {
   final _dictationAttempts = <String, _DictationAttempt>{};
   final _dictationText = TextEditingController();
   final _dictationFocus = FocusNode();
@@ -21,10 +67,10 @@ class _TranscriptReviewState extends State<TranscriptReview> {
 
   bool get _playbackActive => _playing || _mimicWaiting;
 
-  static const _reviewDividerWidth = 9.0;
+  static const reviewDividerWidth = 9.0;
   static const _minimumReviewPaneWidth = 280.0;
   static const _minimumCompanionPaneWidth = 420.0;
-  static const _videoTitleHeaderHeight = 52.0;
+  static const videoTitleHeaderHeight = 52.0;
   static const _mediaModeTransitionDuration = Duration(milliseconds: 320);
   static const _missingSourceAudioHeight = 112.0;
   static const _structureNoticeDuration = Duration(seconds: 4);
@@ -88,7 +134,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
   String _waveformSource = '';
   String? _waveformPath;
   bool _waveformLoading = false;
-  _ReviewMediaMode _mediaMode = _ReviewMediaMode.video;
+  ReviewMediaMode _mediaMode = ReviewMediaMode.video;
   double? _transcriptPaneWidth;
   double? _companionLeftPaneFraction;
   bool _companionLayoutActive = false;
@@ -260,7 +306,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
       _waveformSource = '';
       _waveformPath = null;
       _waveformLoading = false;
-      _mediaMode = _ReviewMediaMode.video;
+      _mediaMode = ReviewMediaMode.video;
       _companionLeftPaneFraction = null;
       _companionLayoutActive = false;
       if (_aiBriefScroll.hasClients) _aiBriefScroll.jumpTo(0);
@@ -610,7 +656,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
       _ensurePlayer();
       _openedPath = job.sourcePath;
       if (!(job.metadata?.hasVideo ?? false) ||
-          _mediaMode == _ReviewMediaMode.audio) {
+          _mediaMode == ReviewMediaMode.audio) {
         unawaited(_loadWaveform(job));
       }
       final resumePosition = _appController.playbackPositionFor(job.id);
@@ -680,11 +726,11 @@ class _TranscriptReviewState extends State<TranscriptReview> {
   }
 
   void _toggleMediaMode(TranscriptionJob job) {
-    final nextMode = _mediaMode == _ReviewMediaMode.video
-        ? _ReviewMediaMode.audio
-        : _ReviewMediaMode.video;
+    final nextMode = _mediaMode == ReviewMediaMode.video
+        ? ReviewMediaMode.audio
+        : ReviewMediaMode.video;
     setState(() => _mediaMode = nextMode);
-    if (nextMode == _ReviewMediaMode.audio) unawaited(_loadWaveform(job));
+    if (nextMode == ReviewMediaMode.audio) unawaited(_loadWaveform(job));
   }
 
   bool _supportsMediaModeSwitch(TranscriptionJob job) {
@@ -808,7 +854,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     return Column(
       key: const Key('transcript-review-surface'),
       children: [
-        _UnifiedReviewToolbar(
+        UnifiedReviewToolbar(
           dictationOpen: _dictationOpen,
           onToggleDictation: _dictationOpen || _currentSentenceId != null
               ? _toggleDictation
@@ -822,7 +868,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               _editingSegmentId == null && _editingTranslationSegmentId == null
               ? _toggleBlindListening
               : null,
-          role: _ReviewToolbarRole.global,
+          role: ReviewToolbarRole.global,
           job: job,
           viewMode: _viewMode,
           showAiBrief: _showAiBrief,
@@ -863,7 +909,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               final hasVideo = job.metadata?.hasVideo ?? false;
               final canSwitchMediaMode = _supportsMediaModeSwitch(job);
               final audioMode =
-                  canSwitchMediaMode && _mediaMode == _ReviewMediaMode.audio;
+                  canSwitchMediaMode && _mediaMode == ReviewMediaMode.audio;
               final transcriptPane = _buildTranscriptPane(
                 controller: controller,
                 job: job,
@@ -879,7 +925,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               );
               final companionAvailable =
                   constraints.maxWidth >=
-                  (_minimumCompanionPaneWidth * 2 + _reviewDividerWidth);
+                  (_minimumCompanionPaneWidth * 2 + reviewDividerWidth);
               final companionActive = _showAiBrief && companionAvailable;
               final audioCompanion =
                   companionAvailable && (!hasVideo || audioMode);
@@ -893,7 +939,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                       key: const Key('audio-review-media'),
                       child: _buildMediaArea(
                         job,
-                        presentation: _ReviewMediaMode.audio,
+                        presentation: ReviewMediaMode.audio,
                         fillHeight: false,
                       ),
                     ),
@@ -931,7 +977,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                   children: [
                     _buildMediaArea(
                       job,
-                      presentation: _ReviewMediaMode.audio,
+                      presentation: ReviewMediaMode.audio,
                       fillHeight: false,
                     ),
                     const Divider(height: 1),
@@ -943,7 +989,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               // Structure adds another persistent transcript action. Keep the
               // minimum workspace width stacked so neither pane is cramped.
               final sideBySide = constraints.maxWidth >= 880;
-              final availableWidth = constraints.maxWidth - _reviewDividerWidth;
+              final availableWidth = constraints.maxWidth - reviewDividerWidth;
               final maximumPaneWidth = availableWidth - _minimumReviewPaneWidth;
               final preferredTranscriptWidth =
                   _transcriptPaneWidth ?? availableWidth * .45;
@@ -962,7 +1008,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                   .clamp(180.0, 300.0)
                   .toDouble();
               final stackedMediaHeight =
-                  _videoTitleHeaderHeight +
+                  videoTitleHeaderHeight +
                   1 +
                   stackedVideoHeight +
                   VideoTransport.height;
@@ -978,7 +1024,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                   ? 0.0
                   : stackedMediaHeight + 1;
               final videoTranscriptRect = Rect.fromLTWH(
-                sideBySide ? videoWidth + _reviewDividerWidth : 0,
+                sideBySide ? videoWidth + reviewDividerWidth : 0,
                 videoTranscriptTop,
                 sideBySide ? transcriptWidth : constraints.maxWidth,
                 (constraints.maxHeight - videoTranscriptTop)
@@ -1005,8 +1051,8 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               final media = _buildMediaArea(
                 job,
                 presentation: audioMode
-                    ? _ReviewMediaMode.audio
-                    : _ReviewMediaMode.video,
+                    ? ReviewMediaMode.audio
+                    : ReviewMediaMode.video,
                 fillHeight: !audioMode && sideBySide,
                 videoHeight: sideBySide ? null : stackedVideoHeight,
               );
@@ -1080,14 +1126,14 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                         key: const ValueKey('vertical-divider-slot'),
                         left: videoWidth * (1 - progress),
                         top: 0,
-                        width: _reviewDividerWidth,
+                        width: reviewDividerWidth,
                         height: constraints.maxHeight,
                         child: sideBySide
                             ? IgnorePointer(
                                 ignoring: progress > 0,
                                 child: Opacity(
                                   opacity: 1 - progress,
-                                  child: _ReviewSplitDivider(
+                                  child: ReviewSplitDivider(
                                     onDragUpdate: (delta) => _resizeReviewPanes(
                                       delta,
                                       availableWidth,
@@ -1142,7 +1188,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     required Widget right,
     bool showRight = true,
   }) {
-    final availableWidth = width - _reviewDividerWidth;
+    final availableWidth = width - reviewDividerWidth;
     final leftWidth = showRight
         ? _resolvedCompanionLeftWidth(availableWidth)
         : width;
@@ -1155,7 +1201,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
           child: left,
         ),
         if (showRight) ...[
-          _ReviewSplitDivider(
+          ReviewSplitDivider(
             dividerKey: const Key('ai-brief-companion-divider'),
             onDragUpdate: (delta) =>
                 _resizeCompanionPanes(delta, availableWidth),
@@ -1177,14 +1223,14 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     required Widget transcriptPane,
     required Widget aiBriefPane,
   }) {
-    final availableWidth = constraints.maxWidth - _reviewDividerWidth;
+    final availableWidth = constraints.maxWidth - reviewDividerWidth;
     final leftWidth = _resolvedCompanionLeftWidth(availableWidth);
     final aspect = _videoAspectRatio.isFinite && _videoAspectRatio > 0
         ? _videoAspectRatio
         : 16 / 9;
     final availableViewportHeight =
         (constraints.maxHeight -
-                _videoTitleHeaderHeight -
+                videoTitleHeaderHeight -
                 VideoTransport.height -
                 2)
             .clamp(0.0, double.infinity)
@@ -1195,7 +1241,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
       availableHeight: availableViewportHeight,
     );
     final mediaHeight =
-        _videoTitleHeaderHeight + 1 + viewportHeight + VideoTransport.height;
+        videoTitleHeaderHeight + 1 + viewportHeight + VideoTransport.height;
     final sourcePane = Column(
       key: const Key('video-ai-brief-source-column'),
       children: [
@@ -1204,7 +1250,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
           height: mediaHeight,
           child: _buildMediaArea(
             job,
-            presentation: _ReviewMediaMode.video,
+            presentation: ReviewMediaMode.video,
             fillHeight: true,
             videoHeight: viewportHeight,
           ),
@@ -1242,21 +1288,21 @@ class _TranscriptReviewState extends State<TranscriptReview> {
 
   Widget _buildMediaArea(
     TranscriptionJob job, {
-    required _ReviewMediaMode presentation,
+    required ReviewMediaMode presentation,
     required bool fillHeight,
     double? videoHeight,
   }) {
     final hasVideo = job.metadata?.hasVideo ?? false;
     final canSwitchMediaMode = _supportsMediaModeSwitch(job);
     final audioMode =
-        canSwitchMediaMode && presentation == _ReviewMediaMode.audio;
+        canSwitchMediaMode && presentation == ReviewMediaMode.audio;
     final showVideoTitle = hasVideo && !audioMode;
 
     Widget withVideoTitle(Widget child) {
       if (!showVideoTitle) return child;
       return Column(
         children: [
-          _VideoMediaHeader(job: job),
+          VideoMediaHeader(job: job),
           const Divider(height: 1),
           if (fillHeight) Expanded(child: child) else child,
         ],
@@ -1269,10 +1315,10 @@ class _TranscriptReviewState extends State<TranscriptReview> {
         leading: const Icon(Icons.link_off_rounded),
         actions: [
           if (canSwitchMediaMode)
-            _MediaModeButton(
+            MediaModeButton(
               destination: audioMode
-                  ? _ReviewMediaMode.video
-                  : _ReviewMediaMode.audio,
+                  ? ReviewMediaMode.video
+                  : ReviewMediaMode.audio,
               onPressed: () => _toggleMediaMode(job),
             ),
           TextButton(
@@ -1326,7 +1372,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     if (audioMode) return audio;
     late final Widget pane;
     if (hasVideo) {
-      final video = _MediaPane(
+      final video = MediaPane(
         sentenceNavigation: _sentenceNavigationControls(),
         job: job,
         video: _video!,
@@ -1356,7 +1402,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     if (!fillHeight && hasVideo) {
       return SizedBox(
         height:
-            _videoTitleHeaderHeight +
+            videoTitleHeaderHeight +
             1 +
             (videoHeight ?? 180) +
             VideoTransport.height,
@@ -1384,7 +1430,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
       children: [
         if (job.translationState.status != TranslationStatus.idle &&
             job.translationState.status != TranslationStatus.completed)
-          _TranslationStatusStrip(job: job),
+          TranslationStatusStrip(job: job),
         if (controller.settings.showSpeakers && document.speakers.isNotEmpty)
           IgnorePointer(
             ignoring: _blindListening,
@@ -1422,7 +1468,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                     if (!structureInteractionsActive) {
                       return const SizedBox(height: 8);
                     }
-                    return _TranscriptMergeBoundary(
+                    return TranscriptMergeBoundary(
                       key: ValueKey('structure-merge-${segments[index].id}'),
                       enabled: _structureMergeAllowed(document, index),
                       onMerge: () => _applyStructureEdit(
@@ -1435,7 +1481,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
                     final tokens =
                         _tokensBySegment[segment.id] ??
                         const <TranscriptToken>[];
-                    return _TranscriptSegmentGroup(
+                    return TranscriptSegmentGroup(
                       key: ValueKey('group-${segment.id}'),
                       blindListening: _blindListening,
                       blurred:
@@ -1506,7 +1552,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
     return Column(
       key: const Key('transcript-pane'),
       children: [
-        _UnifiedReviewToolbar(
+        UnifiedReviewToolbar(
           dictationOpen: _dictationOpen,
           onToggleDictation: _dictationOpen || _currentSentenceId != null
               ? _toggleDictation
@@ -1520,7 +1566,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
               _editingSegmentId == null && _editingTranslationSegmentId == null
               ? _toggleBlindListening
               : null,
-          role: _ReviewToolbarRole.transcript,
+          role: ReviewToolbarRole.transcript,
           job: job,
           viewMode: _viewMode,
           showAiBrief: _showAiBrief,
@@ -1618,8 +1664,8 @@ class _TranscriptReviewState extends State<TranscriptReview> {
   }) => Column(
     key: const Key('ai-brief-pane'),
     children: [
-      _UnifiedReviewToolbar(
-        role: _ReviewToolbarRole.aiBrief,
+      UnifiedReviewToolbar(
+        role: ReviewToolbarRole.aiBrief,
         job: job,
         viewMode: _viewMode,
         showAiBrief: _showAiBrief,
@@ -1637,7 +1683,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
       ),
       const Divider(height: 1),
       Expanded(
-        child: _AiBriefPane(
+        child: AiBriefPane(
           job: job,
           document: document,
           scrollController: _aiBriefScroll,
@@ -1654,10 +1700,10 @@ class _TranscriptReviewState extends State<TranscriptReview> {
       showAppNotice(context, message: context.strings.t('ai_brief_configure'));
       return;
     }
-    final result = await _showAiBriefGenerationDialog(context, job);
+    final result = await showAiBriefGenerationDialog(context, job);
     if (result == null || !mounted) return;
     if (job.aiBrief?.edited ?? false) {
-      final replace = await _showDialogAfterDismissal<bool>(
+      final replace = await showDialogAfterDismissal<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: Text(context.strings.t('ai_brief_edited_refresh_title')),
@@ -1709,7 +1755,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
   }
 
   Widget _buildVideoControls(VideoState _) {
-    return _ReviewFullscreenControlsHost(
+    return ReviewFullscreenControlsHost(
       playback: _playbackTick,
       isActive: () => _fullscreenController.isActive,
       overlay: _fullscreenOverlay,
@@ -2206,7 +2252,7 @@ class _TranscriptReviewState extends State<TranscriptReview> {
         segment != null &&
         _playbackActive &&
         _manualRepeatingSegmentId == segment.id;
-    return _MimicPanel(
+    return MimicPanel(
       targetLabel: segment == null
           ? null
           : '${context.strings.t('dictation_sentence')} ${index + 1} · ${formatClock(segment.startMs)}',
@@ -2918,4 +2964,21 @@ class _TranscriptReviewState extends State<TranscriptReview> {
         entry.key: List.unmodifiable(entry.value),
     };
   }
+}
+
+SentenceRepeatLoopController? _mpvSentenceRepeatLoopFor(Player player) {
+  final platform = player.platform;
+  if (platform is! NativePlayer) return null;
+  return MpvSentenceRepeatLoopController(platform.setProperty);
+}
+
+class _ReviewPlaybackTick extends ChangeNotifier {
+  void tick() => notifyListeners();
+}
+
+class _DictationAttempt {
+  _DictationAttempt(this.reference);
+  String reference;
+  String draft = '';
+  DictationResult? result;
 }

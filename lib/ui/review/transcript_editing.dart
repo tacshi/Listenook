@@ -1,4 +1,15 @@
-part of '../transcript_review.dart';
+import 'dart:async';
+import 'dart:math';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../../core/models.dart';
+import '../../core/transcript_structure_editor.dart';
+import '../../l10n/strings.dart';
+import '../transcript_structure_cursor.dart';
+import '../transcript_review.dart';
+import 'transcript_segments.dart';
 
 class TranscriptSegmentEditor extends StatefulWidget {
   const TranscriptSegmentEditor({
@@ -117,7 +128,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (widget.showTimestamp || _showsSpeaker)
-          _TranscriptSegmentMetadata(
+          TranscriptSegmentMetadata(
             segment: widget.segment,
             query: widget.query,
             speakerName: widget.speakerName,
@@ -150,7 +161,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
               key: ValueKey('segment-original-line-${widget.segment.id}'),
               child: line,
             )
-          : _TranscriptSegmentSurface(
+          : TranscriptSegmentSurface(
               surfaceKey: ValueKey('segment-card-${widget.segment.id}'),
               hovered: _hovered,
               isCurrent: widget.isCurrent,
@@ -243,7 +254,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (widget.isRepeating)
-              _SentenceRepeatButton(
+              SentenceRepeatButton(
                 segmentId: widget.segment.id,
                 isRepeating: true,
                 onPressed: widget.onToggleRepeat,
@@ -252,14 +263,14 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
               key: ValueKey('segment-cancel-${widget.segment.id}'),
               tooltip: context.strings.t('cancel'),
               onPressed: _saving ? null : widget.onCancel,
-              style: _compactSegmentActionStyle(context),
+              style: compactSegmentActionStyle(context),
               icon: const Icon(Icons.close_rounded, size: 18),
             ),
             IconButton(
               key: ValueKey('segment-save-${widget.segment.id}'),
               tooltip: context.strings.t('save'),
               onPressed: _saving ? null : _save,
-              style: _compactSegmentActionStyle(context),
+              style: compactSegmentActionStyle(context),
               icon: _saving
                   ? const SizedBox.square(
                       dimension: 16,
@@ -281,25 +292,25 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _SegmentActionVisibility(
+            SegmentActionVisibility(
               opacityKey: ValueKey(
                 'segment-repeat-opacity-${widget.segment.id}',
               ),
               visible: repeatVisible,
-              child: _SentenceRepeatButton(
+              child: SentenceRepeatButton(
                 segmentId: widget.segment.id,
                 isRepeating: widget.isRepeating,
                 onPressed: widget.onToggleRepeat,
               ),
             ),
-            _SegmentActionVisibility(
+            SegmentActionVisibility(
               opacityKey: ValueKey('segment-edit-opacity-${widget.segment.id}'),
               visible: editVisible,
               child: IconButton(
                 key: ValueKey('segment-edit-${widget.segment.id}'),
                 tooltip: context.strings.t('edit'),
                 onPressed: widget.blindListening ? null : widget.onEdit,
-                style: _compactSegmentActionStyle(context),
+                style: compactSegmentActionStyle(context),
                 icon: const Icon(Icons.edit_outlined, size: 18),
               ),
             ),
@@ -499,8 +510,8 @@ class _TranscriptSplitPreviewPainter extends CustomPainter {
       oldDelegate.color != color;
 }
 
-class _TranscriptMergeBoundary extends StatefulWidget {
-  const _TranscriptMergeBoundary({
+class TranscriptMergeBoundary extends StatefulWidget {
+  const TranscriptMergeBoundary({
     super.key,
     required this.enabled,
     required this.onMerge,
@@ -510,11 +521,11 @@ class _TranscriptMergeBoundary extends StatefulWidget {
   final Future<void> Function() onMerge;
 
   @override
-  State<_TranscriptMergeBoundary> createState() =>
+  State<TranscriptMergeBoundary> createState() =>
       _TranscriptMergeBoundaryState();
 }
 
-class _TranscriptMergeBoundaryState extends State<_TranscriptMergeBoundary> {
+class _TranscriptMergeBoundaryState extends State<TranscriptMergeBoundary> {
   bool _hovered = false;
 
   @override

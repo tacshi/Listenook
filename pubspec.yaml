@@ -41,7 +41,7 @@ dependencies:
     path: third_party/desktop_drop
   file_selector: ^1.1.0
   flutter_local_notifications: ^22.2.0
-  flutter_secure_storage: ^10.3.1
+  flutter_secure_storage: ^11.2.0
   flutter_widget_from_html_core: ^0.17.4
   http: ^1.6.0
   intl: ^0.20.2
@@ -53,7 +53,9 @@ dependencies:
   package_info_plus: ^10.2.1
   provider: ^6.1.5+1
   scrollable_positioned_list: ^0.3.8
-  tray_manager: ^0.5.3
+  # 0.8 needs nativeapi 0.5, which calls Isolate.create; the SDK pinned in
+  # .fvmrc does not have it yet.
+  tray_manager: ^0.7.0
   uuid: ^4.5.2
   windows_single_instance: ^1.2.0
   win32_registry: ^3.0.3

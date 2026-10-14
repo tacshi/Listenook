@@ -1,7 +1,11 @@
-part of '../transcript_review.dart';
+import 'package:flutter/material.dart';
 
-class _ReviewSplitDivider extends StatelessWidget {
-  const _ReviewSplitDivider({
+import '../../l10n/strings.dart';
+import 'transcript_review_state.dart';
+
+class ReviewSplitDivider extends StatelessWidget {
+  const ReviewSplitDivider({
+    super.key,
     this.dividerKey = const Key('video-transcript-divider'),
     required this.onDragUpdate,
   });
@@ -19,7 +23,7 @@ class _ReviewSplitDivider extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         onHorizontalDragUpdate: (details) => onDragUpdate(details.delta.dx),
         child: SizedBox(
-          width: _TranscriptReviewState._reviewDividerWidth,
+          width: TranscriptReviewState.reviewDividerWidth,
           child: Center(
             child: VerticalDivider(
               width: 1,
@@ -32,8 +36,9 @@ class _ReviewSplitDivider extends StatelessWidget {
   );
 }
 
-class _ReviewContentTabs extends StatelessWidget {
-  const _ReviewContentTabs({
+class ReviewContentTabs extends StatelessWidget {
+  const ReviewContentTabs({
+    super.key,
     required this.width,
     this.aiBriefEnabled = true,
     required this.showAiBrief,

@@ -1,45 +1,54 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:math';
-import 'dart:ui' as ui;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
-import 'package:file_selector/file_selector.dart';
-import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
-import 'package:provider/provider.dart';
-import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
-import '../core/dictation_comparison.dart';
-import '../core/models.dart';
-import '../core/windowing/app_window.dart';
-import '../core/transcript_structure_editor.dart';
-import '../data/transcript_exporter.dart';
-import '../l10n/strings.dart';
-import '../state/app_controller.dart';
-import 'app_notice.dart';
-import 'dictation_panel.dart';
-import 'job_actions.dart';
-import 'keyboard_shortcuts.dart';
 import 'review_fullscreen_controller.dart';
-import 'transcript_export_dialog.dart';
-import 'transcript_structure_cursor.dart';
+import 'review/transcript_review_state.dart';
 
-part 'review/ai_brief_pane.dart';
-part 'review/highlighted_text.dart';
-part 'review/listening_widgets.dart';
-part 'review/media_pane.dart';
-part 'review/mimic_panel.dart';
-part 'review/review_scaffold.dart';
-part 'review/review_toolbar.dart';
-part 'review/seek_helpers.dart';
-part 'review/speaker_strip.dart';
-part 'review/transcript_editing.dart';
-part 'review/transcript_review_state.dart';
-part 'review/transcript_segments.dart';
+export 'review/highlighted_text.dart' show PlaybackHighlightedText;
+export 'review/listening_widgets.dart'
+    show
+        BlindListeningBlur,
+        SearchHighlightedText,
+        SentenceNavigationControls,
+        SentenceRevealButton,
+        currentListeningSegmentIndex,
+        sentenceNavigationTarget;
+export 'review/media_pane.dart'
+    show
+        AudioTransport,
+        PlaybackSpeedButton,
+        VideoFullscreenKeyboardRegion,
+        VideoTransport,
+        WaveformScrubber,
+        formatPlaybackRate,
+        videoViewportHeight;
+export 'review/seek_helpers.dart'
+    show
+        LatestSeekDispatcher,
+        TranscriptSeekCallback,
+        TranscriptSeekReason,
+        TranscriptSegmentSeekCallback,
+        currentTranscriptSegmentIndex,
+        fullscreenTranscriptSubtitle,
+        fullscreenTranscriptWordRange,
+        isRepeatLoopEndCrossing,
+        isRepeatLoopWrap,
+        sentenceRepeatEndMs,
+        sentenceRepeatRestartMs,
+        sentenceRepeatStartMs,
+        shouldAutoFollowPlaybackSegment,
+        shouldFocusTranscriptAfterSeek,
+        shouldFocusTranscriptOnPlaybackResume,
+        shouldRestartRepeatedSentence;
+export 'review/speaker_strip.dart' show SpeakerStrip;
+export 'review/transcript_editing.dart' show TranscriptSegmentEditor;
+export 'review/transcript_review_state.dart'
+    show
+        debugTranscriptReviewPlayerFactory,
+        debugTranscriptReviewScheduleMediaFrame,
+        debugTranscriptReviewSentenceRepeatLoopFactory,
+        debugTranscriptReviewSourceExists;
 
 class TranscriptReview extends StatefulWidget {
   const TranscriptReview({
@@ -51,23 +60,8 @@ class TranscriptReview extends StatefulWidget {
   final ReviewFullscreenController? fullscreenController;
 
   @override
-  State<TranscriptReview> createState() => _TranscriptReviewState();
+  State<TranscriptReview> createState() => TranscriptReviewState();
 }
-
-enum _ReviewMediaMode { video, audio }
-
-@visibleForTesting
-Player Function()? debugTranscriptReviewPlayerFactory;
-
-@visibleForTesting
-Future<bool> Function(String path)? debugTranscriptReviewSourceExists;
-
-@visibleForTesting
-VoidCallback? debugTranscriptReviewScheduleMediaFrame;
-
-@visibleForTesting
-SentenceRepeatLoopController? Function(Player player)?
-debugTranscriptReviewSentenceRepeatLoopFactory;
 
 abstract interface class SentenceRepeatLoopController {
   Future<void> setRange({required int startMs, required int endMs});
@@ -107,21 +101,4 @@ class MpvSentenceRepeatLoopController implements SentenceRepeatLoopController {
 
   static String _mpvTimestamp(int milliseconds) =>
       (milliseconds / 1000).toStringAsFixed(3);
-}
-
-SentenceRepeatLoopController? _mpvSentenceRepeatLoopFor(Player player) {
-  final platform = player.platform;
-  if (platform is! NativePlayer) return null;
-  return MpvSentenceRepeatLoopController(platform.setProperty);
-}
-
-class _ReviewPlaybackTick extends ChangeNotifier {
-  void tick() => notifyListeners();
-}
-
-class _DictationAttempt {
-  _DictationAttempt(this.reference);
-  String reference;
-  String draft = '';
-  DictationResult? result;
 }

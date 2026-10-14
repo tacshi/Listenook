@@ -1,4 +1,12 @@
-part of '../transcript_review.dart';
+import 'dart:async';
+import 'dart:math';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+
+import '../../core/models.dart';
+import 'highlighted_text.dart';
 
 class LatestSeekDispatcher {
   LatestSeekDispatcher(this._performSeek);
@@ -250,7 +258,7 @@ TextRange? fullscreenTranscriptWordRange(
             token.startMs >= segment.startMs && token.startMs < segment.endMs,
       )
       .toList(growable: false);
-  return _currentTimedTextRange(
+  return currentTimedTextRange(
     text: original,
     tokens: tokens,
     positionMs: positionMs,

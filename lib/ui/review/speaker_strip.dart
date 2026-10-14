@@ -1,8 +1,16 @@
-part of '../transcript_review.dart';
+import 'dart:async';
+
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../core/models.dart';
+import '../../l10n/strings.dart';
+import '../../state/app_controller.dart';
 
 const _speakerHues = <double>[270, 210, 155, 25, 335, 185];
 
-Color _speakerColor(BuildContext context, String speakerId) {
+Color colorForSpeaker(BuildContext context, String speakerId) {
   final numericId = int.tryParse(speakerId);
   var seed = numericId == null ? 0 : numericId - 1;
   if (numericId == null) {
@@ -77,7 +85,7 @@ class _SpeakerStripState extends State<SpeakerStrip> {
           separatorBuilder: (_, __) => const SizedBox(width: 8),
           itemBuilder: (context, index) {
             final speaker = widget.document.speakers[index];
-            final speakerColor = _speakerColor(context, speaker.id);
+            final speakerColor = colorForSpeaker(context, speaker.id);
             return ActionChip(
               avatarBoxConstraints: const BoxConstraints.tightFor(
                 width: 18,
