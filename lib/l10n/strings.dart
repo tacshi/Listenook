@@ -377,8 +377,6 @@ class AppStrings {
     'player_subtitle_picture': 'Picture subtitles cannot be shown',
     'player_choose_subtitle_file': 'Choose subtitle file…',
     'player_loading_subtitles': 'Reading subtitles…',
-    'player_no_subtitles':
-        'No subtitles found. Choose a subtitle file to jump and repeat by sentence.',
     'player_subtitle_display_only':
         'This subtitle can be shown, but not navigated by sentence.',
     'subtitle_files': 'Subtitles',
@@ -1187,7 +1185,6 @@ class AppStrings {
     'player_subtitle_picture': '无法显示图形字幕',
     'player_choose_subtitle_file': '选择字幕文件…',
     'player_loading_subtitles': '正在读取字幕…',
-    'player_no_subtitles': '未找到字幕。选择字幕文件后即可按句跳转和重复。',
     'player_subtitle_display_only': '此字幕可以显示，但无法按句跳转。',
     'subtitle_files': '字幕',
     'video_files': '视频',

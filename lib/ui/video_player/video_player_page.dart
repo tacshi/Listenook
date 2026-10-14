@@ -282,7 +282,6 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     if (!controller.opened) return null;
     if (controller.loadingCues) return strings.t('player_loading_subtitles');
     if (controller.cueError != null) return strings.error(controller.cueError);
-    if (controller.sources.isEmpty) return strings.t('player_no_subtitles');
     final selected = controller.selected;
     if (selected != null && !selected.navigable) {
       return strings.t('player_subtitle_display_only');
