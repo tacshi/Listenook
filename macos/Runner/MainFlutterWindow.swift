@@ -1,52 +1,273 @@
 import Cocoa
 import FlutterMacOS
 
-class MainFlutterWindow: NSWindow {
-  private let applicationChannels = ApplicationChannels()
-  private var transcriptStructureCursor: TranscriptStructureCursorController?
+// The app has no window class of its own any more: every window (the main
+// window and each video player) is created from Dart through Flutter's
+// windowing API as a view of the one engine `AppDelegate` starts. This file
+// keeps the native helpers those windows need.
 
-  override func awakeFromNib() {
-    let flutterViewController = FlutterViewController()
-    let windowFrame = self.frame
-    self.contentViewController = flutterViewController
-    self.setFrame(windowFrame, display: true)
+/// Native operations on the windows Dart creates through Flutter's windowing
+/// API (`lib/core/windowing/window_handle_channel.dart`), for what that API
+/// does not offer: hiding without destroying, starting hidden, aspect-ratio
+/// locking, title bar styling and wiring the main window into native services.
+///
+/// Windows are addressed by their `NSWindow*` as an integer. A handle is only
+/// honoured if it still names one of the app's windows, so a call racing a
+/// window's destruction is a no-op rather than a dangling pointer.
+final class WindowHandleChannel: NSObject {
+  static let shared = WindowHandleChannel()
 
-    RegisterGeneratedPlugins(registry: flutterViewController)
-    applicationChannels.register(
-      with: flutterViewController.engine.binaryMessenger
-    )
-    let transcriptStructureCursor = TranscriptStructureCursorController(
-      hostView: flutterViewController.view
-    )
-    transcriptStructureCursor.register(
-      with: flutterViewController.engine.binaryMessenger
-    )
-    self.transcriptStructureCursor = transcriptStructureCursor
+  private var channel: FlutterMethodChannel?
+  private(set) weak var mainWindow: NSWindow?
+  private var titlebarFaders: [ObjectIdentifier: PlayerTitlebarFader] = [:]
+  private var keepHidden: HiddenAtLaunch?
+  let transcriptStructureCursor = TranscriptStructureCursorController()
 
-    super.awakeFromNib()
+  func attach(engine: FlutterEngine) {
+    let channel = FlutterMethodChannel(
+      name: "app.capyvibe.listenook/window_handle",
+      binaryMessenger: engine.binaryMessenger
+    )
+    channel.setMethodCallHandler { [weak self] call, result in
+      self?.handle(call, result: result)
+    }
+    self.channel = channel
+    transcriptStructureCursor.register(with: engine.binaryMessenger)
   }
 
-  override func sendEvent(_ event: NSEvent) {
-    super.sendEvent(event)
-    if event.type == .mouseExited {
-      transcriptStructureCursor?.deactivateAll()
+  /// Brings the main window forward (Dock, menu items, a second launch).
+  func showMainWindow() {
+    guard let window = mainWindow else { return }
+    show(window)
+  }
+
+  private func window(for call: FlutterMethodCall) -> NSWindow? {
+    let live = Set(NSApp.windows.map(ObjectIdentifier.init))
+    titlebarFaders = titlebarFaders.filter { live.contains($0.key) }
+
+    guard let args = call.arguments as? [String: Any],
+          let handle = (args["handle"] as? NSNumber)?.intValue,
+          let pointer = UnsafeRawPointer(bitPattern: handle) else { return nil }
+    return NSApp.windows.first { Unmanaged.passUnretained($0).toOpaque() == pointer }
+  }
+
+  private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let window = window(for: call) else {
+      // Destroyed already, or never one of ours: nothing to do.
+      result(nil)
+      return
+    }
+    let args = call.arguments as? [String: Any] ?? [:]
+    switch call.method {
+    case "hide":
+      if window === mainWindow { transcriptStructureCursor.deactivateAll() }
+      window.orderOut(nil)
+      result(nil)
+
+    case "show":
+      show(window)
+      result(nil)
+
+    case "setAspectRatio":
+      if let ratio = (args["aspectRatio"] as? NSNumber)?.doubleValue, ratio > 0 {
+        window.contentAspectRatio = NSSize(width: ratio, height: 1)
+      } else {
+        // Assigning resize increments is what clears an aspect-ratio lock.
+        window.contentResizeIncrements = NSSize(width: 1, height: 1)
+      }
+      result(nil)
+
+    case "center":
+      window.center()
+      result(nil)
+
+    case "startDrag":
+      // Reply first: performDrag tracks the mouse until the button goes up.
+      result(nil)
+      if let event = NSApp.currentEvent,
+         event.type == .leftMouseDown || event.type == .leftMouseDragged {
+        window.performDrag(with: event)
+      }
+
+    case "registerMainWindow":
+      registerMainWindow(window, startHidden: args["startHidden"] as? Bool ?? false)
+      result(nil)
+
+    case "setSkipTaskbar":
+      // Windows only; macOS has no taskbar entry per window.
+      result(nil)
+
+    case "stylePlayerWindow":
+      window.appearance = NSAppearance(named: .darkAqua)
+      window.backgroundColor = .black
+      window.collectionBehavior.insert(.fullScreenPrimary)
+      // Video first: the picture fills the window and the title bar is laid
+      // over it, transparent, fading with the player's controls.
+      window.styleMask.insert(.fullSizeContentView)
+      window.titlebarAppearsTransparent = true
+      window.titleVisibility = .visible
+      titlebarFaders[ObjectIdentifier(window)] = PlayerTitlebarFader(window: window)
+      result(nil)
+
+    case "setTitlebarVisible":
+      let visible = args["visible"] as? Bool ?? true
+      titlebarFaders[ObjectIdentifier(window)]?.setChromeVisible(visible)
+      result(nil)
+
+    default:
+      result(FlutterMethodNotImplemented)
     }
   }
 
-  override func resignKey() {
-    transcriptStructureCursor?.deactivateAll()
-    super.resignKey()
+  private func show(_ window: NSWindow) {
+    if window === mainWindow { keepHidden = nil }
+    window.alphaValue = 1
+    window.ignoresMouseEvents = false
+    if window.isMiniaturized { window.deminiaturize(nil) }
+    NSApp.activate(ignoringOtherApps: true)
+    window.makeKeyAndOrderFront(nil)
   }
 
-  override func order(
-    _ place: NSWindow.OrderingMode,
-    relativeTo otherWindowNumber: Int
-  ) {
-    let previousAnimationBehavior = animationBehavior
-    animationBehavior = .none
-    super.order(place, relativeTo: otherWindowNumber)
-    hiddenWindowAtLaunch()
-    animationBehavior = previousAnimationBehavior
+  /// The main window takes over what the template's `MainFlutterWindow` was:
+  /// the target of the Dock, the menu and real full screen, drawn under a
+  /// hidden title bar with the traffic lights over Flutter's toolbar.
+  private func registerMainWindow(_ window: NSWindow, startHidden: Bool) {
+    mainWindow = window
+    window.styleMask.insert(.fullSizeContentView)
+    window.titlebarAppearsTransparent = true
+    window.titleVisibility = .hidden
+    window.collectionBehavior.insert(.fullScreenPrimary)
+    window.center()
+    transcriptStructureCursor.hostView = window.contentViewController?.view
+    NotificationCenter.default.addObserver(
+      forName: NSWindow.didResignKeyNotification,
+      object: window,
+      queue: .main
+    ) { [weak self] _ in
+      self?.transcriptStructureCursor.deactivateAll()
+    }
+    if startHidden {
+      keepHidden = HiddenAtLaunch(window: window)
+    }
+  }
+}
+
+/// Keeps a window off screen through its first frame. Flutter orders a
+/// Dart-created window in once it has painted; a login-item launch, or one
+/// that only opens a video, must not flash the main window.
+final class HiddenAtLaunch: NSObject {
+  private weak var window: NSWindow?
+  private var observer: NSObjectProtocol?
+
+  init(window: NSWindow) {
+    self.window = window
+    super.init()
+    window.alphaValue = 0
+    window.ignoresMouseEvents = true
+    window.orderOut(nil)
+    observer = NotificationCenter.default.addObserver(
+      forName: NSWindow.didChangeOcclusionStateNotification,
+      object: window,
+      queue: .main
+    ) { [weak self] _ in
+      self?.hideIfShown()
+    }
+    // Belt and braces for platforms that order the window in silently.
+    for delay in [0.25, 0.75, 1.5] {
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        self?.hideIfShown()
+      }
+    }
+  }
+
+  deinit {
+    if let observer { NotificationCenter.default.removeObserver(observer) }
+  }
+
+  private func hideIfShown() {
+    guard let window, window.alphaValue == 0, window.isVisible else { return }
+    window.orderOut(nil)
+  }
+}
+
+/// Fades a player window's transparent title bar (traffic lights and title)
+/// with the Flutter player's controls. It stays up while the pointer is over
+/// it, and is left to the system in full screen.
+final class PlayerTitlebarFader: NSObject {
+  private weak var window: NSWindow?
+  private var chromeVisible = true
+  private var hovering = false
+  private var trackingArea: NSTrackingArea?
+  private var observers: [NSObjectProtocol] = []
+
+  init(window: NSWindow) {
+    self.window = window
+    super.init()
+    installTracking()
+    let center = NotificationCenter.default
+    for name in [NSWindow.willEnterFullScreenNotification,
+                 NSWindow.didExitFullScreenNotification] {
+      observers.append(center.addObserver(
+        forName: name, object: window, queue: .main
+      ) { [weak self] _ in
+        self?.installTracking()
+        self?.apply(animated: false)
+      })
+    }
+  }
+
+  deinit {
+    observers.forEach(NotificationCenter.default.removeObserver)
+  }
+
+  private var titlebarView: NSView? {
+    window?.standardWindowButton(.closeButton)?.superview
+  }
+
+  private var isFullScreen: Bool {
+    window?.styleMask.contains(.fullScreen) ?? false
+  }
+
+  private func installTracking() {
+    guard let view = titlebarView else { return }
+    if let trackingArea { view.removeTrackingArea(trackingArea) }
+    let area = NSTrackingArea(
+      rect: .zero,
+      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+      owner: self,
+      userInfo: nil
+    )
+    view.addTrackingArea(area)
+    trackingArea = area
+  }
+
+  func setChromeVisible(_ visible: Bool) {
+    guard visible != chromeVisible else { return }
+    chromeVisible = visible
+    apply(animated: true)
+  }
+
+  @objc func mouseEntered(with event: NSEvent) {
+    hovering = true
+    apply(animated: true)
+  }
+
+  @objc func mouseExited(with event: NSEvent) {
+    hovering = false
+    apply(animated: true)
+  }
+
+  private func apply(animated: Bool) {
+    guard let view = titlebarView else { return }
+    let alpha: CGFloat = isFullScreen || chromeVisible || hovering ? 1 : 0
+    guard animated else {
+      view.alphaValue = alpha
+      return
+    }
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.2
+      view.animator().alphaValue = alpha
+    }
   }
 }
 
@@ -58,7 +279,7 @@ final class TranscriptStructureCursorController {
 
   private static let channelName =
     "app.capyvibe.listenook/transcript_structure_cursor"
-  private weak var hostView: NSView?
+  weak var hostView: NSView?
   private var channel: FlutterMethodChannel?
   private(set) var activeSession: Int?
   private(set) var activeKind: Kind?

@@ -220,7 +220,16 @@ enum TranscriptSource {
   importedSubtitle,
 }
 
-enum SubtitleFormat { srt, webVtt }
+enum SubtitleFormat { srt, webVtt, ass, movText }
+
+extension SubtitleFormatX on SubtitleFormat {
+  String get label => switch (this) {
+    SubtitleFormat.srt => 'SRT',
+    SubtitleFormat.webVtt => 'WebVTT',
+    SubtitleFormat.ass => 'ASS',
+    SubtitleFormat.movText => 'MP4 text',
+  };
+}
 
 class TranscriptionModelReference {
   const TranscriptionModelReference({required this.id, required this.revision});

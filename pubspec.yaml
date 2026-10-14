@@ -35,7 +35,10 @@ dependencies:
 
   archive: ^4.0.9
   crypto: ^3.0.7
-  desktop_drop: ^0.8.4
+  # Vendored (third_party/desktop_drop): attaches its drop target to a window
+  # created from Dart instead of the view that exists at plugin registration.
+  desktop_drop:
+    path: third_party/desktop_drop
   file_selector: ^1.1.0
   flutter_local_notifications: ^22.2.0
   flutter_secure_storage: ^10.3.1
@@ -52,7 +55,6 @@ dependencies:
   scrollable_positioned_list: ^0.3.8
   tray_manager: ^0.5.3
   uuid: ^4.5.2
-  window_manager: ^0.5.2
   windows_single_instance: ^1.2.0
   win32_registry: ^3.0.3
   url_launcher: ^6.3.2
@@ -71,6 +73,12 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+
+  # Flutter's multi-window API (one engine, a view per OS window) creates the
+  # main and video player windows from Dart — see lib/core/windowing/. It only
+  # exists on the master channel; the SDK is pinned in .fvmrc.
+  config:
+    enable-windowing: true
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

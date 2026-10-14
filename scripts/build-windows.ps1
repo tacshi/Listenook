@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "environment.ps1")
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot "flutter-sdk.ps1")
 $HostArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 $ExpectedHost = if ($Arch -eq "x64") { "AMD64" } else { "ARM64" }
 if ($HostArch -ne $ExpectedHost) {
@@ -91,7 +92,7 @@ try {
   $FlutterArgs = @("build", "windows", "--$Mode")
   if ($BuildName) { $FlutterArgs += @("--build-name", $BuildName) }
   if ($BuildNumber) { $FlutterArgs += @("--build-number", $BuildNumber) }
-  & flutter @FlutterArgs
+  & $script:ListenookFlutter @FlutterArgs
   if ($LASTEXITCODE -ne 0) { throw "Flutter Windows build failed." }
 
   $Build = Join-Path $Root "build\windows\$Arch\runner\$Configuration"

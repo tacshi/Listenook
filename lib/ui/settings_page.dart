@@ -565,6 +565,13 @@ class _SettingsPageState extends State<SettingsPage> {
             keys: [commandKey, 'O'],
           ),
           _ShortcutDefinition(
+            id: 'watch-video',
+            description: context.strings.t('shortcut_watch_video'),
+            keys: macOS
+                ? [shiftKey, commandKey, 'O']
+                : [commandKey, shiftKey, 'O'],
+          ),
+          _ShortcutDefinition(
             id: 'toggle-sidebar',
             description: context.strings.t('shortcut_toggle_sidebar'),
             keys: [commandKey, 'B'],
@@ -691,6 +698,37 @@ class _SettingsPageState extends State<SettingsPage> {
           _ShortcutDefinition(
             id: 'exit-fullscreen',
             description: context.strings.t('exit_fullscreen'),
+            keys: [escapeKey],
+          ),
+        ],
+      ),
+      _ShortcutSection(
+        title: context.strings.t('shortcut_section_video_player'),
+        icon: Icons.smart_display_outlined,
+        shortcuts: [
+          _ShortcutDefinition(
+            id: 'player-previous-subtitle',
+            description: context.strings.t('shortcut_previous_subtitle'),
+            keys: const ['←'],
+          ),
+          _ShortcutDefinition(
+            id: 'player-next-subtitle',
+            description: context.strings.t('shortcut_next_subtitle'),
+            keys: const ['→'],
+          ),
+          _ShortcutDefinition(
+            id: 'player-hold-repeat',
+            description: context.strings.t('shortcut_hold_repeat_subtitle'),
+            keys: const ['R'],
+          ),
+          _ShortcutDefinition(
+            id: 'player-fullscreen',
+            description: context.strings.t('shortcut_toggle_fullscreen'),
+            keys: const ['F'],
+          ),
+          _ShortcutDefinition(
+            id: 'player-close',
+            description: context.strings.t('player_close'),
             keys: [escapeKey],
           ),
         ],

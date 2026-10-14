@@ -287,6 +287,12 @@ class VideoFullscreenKeyboardRegion extends StatefulWidget {
     super.key,
     this.subtitle,
     this.subtitleHighlight,
+    this.topBar,
+    this.title,
+    this.trailingControls = const [],
+    this.fullscreen = true,
+    this.onEnterFullscreen,
+    this.onControlsVisibilityChanged,
     required this.playing,
     required this.position,
     required this.duration,
@@ -313,6 +319,23 @@ class VideoFullscreenKeyboardRegion extends StatefulWidget {
 
   final String? subtitle;
   final TextRange? subtitleHighlight;
+
+  /// Shown above the video with the bottom controls, and hidden with them.
+  final Widget? topBar;
+
+  /// A label above the bottom controls, such as the file being played.
+  final String? title;
+
+  /// Extra buttons placed before the fullscreen button.
+  final List<Widget> trailingControls;
+
+  /// When false the region fills a normal window: the last button enters
+  /// fullscreen through [onEnterFullscreen] instead of exiting it.
+  final bool fullscreen;
+  final VoidCallback? onEnterFullscreen;
+
+  /// Called whenever the auto-hiding controls appear or disappear.
+  final ValueChanged<bool>? onControlsVisibilityChanged;
   final bool playing;
   final Duration position;
   final Duration duration;
@@ -338,6 +361,7 @@ class _VideoFullscreenKeyboardRegionState
 
   Timer? _hideTimer;
   bool _controlsVisible = true;
+  bool? _reportedControlsVisible;
   bool _scrubbing = false;
   bool _repeatKeyHeld = false;
 
@@ -446,8 +470,17 @@ class _VideoFullscreenKeyboardRegionState
     _showControls();
   }
 
+  void _reportControlsVisibility() {
+    final callback = widget.onControlsVisibilityChanged;
+    final visible = _controlsVisible;
+    if (callback == null || _reportedControlsVisible == visible) return;
+    _reportedControlsVisible = visible;
+    WidgetsBinding.instance.addPostFrameCallback((_) => callback(visible));
+  }
+
   @override
   Widget build(BuildContext context) {
+    _reportControlsVisibility();
     final text = widget.subtitle?.trim();
     return CallbackShortcuts(
       bindings: {
@@ -542,6 +575,13 @@ class _VideoFullscreenKeyboardRegionState
                           ),
                         ),
                       ),
+                    if (widget.topBar != null)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                        child: _autoHiding(widget.topBar!, slideFrom: -.12),
+                      ),
                     Positioned(
                       left: 0,
                       right: 0,
@@ -582,6 +622,54 @@ class _VideoFullscreenKeyboardRegionState
     );
   }
 
+  Widget _withTitle(Widget controls) {
+    final title = widget.title;
+    if (title == null || title.isEmpty) return controls;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 12, bottom: 2),
+          child: Text(
+            title,
+            key: const Key('fullscreen-title'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(color: Colors.white),
+          ),
+        ),
+        controls,
+      ],
+    );
+  }
+
+  Widget _autoHiding(
+    Widget child, {
+    required double slideFrom,
+  }) => ExcludeSemantics(
+    excluding: !_controlsVisible,
+    child: ExcludeFocus(
+      excluding: !_controlsVisible,
+      child: IgnorePointer(
+        ignoring: !_controlsVisible,
+        child: AnimatedSlide(
+          offset: _controlsVisible ? Offset.zero : Offset(0, slideFrom),
+          duration: VideoFullscreenKeyboardRegion.controlsTransitionDuration,
+          curve: Curves.easeInOut,
+          child: AnimatedOpacity(
+            opacity: _controlsVisible ? 1 : 0,
+            duration: VideoFullscreenKeyboardRegion.controlsTransitionDuration,
+            curve: Curves.easeInOut,
+            child: child,
+          ),
+        ),
+      ),
+    ),
+  );
+
   Widget _buildControls(BuildContext context) {
     final durationMs = widget.duration.inMilliseconds;
     final hasDuration = durationMs > 0;
@@ -612,70 +700,87 @@ class _VideoFullscreenKeyboardRegionState
                 disabledForegroundColor: Colors.white38,
               ),
             ),
-            child: Row(
-              key: const Key('fullscreen-controls-bar'),
-              children: [
-                IconButton(
-                  key: const Key('fullscreen-play-pause'),
-                  tooltip: context.strings.t(widget.playing ? 'pause' : 'play'),
-                  onPressed: () => _runWithVisibleControls(widget.onPlayPause),
-                  color: Colors.white,
-                  iconSize: 30,
-                  icon: Icon(
-                    widget.playing
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
-                  ),
-                ),
-                if (widget.sentenceNavigation != null)
-                  widget.sentenceNavigation!,
-                if (widget.blindListening)
-                  SentenceRevealButton(
-                    revealed: widget.sentenceRevealed,
-                    onPressed: widget.onReveal,
-                  ),
-                const SizedBox(width: 4),
-                Text(
-                  formatClock(positionMs.round()),
-                  key: const Key('fullscreen-position'),
-                  style: const TextStyle(color: Colors.white),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      activeTrackColor: colors.primaryContainer,
-                      inactiveTrackColor: Colors.white38,
-                      thumbColor: Colors.white,
-                      overlayColor: Colors.white24,
-                      trackHeight: 3,
+            child: _withTitle(
+              Row(
+                key: const Key('fullscreen-controls-bar'),
+                children: [
+                  IconButton(
+                    key: const Key('fullscreen-play-pause'),
+                    tooltip: context.strings.t(
+                      widget.playing ? 'pause' : 'play',
                     ),
-                    child: Slider(
-                      key: const Key('fullscreen-seek'),
-                      value: positionMs,
-                      max: hasDuration ? durationMs.toDouble() : 1,
-                      onChangeStart: hasDuration ? _beginScrubbing : null,
-                      onChanged: hasDuration ? _seekTo : null,
-                      onChangeEnd: hasDuration ? _finishScrubbing : null,
+                    onPressed: () =>
+                        _runWithVisibleControls(widget.onPlayPause),
+                    color: Colors.white,
+                    iconSize: 30,
+                    icon: Icon(
+                      widget.playing
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  formatClock(hasDuration ? durationMs : 0),
-                  key: const Key('fullscreen-duration'),
-                  style: const TextStyle(color: Colors.white),
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  key: const Key('fullscreen-exit'),
-                  tooltip: context.strings.t('exit_fullscreen'),
-                  onPressed: () => _runWithVisibleControls(_exit),
-                  color: Colors.white,
-                  iconSize: 30,
-                  icon: const Icon(Icons.fullscreen_exit_rounded),
-                ),
-              ],
+                  if (widget.sentenceNavigation != null)
+                    widget.sentenceNavigation!,
+                  if (widget.blindListening)
+                    SentenceRevealButton(
+                      revealed: widget.sentenceRevealed,
+                      onPressed: widget.onReveal,
+                    ),
+                  const SizedBox(width: 4),
+                  Text(
+                    formatClock(positionMs.round()),
+                    key: const Key('fullscreen-position'),
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        activeTrackColor: colors.primaryContainer,
+                        inactiveTrackColor: Colors.white38,
+                        thumbColor: Colors.white,
+                        overlayColor: Colors.white24,
+                        trackHeight: 3,
+                      ),
+                      child: Slider(
+                        key: const Key('fullscreen-seek'),
+                        value: positionMs,
+                        max: hasDuration ? durationMs.toDouble() : 1,
+                        onChangeStart: hasDuration ? _beginScrubbing : null,
+                        onChanged: hasDuration ? _seekTo : null,
+                        onChangeEnd: hasDuration ? _finishScrubbing : null,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    formatClock(hasDuration ? durationMs : 0),
+                    key: const Key('fullscreen-duration'),
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  const SizedBox(width: 4),
+                  ...widget.trailingControls,
+                  if (widget.fullscreen)
+                    IconButton(
+                      key: const Key('fullscreen-exit'),
+                      tooltip: context.strings.t('exit_fullscreen'),
+                      onPressed: () => _runWithVisibleControls(_exit),
+                      color: Colors.white,
+                      iconSize: 30,
+                      icon: const Icon(Icons.fullscreen_exit_rounded),
+                    )
+                  else if (widget.onEnterFullscreen != null)
+                    IconButton(
+                      key: const Key('fullscreen-enter'),
+                      tooltip: context.strings.t('fullscreen'),
+                      onPressed: () =>
+                          _runWithVisibleControls(widget.onEnterFullscreen!),
+                      color: Colors.white,
+                      iconSize: 30,
+                      icon: const Icon(Icons.fullscreen_rounded),
+                    ),
+                ],
+              ),
             ),
           ),
         ),

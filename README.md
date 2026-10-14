@@ -15,7 +15,7 @@ local transcription is available on supported Apple Silicon Macs.
 
 1. Drop audio, video, or a folder into Inbox, or find an episode in Podcast.
 2. Choose a transcription provider, use available word-level publisher
-   transcripts, or pair local media with an existing SRT or WebVTT file.
+   transcripts, or pair local media with an existing SRT, WebVTT, or ASS file.
 3. Open the transcript to listen, read, translate, edit, practice, or export.
 
 Supported media: MP3, WAV, M4A, OGG, MP4, MKV, and AVI, up to 300 minutes per file.
@@ -36,7 +36,18 @@ Supported media: MP3, WAV, M4A, OGG, MP4, MKV, and AVI, up to 300 minutes per fi
 - **Follow podcasts:** search public Apple Podcasts results, open RSS feeds,
   follow shows, preview episodes, and download episodes for further study.
   Word-level publisher transcripts can be imported when available.
-- **Import subtitles:** pair SRT or WebVTT files with local media and review
+- **Watch subtitled videos:** double-click a video (or open it with
+  **⇧⌘O** / **Ctrl+Shift+O**) to play it with its own subtitles, without
+  transcribing it or adding it to the Library. Built-in text tracks (MKV
+  SRT/ASS/WebVTT, MP4 mov_text) and SRT, WebVTT, or ASS/SSA files next to the
+  video are listed in the subtitle menu. ←/→ jump to the previous/next
+  subtitle and holding **R** repeats the current one. The player remembers
+  each video's subtitle choice and position. Picture subtitles (PGS, VobSub)
+  cannot be shown. On macOS Listenook appears in **Open With** for every video
+  type; the Windows installer registers MP4, M4V, MOV, MKV, WebM, and AVI.
+  Choose it as the default in Finder's **Get Info → Open with** or Windows
+  **Default apps**.
+- **Import subtitles:** pair SRT, WebVTT, or ASS/SSA files with local media and review
   matches before import. Imported subtitles use their parsed cue timings;
   they do not run speech recognition or forced alignment.
 - **Transcribe recordings:** batch files with speaker labels where supported,
@@ -119,14 +130,20 @@ Later Listenook releases use `listenook-latest.json` in
 
 ## Development
 
-Use Flutter stable with the macOS or Windows desktop toolchain enabled. The
-Apple Silicon speech worker also requires Xcode and its Metal toolchain.
+Desktop builds need the Flutter **master** SDK pinned in `.fvmrc`: the main and
+video player windows are created through Flutter's multi-window API
+(`lib/core/windowing/`), which stable does not have. Install
+[FVM](https://fvm.app), then use `fvm flutter …` (or `scripts/flutter.sh …`);
+the build scripts resolve the pinned SDK themselves. A bare `flutter` from PATH
+fails to compile and rewrites `pubspec.lock`. The Apple Silicon speech worker
+also requires Xcode and its Metal toolchain.
 
 ```sh
 git clone git@github.com:tacshi/Listenook.git
 cd Listenook
-flutter pub get
-flutter run -d macos
+fvm install
+fvm flutter pub get
+fvm flutter run -d macos
 ```
 
 For local speech during development on Apple Silicon, build the helper and
@@ -134,10 +151,10 @@ point the app to it:
 
 ```sh
 scripts/build-speech-worker.sh
-LISTENOOK_SPEECH_WORKER="$PWD/build/native/speech_worker/ListenookSpeechWorker" flutter run -d macos
+LISTENOOK_SPEECH_WORKER="$PWD/build/native/speech_worker/ListenookSpeechWorker" fvm flutter run -d macos
 ```
 
-Before `flutter run -d windows`, prepare the native FLAC encoder once:
+Before `fvm flutter run -d windows`, prepare the native FLAC encoder once:
 
 ```powershell
 scripts\fetch-flac.ps1 -Arch x64
@@ -150,15 +167,15 @@ Run static analysis and tests relevant to the change. For example, to check
 application identity and startup:
 
 ```sh
-flutter analyze
-flutter test test/core/app_identity_test.dart test/ui/bootstrap_test.dart
+fvm flutter analyze
+fvm flutter test test/core/app_identity_test.dart test/ui/bootstrap_test.dart
 ```
 
 Native bundle identity, localized-name channel, and isolated Keychain migration
 checks run separately from packaging:
 
 ```sh
-flutter test integration_test/secure_credential_store_test.dart -d macos
+fvm flutter test integration_test/secure_credential_store_test.dart -d macos
 ```
 
 Cloud smoke tests are opt-in and may consume provider credit when

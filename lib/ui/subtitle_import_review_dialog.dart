@@ -264,10 +264,7 @@ class _SubtitleImportReviewDialogState
               Text(
                 context.strings
                     .t('subtitle_import_cue_summary')
-                    .replaceFirst(
-                      '{format}',
-                      result.format == SubtitleFormat.srt ? 'SRT' : 'WebVTT',
-                    )
+                    .replaceFirst('{format}', result.format.label)
                     .replaceFirst(
                       '{count}',
                       '${result.document.segments.length}',

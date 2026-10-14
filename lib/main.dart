@@ -4,16 +4,20 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
-import 'package:window_manager/window_manager.dart';
 import 'package:windows_single_instance/windows_single_instance.dart';
 
 import 'app.dart';
 import 'core/local_speech.dart';
 import 'core/app_identity.dart';
 import 'core/models.dart';
+import 'core/windowing/app_window.dart';
+import 'core/windowing/desktop_windows.dart';
 import 'data/app_data_migration.dart';
 import 'data/migrating_secure_value.dart';
 import 'ui/startup_page.dart';
+import 'ui/video_player/player_window_app.dart';
+import 'ui/video_player/video_player_controller.dart';
+import 'ui/video_player/video_player_windows.dart';
 
 export 'ui/startup_page.dart';
 import 'data/ai_brief_service.dart';
@@ -34,23 +38,37 @@ import 'data/transcript_exporter.dart';
 import 'data/update_service.dart';
 import 'state/app_controller.dart';
 import 'state/podcast_controller.dart';
+import 'state/video_open_requests.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  await windowManager.ensureInitialized();
+  final videoOpenRequests = VideoOpenRequests()..addAll(arguments);
+  // Files Finder opened the app with are queued natively before Dart starts.
+  if (Platform.isMacOS) await videoOpenRequests.attachNativeInbox();
   if (Platform.isWindows) {
     await WindowsSingleInstance.ensureSingleInstance(
       arguments,
       '${AppIdentity.bundleId}.instance',
-      onSecondWindow: (_) async {
-        await windowManager.setSkipTaskbar(false);
-        await windowManager.show();
-        await windowManager.focus();
+      // The runner's own window is a hidden engine host; Dart raises the
+      // window that should come forward.
+      bringWindowToFront: false,
+      onSecondWindow: (secondArguments) async {
+        videoOpenRequests.addAll(secondArguments);
+        // A video opens in its own window; anything else raises the app.
+        if (!videoOpenRequests.hasPending) {
+          await DesktopWindows.instance?.showMain();
+        }
       },
     );
   }
   final backgroundLaunch = arguments.contains('--background');
+  // Filled once the app's services exist; video windows wait for it.
+  final playerServices = Completer<_PlayerServices>();
+  // Launched only to play a video: the player window is all that shows.
+  final videoLaunch =
+      videoOpenRequests.hasPending ||
+      (Platform.isMacOS && await videoOpenRequests.launchedForFiles());
   final migrationProgress = ValueNotifier<double?>(null);
   final startupLocale = ValueNotifier(
     WidgetsBinding.instance.platformDispatcher.locale,
@@ -163,24 +181,28 @@ Future<void> main(List<String> arguments) async {
     await desktopRuntime.setLaunchAtLogin(
       controller.inboxMonitorConfig.launchAtLogin,
     );
-    if (backgroundLaunch && !controller.inboxMonitorConfig.showTrayIcon) {
-      await windowManager.setSkipTaskbar(false);
-      await windowManager.show();
-      await windowManager.focus();
-    } else if (backgroundLaunch) {
-      await windowManager.setSkipTaskbar(true);
-      await windowManager.hide();
+    if (backgroundLaunch &&
+        !videoLaunch &&
+        !controller.inboxMonitorConfig.showTrayIcon) {
+      // Without a tray icon a hidden window would leave no way back in.
+      await DesktopWindows.instance?.showMain();
     }
     final updates = UpdateService();
     await updates.initialize();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(localModels.removeLegacyGGUFModels());
     });
+    final videoPlayback = JsonVideoPlaybackRepository(paths);
+    if (!playerServices.isCompleted) {
+      playerServices.complete(_PlayerServices(controller, videoPlayback));
+    }
     return ListenookApp(
       controller: controller,
       updates: updates,
       desktopRuntime: desktopRuntime,
       podcastController: podcastController,
+      videoOpenRequests: videoOpenRequests,
+      videoPlaybackRepository: videoPlayback,
     );
   }
 
@@ -188,36 +210,70 @@ Future<void> main(List<String> arguments) async {
     try {
       return await createApplication();
     } on Object {
-      if (backgroundLaunch) {
-        await windowManager.setSkipTaskbar(false);
-        await windowManager.show();
-      }
+      // Startup problems are shown in the main window.
+      await DesktopWindows.instance?.showMain();
       rethrow;
     }
   }
 
-  runApp(
-    ListenookBootstrap(
-      application: start(),
-      restart: start,
-      progress: migrationProgress,
-      locale: startupLocale,
-    ),
+  final bootstrap = ListenookBootstrap(
+    application: start(),
+    restart: start,
+    progress: migrationProgress,
+    locale: startupLocale,
   );
-  await windowManager.waitUntilReadyToShow(
-    const WindowOptions(
-      title: '',
-      minimumSize: Size(920, 640),
-      size: Size(1240, 820),
-      center: true,
-      titleBarStyle: TitleBarStyle.hidden,
-      windowButtonVisibility: true,
-    ),
-    () async {
-      if (!backgroundLaunch) {
-        await windowManager.show();
-        await windowManager.focus();
-      }
-    },
+  if (!appWindowingAvailable) {
+    runApp(bootstrap);
+    return;
+  }
+  final windows = DesktopWindows.start(
+    content: bootstrap,
+    startHidden: backgroundLaunch || videoLaunch,
   );
+  // Like a standalone player: a video gets its own window whether or not the
+  // main window is on screen (a hidden window does not paint, so this cannot
+  // wait for the main window's widgets).
+  Future<void> openRequestedVideo() async {
+    final services = await playerServices.future;
+    final path = videoOpenRequests.takeLatest();
+    if (path == null) return;
+    await VideoPlayerWindows.instance?.open(
+      path,
+      createController: (path) => VideoPlayerController(
+        path: path,
+        playbackRepository: services.videoPlayback,
+        preferredLanguage:
+            WidgetsBinding.instance.platformDispatcher.locale.languageCode,
+      ),
+      wrap: (_, player) => PlayerWindowApp(
+        controller: services.controller,
+        repository: services.videoPlayback,
+        child: player,
+      ),
+    );
+  }
+
+  videoOpenRequests.addListener(() => unawaited(openRequestedVideo()));
+  if (videoOpenRequests.hasPending) unawaited(openRequestedVideo());
+  if (videoLaunch) {
+    // Launched to open something that turned out not to be a playable video:
+    // show the app rather than leave it running with no window.
+    unawaited(
+      playerServices.future.then((_) {
+        Timer(const Duration(seconds: 3), () {
+          if (!videoOpenRequests.hasPending &&
+              !(VideoPlayerWindows.instance?.hasOpenWindows ?? false)) {
+            unawaited(windows.showMain());
+          }
+        });
+      }),
+    );
+  }
+}
+
+class _PlayerServices {
+  const _PlayerServices(this.controller, this.videoPlayback);
+
+  final AppController controller;
+  final VideoPlaybackRepository videoPlayback;
 }

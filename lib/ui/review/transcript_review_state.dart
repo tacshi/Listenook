@@ -1,7 +1,6 @@
 part of '../transcript_review.dart';
 
-class _TranscriptReviewState extends State<TranscriptReview>
-    with WindowListener {
+class _TranscriptReviewState extends State<TranscriptReview> {
   final _dictationAttempts = <String, _DictationAttempt>{};
   final _dictationText = TextEditingController();
   final _dictationFocus = FocusNode();
@@ -117,7 +116,6 @@ class _TranscriptReviewState extends State<TranscriptReview>
       resume: _resumeMedia,
     );
     HardwareKeyboard.instance.addHandler(_handleReviewShortcut);
-    windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
   }
 
@@ -131,22 +129,43 @@ class _TranscriptReviewState extends State<TranscriptReview>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _rootNavigator = Navigator.of(context, rootNavigator: true);
+    final window = AppWindow.maybeOf(context);
+    if (!identical(window, _appWindow)) {
+      _appWindow?.listenable.removeListener(_appWindowChanged);
+      _appWindow = window;
+      _windowActivated = window?.isActivated ?? true;
+      _windowFullscreen = window?.isFullscreen ?? false;
+      window?.listenable.addListener(_appWindowChanged);
+    }
   }
 
-  @override
-  void onWindowBlur() {
+  AppWindow? _appWindow;
+  bool _windowActivated = true;
+  bool _windowFullscreen = false;
+
+  void _appWindowChanged() {
+    final window = _appWindow;
+    if (window == null) return;
+    if (window.isActivated != _windowActivated) {
+      _windowActivated = window.isActivated;
+      _windowActivated ? _onWindowFocus() : _onWindowBlur();
+    }
+    final leftFullscreen = _windowFullscreen && !window.isFullscreen;
+    _windowFullscreen = window.isFullscreen;
+    if (leftFullscreen) _onWindowLeaveFullScreen();
+  }
+
+  void _onWindowBlur() {
     _endSentenceRepeatHold();
     unawaited(TranscriptStructureCursors.deactivateAll());
   }
 
-  @override
-  void onWindowFocus() {
+  void _onWindowFocus() {
     TranscriptStructureCursors.beginNewGeneration();
     if (mounted) setState(() {});
   }
 
-  @override
-  void onWindowLeaveFullScreen() {
+  void _onWindowLeaveFullScreen() {
     _endSentenceRepeatHold();
     unawaited(_fullscreenController.exit());
   }
@@ -680,7 +699,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     HardwareKeyboard.instance.removeHandler(_handleReviewShortcut);
     _rememberPlaybackPosition(widget.jobId);
     _fullscreenController.unregisterMediaShutdown(this);
-    windowManager.removeListener(this);
+    _appWindow?.listenable.removeListener(_appWindowChanged);
     _cancelDictationReplay();
     _dictationText.dispose();
     _dictationFocus.dispose();
@@ -1754,7 +1773,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     }
     _dictationFocus.unfocus();
     if (mounted) setState(() {});
-    await defaultEnterNativeFullscreen();
+    _appWindow?.setFullscreen(true);
   }
 
   Future<void> _exitNativeFullscreen() async {
@@ -1762,7 +1781,7 @@ class _TranscriptReviewState extends State<TranscriptReview>
     _fullscreenController.markExited();
     if (mounted) setState(() {});
     _playbackTick.tick();
-    await defaultExitNativeFullscreen();
+    _appWindow?.setFullscreen(false);
   }
 
   void _seekTranscriptSegment(

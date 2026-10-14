@@ -4,10 +4,12 @@ import 'package:provider/provider.dart';
 
 import 'core/models.dart';
 import 'data/desktop_runtime.dart';
+import 'data/local_repositories.dart';
 import 'data/update_service.dart';
 import 'l10n/strings.dart';
 import 'state/app_controller.dart';
 import 'state/podcast_controller.dart';
+import 'state/video_open_requests.dart';
 import 'theme.dart';
 import 'ui/app_shell.dart';
 
@@ -18,11 +20,15 @@ class ListenookApp extends StatelessWidget {
     required this.updates,
     required this.desktopRuntime,
     this.podcastController,
+    this.videoOpenRequests,
+    this.videoPlaybackRepository,
   });
   final AppController controller;
   final UpdateService updates;
   final DesktopRuntime desktopRuntime;
   final PodcastController? podcastController;
+  final VideoOpenRequests? videoOpenRequests;
+  final VideoPlaybackRepository? videoPlaybackRepository;
 
   @override
   Widget build(BuildContext context) => MultiProvider(
@@ -32,6 +38,12 @@ class ListenookApp extends StatelessWidget {
       Provider.value(value: desktopRuntime),
       if (podcastController != null)
         ChangeNotifierProvider.value(value: podcastController!),
+      if (videoOpenRequests != null)
+        ChangeNotifierProvider.value(value: videoOpenRequests!),
+      if (videoPlaybackRepository != null)
+        Provider<VideoPlaybackRepository>.value(
+          value: videoPlaybackRepository!,
+        ),
     ],
     child: Consumer<AppController>(
       builder: (context, state, _) => MaterialApp(

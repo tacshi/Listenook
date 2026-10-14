@@ -6,6 +6,8 @@ abstract final class AppIdentity {
   static const bundleId = 'app.capyvibe.listenook';
   static const legacyBundleId = 'app.meowstt.desktop';
   static const navigationChannel = '$bundleId/navigation';
+  static const openFilesChannel = '$bundleId/open_files';
+  static const windowHandleChannel = '$bundleId/window_handle';
   static const startupChannel = '$bundleId/launch_at_login';
   static const cursorChannel = '$bundleId/transcript_structure_cursor';
   static const encoderChannel = '$bundleId/audio_encoder';

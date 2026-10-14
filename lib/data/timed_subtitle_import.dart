@@ -8,7 +8,7 @@ import '../core/contracts.dart';
 import '../core/models.dart';
 import '../core/subtitle_text.dart';
 
-const supportedSubtitleExtensions = {'srt', 'vtt'};
+const supportedSubtitleExtensions = {'srt', 'vtt', 'ass', 'ssa'};
 const supportedSubtitleLanguageCodes = {
   'zh',
   'yue',
@@ -226,7 +226,28 @@ class TimedSubtitleImportService {
     final rawCues = switch (format) {
       SubtitleFormat.srt => _parseSrt(body),
       SubtitleFormat.webVtt => _parseVtt(body),
+      SubtitleFormat.ass => _CueParse(parseAssScript(body), 0),
+      SubtitleFormat.movText => throw const TimedSubtitleImportException(
+        'subtitle_format_unsupported',
+      ),
     };
+    return documentFromCues(
+      rawCues.cues,
+      format: format,
+      invalidCount: rawCues.invalidCount,
+      durationMs: durationMs,
+    );
+  }
+
+  /// Builds the transcript document shared by subtitle files and subtitle
+  /// tracks embedded in a video container.
+  TimedSubtitleParseResult documentFromCues(
+    List<TimedSubtitleCue> cues, {
+    required SubtitleFormat format,
+    int invalidCount = 0,
+    int? durationMs,
+  }) {
+    final rawCues = _CueParse(cues, invalidCount);
     final segments = <TranscriptSegment>[];
     final speakers = <SpeakerProfile>[];
     final speakerIds = <String, String>{};
@@ -289,6 +310,7 @@ class TimedSubtitleImportService {
   SubtitleFormat _format(String path) => switch (_extension(path)) {
     'srt' => SubtitleFormat.srt,
     'vtt' => SubtitleFormat.webVtt,
+    'ass' || 'ssa' => SubtitleFormat.ass,
     _ => throw const TimedSubtitleImportException(
       'subtitle_format_unsupported',
     ),
@@ -327,7 +349,7 @@ class TimedSubtitleImportService {
   int _windows1252CodePoint(int byte) => _windows1252[byte] ?? byte;
 
   _CueParse _parseSrt(String body) {
-    final cues = <_RawCue>[];
+    final cues = <TimedSubtitleCue>[];
     var invalid = 0;
     final blocks = body
         .replaceAll('\r\n', '\n')
@@ -347,7 +369,7 @@ class TimedSubtitleImportService {
         continue;
       }
       cues.add(
-        _RawCue(
+        TimedSubtitleCue(
           startMs: timing.$1,
           endMs: timing.$2,
           text: lines.skip(timingIndex + 1).join('\n').trim(),
@@ -358,7 +380,7 @@ class TimedSubtitleImportService {
   }
 
   _CueParse _parseVtt(String body) {
-    final cues = <_RawCue>[];
+    final cues = <TimedSubtitleCue>[];
     var invalid = 0;
     var normalized = body.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     if (normalized.startsWith('\uFEFF')) normalized = normalized.substring(1);
@@ -393,7 +415,7 @@ class TimedSubtitleImportService {
         continue;
       }
       cues.add(
-        _RawCue(
+        TimedSubtitleCue(
           startMs: timing.$1,
           endMs: timing.$2,
           text: lines.skip(timingIndex + 1).join('\n').trim(),
@@ -446,6 +468,27 @@ class TimedSubtitleImportService {
       .replaceAll('&#39;', "'")
       .replaceAll('&amp;', '&');
 
+  /// Subtitle files beside [mediaPath] whose name matches the media, such as
+  /// `movie.srt` or `movie.en.ass`.
+  Future<List<String>> subtitleSidecarsFor(String mediaPath) async {
+    final matches = <String>[];
+    try {
+      await for (final entity in Directory(
+        p.dirname(p.absolute(mediaPath)),
+      ).list(followLinks: false)) {
+        if (entity is File && _isPotentialMatch(mediaPath, entity.path)) {
+          matches.add(p.absolute(entity.path));
+        }
+      }
+    } on FileSystemException {
+      return const [];
+    }
+    matches.sort(
+      (left, right) => p.basename(left).compareTo(p.basename(right)),
+    );
+    return matches;
+  }
+
   bool _isPotentialMatch(String mediaPath, String subtitlePath) {
     if (!supportedSubtitleExtensions.contains(_extension(subtitlePath)) ||
         p.dirname(p.absolute(mediaPath)) !=
@@ -472,8 +515,8 @@ class TimedSubtitleImportService {
       p.extension(path).replaceFirst('.', '').toLowerCase();
 }
 
-class _RawCue {
-  const _RawCue({
+class TimedSubtitleCue {
+  const TimedSubtitleCue({
     required this.startMs,
     required this.endMs,
     required this.text,
@@ -484,14 +527,157 @@ class _RawCue {
   final String text;
 }
 
-class _CueParse extends Iterable<_RawCue> {
+const _defaultAssEventFields = [
+  'layer',
+  'start',
+  'end',
+  'style',
+  'name',
+  'marginl',
+  'marginr',
+  'marginv',
+  'effect',
+  'text',
+];
+
+/// Reads the `Dialogue:` events of an ASS/SSA script as plain-text cues.
+///
+/// Styling is dropped. Events that share a time range (positioned lines,
+/// shadow layers) collapse into one cue so sentence navigation sees a single
+/// subtitle per moment.
+List<TimedSubtitleCue> parseAssScript(String body) {
+  var fields = _defaultAssEventFields;
+  var inEvents = false;
+  final cues = <TimedSubtitleCue>[];
+  for (final rawLine in const LineSplitter().convert(body)) {
+    final line = rawLine.trim();
+    if (line.startsWith('[')) {
+      inEvents = line.toLowerCase() == '[events]';
+      continue;
+    }
+    if (!inEvents) continue;
+    final colon = line.indexOf(':');
+    if (colon < 0) continue;
+    final kind = line.substring(0, colon).trim().toLowerCase();
+    final value = line.substring(colon + 1).trimLeft();
+    if (kind == 'format') {
+      fields = value
+          .split(',')
+          .map((field) => field.trim().toLowerCase())
+          .toList(growable: false);
+      continue;
+    }
+    if (kind != 'dialogue') continue;
+    final textIndex = fields.indexOf('text');
+    if (textIndex < 0) continue;
+    final parts = _splitAssFields(value, fields.length);
+    if (parts.length <= textIndex) continue;
+    final start = _assClock(parts[fields.indexOf('start')]);
+    final end = _assClock(parts[fields.indexOf('end')]);
+    if (start == null || end == null) continue;
+    final text = cleanAssText(parts[textIndex]);
+    if (text.isEmpty) continue;
+    cues.add(TimedSubtitleCue(startMs: start, endMs: end, text: text));
+  }
+  return mergeSimultaneousCues(cues);
+}
+
+/// Extracts the text of one Matroska ASS/SSA block, whose payload is
+/// `ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text`.
+String matroskaAssBlockText(String payload) {
+  final parts = _splitAssFields(payload, 9);
+  return parts.length < 9 ? '' : cleanAssText(parts.last);
+}
+
+/// Removes ASS override blocks and drawings, keeping the spoken text.
+String cleanAssText(String raw) {
+  final drawing = RegExp(r'\\p[1-9]');
+  final buffer = StringBuffer();
+  var drawingMode = false;
+  var index = 0;
+  while (index < raw.length) {
+    if (raw[index] == '{') {
+      final close = raw.indexOf('}', index);
+      if (close < 0) break;
+      final block = raw.substring(index, close + 1);
+      if (drawing.hasMatch(block)) {
+        drawingMode = true;
+      } else if (block.contains(r'\p0')) {
+        drawingMode = false;
+      }
+      index = close + 1;
+      continue;
+    }
+    if (!drawingMode) buffer.write(raw[index]);
+    index++;
+  }
+  final text = buffer
+      .toString()
+      .replaceAll(r'\N', '\n')
+      .replaceAll(r'\n', '\n')
+      .replaceAll(r'\h', ' ');
+  return cleanSubtitleCaptionArtifacts(text);
+}
+
+List<TimedSubtitleCue> mergeSimultaneousCues(List<TimedSubtitleCue> cues) {
+  final sorted = List.of(cues)
+    ..sort((left, right) {
+      final start = left.startMs.compareTo(right.startMs);
+      return start != 0 ? start : left.endMs.compareTo(right.endMs);
+    });
+  final merged = <TimedSubtitleCue>[];
+  for (final cue in sorted) {
+    final last = merged.isEmpty ? null : merged.last;
+    if (last != null &&
+        last.startMs == cue.startMs &&
+        last.endMs == cue.endMs) {
+      if (!'\n${last.text}\n'.contains('\n${cue.text}\n')) {
+        merged[merged.length - 1] = TimedSubtitleCue(
+          startMs: last.startMs,
+          endMs: last.endMs,
+          text: '${last.text}\n${cue.text}',
+        );
+      }
+      continue;
+    }
+    merged.add(cue);
+  }
+  return merged;
+}
+
+List<String> _splitAssFields(String value, int count) {
+  final parts = <String>[];
+  var start = 0;
+  while (parts.length < count - 1) {
+    final comma = value.indexOf(',', start);
+    if (comma < 0) break;
+    parts.add(value.substring(start, comma).trim());
+    start = comma + 1;
+  }
+  parts.add(value.substring(start));
+  return parts;
+}
+
+int? _assClock(String raw) {
+  final match = RegExp(
+    r'^(\d+):(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?$',
+  ).firstMatch(raw.trim());
+  if (match == null) return null;
+  final fraction = (match.group(4) ?? '0').padRight(3, '0');
+  return int.parse(match.group(1)!) * 3600000 +
+      int.parse(match.group(2)!) * 60000 +
+      int.parse(match.group(3)!) * 1000 +
+      int.parse(fraction);
+}
+
+class _CueParse extends Iterable<TimedSubtitleCue> {
   const _CueParse(this.cues, this.invalidCount);
 
-  final List<_RawCue> cues;
+  final List<TimedSubtitleCue> cues;
   final int invalidCount;
 
   @override
-  Iterator<_RawCue> get iterator => cues.iterator;
+  Iterator<TimedSubtitleCue> get iterator => cues.iterator;
 }
 
 class _CleanedText {

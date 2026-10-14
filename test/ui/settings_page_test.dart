@@ -878,6 +878,7 @@ void main() {
       'undo-structure',
       'redo-structure',
       'exit-structure',
+      'watch-video',
     ]) {
       expect(find.byKey(ValueKey('shortcut-row-$id')), findsOneWidget);
     }
@@ -903,6 +904,20 @@ void main() {
       ),
       findsOneWidget,
     );
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('shortcut-row-player-close')),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    for (final id in [
+      'player-previous-subtitle',
+      'player-next-subtitle',
+      'player-hold-repeat',
+      'player-fullscreen',
+      'player-close',
+    ]) {
+      expect(find.byKey(ValueKey('shortcut-row-$id')), findsOneWidget);
+    }
 
     await tester.tap(find.text('About'));
     await tester.pumpAndSettle();

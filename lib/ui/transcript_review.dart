@@ -12,10 +12,10 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
-import 'package:window_manager/window_manager.dart';
 
 import '../core/dictation_comparison.dart';
 import '../core/models.dart';
+import '../core/windowing/app_window.dart';
 import '../core/transcript_structure_editor.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';

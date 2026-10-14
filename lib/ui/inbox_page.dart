@@ -39,10 +39,14 @@ class InboxPage extends StatefulWidget {
     super.key,
     required this.onAddFiles,
     required this.onImportFolder,
+    this.onWatchVideo,
   });
 
   final VoidCallback onAddFiles;
   final VoidCallback onImportFolder;
+
+  /// Opens a video in the standalone player instead of adding a job.
+  final VoidCallback? onWatchVideo;
 
   @override
   State<InboxPage> createState() => _InboxPageState();
@@ -92,6 +96,7 @@ class _InboxPageState extends State<InboxPage> {
                     dragging: _dragging,
                     onAddFiles: widget.onAddFiles,
                     onImportFolder: widget.onImportFolder,
+                    onWatchVideo: widget.onWatchVideo,
                   ),
                 )
               else
@@ -315,11 +320,13 @@ class _EmptyDropZone extends StatelessWidget {
     required this.dragging,
     required this.onAddFiles,
     required this.onImportFolder,
+    this.onWatchVideo,
   });
 
   final bool dragging;
   final VoidCallback onAddFiles;
   final VoidCallback onImportFolder;
+  final VoidCallback? onWatchVideo;
 
   @override
   Widget build(BuildContext context) => Center(
@@ -390,6 +397,13 @@ class _EmptyDropZone extends StatelessWidget {
                             icon: const Icon(Icons.create_new_folder_outlined),
                             label: Text(context.strings.t('import_folder')),
                           ),
+                          if (onWatchVideo != null)
+                            TextButton.icon(
+                              key: const Key('empty-watch-video'),
+                              onPressed: onWatchVideo,
+                              icon: const Icon(Icons.smart_display_outlined),
+                              label: Text(context.strings.t('watch_video')),
+                            ),
                         ],
                       ),
                     ],

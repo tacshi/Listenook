@@ -14,6 +14,7 @@ import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/local_speech.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/core/transcript_structure_editor.dart';
+import 'package:listenook/core/windowing/main_window_host.dart';
 import 'package:listenook/core/podcast_models.dart';
 import 'package:listenook/data/podcast/http_podcast_gateway.dart';
 import 'package:listenook/data/local_media_source_resolver.dart';
@@ -5304,14 +5305,9 @@ void main() {
     tester,
   ) async {
     _setTestWindow(tester, const Size(1240, 820));
-    const windowChannel = MethodChannel('window_manager');
+    final mainWindow = _installFakeMainWindow();
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(
-      windowChannel,
-      (call) async => call.method == 'isFullScreen' ? false : null,
-    );
-    addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
     final controller = AppController(
       credentialStore: _Credentials(),
       settingsRepository: _Settings(),
@@ -5589,8 +5585,7 @@ void main() {
     expect(find.byKey(const Key('app-sidebar')), findsOneWidget);
     expect(find.byType(NavigationRail), findsOneWidget);
 
-    final dynamic appShellState = tester.state(find.byType(AppShell));
-    appShellState.onWindowEnterFullScreen();
+    mainWindow.setFullscreen(true);
     await tester.pump();
     expect(windowToolbar, findsNothing);
     expect(
@@ -5598,7 +5593,7 @@ void main() {
       findsOneWidget,
     );
 
-    appShellState.onWindowLeaveFullScreen();
+    mainWindow.setFullscreen(false);
     await tester.pump();
     expect(windowToolbar, findsOneWidget);
   });
@@ -5607,14 +5602,6 @@ void main() {
     tester,
   ) async {
     _setTestWindow(tester, const Size(1240, 820));
-    const windowChannel = MethodChannel('window_manager');
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(
-      windowChannel,
-      (call) async => call.method == 'isFullScreen' ? false : null,
-    );
-    addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
     final controller = await _controllerForDocument(
       _simpleDocument(),
       metadata: _videoMetadata,
@@ -5650,24 +5637,10 @@ void main() {
   });
 
   testWidgets(
-    'window close runs cleanup concurrently before allowing native close',
+    'window close runs cleanup concurrently before quitting',
     (tester) async {
-      const windowChannel = MethodChannel('window_manager');
-      final messenger =
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       final events = <String>[];
-      messenger.setMockMethodCallHandler(windowChannel, (call) async {
-        if (call.method == 'isFullScreen') return false;
-        if (call.method == 'setPreventClose') {
-          final arguments = call.arguments as Map<Object?, Object?>;
-          events.add('prevent:${arguments['isPreventClose']}');
-        }
-        if (call.method == 'destroy') events.add('destroy');
-        return null;
-      });
-      addTearDown(
-        () => messenger.setMockMethodCallHandler(windowChannel, null),
-      );
+      final mainWindow = _installFakeMainWindow(events);
       final controller = AppController(
         credentialStore: _Credentials(),
         settingsRepository: _Settings(),
@@ -5717,50 +5690,25 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(events, ['prevent:true']);
+      expect(mainWindow.closeHandler, isNotNull);
       events.clear();
 
-      final dynamic appShellState = tester.state(find.byType(AppShell));
-      final close = appShellState.onWindowClose() as Future<void>;
+      final close = mainWindow.requestClose();
       await tester.pump();
       expect(events, ['media-start', 'podcast-save']);
 
       mediaReleased.complete();
       await close;
-      expect(events, [
-        'media-start',
-        'podcast-save',
-        'media-done',
-        'prevent:false',
-        'destroy',
-      ]);
+      expect(events, ['media-start', 'podcast-save', 'media-done', 'quit']);
 
-      await appShellState.onWindowClose();
-      expect(events, [
-        'media-start',
-        'podcast-save',
-        'media-done',
-        'prevent:false',
-        'destroy',
-      ]);
+      await mainWindow.requestClose();
+      expect(events, ['media-start', 'podcast-save', 'media-done', 'quit']);
     },
   );
 
   testWidgets('Open Main Window tray action preserves the current tab', (
     tester,
   ) async {
-    const windowChannel = MethodChannel('window_manager');
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(
-      windowChannel,
-      (call) async => switch (call.method) {
-        'isFullScreen' => false,
-        'isVisible' => true,
-        _ => null,
-      },
-    );
-    addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
     final controller = AppController(
       credentialStore: _Credentials(),
       settingsRepository: _Settings(),
@@ -5802,30 +5750,15 @@ void main() {
   testWidgets(
     'menu bar item and close-to-menu-bar work without an Inbox folder',
     (tester) async {
-      const windowChannel = MethodChannel('window_manager');
       const trayChannel = MethodChannel('tray_manager');
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       final events = <String>[];
-      messenger.setMockMethodCallHandler(windowChannel, (call) async {
-        if (call.method == 'isFullScreen') return false;
-        if (call.method == 'isVisible') return true;
-        if (call.method == 'setPreventClose') {
-          final arguments = call.arguments as Map<Object?, Object?>;
-          events.add('prevent:${arguments['isPreventClose']}');
-        }
-        if (call.method == 'setSkipTaskbar') events.add('skip-taskbar');
-        if (call.method == 'hide') events.add('hide');
-        if (call.method == 'destroy') events.add('destroy');
-        return null;
-      });
+      final mainWindow = _installFakeMainWindow(events);
       messenger.setMockMethodCallHandler(trayChannel, (call) async {
         events.add('tray:${call.method}');
         return null;
       });
-      addTearDown(
-        () => messenger.setMockMethodCallHandler(windowChannel, null),
-      );
       addTearDown(() => messenger.setMockMethodCallHandler(trayChannel, null));
       final controller = AppController(
         credentialStore: _Credentials(),
@@ -5878,19 +5811,17 @@ void main() {
         events.clear();
       }
 
-      final dynamic appShellState = tester.state(find.byType(AppShell));
-      await appShellState.onWindowClose();
+      await mainWindow.requestClose();
 
-      expect(events, containsAllInOrder(['skip-taskbar', 'hide']));
-      expect(events, isNot(contains('destroy')));
-      expect(events, isNot(contains('prevent:false')));
+      expect(events, contains('hide'));
+      expect(events, isNot(contains('quit')));
 
       events.clear();
       await controller.setDesktopTrayIconVisible(false);
       await tester.pump();
-      await appShellState.onWindowClose();
+      await mainWindow.requestClose();
 
-      expect(events, containsAllInOrder(['prevent:false', 'destroy']));
+      expect(events, contains('quit'));
       expect(events, isNot(contains('hide')));
     },
   );
@@ -5899,14 +5830,6 @@ void main() {
     tester,
   ) async {
     _setTestWindow(tester, const Size(1240, 820));
-    const windowChannel = MethodChannel('window_manager');
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(
-      windowChannel,
-      (call) async => call.method == 'isFullScreen' ? false : null,
-    );
-    addTearDown(() => messenger.setMockMethodCallHandler(windowChannel, null));
     final now = DateTime.now().toUtc();
     final controller = await _controllerForDocument(
       TranscriptDocument(
@@ -6071,18 +5994,9 @@ void main() {
     'restored workspace keeps video ready when switching translation',
     (tester) async {
       _setTestWindow(tester, const Size(1055, 820));
-      const windowChannel = MethodChannel('window_manager');
+      final mainWindow = _installFakeMainWindow();
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      messenger.setMockMethodCallHandler(windowChannel, (call) async {
-        if (call.method == 'isFullScreen') return false;
-        if (call.method == 'isVisible') return true;
-        if (call.method == 'isMinimized') return false;
-        return null;
-      });
-      addTearDown(
-        () => messenger.setMockMethodCallHandler(windowChannel, null),
-      );
       final directory = (await tester.runAsync(
         () => Directory.systemTemp.createTemp('meow-translated-video-'),
       ))!;
@@ -6144,10 +6058,7 @@ void main() {
       expect(platforms, hasLength(1));
       expect(platforms.single.openCalls, 1);
 
-      final dynamic appShellState = tester.state(find.byType(AppShell));
-      await tester.runAsync(
-        () => appShellState.onWindowClose() as Future<void>,
-      );
+      await tester.runAsync(mainWindow.requestClose);
       final restoreFuture = messenger.handlePlatformMessage(
         'app.capyvibe.listenook/navigation',
         const StandardMethodCodec().encodeMethodCall(
@@ -10226,4 +10137,60 @@ class _TranscriptSoniox extends _Soniox {
       {'text': 'Done.', 'start_ms': 0, 'end_ms': 800, 'speaker': '1'},
     ],
   };
+}
+
+/// Stands in for the Dart-created main window, recording what the app shell
+/// asks of it.
+class _FakeMainWindow extends ChangeNotifier implements MainWindowHost {
+  _FakeMainWindow(this.events);
+
+  final List<String> events;
+  Future<void> Function()? closeHandler;
+  bool _fullscreen = false;
+  bool _visible = true;
+
+  void setFullscreen(bool value) {
+    _fullscreen = value;
+    notifyListeners();
+  }
+
+  Future<void> requestClose() => closeHandler?.call() ?? Future<void>.value();
+
+  @override
+  bool get mainVisible => _visible;
+
+  @override
+  bool get mainFullscreen => _fullscreen;
+
+  @override
+  Listenable get mainListenable => this;
+
+  @override
+  set mainCloseHandler(Future<void> Function()? handler) =>
+      closeHandler = handler;
+
+  @override
+  void setMainTitle(String title) {}
+
+  @override
+  Future<void> showMain() async {
+    _visible = true;
+    events.add('show');
+  }
+
+  @override
+  Future<void> hideMain() async {
+    _visible = false;
+    events.add('hide');
+  }
+
+  @override
+  Future<void> quit() async => events.add('quit');
+}
+
+_FakeMainWindow _installFakeMainWindow([List<String>? events]) {
+  final window = _FakeMainWindow(events ?? []);
+  MainWindowHost.debugOverride = window;
+  addTearDown(() => MainWindowHost.debugOverride = null);
+  return window;
 }

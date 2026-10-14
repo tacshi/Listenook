@@ -10,13 +10,17 @@
 #include <memory>
 
 #include "win32_window.h"
+#include "window_handle_channel.h"
 
-// A window that does nothing but host a Flutter view.
+// The runner's own window. It hosts the engine and its implicit view but is
+// never shown: every visible window — the main window and each video player —
+// is created from Dart through Flutter's windowing API (lib/core/windowing/).
+// It stays as the process's anchor: plugins that look for "the" window find
+// it, and destroying it ends the message loop.
 class FlutterWindow : public Win32Window {
  public:
   // Creates a new FlutterWindow hosting a Flutter view running |project|.
-  explicit FlutterWindow(const flutter::DartProject& project,
-                         bool start_hidden = false);
+  explicit FlutterWindow(const flutter::DartProject& project);
   virtual ~FlutterWindow();
 
  protected:
@@ -30,6 +34,9 @@ class FlutterWindow : public Win32Window {
   enum class TranscriptCursorKind { kSplit, kMerge };
 
   void RegisterTranscriptStructureCursor();
+  // Moves the split/merge cursor onto the Flutter view of Dart's main window.
+  void AttachTranscriptCursor(HWND main_window);
+  void DetachTranscriptCursor();
   bool ActivateTranscriptStructureCursor(TranscriptCursorKind kind,
                                          int64_t session);
   void DeactivateTranscriptStructureCursor(int64_t session);
@@ -44,12 +51,12 @@ class FlutterWindow : public Win32Window {
 
   // The project to run.
   flutter::DartProject project_;
-  bool start_hidden_ = false;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       transcript_cursor_channel_;
+  std::unique_ptr<WindowHandleChannel> window_handles_;
   HWND flutter_view_window_ = nullptr;
   HCURSOR split_cursor_ = nullptr;
   HCURSOR merge_cursor_ = nullptr;

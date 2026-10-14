@@ -224,4 +224,52 @@ Backwards
     expect(review!.media.single.candidates, isEmpty);
     expect(review.unmatchedSubtitles.single.path, subtitle.path);
   });
+
+  test('ASS parsing keeps dialogue text and drops styling', () async {
+    final file = File('${directory.path}/movie.en.ass');
+    await file.writeAsString(r'''
+[Script Info]
+ScriptType: v4.00+
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:02.00,0:00:03.50,Default,,0,0,0,,Second, after {\i1}first{\i0}
+Dialogue: 0,0:00:00.50,0:00:01.25,Default,,0,0,0,,Top\Nline
+Dialogue: 1,0:00:00.50,0:00:01.25,Shadow,,0,0,0,,Top\Nline
+Dialogue: 0,0:00:00.50,0:00:01.25,Sign,,0,0,0,,{\pos(10,10)}Sign text
+Dialogue: 0,0:00:04.00,0:00:05.00,Default,,0,0,0,,{\p1}m 0 0 l 10 0 10 10{\p0}
+Comment: 0,0:00:06.00,0:00:07.00,Default,,0,0,0,,Not shown
+''');
+
+    final result = await const TimedSubtitleImportService().parseFile(
+      file.path,
+    );
+
+    expect(result.format, SubtitleFormat.ass);
+    expect(
+      result.document.segments.map(
+        (segment) => (segment.startMs, segment.endMs, segment.text),
+      ),
+      [
+        (500, 1250, 'Top\nline\nSign text'),
+        (2000, 3500, 'Second, after first'),
+      ],
+    );
+  });
+
+  test('sidecar lookup finds language-tagged subtitle files', () async {
+    final media = File('${directory.path}/Movie.mkv')..writeAsStringSync('');
+    File('${directory.path}/Movie.srt').writeAsStringSync('');
+    File('${directory.path}/Movie.en.ass').writeAsStringSync('');
+    File('${directory.path}/Other.srt').writeAsStringSync('');
+    File('${directory.path}/Movie.txt').writeAsStringSync('');
+
+    final sidecars = await const TimedSubtitleImportService()
+        .subtitleSidecarsFor(media.path);
+
+    expect(sidecars.map((path) => path.split('/').last), [
+      'Movie.en.ass',
+      'Movie.srt',
+    ]);
+  });
 }

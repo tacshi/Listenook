@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/macos-signing.sh"
+source "$ROOT/scripts/flutter-sdk.sh"
 MODE="${1:?internal usage: build-macos.sh debug|release [--arch ...]}"
 shift
 ARCH="arm64"
@@ -66,7 +67,7 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   echo "Building Listenook $VERSION macOS $CURRENT_ARCH $MODE"
   cd "$ROOT"
   if [[ "$MODE" == "debug" ]]; then
-    flutter build macos --debug --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
+    "$FLUTTER" build macos --debug --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
     xcodebuild \
       -workspace macos/Runner.xcworkspace \
       -scheme Runner \
@@ -81,7 +82,7 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   else
     EXCLUDED="x86_64"
     if [[ "$CURRENT_ARCH" == "x64" ]]; then EXCLUDED="arm64"; fi
-    FLUTTER_XCODE_EXCLUDED_ARCHS="$EXCLUDED" flutter build macos --release --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
+    FLUTTER_XCODE_EXCLUDED_ARCHS="$EXCLUDED" "$FLUTTER" build macos --release --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
     xcodebuild \
       -workspace macos/Runner.xcworkspace \
       -scheme Runner \
