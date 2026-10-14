@@ -87,8 +87,25 @@ function Invoke-CodeSign([string]$Path) {
   if ($LASTEXITCODE -ne 0) { throw "Code signing failed: $Path" }
 }
 
+function Clear-StaleCMakeCache {
+  # CMake refuses to reuse a cache generated for a different source directory
+  # (e.g. after the project folder was moved or renamed).
+  $CMakeBuild = Join-Path $Root "build\windows\$Arch"
+  $Cache = Join-Path $CMakeBuild "CMakeCache.txt"
+  if (-not (Test-Path -LiteralPath $Cache -PathType Leaf)) { return }
+  $HomeLine = Select-String -LiteralPath $Cache -Pattern '^CMAKE_HOME_DIRECTORY:INTERNAL=(.+)$' | Select-Object -First 1
+  if (-not $HomeLine) { return }
+  $Cached = $HomeLine.Matches[0].Groups[1].Value.Trim().Replace('\', '/').TrimEnd('/')
+  $Expected = (Join-Path $Root "windows").Replace('\', '/').TrimEnd('/')
+  if ($Cached -ne $Expected) {
+    Write-Host "Removing stale CMake build directory (generated for $Cached)."
+    Remove-Item -LiteralPath $CMakeBuild -Recurse -Force
+  }
+}
+
 Push-Location $Root
 try {
+  Clear-StaleCMakeCache
   $FlutterArgs = @("build", "windows", "--$Mode")
   if ($BuildName) { $FlutterArgs += @("--build-name", $BuildName) }
   if ($BuildNumber) { $FlutterArgs += @("--build-number", $BuildNumber) }
