@@ -102,6 +102,52 @@ void main() {
     ]);
   });
 
+  test('JSON mode falls back once for providers that reject it', () async {
+    final formats = <Object?>[];
+    final client = OpenAiCompatibleLlmClient(
+      _Credentials('secret'),
+      httpClient: MockClient((request) async {
+        final body = (jsonDecode(request.body) as Map).cast<String, dynamic>();
+        formats.add(body['response_format']);
+        if (body.containsKey('response_format')) {
+          return http.Response(
+            jsonEncode({
+              'error': {'message': 'response_format is not supported'},
+            }),
+            400,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'choices': [
+              {
+                'message': {'content': '{"overview":"ok"}'},
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+    );
+    Future<String> complete() => client.complete(
+      settings: const LlmProviderSettings(
+        baseUrl: 'https://llm.example/v1',
+        model: 'model',
+      ),
+      systemPrompt: 'Return JSON only.',
+      userPrompt: 'prompt',
+      jsonObject: true,
+    );
+
+    expect(await complete(), '{"overview":"ok"}');
+    expect(await complete(), '{"overview":"ok"}');
+    expect(formats, [
+      {'type': 'json_object'},
+      null,
+      null,
+    ]);
+  });
+
   test('cancelling aborts the in-flight request', () async {
     var requestSent = false;
     final client = OpenAiCompatibleLlmClient(

@@ -78,10 +78,13 @@ abstract interface class LlmClient {
     String? candidateApiKey,
   });
 
+  /// With [jsonObject], asks the provider for a single JSON object where it
+  /// supports that; callers still validate the reply.
   Future<String> complete({
     required LlmProviderSettings settings,
     required String systemPrompt,
     required String userPrompt,
+    bool jsonObject = false,
     CancelCheck? shouldCancel,
   });
 }

@@ -74,6 +74,7 @@ void main() {
       expect(action.owner, isNull);
       expect(action.deadline, isNull);
       expect(brief.model, 'brief-model');
+      expect(client.jsonObjectRequests, everyElement(isTrue));
     },
   );
 
@@ -402,6 +403,7 @@ class _LlmClient implements LlmClient {
 
   final List<String> _responses;
   final List<String> prompts = [];
+  final List<bool> jsonObjectRequests = [];
   var _index = 0;
 
   @override
@@ -409,9 +411,11 @@ class _LlmClient implements LlmClient {
     required LlmProviderSettings settings,
     required String systemPrompt,
     required String userPrompt,
+    bool jsonObject = false,
     CancelCheck? shouldCancel,
   }) async {
     prompts.add(userPrompt);
+    jsonObjectRequests.add(jsonObject);
     return _responses[_index++];
   }
 

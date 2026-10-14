@@ -309,6 +309,7 @@ source_excerpt must be a short verbatim substring of a cited transcript segment.
             ? prompt
             : '$prompt\nYour previous response was not valid JSON. Return only '
                   'one valid JSON object matching the requested shape.',
+        jsonObject: true,
         shouldCancel: shouldCancel,
       );
       try {

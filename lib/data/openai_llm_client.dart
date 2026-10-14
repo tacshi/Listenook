@@ -18,6 +18,8 @@ class OpenAiCompatibleLlmClient implements LlmClient {
   final LlmCredentialStore _credentials;
   final http.Client _http;
   final Future<void> Function(Duration duration) _delay;
+  // Endpoint and model pairs that rejected JSON mode in this session.
+  final Set<String> _jsonObjectUnsupported = {};
 
   @override
   Future<List<String>> listModels(
@@ -52,6 +54,7 @@ class OpenAiCompatibleLlmClient implements LlmClient {
     required LlmProviderSettings settings,
     required String systemPrompt,
     required String userPrompt,
+    bool jsonObject = false,
     CancelCheck? shouldCancel,
   }) async {
     final validation = settings.validationError();
@@ -61,11 +64,12 @@ class OpenAiCompatibleLlmClient implements LlmClient {
     for (var attempt = 1; attempt <= 4; attempt++) {
       _checkCancelled(shouldCancel);
       try {
-        return await _send(
+        return await _sendWithJsonFallback(
           settings: settings,
           key: key,
           systemPrompt: systemPrompt,
           userPrompt: userPrompt,
+          jsonObject: jsonObject,
           shouldCancel: shouldCancel,
         );
       } on LlmException catch (error) {
@@ -87,11 +91,58 @@ class OpenAiCompatibleLlmClient implements LlmClient {
     throw lastError ?? const LlmException('llm_request_failed');
   }
 
+  /// Not every OpenAI-compatible provider accepts `response_format`. When a
+  /// request is rejected with it but succeeds without it, later requests to
+  /// that endpoint and model skip it.
+  Future<String> _sendWithJsonFallback({
+    required LlmProviderSettings settings,
+    required String? key,
+    required String systemPrompt,
+    required String userPrompt,
+    required bool jsonObject,
+    CancelCheck? shouldCancel,
+  }) async {
+    final target = '${_endpoint(settings, '')}|${settings.model.trim()}';
+    if (jsonObject && !_jsonObjectUnsupported.contains(target)) {
+      try {
+        return await _send(
+          settings: settings,
+          key: key,
+          systemPrompt: systemPrompt,
+          userPrompt: userPrompt,
+          jsonObject: true,
+          shouldCancel: shouldCancel,
+        );
+      } on LlmException catch (error) {
+        if (error.code != 'llm_request_failed') rethrow;
+      }
+      final content = await _send(
+        settings: settings,
+        key: key,
+        systemPrompt: systemPrompt,
+        userPrompt: userPrompt,
+        jsonObject: false,
+        shouldCancel: shouldCancel,
+      );
+      _jsonObjectUnsupported.add(target);
+      return content;
+    }
+    return _send(
+      settings: settings,
+      key: key,
+      systemPrompt: systemPrompt,
+      userPrompt: userPrompt,
+      jsonObject: false,
+      shouldCancel: shouldCancel,
+    );
+  }
+
   Future<String> _send({
     required LlmProviderSettings settings,
     required String? key,
     required String systemPrompt,
     required String userPrompt,
+    required bool jsonObject,
     CancelCheck? shouldCancel,
   }) async {
     final abort = Completer<void>();
@@ -113,6 +164,7 @@ class OpenAiCompatibleLlmClient implements LlmClient {
               {'role': 'system', 'content': systemPrompt},
               {'role': 'user', 'content': userPrompt},
             ],
+            if (jsonObject) 'response_format': {'type': 'json_object'},
           });
     late http.Response response;
     try {
