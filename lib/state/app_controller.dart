@@ -22,6 +22,7 @@ import '../data/process_media_service.dart';
 import '../data/soniox_api_client.dart';
 import '../data/transcript_exporter.dart';
 import '../data/timed_subtitle_import.dart';
+import 'local_models_controller.dart';
 
 enum AppDestination { inbox, podcast, workspace, library, settings }
 
@@ -125,9 +126,10 @@ class AppController extends ChangeNotifier {
   final Set<String> _localAutoStartCandidates = {};
   final _remoteLane = _PermitPool(4);
   final _localModelLane = _PermitPool(1);
-  final Map<String, LocalModelStatus> _localModelStatuses = {};
-  final Map<String, double?> _localModelDownloadProgress = {};
-  final Set<String> _localModelDownloadCancelled = {};
+  late final LocalModelsController localModels = LocalModelsController(
+    _localModelManager,
+    onStatusesChanged: _localModelStatusesChanged,
+  );
   String _batchId = '';
   bool _processing = false;
   bool _initializing = true;
@@ -205,26 +207,19 @@ class AppController extends ChangeNotifier {
   bool get hasActiveWork => _jobs.values.any((job) => job.isBusy);
   bool get keyConfigured => _keyConfigured;
   bool get mossKeyConfigured => _mossKeyConfigured;
-  bool isTranscriptionProviderConfigured(
-    TranscriptionProvider provider,
-  ) => switch (provider) {
-    TranscriptionProvider.soniox => _keyConfigured,
-    TranscriptionProvider.mossPro => _mossKeyConfigured,
-    TranscriptionProvider.mossLocal =>
-      (_localSttService?.isSupported ?? false) &&
-          (_localModelManager == null ||
-              _localModelStatuses[LocalSpeechModels.mossDiarizeCoreMlInt8.id]
-                      ?.availability ==
-                  LocalModelAvailability.ready),
-    TranscriptionProvider.qwen3Local =>
-      (_localSttService?.isSupported ?? false) &&
-          (_localModelManager == null ||
+  bool isTranscriptionProviderConfigured(TranscriptionProvider provider) =>
+      switch (provider) {
+        TranscriptionProvider.soniox => _keyConfigured,
+        TranscriptionProvider.mossPro => _mossKeyConfigured,
+        TranscriptionProvider.mossLocal =>
+          (_localSttService?.isSupported ?? false) &&
+              localModels.isReady(LocalSpeechModels.mossDiarizeCoreMlInt8.id),
+        TranscriptionProvider.qwen3Local =>
+          (_localSttService?.isSupported ?? false) &&
               LocalSpeechModels.qwen3AsrBundle.artifacts.every(
-                (model) =>
-                    _localModelStatuses[model.id]?.availability ==
-                    LocalModelAvailability.ready,
-              )),
-  };
+                (model) => localModels.isReady(model.id),
+              ),
+      };
   bool get localSpeechSupported => _localSttService?.isSupported ?? false;
   bool get localForcedAlignmentSupported =>
       _forcedAlignmentService?.isSupported ?? false;
@@ -233,9 +228,7 @@ class AppController extends ChangeNotifier {
     final model = _defaultForcedAligner;
     return localForcedAlignmentSupported &&
         model != null &&
-        (_localModelManager == null ||
-            _localModelStatuses[model.id]?.availability ==
-                LocalModelAvailability.ready);
+        localModels.isReady(model.id);
   }
 
   List<TranscriptionProvider> get availableTranscriptionProviders => [
@@ -244,32 +237,6 @@ class AppController extends ChangeNotifier {
     if (localSpeechSupported) TranscriptionProvider.mossLocal,
     if (localSpeechSupported) TranscriptionProvider.qwen3Local,
   ];
-  LocalModelStatus? localModelStatus(String modelId) =>
-      _localModelStatuses[modelId];
-  bool localModelDownloading(String modelId) =>
-      _localModelDownloadProgress.containsKey(modelId);
-  double? localModelDownloadProgress(String modelId) =>
-      _localModelDownloadProgress[modelId];
-  LocalModelAvailability localModelBundleAvailability(
-    LocalModelInstallBundle bundle,
-  ) {
-    final states = bundle.artifacts
-        .map((model) => _localModelStatuses[model.id]?.availability)
-        .toList(growable: false);
-    if (states.every((state) => state == LocalModelAvailability.ready)) {
-      return LocalModelAvailability.ready;
-    }
-    if (states.any((state) => state == LocalModelAvailability.corrupt)) {
-      return LocalModelAvailability.corrupt;
-    }
-    if (states.every(
-      (state) => state == null || state == LocalModelAvailability.missing,
-    )) {
-      return LocalModelAvailability.missing;
-    }
-    return LocalModelAvailability.partial;
-  }
-
   bool get translationKeyConfigured => _translationKeyConfigured;
   bool get translationConfigured => _settings.translationSettings.isConfigured(
     hasApiKey: _translationKeyConfigured,
@@ -547,7 +514,7 @@ class AppController extends ChangeNotifier {
       _translationCredentials,
       _translationCredentials?.readApiKey,
     );
-    await _refreshLocalModelStatuses(notify: false);
+    await localModels.refresh();
     settingsChanged =
         _selectSoleInstalledForcedAlignerIfUnset() || settingsChanged;
     if (!availableTranscriptionProviders.contains(
@@ -599,31 +566,22 @@ class AppController extends ChangeNotifier {
     return (await read())?.isNotEmpty ?? false;
   }
 
-  Future<void> refreshLocalModelStatuses() =>
-      _refreshLocalModelStatuses(verifyIntegrity: true);
-
-  Future<void> _refreshLocalModelStatuses({
-    bool notify = true,
-    bool verifyIntegrity = false,
-  }) async {
-    final manager = _localModelManager;
-    if (manager == null) return;
-    for (final model in manager.models) {
-      _localModelStatuses[model.id] = await manager.status(
-        model.id,
-        verifyIntegrity: verifyIntegrity,
-      );
-    }
-    if (notify) notifyListeners();
-    _scheduleLocalAutoStart();
-  }
-
   Future<void> _verifyLocalModelStatusesInBackground() async {
     try {
-      await _refreshLocalModelStatuses(verifyIntegrity: true);
+      await localModels.refresh(verifyIntegrity: true);
     } on Object catch (error) {
       debugPrint('Unable to verify local speech models: $error');
     }
+  }
+
+  Future<void> _localModelStatusesChanged() async {
+    // initialize() applies the aligner default itself once settings load.
+    if (_initializing) return;
+    if (_selectSoleInstalledForcedAlignerIfUnset()) {
+      await _queueSettingsSave(_settings);
+    }
+    notifyListeners();
+    _scheduleLocalAutoStart();
   }
 
   bool _selectSoleInstalledForcedAlignerIfUnset() {
@@ -631,7 +589,7 @@ class AppController extends ChangeNotifier {
     final installed = LocalSpeechModels.forcedAligners.entries
         .where(
           (entry) =>
-              _localModelStatuses[entry.value.id]?.availability ==
+              localModels.status(entry.value.id)?.availability ==
               LocalModelAvailability.ready,
         )
         .toList(growable: false);
@@ -645,108 +603,6 @@ class AppController extends ChangeNotifier {
   LocalModelDescriptor? get _defaultForcedAligner {
     final model = _settings.defaultForcedAlignmentModel;
     return model == null ? null : LocalSpeechModels.forcedAligner(model);
-  }
-
-  Future<void> downloadLocalModel(String modelId) async {
-    final manager = _localModelManager;
-    if (manager == null || _localModelDownloadProgress.containsKey(modelId)) {
-      return;
-    }
-    _localModelDownloadProgress[modelId] = 0;
-    _localModelDownloadCancelled.remove(modelId);
-    notifyListeners();
-    try {
-      await manager.download(
-        modelId,
-        onProgress: (downloaded, total) {
-          _localModelDownloadProgress[modelId] = total == 0
-              ? null
-              : downloaded / total;
-          notifyListeners();
-        },
-        shouldCancel: () => _localModelDownloadCancelled.contains(modelId),
-      );
-    } finally {
-      _localModelDownloadCancelled.remove(modelId);
-      _localModelDownloadProgress.remove(modelId);
-      _localModelStatuses[modelId] = await manager.status(modelId);
-      if (_selectSoleInstalledForcedAlignerIfUnset()) {
-        await _queueSettingsSave(_settings);
-      }
-      notifyListeners();
-      _scheduleLocalAutoStart();
-    }
-  }
-
-  Future<void> downloadLocalModelBundle(LocalModelInstallBundle bundle) async {
-    final manager = _localModelManager;
-    if (manager == null || localModelDownloading(bundle.id)) return;
-    final totalBytes = bundle.sizeBytes;
-    var completedBytes = 0;
-    _localModelDownloadProgress[bundle.id] = 0;
-    _localModelDownloadCancelled.remove(bundle.id);
-    notifyListeners();
-    try {
-      for (final model in bundle.artifacts) {
-        final existing = await manager.status(model.id, verifyIntegrity: true);
-        _localModelStatuses[model.id] = existing;
-        if (existing.availability == LocalModelAvailability.ready) {
-          completedBytes += model.sizeBytes;
-          _localModelDownloadProgress[bundle.id] = totalBytes == 0
-              ? null
-              : completedBytes / totalBytes;
-          notifyListeners();
-          continue;
-        }
-        await manager.download(
-          model.id,
-          onProgress: (downloaded, _) {
-            _localModelDownloadProgress[bundle.id] = totalBytes == 0
-                ? null
-                : (completedBytes + downloaded) / totalBytes;
-            notifyListeners();
-          },
-          shouldCancel: () => _localModelDownloadCancelled.contains(bundle.id),
-        );
-        completedBytes += model.sizeBytes;
-      }
-    } finally {
-      _localModelDownloadCancelled.remove(bundle.id);
-      _localModelDownloadProgress.remove(bundle.id);
-      for (final model in bundle.artifacts) {
-        _localModelStatuses[model.id] = await manager.status(model.id);
-      }
-      notifyListeners();
-      _scheduleLocalAutoStart();
-    }
-  }
-
-  void cancelLocalModelDownload(String modelId) {
-    if (localModelDownloading(modelId)) {
-      _localModelDownloadCancelled.add(modelId);
-    }
-  }
-
-  void cancelLocalModelBundleDownload(LocalModelInstallBundle bundle) {
-    cancelLocalModelDownload(bundle.id);
-  }
-
-  Future<void> deleteLocalModel(String modelId) async {
-    final manager = _localModelManager;
-    if (manager == null || localModelDownloading(modelId)) return;
-    await manager.delete(modelId);
-    _localModelStatuses[modelId] = await manager.status(modelId);
-    notifyListeners();
-  }
-
-  Future<void> deleteLocalModelBundle(LocalModelInstallBundle bundle) async {
-    final manager = _localModelManager;
-    if (manager == null || localModelDownloading(bundle.id)) return;
-    for (final model in bundle.artifacts) {
-      await manager.delete(model.id);
-      _localModelStatuses[model.id] = await manager.status(model.id);
-    }
-    notifyListeners();
   }
 
   Future<void> configureInboxMonitor({
@@ -4722,6 +4578,7 @@ class AppController extends ChangeNotifier {
   @override
   void dispose() {
     unawaited(shutdown());
+    localModels.dispose();
     super.dispose();
   }
 }

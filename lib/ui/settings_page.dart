@@ -1663,18 +1663,12 @@ class _LocalTranscriptionProviderSection extends StatelessWidget {
           if (_isQwen)
             _LocalModelBundleRow(
               bundle: LocalSpeechModels.qwen3AsrBundle,
-              availability: controller.localModelBundleAvailability(
-                LocalSpeechModels.qwen3AsrBundle,
-              ),
               controller: controller,
               showMessage: showMessage,
             )
           else
             _LocalModelRow(
               descriptor: LocalSpeechModels.mossDiarizeCoreMlInt8,
-              status: controller.localModelStatus(
-                LocalSpeechModels.mossDiarizeCoreMlInt8.id,
-              ),
               controller: controller,
               showMessage: showMessage,
             ),
@@ -1724,16 +1718,14 @@ class _AutomaticWordTimingSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final installed = LocalSpeechModels.forcedAligners.entries.where(
       (entry) =>
-          controller.localModelStatus(entry.value.id)?.availability ==
+          controller.localModels.status(entry.value.id)?.availability ==
           LocalModelAvailability.ready,
     );
     final selectedModel = settings.defaultForcedAlignmentModel;
     final selectedReady =
         selectedModel != null &&
-        controller
-                .localModelStatus(
-                  LocalSpeechModels.forcedAligner(selectedModel).id,
-                )
+        controller.localModels
+                .status(LocalSpeechModels.forcedAligner(selectedModel).id)
                 ?.availability ==
             LocalModelAvailability.ready;
     final needsConfiguration = settings.automaticWordTiming && !selectedReady;
@@ -1817,18 +1809,12 @@ class _WordTimingModelsSection extends StatelessWidget {
         const SizedBox(height: 12),
         _LocalModelRow(
           descriptor: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8,
-          status: controller.localModelStatus(
-            LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
-          ),
           controller: controller,
           showMessage: showMessage,
         ),
         const SizedBox(height: 8),
         _LocalModelRow(
           descriptor: LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16,
-          status: controller.localModelStatus(
-            LocalSpeechModels.qwen3ForcedAlignerCoreMlFp16.id,
-          ),
           controller: controller,
           showMessage: showMessage,
         ),
@@ -1849,10 +1835,12 @@ class _WordTimingModelsSection extends StatelessWidget {
               DropdownMenuItem(
                 value: entry.key,
                 enabled:
-                    controller.localModelStatus(entry.value.id)?.availability ==
+                    controller.localModels
+                        .status(entry.value.id)
+                        ?.availability ==
                     LocalModelAvailability.ready,
                 child: Text(
-                  controller.localModelStatus(entry.value.id)?.availability ==
+                  controller.localModels.status(entry.value.id)?.availability ==
                           LocalModelAvailability.ready
                       ? entry.value.displayName
                       : '${entry.value.displayName} · ${context.strings.t('model_not_installed')}',
@@ -1864,7 +1852,7 @@ class _WordTimingModelsSection extends StatelessWidget {
           onChanged: (model) {
             if (model == null) return;
             final descriptor = LocalSpeechModels.forcedAligner(model);
-            if (controller.localModelStatus(descriptor.id)?.availability !=
+            if (controller.localModels.status(descriptor.id)?.availability !=
                 LocalModelAvailability.ready) {
               return;
             }
@@ -1881,20 +1869,26 @@ class _WordTimingModelsSection extends StatelessWidget {
 class _LocalModelBundleRow extends StatelessWidget {
   const _LocalModelBundleRow({
     required this.bundle,
-    required this.availability,
     required this.controller,
     required this.showMessage,
   });
 
   final LocalModelInstallBundle bundle;
-  final LocalModelAvailability availability;
   final AppController controller;
   final ValueChanged<String> showMessage;
 
+  // Download progress notifies only the models controller.
   @override
-  Widget build(BuildContext context) {
-    final downloading = controller.localModelDownloading(bundle.id);
-    final progress = controller.localModelDownloadProgress(bundle.id);
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller.localModels,
+    builder: (context, _) => _buildRow(context),
+  );
+
+  Widget _buildRow(BuildContext context) {
+    final models = controller.localModels;
+    final availability = models.bundleAvailability(bundle);
+    final downloading = models.isDownloading(bundle.id);
+    final progress = models.downloadProgress(bundle.id);
     final installed = availability == LocalModelAvailability.ready;
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -1929,27 +1923,22 @@ class _LocalModelBundleRow extends StatelessWidget {
             if (downloading)
               TextButton(
                 key: Key('cancel-model-${bundle.id}'),
-                onPressed: () =>
-                    controller.cancelLocalModelBundleDownload(bundle),
+                onPressed: () => models.cancelBundleDownload(bundle),
                 child: Text(context.strings.t('cancel')),
               )
             else if (installed)
               TextButton.icon(
                 key: Key('delete-model-${bundle.id}'),
-                onPressed: () => _run(
-                  context,
-                  () => controller.deleteLocalModelBundle(bundle),
-                ),
+                onPressed: () =>
+                    _run(context, () => models.deleteBundle(bundle)),
                 icon: const Icon(Icons.delete_outline_rounded),
                 label: Text(context.strings.t('remove')),
               )
             else
               OutlinedButton.icon(
                 key: Key('download-model-${bundle.id}'),
-                onPressed: () => _run(
-                  context,
-                  () => controller.downloadLocalModelBundle(bundle),
-                ),
+                onPressed: () =>
+                    _run(context, () => models.downloadBundle(bundle)),
                 icon: const Icon(Icons.download_rounded),
                 label: Text(context.strings.t('download')),
               ),
@@ -1988,20 +1977,26 @@ String _modelSize(int bytes) => '${(bytes / 1000000000).toStringAsFixed(2)} GB';
 class _LocalModelRow extends StatelessWidget {
   const _LocalModelRow({
     required this.descriptor,
-    required this.status,
     required this.controller,
     required this.showMessage,
   });
 
   final LocalModelDescriptor descriptor;
-  final LocalModelStatus? status;
   final AppController controller;
   final ValueChanged<String> showMessage;
 
+  // Download progress notifies only the models controller.
   @override
-  Widget build(BuildContext context) {
-    final downloading = controller.localModelDownloading(descriptor.id);
-    final progress = controller.localModelDownloadProgress(descriptor.id);
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller.localModels,
+    builder: (context, _) => _buildRow(context),
+  );
+
+  Widget _buildRow(BuildContext context) {
+    final models = controller.localModels;
+    final status = models.status(descriptor.id);
+    final downloading = models.isDownloading(descriptor.id);
+    final progress = models.downloadProgress(descriptor.id);
     final installed = status?.availability == LocalModelAvailability.ready;
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -2036,27 +2031,22 @@ class _LocalModelRow extends StatelessWidget {
             if (downloading)
               TextButton(
                 key: Key('cancel-model-${descriptor.id}'),
-                onPressed: () =>
-                    controller.cancelLocalModelDownload(descriptor.id),
+                onPressed: () => models.cancelDownload(descriptor.id),
                 child: Text(context.strings.t('cancel')),
               )
             else if (installed)
               TextButton.icon(
                 key: Key('delete-model-${descriptor.id}'),
-                onPressed: () => _run(
-                  context,
-                  () => controller.deleteLocalModel(descriptor.id),
-                ),
+                onPressed: () =>
+                    _run(context, () => models.delete(descriptor.id)),
                 icon: const Icon(Icons.delete_outline_rounded),
                 label: Text(context.strings.t('remove')),
               )
             else
               OutlinedButton.icon(
                 key: Key('download-model-${descriptor.id}'),
-                onPressed: () => _run(
-                  context,
-                  () => controller.downloadLocalModel(descriptor.id),
-                ),
+                onPressed: () =>
+                    _run(context, () => models.download(descriptor.id)),
                 icon: const Icon(Icons.download_rounded),
                 label: Text(context.strings.t('download')),
               ),
