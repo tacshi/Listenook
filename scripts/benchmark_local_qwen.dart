@@ -3,9 +3,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../tool/score_transcripts.dart'
+    show scoreTranscript, transcriptTextFromFile;
+
 Future<void> main(List<String> arguments) async {
   final options = _Options.parse(arguments);
   final duration = await _wavDuration(File(options.audioPath));
+  final referenceText = await _referenceText(options.referencePath);
   final exchange = await Directory.systemTemp.createTemp(
     'listenook-qwen-benchmark-',
   );
@@ -53,13 +57,20 @@ Future<void> main(List<String> arguments) async {
       final valid = workerExit == 0 && await _validTranscript(output);
       final withinRtf = rtf < options.maxRtf;
       final withinMemory = peakRssKb < options.maxRssGiB * 1024 * 1024;
+      final accuracy = valid && referenceText != null
+          ? scoreTranscript(
+              referenceText,
+              transcriptTextFromFile(output.path, await output.readAsString()),
+            )
+          : null;
       stdout.writeln(
         'run=$run duration_s=${_fixed(durationSeconds)} '
         'elapsed_s=${_fixed(elapsedSeconds)} rtf=${_fixed(rtf)} '
         'peak_rss_gib=${_fixed(peakRssKb / 1024 / 1024)} '
         'timestamps=${valid ? 'pass' : 'fail'} '
         'rtf_budget=${withinRtf ? 'pass' : 'fail'} '
-        'rss_budget=${withinMemory ? 'pass' : 'fail'}',
+        'rss_budget=${withinMemory ? 'pass' : 'fail'}'
+        '${accuracy == null ? '' : ' ${accuracy.summary}'}',
       );
       if (!valid) {
         stderr.writeln('Worker exit code: $workerExit');
@@ -120,6 +131,11 @@ Future<bool> _validTranscript(File output) async {
   return true;
 }
 
+/// A human-reviewed transcript of the benchmark audio, scored per run.
+Future<String?> _referenceText(String? path) async => path == null
+    ? null
+    : transcriptTextFromFile(path, await File(path).readAsString());
+
 int maxInt(int a, int b) => a > b ? a : b;
 
 String _fixed(num value) => value.toStringAsFixed(3);
@@ -177,6 +193,7 @@ class _Options {
     required this.runs,
     required this.maxRtf,
     required this.maxRssGiB,
+    required this.referencePath,
   });
 
   final String workerPath;
@@ -186,6 +203,7 @@ class _Options {
   final int runs;
   final double maxRtf;
   final double maxRssGiB;
+  final String? referencePath;
 
   static _Options parse(List<String> arguments) {
     String? value(String name) {
@@ -204,7 +222,7 @@ class _Options {
         'Usage: dart run scripts/benchmark_local_qwen.dart '
         '--worker PATH --model-directory PATH --vad-directory PATH '
         '--audio TWO_HOUR_PCM.wav [--runs 1] [--max-rtf 0.7] '
-        '[--max-rss-gib 8]',
+        '[--max-rss-gib 8] [--reference TRANSCRIPT]',
       );
       exit(64);
     }
@@ -216,6 +234,7 @@ class _Options {
       runs: int.parse(value('--runs') ?? '1'),
       maxRtf: double.parse(value('--max-rtf') ?? '0.7'),
       maxRssGiB: double.parse(value('--max-rss-gib') ?? '8'),
+      referencePath: value('--reference'),
     );
   }
 }

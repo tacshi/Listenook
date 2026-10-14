@@ -5,9 +5,13 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
+import '../tool/score_transcripts.dart'
+    show scoreTranscript, transcriptTextFromFile;
+
 Future<void> main(List<String> arguments) async {
   final options = _Options.parse(arguments);
   final audioDuration = await _wavDuration(File(options.audioPath));
+  final referenceText = await _referenceText(options.referencePath);
   final temporaryDirectory = await Directory.systemTemp.createTemp(
     'listenook-moss-benchmark-',
   );
@@ -77,12 +81,22 @@ Future<void> main(List<String> arguments) async {
           ? await _transcriptDigest(outputFile)
           : 'unavailable';
       final withinBudget = realTimeFactor <= options.maxRealTimeFactor;
+      final accuracy = resultOkay && referenceText != null
+          ? scoreTranscript(
+              referenceText,
+              transcriptTextFromFile(
+                outputFile.path,
+                await outputFile.readAsString(),
+              ),
+            )
+          : null;
       stdout.writeln(
         'run=$run duration_s=${_fixed(audioDuration.inMicroseconds / 1000000)} '
         'elapsed_s=${_fixed(elapsedSeconds)} rtf=${_fixed(realTimeFactor)} '
         'events=$progressEvents result=${resultOkay ? 'ok' : 'failed'} '
         'budget=${withinBudget ? 'pass' : 'fail'} '
-        'peak_rss_mb=${_fixed(peakRssKb / 1024)} digest=$resultDigest',
+        'peak_rss_mb=${_fixed(peakRssKb / 1024)} digest=$resultDigest'
+        '${accuracy == null ? '' : ' ${accuracy.summary}'}',
       );
 
       if (!resultOkay) {
@@ -99,6 +113,11 @@ Future<void> main(List<String> arguments) async {
     await temporaryDirectory.delete(recursive: true);
   }
 }
+
+/// A human-reviewed transcript of the benchmark audio, scored per run.
+Future<String?> _referenceText(String? path) async => path == null
+    ? null
+    : transcriptTextFromFile(path, await File(path).readAsString());
 
 Future<int> _peakResidentKilobytes(
   Process process,
@@ -219,6 +238,7 @@ class _Options {
     required this.maxRealTimeFactor,
     required this.showProgress,
     required this.parallelChunks,
+    required this.referencePath,
   });
 
   final String workerPath;
@@ -228,6 +248,7 @@ class _Options {
   final double maxRealTimeFactor;
   final bool showProgress;
   final int parallelChunks;
+  final String? referencePath;
 
   static _Options parse(List<String> arguments) {
     String? value(String name) {
@@ -245,7 +266,8 @@ class _Options {
       stderr.writeln(
         'Usage: dart run scripts/benchmark_local_moss.dart '
         '--worker PATH --model-directory PATH --audio PATH '
-        '[--runs 2] [--max-rtf 1.0] [--show-progress]',
+        '[--runs 2] [--max-rtf 1.0] [--show-progress] '
+        '[--reference TRANSCRIPT]',
       );
       exit(64);
     }
@@ -258,6 +280,7 @@ class _Options {
       maxRealTimeFactor: double.parse(value('--max-rtf') ?? '1.0'),
       showProgress: arguments.contains('--show-progress'),
       parallelChunks: int.parse(value('--parallel-chunks') ?? '2'),
+      referencePath: value('--reference'),
     );
   }
 }
