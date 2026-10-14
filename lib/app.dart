@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'core/models.dart';
 import 'data/desktop_runtime.dart';
+import 'data/desktop_tray.dart';
 import 'data/local_repositories.dart';
 import 'data/update_service.dart';
 import 'l10n/strings.dart';
@@ -19,6 +20,7 @@ class ListenookApp extends StatelessWidget {
     required this.controller,
     required this.updates,
     required this.desktopRuntime,
+    this.desktopTray,
     this.podcastController,
     this.videoOpenRequests,
     this.videoPlaybackRepository,
@@ -26,6 +28,7 @@ class ListenookApp extends StatelessWidget {
   final AppController controller;
   final UpdateService updates;
   final DesktopRuntime desktopRuntime;
+  final DesktopTray? desktopTray;
   final PodcastController? podcastController;
   final VideoOpenRequests? videoOpenRequests;
   final VideoPlaybackRepository? videoPlaybackRepository;
@@ -36,6 +39,7 @@ class ListenookApp extends StatelessWidget {
       ChangeNotifierProvider.value(value: controller),
       ChangeNotifierProvider.value(value: updates),
       Provider.value(value: desktopRuntime),
+      if (desktopTray != null) Provider<DesktopTray>.value(value: desktopTray!),
       if (podcastController != null)
         ChangeNotifierProvider.value(value: podcastController!),
       if (videoOpenRequests != null)

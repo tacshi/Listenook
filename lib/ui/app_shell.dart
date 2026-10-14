@@ -1,13 +1,11 @@
 import '../core/app_identity.dart';
 import 'dart:async';
-import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
-import 'package:tray_manager/tray_manager.dart' as tray;
 
 import '../core/models.dart';
 import '../core/windowing/app_window.dart';
@@ -16,6 +14,7 @@ import '../core/windowing/main_window_host.dart';
 import '../core/windowing/window_caption_button.dart';
 import '../core/windowing/window_drag_area.dart';
 import '../data/desktop_runtime.dart';
+import '../data/desktop_tray.dart';
 import '../l10n/strings.dart';
 import '../data/update_service.dart';
 import '../state/app_controller.dart';
@@ -45,7 +44,7 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell>
-    with tray.TrayListener, WidgetsBindingObserver {
+    with DesktopTrayListener, WidgetsBindingObserver {
   static const _nativeNavigationChannel = MethodChannel(
     AppIdentity.navigationChannel,
   );
@@ -68,6 +67,7 @@ class _AppShellState extends State<AppShell>
   late final ReviewFullscreenController _fullscreenController;
   late final AppController _controller;
   DesktopRuntime? _desktopRuntime;
+  DesktopTray? _tray;
   UpdateService? _updates;
   VideoOpenRequests? _videoRequests;
   Route<void>? _videoPlayerRoute;
@@ -79,6 +79,7 @@ class _AppShellState extends State<AppShell>
         widget.reviewController ?? ReviewFullscreenController();
     _controller = context.read<AppController>();
     _desktopRuntime = Provider.of<DesktopRuntime?>(context, listen: false);
+    _tray = Provider.of<DesktopTray?>(context, listen: false);
     _updates = Provider.of<UpdateService?>(context, listen: false);
     _videoRequests = Provider.of<VideoOpenRequests?>(context, listen: false);
     final playerWindows = VideoPlayerWindows.instance;
@@ -99,7 +100,7 @@ class _AppShellState extends State<AppShell>
     WidgetsBinding.instance.addObserver(this);
     _mainWindow?.mainListenable.addListener(_syncWindowFullscreen);
     _mainWindow?.mainCloseHandler = _onMainWindowClose;
-    tray.trayManager.addListener(this);
+    _tray?.listener = this;
     _nativeNavigationChannel.setMethodCallHandler(_handleNativeNavigation);
     _syncWindowFullscreen();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -180,7 +181,7 @@ class _AppShellState extends State<AppShell>
     WidgetsBinding.instance.removeObserver(this);
     _mainWindow?.mainListenable.removeListener(_syncWindowFullscreen);
     _mainWindow?.mainCloseHandler = null;
-    tray.trayManager.removeListener(this);
+    _tray?.listener = null;
     _nativeNavigationChannel.setMethodCallHandler(null);
     super.dispose();
   }
@@ -304,16 +305,18 @@ class _AppShellState extends State<AppShell>
     _traySyncTimer = Timer(const Duration(milliseconds: 100), _syncTray);
   }
 
-  Future<void> _syncTray() async {
+  void _syncTray() {
     if (!mounted) return;
     final controller = _controller;
     final strings = context.strings;
+    final tray = _tray;
+    if (tray == null) return;
     if (!controller.inboxMonitorConfig.showTrayIcon) {
       if (_trayReady) {
         try {
-          await tray.trayManager.destroy();
-        } on Object {
-          // Desktop plugins are intentionally unavailable in widget tests.
+          tray.remove();
+        } on Object catch (error) {
+          debugPrint('Unable to remove the tray icon: $error');
         }
       }
       _trayReady = false;
@@ -343,53 +346,39 @@ class _AppShellState extends State<AppShell>
       _ => strings.t('inbox_monitor_active'),
     };
     try {
-      if (!_trayReady) {
-        await tray.trayManager.setIcon(
-          Platform.isWindows
-              ? 'assets/branding/tray/listenook-tray.ico'
-              : Platform.isMacOS
-              ? 'assets/branding/tray/listenook-tray-template@2x.png'
-              : 'assets/branding/tray/listenook-tray-template.png',
-          isTemplate: Platform.isMacOS,
-          iconSize: 18,
-        );
-      }
-      await tray.trayManager.setToolTip(strings.appName);
-      await tray.trayManager.setContextMenu(
-        tray.Menu(
-          items: [
-            tray.MenuItem(
-              key: 'status',
-              label: configured
-                  ? '$folder · $status · ${controller.monitoredWaitingCount} ${strings.t('inbox')}'
-                  : status,
-              disabled: true,
-            ),
-            tray.MenuItem.separator(),
-            tray.MenuItem(
-              key: 'open-main-window',
-              label: strings.t('tray_open_main_window'),
-            ),
-            if (configured)
-              tray.MenuItem(
-                key: 'toggle-monitor',
-                label: strings.t(
-                  config.paused
-                      ? 'inbox_monitor_resume'
-                      : 'inbox_monitor_pause',
-                ),
+      tray.show(
+        tooltip: strings.appName,
+        menu: [
+          DesktopTrayMenuItem(
+            key: 'status',
+            label: configured
+                ? '$folder · $status · ${controller.monitoredWaitingCount} ${strings.t('inbox')}'
+                : status,
+            enabled: false,
+          ),
+          null,
+          DesktopTrayMenuItem(
+            key: 'open-main-window',
+            label: strings.t('tray_open_main_window'),
+          ),
+          if (configured)
+            DesktopTrayMenuItem(
+              key: 'toggle-monitor',
+              label: strings.t(
+                config.paused ? 'inbox_monitor_resume' : 'inbox_monitor_pause',
               ),
-            tray.MenuItem(
-              key: 'settings',
-              label: strings.t('tray_open_settings'),
             ),
-            tray.MenuItem.separator(),
-            tray.MenuItem(key: 'quit', label: strings.t('tray_quit')),
-          ],
-        ),
+          DesktopTrayMenuItem(
+            key: 'settings',
+            label: strings.t('tray_open_settings'),
+          ),
+          null,
+          DesktopTrayMenuItem(key: 'quit', label: strings.t('tray_quit')),
+        ],
       );
       _trayReady = true;
-    } on Object {
+    } on Object catch (error) {
+      debugPrint('Unable to show the tray icon: $error');
       _trayReady = false;
     }
   }
@@ -407,24 +396,11 @@ class _AppShellState extends State<AppShell>
   }
 
   @override
-  void onTrayIconMouseDown() {
-    if (Platform.isWindows) {
-      unawaited(_restoreMainWindow());
-    } else {
-      unawaited(tray.trayManager.popUpContextMenu());
-    }
-  }
+  void onTrayIconClicked() => unawaited(_restoreMainWindow());
 
   @override
-  void onTrayIconRightMouseDown() {
-    if (Platform.isWindows) {
-      unawaited(tray.trayManager.popUpContextMenu());
-    }
-  }
-
-  @override
-  void onTrayMenuItemClick(tray.MenuItem menuItem) {
-    switch (menuItem.key) {
+  void onTrayMenuItemSelected(String key) {
+    switch (key) {
       case 'open-main-window':
         unawaited(_restoreMainWindow());
         return;
@@ -579,9 +555,9 @@ class _AppShellState extends State<AppShell>
       await _fullscreenController.exit();
       if (_trayReady) {
         try {
-          await tray.trayManager.destroy();
-        } on Object {
-          // Desktop plugins are intentionally unavailable in widget tests.
+          _tray?.remove();
+        } on Object catch (error) {
+          debugPrint('Unable to remove the tray icon: $error');
         }
       }
       await Future.wait([

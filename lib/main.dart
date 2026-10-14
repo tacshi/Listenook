@@ -22,6 +22,7 @@ import 'ui/video_player/video_player_windows.dart';
 export 'ui/startup_page.dart';
 import 'data/ai_brief_service.dart';
 import 'data/desktop_runtime.dart';
+import 'data/desktop_tray.dart';
 import 'data/inbox_folder_monitor.dart';
 import 'data/llm_translation_service.dart';
 import 'data/local_repositories.dart';
@@ -200,6 +201,7 @@ Future<void> main(List<String> arguments) async {
       controller: controller,
       updates: updates,
       desktopRuntime: desktopRuntime,
+      desktopTray: NativeDesktopTray(),
       podcastController: podcastController,
       videoOpenRequests: videoOpenRequests,
       videoPlaybackRepository: videoPlayback,
