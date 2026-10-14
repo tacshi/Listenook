@@ -1,7 +1,18 @@
-part of '../transcript_review.dart';
+import 'dart:async';
 
-class _AiBriefDialogResult {
-  const _AiBriefDialogResult(
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:file_selector/file_selector.dart';
+import 'package:provider/provider.dart';
+
+import '../../core/models.dart';
+import '../../data/transcript_exporter.dart';
+import '../../l10n/strings.dart';
+import '../../state/app_controller.dart';
+import '../app_notice.dart';
+
+class AiBriefDialogResult {
+  const AiBriefDialogResult(
     this.sections,
     this.outputLanguage,
     this.learningLanguage,
@@ -14,7 +25,7 @@ class _AiBriefDialogResult {
   final AiLearningLevel learningLevel;
 }
 
-Future<T?> _showDialogAfterDismissal<T>({
+Future<T?> showDialogAfterDismissal<T>({
   required BuildContext context,
   required WidgetBuilder builder,
 }) async {
@@ -31,7 +42,7 @@ Future<T?> _showDialogAfterDismissal<T>({
   return result;
 }
 
-Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
+Future<AiBriefDialogResult?> showAiBriefGenerationDialog(
   BuildContext context,
   TranscriptionJob job,
 ) async {
@@ -59,7 +70,7 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
   if (!supportedTranslationLanguageCodes.contains(outputLanguage)) {
     outputLanguage = 'en';
   }
-  return _showDialogAfterDismissal<_AiBriefDialogResult>(
+  return showDialogAfterDismissal<AiBriefDialogResult>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setDialogState) {
@@ -210,7 +221,7 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
                   ? null
                   : () => Navigator.pop(
                       context,
-                      _AiBriefDialogResult(
+                      AiBriefDialogResult(
                         Set<AiBriefSection>.of(sections),
                         outputLanguage,
                         learningLanguage,
@@ -227,8 +238,9 @@ Future<_AiBriefDialogResult?> _showAiBriefGenerationDialog(
   );
 }
 
-class _AiBriefPane extends StatelessWidget {
-  const _AiBriefPane({
+class AiBriefPane extends StatelessWidget {
+  const AiBriefPane({
+    super.key,
     required this.job,
     required this.document,
     required this.scrollController,
@@ -1071,7 +1083,7 @@ class _EvidenceChips extends StatelessWidget {
   }
 }
 
-Future<void> _copyBriefText(BuildContext context, String text) async {
+Future<void> copyBriefText(BuildContext context, String text) async {
   await Clipboard.setData(ClipboardData(text: text.trim()));
   if (!context.mounted) return;
   showAppNotice(
@@ -1081,7 +1093,7 @@ Future<void> _copyBriefText(BuildContext context, String text) async {
   );
 }
 
-Future<void> _exportBrief(BuildContext context, String jobId) async {
+Future<void> exportBrief(BuildContext context, String jobId) async {
   final directory = await getDirectoryPath(
     confirmButtonText: context.strings.t('export_brief'),
   );

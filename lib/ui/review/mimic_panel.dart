@@ -1,7 +1,13 @@
-part of '../transcript_review.dart';
+import 'dart:async';
 
-class _MimicPanel extends StatelessWidget {
-  const _MimicPanel({
+import 'package:flutter/material.dart';
+
+import '../../l10n/strings.dart';
+import '../transcript_review.dart';
+
+class MimicPanel extends StatelessWidget {
+  const MimicPanel({
+    super.key,
     required this.targetLabel,
     required this.text,
     required this.translation,

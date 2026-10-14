@@ -1,4 +1,19 @@
-part of '../transcript_review.dart';
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+
+import '../../core/models.dart';
+import '../../l10n/strings.dart';
+import '../../state/app_controller.dart';
+import '../app_notice.dart';
+import '../transcript_export_dialog.dart';
+import '../transcript_review.dart';
+import 'ai_brief_pane.dart';
+import 'listening_widgets.dart';
+import 'review_scaffold.dart';
+import 'transcript_segments.dart';
 
 enum _TranscriptMoreAction {
   toggleMimic,
@@ -16,10 +31,11 @@ enum _TranscriptMoreAction {
   export,
 }
 
-enum _ReviewToolbarRole { global, transcript, aiBrief }
+enum ReviewToolbarRole { global, transcript, aiBrief }
 
-class _UnifiedReviewToolbar extends StatelessWidget {
-  const _UnifiedReviewToolbar({
+class UnifiedReviewToolbar extends StatelessWidget {
+  const UnifiedReviewToolbar({
+    super.key,
     required this.role,
     required this.job,
     required this.viewMode,
@@ -61,7 +77,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   final VoidCallback? onToggleDictation;
   final bool mimicOpen;
   final VoidCallback? onToggleMimic;
-  final _ReviewToolbarRole role;
+  final ReviewToolbarRole role;
   final TranscriptionJob job;
   final TranslationViewMode viewMode;
   final bool showAiBrief;
@@ -88,15 +104,12 @@ class _UnifiedReviewToolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
     return switch (role) {
-      _ReviewToolbarRole.global => _buildGlobalHeader(context),
-      _ReviewToolbarRole.transcript => _buildTranscriptPaneHeader(
+      ReviewToolbarRole.global => _buildGlobalHeader(context),
+      ReviewToolbarRole.transcript => _buildTranscriptPaneHeader(
         context,
         controller,
       ),
-      _ReviewToolbarRole.aiBrief => _buildAiBriefPaneHeader(
-        context,
-        controller,
-      ),
+      ReviewToolbarRole.aiBrief => _buildAiBriefPaneHeader(context, controller),
     };
   }
 
@@ -145,7 +158,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
             key: const Key('transcript-pane-toolbar-row'),
             children: [
               if (showFilename)
-                Expanded(child: _ReviewFilename(job: job))
+                Expanded(child: ReviewFilename(job: job))
               else
                 const Spacer(),
               if (_translationStarted && medium)
@@ -195,7 +208,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
     ),
   );
 
-  Widget _tabs(double width) => _ReviewContentTabs(
+  Widget _tabs(double width) => ReviewContentTabs(
     width: width,
     showAiBrief: showAiBrief,
     onChanged: onTabChanged,
@@ -670,7 +683,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
           key: const Key('copy-ai-brief-toolbar'),
           tooltip: context.strings.t('copy_brief'),
           onPressed: () =>
-              _copyBriefText(context, controller.renderAiBriefMarkdown(job.id)),
+              copyBriefText(context, controller.renderAiBriefMarkdown(job.id)),
           constraints: const BoxConstraints.tightFor(width: 40, height: 40),
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.copy_all_outlined),
@@ -678,7 +691,7 @@ class _UnifiedReviewToolbar extends StatelessWidget {
         IconButton(
           key: const Key('export-ai-brief-toolbar'),
           tooltip: context.strings.t('export_brief'),
-          onPressed: () => _exportBrief(context, job.id),
+          onPressed: () => exportBrief(context, job.id),
           constraints: const BoxConstraints.tightFor(width: 40, height: 40),
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.ios_share_rounded),
@@ -792,8 +805,8 @@ IconData _translationToolbarActionIcon(_TranslationToolbarAction action) =>
       _TranslationToolbarAction.cancel => Icons.stop_circle_outlined,
     };
 
-class _TranslationStatusStrip extends StatelessWidget {
-  const _TranslationStatusStrip({required this.job});
+class TranslationStatusStrip extends StatelessWidget {
+  const TranslationStatusStrip({super.key, required this.job});
 
   final TranscriptionJob job;
 
@@ -933,7 +946,7 @@ Color _translationStatusColor(BuildContext context, TranslationStatus status) {
   };
 }
 
-Color _translatedSegmentHighlightColor(BuildContext context) =>
+Color translatedSegmentHighlightColor(BuildContext context) =>
     _translationStatusColor(context, TranslationStatus.completed).withValues(
       alpha: Theme.of(context).brightness == Brightness.dark ? .18 : .10,
     );

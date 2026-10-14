@@ -1,4 +1,6 @@
-part of '../transcript_review.dart';
+import 'package:flutter/material.dart';
+
+import '../../core/models.dart';
 
 class PlaybackHighlightedText extends StatelessWidget {
   const PlaybackHighlightedText({
@@ -25,7 +27,7 @@ class PlaybackHighlightedText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final currentRange = enabled
-        ? _currentTimedTextRange(
+        ? currentTimedTextRange(
             text: text,
             tokens: tokens,
             positionMs: positionMs,
@@ -61,7 +63,7 @@ class PlaybackHighlightedText extends StatelessWidget {
   }
 }
 
-TextRange? _currentTimedTextRange({
+TextRange? currentTimedTextRange({
   required String text,
   required List<TranscriptToken> tokens,
   required int positionMs,

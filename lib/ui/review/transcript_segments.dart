@@ -1,7 +1,20 @@
-part of '../transcript_review.dart';
+import 'dart:async';
 
-class _TranscriptSegmentGroup extends StatefulWidget {
-  const _TranscriptSegmentGroup({
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../../core/models.dart';
+import '../../core/transcript_structure_editor.dart';
+import '../../data/transcript_exporter.dart';
+import '../../l10n/strings.dart';
+import '../transcript_review.dart';
+import 'media_pane.dart';
+import 'review_toolbar.dart';
+import 'speaker_strip.dart';
+import 'transcript_review_state.dart';
+
+class TranscriptSegmentGroup extends StatefulWidget {
+  const TranscriptSegmentGroup({
     super.key,
     this.blindListening = false,
     this.blurred = false,
@@ -65,11 +78,10 @@ class _TranscriptSegmentGroup extends StatefulWidget {
   final Future<void> Function()? onRetranslate;
 
   @override
-  State<_TranscriptSegmentGroup> createState() =>
-      _TranscriptSegmentGroupState();
+  State<TranscriptSegmentGroup> createState() => _TranscriptSegmentGroupState();
 }
 
-class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
+class _TranscriptSegmentGroupState extends State<TranscriptSegmentGroup> {
   bool _hovered = false;
 
   @override
@@ -80,7 +92,7 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
       key: ValueKey('segment-group-${widget.segment.id}'),
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: _TranscriptSegmentSurface(
+      child: TranscriptSegmentSurface(
         surfaceKey: ValueKey(
           widget.viewMode == TranslationViewMode.translated
               ? 'translated-segment-${widget.segment.id}'
@@ -97,7 +109,7 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
           children: [
             if (widget.showTimestamp ||
                 (widget.showSpeaker && widget.speakerName.isNotEmpty))
-              _TranscriptSegmentMetadata(
+              TranscriptSegmentMetadata(
                 segment: widget.segment,
                 query: widget.query,
                 speakerName: widget.speakerName,
@@ -177,8 +189,9 @@ class _TranscriptSegmentGroupState extends State<_TranscriptSegmentGroup> {
   }
 }
 
-class _TranscriptSegmentSurface extends StatelessWidget {
-  const _TranscriptSegmentSurface({
+class TranscriptSegmentSurface extends StatelessWidget {
+  const TranscriptSegmentSurface({
+    super.key,
     required this.surfaceKey,
     required this.hovered,
     required this.isCurrent,
@@ -204,7 +217,7 @@ class _TranscriptSegmentSurface extends StatelessWidget {
         : hovered
         ? colors.surfaceContainerLow
         : highlightTranslated
-        ? _translatedSegmentHighlightColor(context)
+        ? translatedSegmentHighlightColor(context)
         : null;
     return DecoratedBox(
       key: surfaceKey,
@@ -236,8 +249,9 @@ class _TranscriptSegmentSurface extends StatelessWidget {
   }
 }
 
-class _TranscriptSegmentMetadata extends StatelessWidget {
-  const _TranscriptSegmentMetadata({
+class TranscriptSegmentMetadata extends StatelessWidget {
+  const TranscriptSegmentMetadata({
+    super.key,
     required this.segment,
     required this.query,
     required this.speakerName,
@@ -262,7 +276,10 @@ class _TranscriptSegmentMetadata extends StatelessWidget {
     final showsSpeaker = showSpeaker && speakerName.isNotEmpty;
     final canChangeSpeaker =
         showsSpeaker && speakers.length > 1 && onSpeakerChanged != null;
-    final speakerColor = _speakerColor(context, segment.speaker ?? speakerName);
+    final speakerColor = colorForSpeaker(
+      context,
+      segment.speaker ?? speakerName,
+    );
     final speakerLabel = SearchHighlightedText(
       key: ValueKey('segment-speaker-${segment.id}'),
       text: speakerName,
@@ -313,7 +330,7 @@ class _TranscriptSegmentMetadata extends StatelessWidget {
                                     ? Icons.check_rounded
                                     : Icons.circle,
                                 size: speaker.id == segment.speaker ? 18 : 10,
-                                color: _speakerColor(context, speaker.id),
+                                color: colorForSpeaker(context, speaker.id),
                               ),
                               onPressed: speaker.id == segment.speaker
                                   ? null
@@ -323,7 +340,7 @@ class _TranscriptSegmentMetadata extends StatelessWidget {
                               child: Text(
                                 context.strings.speakerName(speaker.name),
                                 style: TextStyle(
-                                  color: _speakerColor(context, speaker.id),
+                                  color: colorForSpeaker(context, speaker.id),
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -470,7 +487,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (widget.showTimestamp)
-          _TranscriptSegmentMetadata(
+          TranscriptSegmentMetadata(
             segment: widget.segment,
             query: widget.query,
             speakerName: '',
@@ -553,7 +570,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
               key: ValueKey('translated-line-${widget.segment.id}'),
               child: line,
             )
-          : _TranscriptSegmentSurface(
+          : TranscriptSegmentSurface(
               surfaceKey: ValueKey('translated-segment-${widget.segment.id}'),
               hovered: _hovered,
               isCurrent: widget.isCurrent,
@@ -574,7 +591,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (widget.isRepeating)
-              _SentenceRepeatButton(
+              SentenceRepeatButton(
                 segmentId: widget.segment.id,
                 isRepeating: true,
                 onPressed: widget.onToggleRepeat,
@@ -583,14 +600,14 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
               key: ValueKey('translated-cancel-${widget.segment.id}'),
               tooltip: context.strings.t('cancel'),
               onPressed: _saving ? null : widget.onCancel,
-              style: _compactSegmentActionStyle(context),
+              style: compactSegmentActionStyle(context),
               icon: const Icon(Icons.close_rounded, size: 18),
             ),
             IconButton(
               key: ValueKey('translated-save-${widget.segment.id}'),
               tooltip: context.strings.t('save'),
               onPressed: _saving ? null : _save,
-              style: _compactSegmentActionStyle(context),
+              style: compactSegmentActionStyle(context),
               icon: _saving
                   ? const SizedBox.square(
                       dimension: 16,
@@ -617,18 +634,18 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (widget.showRepeatAction)
-              _SegmentActionVisibility(
+              SegmentActionVisibility(
                 opacityKey: ValueKey(
                   'segment-repeat-opacity-${widget.segment.id}',
                 ),
                 visible: repeatVisible,
-                child: _SentenceRepeatButton(
+                child: SentenceRepeatButton(
                   segmentId: widget.segment.id,
                   isRepeating: widget.isRepeating,
                   onPressed: widget.onToggleRepeat,
                 ),
               ),
-            _SegmentActionVisibility(
+            SegmentActionVisibility(
               opacityKey: ValueKey(
                 'translated-edit-opacity-${widget.segment.id}',
               ),
@@ -637,12 +654,12 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
                 key: ValueKey('translated-edit-${widget.segment.id}'),
                 tooltip: context.strings.t('edit_translation'),
                 onPressed: widget.blindListening ? null : widget.onEdit,
-                style: _compactSegmentActionStyle(context),
+                style: compactSegmentActionStyle(context),
                 icon: const Icon(Icons.edit_outlined, size: 18),
               ),
             ),
             if (widget.onRetranslate != null)
-              _SegmentActionVisibility(
+              SegmentActionVisibility(
                 opacityKey: ValueKey(
                   'translated-retranslate-opacity-${widget.segment.id}',
                 ),
@@ -653,7 +670,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
                   onPressed: widget.blindListening
                       ? null
                       : widget.onRetranslate,
-                  style: _compactSegmentActionStyle(context),
+                  style: compactSegmentActionStyle(context),
                   icon: const Icon(Icons.translate_rounded, size: 18),
                 ),
               ),
@@ -664,8 +681,9 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
   }
 }
 
-class _SegmentActionVisibility extends StatelessWidget {
-  const _SegmentActionVisibility({
+class SegmentActionVisibility extends StatelessWidget {
+  const SegmentActionVisibility({
+    super.key,
     this.opacityKey,
     required this.visible,
     required this.child,
@@ -687,8 +705,9 @@ class _SegmentActionVisibility extends StatelessWidget {
   );
 }
 
-class _SentenceRepeatButton extends StatelessWidget {
-  const _SentenceRepeatButton({
+class SentenceRepeatButton extends StatelessWidget {
+  const SentenceRepeatButton({
+    super.key,
     required this.segmentId,
     required this.isRepeating,
     required this.onPressed,
@@ -706,12 +725,12 @@ class _SentenceRepeatButton extends StatelessWidget {
     ),
     onPressed: onPressed,
     isSelected: isRepeating,
-    style: _compactSegmentActionStyle(context, selected: isRepeating),
+    style: compactSegmentActionStyle(context, selected: isRepeating),
     icon: const Icon(Icons.repeat_one_rounded, size: 18),
   );
 }
 
-ButtonStyle _compactSegmentActionStyle(
+ButtonStyle compactSegmentActionStyle(
   BuildContext context, {
   bool selected = false,
 }) => IconButton.styleFrom(
@@ -729,10 +748,14 @@ ButtonStyle _compactSegmentActionStyle(
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
 );
 
-class _MediaModeButton extends StatelessWidget {
-  const _MediaModeButton({required this.destination, required this.onPressed});
+class MediaModeButton extends StatelessWidget {
+  const MediaModeButton({
+    super.key,
+    required this.destination,
+    required this.onPressed,
+  });
 
-  final _ReviewMediaMode destination;
+  final ReviewMediaMode destination;
   final VoidCallback onPressed;
 
   static const size = 44.0;
@@ -741,7 +764,7 @@ class _MediaModeButton extends StatelessWidget {
   Widget build(BuildContext context) => IconButton(
     key: const Key('video-audio-mode-toggle'),
     tooltip: context.strings.t(
-      destination == _ReviewMediaMode.video
+      destination == ReviewMediaMode.video
           ? 'switch_to_video_mode'
           : 'switch_to_audio_mode',
     ),
@@ -764,7 +787,7 @@ class _MediaModeButton extends StatelessWidget {
         ),
       ),
       child: Icon(
-        destination == _ReviewMediaMode.video
+        destination == ReviewMediaMode.video
             ? Icons.videocam_rounded
             : Icons.headphones_rounded,
         key: ValueKey(destination),
@@ -773,27 +796,27 @@ class _MediaModeButton extends StatelessWidget {
   );
 }
 
-class _VideoMediaHeader extends StatelessWidget {
-  const _VideoMediaHeader({required this.job});
+class VideoMediaHeader extends StatelessWidget {
+  const VideoMediaHeader({super.key, required this.job});
 
   final TranscriptionJob job;
 
   @override
   Widget build(BuildContext context) => SizedBox(
     key: const Key('video-media-header'),
-    height: _TranscriptReviewState._videoTitleHeaderHeight,
+    height: TranscriptReviewState.videoTitleHeaderHeight,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Align(
         alignment: Alignment.centerLeft,
-        child: _ReviewFilename(job: job),
+        child: ReviewFilename(job: job),
       ),
     ),
   );
 }
 
-class _ReviewFilename extends StatelessWidget {
-  const _ReviewFilename({required this.job});
+class ReviewFilename extends StatelessWidget {
+  const ReviewFilename({super.key, required this.job});
 
   final TranscriptionJob job;
 

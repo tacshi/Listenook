@@ -1,4 +1,13 @@
-part of '../transcript_review.dart';
+import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+
+import '../../core/models.dart';
+import '../../l10n/strings.dart';
+import '../transcript_review.dart';
+import 'seek_helpers.dart';
 
 class SearchHighlightedText extends StatelessWidget {
   const SearchHighlightedText({
@@ -40,10 +49,6 @@ class SearchHighlightedText extends StatelessWidget {
     }
     return Text.rich(TextSpan(style: style, children: spans));
   }
-}
-
-extension _FirstOrNull<T> on Iterable<T> {
-  T? get firstOrNull => isEmpty ? null : first;
 }
 
 /// Finds a neighboring timed cue without assuming there is a cue in a gap.

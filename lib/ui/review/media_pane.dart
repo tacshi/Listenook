@@ -1,7 +1,22 @@
-part of '../transcript_review.dart';
+import 'dart:async';
+import 'dart:io';
 
-class _MediaPane extends StatelessWidget {
-  const _MediaPane({
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:media_kit_video/media_kit_video.dart';
+
+import '../../core/models.dart';
+import '../../data/transcript_exporter.dart';
+import '../../l10n/strings.dart';
+import '../keyboard_shortcuts.dart';
+import '../transcript_review.dart';
+import 'transcript_segments.dart';
+
+enum ReviewMediaMode { video, audio }
+
+class MediaPane extends StatelessWidget {
+  const MediaPane({
+    super.key,
     this.sentenceNavigation,
     required this.job,
     required this.video,
@@ -193,8 +208,8 @@ class VideoTransport extends StatelessWidget {
             onChanged: onPlaybackRateChanged,
           ),
           if (onSwitchToAudioMode != null)
-            _MediaModeButton(
-              destination: _ReviewMediaMode.audio,
+            MediaModeButton(
+              destination: ReviewMediaMode.audio,
               onPressed: onSwitchToAudioMode!,
             ),
           IconButton(
@@ -254,8 +269,9 @@ String formatPlaybackRate(double rate) {
   return '$value×';
 }
 
-class _ReviewFullscreenControlsHost extends StatelessWidget {
-  const _ReviewFullscreenControlsHost({
+class ReviewFullscreenControlsHost extends StatelessWidget {
+  const ReviewFullscreenControlsHost({
+    super.key,
     required this.playback,
     required this.isActive,
     required this.overlay,
@@ -907,8 +923,8 @@ class AudioTransport extends StatelessWidget {
             key: const Key('audio-duration'),
           ),
           if (onSwitchToVideoMode != null)
-            _MediaModeButton(
-              destination: _ReviewMediaMode.video,
+            MediaModeButton(
+              destination: ReviewMediaMode.video,
               onPressed: onSwitchToVideoMode!,
             ),
         ],
