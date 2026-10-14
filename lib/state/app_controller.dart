@@ -12,7 +12,7 @@ import '../core/models.dart';
 import '../core/podcast_models.dart';
 import '../core/transcript_parser.dart';
 import '../core/transcript_structure_editor.dart';
-import '../data/openai_translation_service.dart';
+import '../data/llm_translation_service.dart';
 import '../data/moss_api_client.dart';
 import '../data/inbox_folder_monitor.dart';
 import '../data/podcast/download_location.dart';

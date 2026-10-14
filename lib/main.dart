@@ -23,6 +23,7 @@ export 'ui/startup_page.dart';
 import 'data/ai_brief_service.dart';
 import 'data/desktop_runtime.dart';
 import 'data/inbox_folder_monitor.dart';
+import 'data/llm_translation_service.dart';
 import 'data/local_repositories.dart';
 import 'data/local_model_manager.dart';
 import 'data/local_media_source_resolver.dart';
@@ -30,7 +31,6 @@ import 'data/local_speech_process.dart';
 import 'data/local_speech_services.dart';
 import 'data/moss_api_client.dart';
 import 'data/openai_llm_client.dart';
-import 'data/openai_translation_service.dart';
 import 'data/podcast/http_podcast_gateway.dart';
 import 'data/process_media_service.dart';
 import 'data/soniox_api_client.dart';
@@ -152,7 +152,7 @@ Future<void> main(List<String> arguments) async {
       mossClient: MossApiClient(mossCredentials),
       exporter: const DefaultTranscriptExporter(),
       translationCredentialStore: llmCredentials,
-      translationService: OpenAiCompatibleTranslationService(llmCredentials),
+      translationService: LlmTranslationService(llmClient),
       localModelManager: localModels,
       localSttService: ProcessLocalSttService(
         models: localModels,

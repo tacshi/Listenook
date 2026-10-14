@@ -101,7 +101,11 @@ class OpenAiCompatibleLlmClient implements LlmClient {
             if (shouldCancel() && !abort.isCompleted) abort.complete();
           });
     final request =
-        http.AbortableRequest('POST', _endpoint(settings, 'chat/completions'))
+        http.AbortableRequest(
+            'POST',
+            _endpoint(settings, 'chat/completions'),
+            abortTrigger: abort.future,
+          )
           ..headers.addAll(_headers(key, json: true))
           ..body = jsonEncode({
             'model': settings.model.trim(),

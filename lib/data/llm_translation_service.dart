@@ -1,20 +1,11 @@
-import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
-
-import 'package:http/http.dart' as http;
 
 import '../core/contracts.dart';
 import '../core/models.dart';
 
-class OpenAiCompatibleTranslationService implements TranslationService {
-  OpenAiCompatibleTranslationService(
-    this._credentials, {
-    http.Client? httpClient,
-    Future<void> Function(Duration duration)? delay,
-  }) : _http = httpClient ?? http.Client(),
-       _delay = delay ?? ((duration) => Future<void>.delayed(duration));
+class LlmTranslationService implements TranslationService {
+  const LlmTranslationService(this._llm);
 
   static const _maxSegmentsPerBatch = 20;
   static const _maxCharactersPerBatch = 8000;
@@ -23,9 +14,7 @@ class OpenAiCompatibleTranslationService implements TranslationService {
       'naturally. Preserve meaning, tone, names, and speaker intent. Return '
       'only the requested numbered lines without explanations.';
 
-  final TranslationCredentialStore _credentials;
-  final http.Client _http;
-  final Future<void> Function(Duration duration) _delay;
+  final LlmClient _llm;
 
   @override
   Future<List<String>> listModels(
@@ -34,27 +23,12 @@ class OpenAiCompatibleTranslationService implements TranslationService {
   }) async {
     final validation = settings.validationError(requireModel: false);
     if (validation != null) throw TranslationException(validation);
-    final key = await _apiKey(settings, candidate: candidateApiKey);
-    final response = await _http
-        .get(_endpoint(settings, 'models'), headers: _headers(key))
-        .timeout(const Duration(seconds: 20));
-    _ensureSuccess(response.statusCode, response.body);
-    try {
-      final json = (jsonDecode(response.body) as Map).cast<String, dynamic>();
-      final data = json['data'];
-      if (data is! List) throw const FormatException();
-      final models =
-          data
-              .whereType<Map>()
-              .map((item) => item['id']?.toString().trim() ?? '')
-              .where((id) => id.isNotEmpty)
-              .toSet()
-              .toList()
-            ..sort();
-      return models;
-    } on Object {
-      throw const TranslationException('translation_invalid_response');
-    }
+    return _translatingErrors(
+      () => _llm.listModels(
+        settings.providerSettings,
+        candidateApiKey: candidateApiKey,
+      ),
+    );
   }
 
   @override
@@ -75,7 +49,6 @@ class OpenAiCompatibleTranslationService implements TranslationService {
     if (!supportedTranslationLanguageCodes.contains(targetLanguage)) {
       throw const TranslationException('translation_invalid_language');
     }
-    final key = await _apiKey(settings);
     final batches = _batches(segments);
     final cache = <String, String>{};
     var processed = 0;
@@ -89,7 +62,6 @@ class OpenAiCompatibleTranslationService implements TranslationService {
         final translated = await _translateLongSegment(
           segment,
           settings: settings,
-          key: key,
           targetLanguage: targetLanguage,
           shouldCancel: shouldCancel,
         );
@@ -117,9 +89,8 @@ class OpenAiCompatibleTranslationService implements TranslationService {
       }
 
       if (representatives.isNotEmpty) {
-        final response = await _completeWithRetry(
+        final response = await _complete(
           settings: settings,
-          key: key,
           prompt: _translationPrompt(representatives, targetLanguage),
           shouldCancel: shouldCancel,
         );
@@ -147,7 +118,6 @@ class OpenAiCompatibleTranslationService implements TranslationService {
   Future<String?> _translateLongSegment(
     TranscriptSegment segment, {
     required TranslationSettings settings,
-    required String? key,
     required String targetLanguage,
     CancelCheck? shouldCancel,
   }) async {
@@ -159,9 +129,8 @@ class OpenAiCompatibleTranslationService implements TranslationService {
         end--;
       }
       final part = segment.text.substring(start, end);
-      final response = await _completeWithRetry(
+      final response = await _complete(
         settings: settings,
-        key: key,
         prompt: _translationPrompt([
           TranscriptSegment(
             id: segment.id,
@@ -185,162 +154,33 @@ class OpenAiCompatibleTranslationService implements TranslationService {
   bool _isHighSurrogate(int codeUnit) =>
       codeUnit >= 0xD800 && codeUnit <= 0xDBFF;
 
-  Future<String> _completeWithRetry({
+  Future<String> _complete({
     required TranslationSettings settings,
-    required String? key,
     required String prompt,
     CancelCheck? shouldCancel,
-  }) async {
-    TranslationException? lastError;
-    for (var attempt = 1; attempt <= 4; attempt++) {
-      _checkCancelled(shouldCancel);
-      try {
-        return await _complete(
-          settings,
-          key,
-          prompt,
-          shouldCancel: shouldCancel,
-        );
-      } on TranslationException catch (error) {
-        lastError = error;
-        if (!error.retryable || attempt == 4) rethrow;
-      } on TimeoutException {
-        lastError = const TranslationException(
-          'translation_timeout',
-          retryable: true,
-        );
-        if (attempt == 4) throw lastError;
-      } on SocketException {
-        lastError = const TranslationException(
-          'translation_network_error',
-          retryable: true,
-        );
-        if (attempt == 4) throw lastError;
-      } on http.ClientException {
-        lastError = const TranslationException(
-          'translation_network_error',
-          retryable: true,
-        );
-        if (attempt == 4) throw lastError;
-      }
-      _checkCancelled(shouldCancel);
-      await _delay(Duration(seconds: 1 << (attempt - 1)));
-    }
-    throw lastError ?? const TranslationException('translation_request_failed');
-  }
+  }) => _translatingErrors(
+    () => _llm.complete(
+      settings: settings.providerSettings,
+      systemPrompt: _systemPrompt,
+      userPrompt: prompt,
+      shouldCancel: shouldCancel,
+    ),
+  );
 
-  Future<String> _complete(
-    TranslationSettings settings,
-    String? key,
-    String prompt, {
-    CancelCheck? shouldCancel,
-  }) async {
-    final abort = Completer<void>();
-    final timer = shouldCancel == null
-        ? null
-        : Timer.periodic(const Duration(milliseconds: 150), (_) {
-            if (shouldCancel() && !abort.isCompleted) abort.complete();
-          });
-    final request =
-        http.AbortableRequest(
-            'POST',
-            _endpoint(settings, 'chat/completions'),
-            abortTrigger: abort.future,
-          )
-          ..headers.addAll(_headers(key, json: true))
-          ..body = jsonEncode({
-            'model': settings.model.trim(),
-            'messages': [
-              {'role': 'system', 'content': _systemPrompt},
-              {'role': 'user', 'content': prompt},
-            ],
-          });
-    late http.Response response;
+  /// Reports client failures under the translation error codes the UI shows.
+  Future<T> _translatingErrors<T>(Future<T> Function() request) async {
     try {
-      final streamed = await _http
-          .send(request)
-          .timeout(const Duration(minutes: 2));
-      response = await http.Response.fromStream(
-        streamed,
-      ).timeout(const Duration(minutes: 2));
-    } on http.RequestAbortedException {
-      throw const OperationCancelledException();
-    } finally {
-      timer?.cancel();
+      return await request();
+    } on LlmException catch (error) {
+      final code = error.code.startsWith('llm_')
+          ? 'translation_${error.code.substring('llm_'.length)}'
+          : error.code;
+      throw TranslationException(
+        code,
+        message: error.message,
+        retryable: error.retryable,
+      );
     }
-    _ensureSuccess(response.statusCode, response.body);
-    try {
-      final json = (jsonDecode(response.body) as Map).cast<String, dynamic>();
-      final choices = json['choices'];
-      if (choices is! List || choices.isEmpty || choices.first is! Map) {
-        throw const FormatException();
-      }
-      final message = (choices.first as Map)['message'];
-      if (message is! Map || message['content'] is! String) {
-        throw const FormatException();
-      }
-      final content = (message['content'] as String).trim();
-      if (content.isEmpty) throw const FormatException();
-      return content;
-    } on Object {
-      throw const TranslationException('translation_invalid_response');
-    }
-  }
-
-  Future<String?> _apiKey(
-    TranslationSettings settings, {
-    String? candidate,
-  }) async {
-    final candidateValue = candidate?.trim();
-    if (!settings.requiresApiKey &&
-        (candidateValue == null || candidateValue.isEmpty)) {
-      return null;
-    }
-    final key = candidateValue != null && candidateValue.isNotEmpty
-        ? candidateValue
-        : await _credentials.readApiKey();
-    if (settings.requiresApiKey && (key == null || key.isEmpty)) {
-      throw const TranslationException('translation_missing_credentials');
-    }
-    return key;
-  }
-
-  Uri _endpoint(TranslationSettings settings, String path) {
-    final base = settings.baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
-    return Uri.parse('$base/$path');
-  }
-
-  Map<String, String> _headers(String? key, {bool json = false}) => {
-    if (key != null && key.isNotEmpty) 'Authorization': 'Bearer $key',
-    if (json) 'Content-Type': 'application/json',
-  };
-
-  void _ensureSuccess(int statusCode, String body) {
-    if (statusCode >= 200 && statusCode < 300) return;
-    final missingEndpointOrModel = _looksLikeMissingEndpointOrModel(body);
-    final code = switch (statusCode) {
-      401 || 403 => 'translation_bad_credentials',
-      404 => 'translation_endpoint_or_model_not_found',
-      400 when missingEndpointOrModel =>
-        'translation_endpoint_or_model_not_found',
-      408 => 'translation_timeout',
-      429 => 'translation_rate_limit',
-      >= 500 => 'translation_server_failure',
-      _ => 'translation_request_failed',
-    };
-    throw TranslationException(
-      code,
-      retryable: statusCode == 408 || statusCode == 429 || statusCode >= 500,
-    );
-  }
-
-  bool _looksLikeMissingEndpointOrModel(String body) {
-    final value = body.toLowerCase();
-    final missing =
-        value.contains('not found') ||
-        value.contains('does not exist') ||
-        value.contains('unknown');
-    return missing && (value.contains('model') || value.contains('endpoint'));
   }
 
   List<List<TranscriptSegment>> _batches(List<TranscriptSegment> segments) {

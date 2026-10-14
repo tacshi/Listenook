@@ -5,7 +5,8 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
-import 'package:listenook/data/openai_translation_service.dart';
+import 'package:listenook/data/llm_translation_service.dart';
+import 'package:listenook/data/openai_llm_client.dart';
 
 void main() {
   test('translation settings require HTTPS except on loopback hosts', () {
@@ -43,7 +44,7 @@ void main() {
     'model discovery tests candidate values without saving the key',
     () async {
       final credentials = _Credentials('stored-key');
-      final service = OpenAiCompatibleTranslationService(
+      final service = _service(
         credentials,
         httpClient: MockClient((request) async {
           expect(request.method, 'GET');
@@ -73,7 +74,7 @@ void main() {
   );
 
   test('loopback discovery does not send a stored cloud key', () async {
-    final service = OpenAiCompatibleTranslationService(
+    final service = _service(
       _Credentials('stored-cloud-key'),
       httpClient: MockClient((request) async {
         expect(request.url.toString(), 'http://localhost:11434/v1/models');
@@ -94,7 +95,7 @@ void main() {
     () async {
       final credentials = _Credentials('secret');
       late Map<String, dynamic> requestBody;
-      final service = OpenAiCompatibleTranslationService(
+      final service = _service(
         credentials,
         httpClient: MockClient((request) async {
           expect(request.method, 'POST');
@@ -151,7 +152,7 @@ void main() {
   test(
     'credential failures map to a stable error without exposing keys',
     () async {
-      final service = OpenAiCompatibleTranslationService(
+      final service = _service(
         _Credentials('top-secret'),
         httpClient: MockClient(
           (_) async => http.Response(
@@ -187,7 +188,7 @@ void main() {
   test('transient failures are retried up to three times', () async {
     var attempts = 0;
     final delays = <Duration>[];
-    final service = OpenAiCompatibleTranslationService(
+    final service = _service(
       _Credentials('secret'),
       delay: (duration) async => delays.add(duration),
       httpClient: MockClient((_) async {
@@ -232,7 +233,7 @@ void main() {
     'requests contain at most 20 segments or 8000 source characters',
     () async {
       var calls = 0;
-      final service = OpenAiCompatibleTranslationService(
+      final service = _service(
         _Credentials('secret'),
         httpClient: MockClient((request) async {
           calls++;
@@ -309,7 +310,47 @@ void main() {
       expect(updates['long'], 'translated-1 translated-1');
     },
   );
+
+  test('cancelling aborts the in-flight request', () async {
+    var requestSent = false;
+    final service = _service(
+      _Credentials('secret'),
+      // MockClient leaves aborting to the handler: wait for the trigger.
+      httpClient: MockClient.streaming((request, _) async {
+        requestSent = true;
+        if (request case http.Abortable(:final abortTrigger?)) {
+          await abortTrigger;
+          throw http.RequestAbortedException(request.url);
+        }
+        fail('The request has no abort trigger.');
+      }),
+    );
+
+    await expectLater(
+      service.translate(
+        settings: const TranslationSettings(
+          baseUrl: 'https://llm.example/v1',
+          model: 'model',
+        ),
+        targetLanguage: 'en',
+        segments: const [
+          TranscriptSegment(id: 'one', startMs: 0, endMs: 1, text: 'Source'),
+        ],
+        onBatch: (_, _, _) async {},
+        shouldCancel: () => requestSent,
+      ),
+      throwsA(isA<OperationCancelledException>()),
+    );
+  });
 }
+
+LlmTranslationService _service(
+  TranslationCredentialStore credentials, {
+  required http.Client httpClient,
+  Future<void> Function(Duration duration)? delay,
+}) => LlmTranslationService(
+  OpenAiCompatibleLlmClient(credentials, httpClient: httpClient, delay: delay),
+);
 
 class _Credentials implements TranslationCredentialStore {
   _Credentials(this.value);

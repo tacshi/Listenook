@@ -101,6 +101,35 @@ void main() {
       Duration(seconds: 4),
     ]);
   });
+
+  test('cancelling aborts the in-flight request', () async {
+    var requestSent = false;
+    final client = OpenAiCompatibleLlmClient(
+      _Credentials('secret'),
+      // MockClient leaves aborting to the handler: wait for the trigger.
+      httpClient: MockClient.streaming((request, _) async {
+        requestSent = true;
+        if (request case http.Abortable(:final abortTrigger?)) {
+          await abortTrigger;
+          throw http.RequestAbortedException(request.url);
+        }
+        fail('The request has no abort trigger.');
+      }),
+    );
+
+    await expectLater(
+      client.complete(
+        settings: const LlmProviderSettings(
+          baseUrl: 'https://llm.example/v1',
+          model: 'model',
+        ),
+        systemPrompt: 'system',
+        userPrompt: 'prompt',
+        shouldCancel: () => requestSent,
+      ),
+      throwsA(isA<OperationCancelledException>()),
+    );
+  });
 }
 
 class _Credentials implements LlmCredentialStore {
