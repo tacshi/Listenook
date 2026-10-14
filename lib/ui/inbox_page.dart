@@ -114,8 +114,13 @@ class _InboxMonitorPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final controller = context.watch<AppController>();
-    if (!controller.inboxMonitorConfigured) {
+    // Rebuild for monitor changes only, not for every job update.
+    final (config, status, waitingCount) = context.select(
+      (AppController c) =>
+          (c.inboxMonitorConfig, c.inboxMonitorStatus, c.monitoredWaitingCount),
+    );
+    final controller = Provider.of<AppController>(context, listen: false);
+    if (!config.isConfigured) {
       final colors = Theme.of(context).colorScheme;
       return Container(
         key: const Key('inbox-monitor-setup-card'),
@@ -157,15 +162,14 @@ class _InboxMonitorPanel extends StatelessWidget {
       );
     }
 
-    final config = controller.inboxMonitorConfig;
-    final statusKey = switch (controller.inboxMonitorStatus) {
+    final statusKey = switch (status) {
       InboxMonitorStatus.scanning => 'inbox_monitor_scanning',
       InboxMonitorStatus.paused => 'inbox_monitor_paused',
       InboxMonitorStatus.unavailable => 'inbox_monitor_unavailable',
       InboxMonitorStatus.error => 'inbox_monitor_error',
       _ => 'inbox_monitor_active',
     };
-    final statusColor = switch (controller.inboxMonitorStatus) {
+    final statusColor = switch (status) {
       InboxMonitorStatus.unavailable ||
       InboxMonitorStatus.error => Theme.of(context).colorScheme.error,
       InboxMonitorStatus.paused => Theme.of(context).colorScheme.tertiary,
@@ -176,7 +180,7 @@ class _InboxMonitorPanel extends StatelessWidget {
         .t('inbox_monitor_status_summary')
         .replaceFirst('{folder}', folder)
         .replaceFirst('{types}', '${config.extensions.length}')
-        .replaceFirst('{count}', '${controller.monitoredWaitingCount}');
+        .replaceFirst('{count}', '$waitingCount');
     return Card(
       key: const Key('inbox-monitor-status-card'),
       child: Padding(

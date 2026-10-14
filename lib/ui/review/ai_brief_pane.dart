@@ -474,7 +474,7 @@ class _AiBriefEmpty extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final controller = context.watch<AppController>();
+    final configured = context.select((AppController c) => c.aiBriefConfigured);
     final state = job.aiGenerationState;
     return Center(
       child: SingleChildScrollView(
@@ -513,7 +513,7 @@ class _AiBriefEmpty extends StatelessWidget {
               const SizedBox(height: 16),
               FilledButton.icon(
                 key: const Key('ai-brief-empty-action'),
-                onPressed: controller.aiBriefConfigured ? onGenerate : null,
+                onPressed: configured ? onGenerate : null,
                 icon: const Icon(Icons.auto_awesome_rounded),
                 label: Text(
                   context.strings.t(
@@ -521,11 +521,12 @@ class _AiBriefEmpty extends StatelessWidget {
                   ),
                 ),
               ),
-              if (!controller.aiBriefConfigured) ...[
+              if (!configured) ...[
                 const SizedBox(height: 8),
                 TextButton(
-                  onPressed: () =>
-                      controller.setDestination(AppDestination.settings),
+                  onPressed: () => context.read<AppController>().setDestination(
+                    AppDestination.settings,
+                  ),
                   child: Text(context.strings.t('ai_brief_configure')),
                 ),
               ],

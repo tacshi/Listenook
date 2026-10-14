@@ -21,10 +21,12 @@ class PodcastNowPlaying extends StatelessWidget {
   Widget build(BuildContext context) {
     final podcast = context.watch<PodcastController>();
     final player = podcast.playback;
-    final app = context.watch<AppController>();
+    final app = Provider.of<AppController>(context, listen: false);
     final episode = player.episode;
+    final job = context.select(
+      (AppController c) => episode == null ? null : c.jobForEpisode(episode.id),
+    );
     if (episode == null) return const SizedBox.shrink();
-    final job = app.jobForEpisode(episode.id);
     return Material(
       color: Theme.of(context).colorScheme.surface,
       child: SafeArea(
