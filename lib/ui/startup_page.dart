@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import '../data/app_data_migration.dart';
 import '../data/migrating_secure_value.dart';
 import '../l10n/strings.dart';
+import '../theme.dart';
 
 class ListenookBootstrap extends StatefulWidget {
   const ListenookBootstrap({
@@ -96,11 +97,8 @@ class _ListenookBootstrapState extends State<ListenookBootstrap> {
         return MaterialApp(
           title: strings.appName,
           debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xff7439ce),
-            ),
-          ),
+          theme: ListenookTheme.light(),
+          darkTheme: ListenookTheme.dark(),
           home: Scaffold(
             body: Center(
               child: ConstrainedBox(
@@ -168,7 +166,7 @@ class _ListenookBootstrapState extends State<ListenookBootstrap> {
                           const Icon(
                             Icons.graphic_eq_rounded,
                             size: 52,
-                            color: Color(0xff7439ce),
+                            color: ListenookTheme.seed,
                           ),
                           const SizedBox(height: 20),
                           CircularProgressIndicator(

@@ -786,19 +786,22 @@ class _AppShellState extends State<AppShell>
         data: FloatingActionButtonTheme.of(context).copyWith(
           extendedSizeConstraints: const BoxConstraints.tightFor(height: 44),
         ),
-        child: FloatingActionButton.extended(
-          key: const Key('inbox-fab'),
-          heroTag: 'inbox-fab',
-          tooltip: tooltip,
-          onPressed: openInbox,
-          backgroundColor: colors.surfaceContainerHighest,
-          foregroundColor: colors.primary,
-          elevation: 0,
-          focusElevation: 1,
-          hoverElevation: 2,
-          highlightElevation: 1,
-          icon: const Icon(Icons.inbox_rounded),
-          label: Text(label),
+        child: SizedBox(
+          width: _extendedSidebarWidth - 24,
+          child: FloatingActionButton.extended(
+            key: const Key('inbox-fab'),
+            heroTag: 'inbox-fab',
+            tooltip: tooltip,
+            onPressed: openInbox,
+            backgroundColor: colors.surfaceContainerHighest,
+            foregroundColor: colors.primary,
+            elevation: 0,
+            focusElevation: 1,
+            hoverElevation: 2,
+            highlightElevation: 1,
+            icon: const Icon(Icons.inbox_rounded),
+            label: Text(label),
+          ),
         ),
       );
     }
@@ -983,25 +986,7 @@ class _AppShellState extends State<AppShell>
                                           children: [
                                             Padding(
                                               padding: const EdgeInsets.only(
-                                                top: 10,
-                                                bottom: 12,
-                                              ),
-                                              child: Tooltip(
-                                                message:
-                                                    context.strings.appName,
-                                                child: ClipRRect(
-                                                  borderRadius:
-                                                      BorderRadius.circular(9),
-                                                  child: Image.asset(
-                                                    'assets/branding/listenook-icon.png',
-                                                    width: 38,
-                                                    height: 38,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                            Padding(
-                                              padding: const EdgeInsets.only(
+                                                top: 12,
                                                 bottom: 14,
                                               ),
                                               child: _inboxFab(
@@ -1232,9 +1217,9 @@ class _NavigationRailActionState extends State<_NavigationRailAction> {
                         height: 32,
                         decoration: BoxDecoration(
                           color: widget.selected
-                              ? colors.primaryContainer
+                              ? colors.surfaceContainerHighest
                               : _hovered
-                              ? colors.primary.withValues(alpha: .04)
+                              ? colors.onSurface.withValues(alpha: .05)
                               : null,
                           borderRadius: BorderRadius.circular(20),
                         ),
@@ -1438,9 +1423,8 @@ class _AppWindowToolbarState extends State<AppWindowToolbar> {
                 child: WindowCaptionButton.close(
                   key: const Key('window-close'),
                   brightness: brightness,
-                  onPressed: () => unawaited(
-                    DesktopWindows.instance?.requestMainClose(),
-                  ),
+                  onPressed: () =>
+                      unawaited(DesktopWindows.instance?.requestMainClose()),
                 ),
               ),
             ],
