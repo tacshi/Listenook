@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -9,6 +10,8 @@ import 'package:provider/provider.dart';
 
 import '../../core/models.dart';
 import '../../core/windowing/app_window.dart';
+import '../../core/windowing/window_caption_button.dart';
+import '../../core/windowing/window_drag_area.dart';
 import '../../core/windowing/window_handle_channel.dart';
 import '../../data/local_repositories.dart';
 import '../../l10n/strings.dart';
@@ -199,6 +202,10 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     final hasCues = controller.cues.isNotEmpty;
     final window = _window;
     final status = _statusText(context);
+    // On Windows the player window has no native caption (see
+    // stylePlayerWindow); the top bar draws it, fading with the controls.
+    final drawsCaption =
+        window != null && defaultTargetPlatform == TargetPlatform.windows;
     return VideoFullscreenKeyboardRegion(
       key: const Key('video-player-region'),
       fullscreen: _fullscreen,
@@ -216,7 +223,17 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       title: window == null ? controller.title : null,
       topBar: status == null && window == null
           ? null
-          : _PlayerStatusBar(status: status, belowTitleBar: window != null),
+          : _PlayerStatusBar(
+              status: status,
+              belowTitleBar: window != null && !drawsCaption,
+              caption: drawsCaption && !_fullscreen
+                  ? _PlayerCaption(
+                      window: window,
+                      title: controller.title,
+                      onClose: () => unawaited(_close()),
+                    )
+                  : null,
+            ),
       subtitle: controller.subtitleText,
       sentenceNavigation: SentenceNavigationControls(
         previousLabel: 'shortcut_previous_subtitle',
@@ -293,14 +310,21 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
 /// A one-line note about the subtitles (none found, still loading, …) at the
 /// top of the picture, fading with the controls.
 class _PlayerStatusBar extends StatelessWidget {
-  const _PlayerStatusBar({required this.status, required this.belowTitleBar});
+  const _PlayerStatusBar({
+    required this.status,
+    required this.belowTitleBar,
+    this.caption,
+  });
 
-  /// Null when there is nothing to say: the bar then only shades the native
-  /// title bar so the file name stays readable over a bright picture.
+  /// Null when there is nothing to say: the bar then only shades the title
+  /// bar so the file name stays readable over a bright picture.
   final String? status;
 
-  /// Leaves room for a player window's native title bar.
+  /// Leaves room for a player window's native title bar (macOS).
   final bool belowTitleBar;
+
+  /// The window's own title bar, where the player draws it (Windows).
+  final Widget? caption;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
@@ -312,21 +336,109 @@ class _PlayerStatusBar extends StatelessWidget {
         colors: [Color(0x80000000), Colors.transparent],
       ),
     ),
-    child: Padding(
-      padding: EdgeInsets.fromLTRB(16, belowTitleBar ? 34 : 10, 16, 18),
-      child: status == null
-          ? const SizedBox(width: double.infinity)
-          : Text(
-              status!,
-              key: const Key('video-player-status'),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: Colors.white70),
-            ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ?caption,
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            caption != null ? 2 : (belowTitleBar ? 34 : 10),
+            16,
+            18,
+          ),
+          child: status == null
+              ? const SizedBox(width: double.infinity)
+              : Text(
+                  status!,
+                  key: const Key('video-player-status'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                ),
+        ),
+      ],
     ),
   );
+}
+
+/// A player window's title bar on Windows: the file name and the caption
+/// buttons, transparent over the video.
+class _PlayerCaption extends StatelessWidget {
+  const _PlayerCaption({
+    required this.window,
+    required this.title,
+    required this.onClose,
+  });
+
+  static const height = 32.0;
+
+  final AppWindow window;
+  final String title;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = context.strings;
+    final maximized = window.isMaximized;
+    return SizedBox(
+      key: const Key('video-player-caption'),
+      height: height,
+      child: Row(
+        children: [
+          Expanded(
+            child: WindowDragArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Tooltip(
+            message: strings.t('minimize_window'),
+            child: WindowCaptionButton.minimize(
+              brightness: Brightness.dark,
+              onPressed: () => window.setMinimized(true),
+            ),
+          ),
+          Tooltip(
+            message: strings.t(
+              maximized ? 'restore_window' : 'maximize_window',
+            ),
+            child: maximized
+                ? WindowCaptionButton.unmaximize(
+                    brightness: Brightness.dark,
+                    onPressed: () => window.setMaximized(false),
+                  )
+                : WindowCaptionButton.maximize(
+                    brightness: Brightness.dark,
+                    onPressed: () => window.setMaximized(true),
+                  ),
+          ),
+          Tooltip(
+            message: strings.t('close_window'),
+            child: WindowCaptionButton.close(
+              key: const Key('video-player-close'),
+              brightness: Brightness.dark,
+              onPressed: onClose,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _SubtitleMenuButton extends StatelessWidget {
