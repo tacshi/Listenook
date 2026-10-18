@@ -145,6 +145,15 @@ void ShowAndActivate(HWND window) {
   SetForegroundWindow(window);
 }
 
+// Leaves the title bar to Flutter, keeping the resize frame and system menu.
+void RemoveCaption(HWND window) {
+  const LONG_PTR style = GetWindowLongPtr(window, GWL_STYLE);
+  SetWindowLongPtr(window, GWL_STYLE, style & ~WS_CAPTION);
+  SetWindowPos(window, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                   SWP_FRAMECHANGED);
+}
+
 void UseDarkFrame(HWND window) {
   const BOOL dark = TRUE;
   DwmSetWindowAttribute(window, kUseImmersiveDarkMode, &dark, sizeof(dark));
@@ -204,20 +213,18 @@ void WindowHandleChannel::HandleMethodCall(
       SetWindowSubclass(window, KeepHiddenProc, kKeepHiddenSubclassId, 0);
     }
     // Flutter draws the main window's title bar and caption buttons (see
-    // AppWindowToolbar). Keep the resize frame and system menu.
-    const LONG_PTR style = GetWindowLongPtr(window, GWL_STYLE);
-    SetWindowLongPtr(window, GWL_STYLE, style & ~WS_CAPTION);
-    SetWindowPos(window, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
-                     SWP_FRAMECHANGED);
+    // AppWindowToolbar).
+    RemoveCaption(window);
     CenterWindow(window);
     if (on_main_window_) on_main_window_(window);
   } else if (method == "stylePlayerWindow") {
-    // The native caption stays: it shows the file name.
+    // The player draws its own transparent title bar over the video, fading
+    // with its controls (VideoPlayerPage).
     UseDarkFrame(window);
+    RemoveCaption(window);
   } else if (method == "setSkipTaskbar" || method == "setTitlebarVisible") {
-    // A hidden window has no taskbar button, and the player keeps its native
-    // caption on Windows.
+    // A hidden window has no taskbar button, and the player's title bar on
+    // Windows is Flutter's, already fading with the controls.
   } else {
     result->NotImplemented();
     return;

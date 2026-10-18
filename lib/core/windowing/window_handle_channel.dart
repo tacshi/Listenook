@@ -86,7 +86,8 @@ class WindowHandleChannel {
   }
 
   /// Applies the player chrome: a transparent native title bar laid over the
-  /// video on macOS, which fades with the player's controls.
+  /// video on macOS, which fades with the player's controls. On Windows the
+  /// native caption is removed and the player draws its own.
   static Future<void> stylePlayerWindow(AppWindow window) =>
       _call('stylePlayerWindow', window);
 
