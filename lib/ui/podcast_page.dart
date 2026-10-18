@@ -66,31 +66,34 @@ class _PodcastPageState extends State<PodcastPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (podcast.showsRootTabs) ...[
-              SegmentedButton<PodcastPane>(
-                key: const Key('podcast-root-tabs'),
-                showSelectedIcon: false,
-                segments: [
-                  ButtonSegment(
-                    value: PodcastPane.discover,
-                    label: Text(strings.t('podcast_discover')),
-                    icon: const Icon(Icons.search_rounded),
-                  ),
-                  ButtonSegment(
-                    value: PodcastPane.following,
-                    label: Text(
-                      '${strings.t('podcast_following')} '
-                      '(${podcast.followed.length})',
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SegmentedButton<PodcastPane>(
+                  key: const Key('podcast-root-tabs'),
+                  showSelectedIcon: false,
+                  segments: [
+                    ButtonSegment(
+                      value: PodcastPane.discover,
+                      label: Text(strings.t('podcast_discover')),
+                      icon: const Icon(Icons.search_rounded),
                     ),
-                    icon: const Icon(Icons.bookmark_rounded),
-                  ),
-                  ButtonSegment(
-                    value: PodcastPane.library,
-                    label: Text(strings.t('podcast_library')),
-                    icon: const Icon(Icons.download_done_rounded),
-                  ),
-                ],
-                selected: {podcast.pane},
-                onSelectionChanged: (values) => podcast.setPane(values.first),
+                    ButtonSegment(
+                      value: PodcastPane.following,
+                      label: Text(
+                        '${strings.t('podcast_following')} '
+                        '(${podcast.followed.length})',
+                      ),
+                      icon: const Icon(Icons.bookmark_rounded),
+                    ),
+                    ButtonSegment(
+                      value: PodcastPane.library,
+                      label: Text(strings.t('podcast_library')),
+                      icon: const Icon(Icons.download_done_rounded),
+                    ),
+                  ],
+                  selected: {podcast.pane},
+                  onSelectionChanged: (values) => podcast.setPane(values.first),
+                ),
               ),
               const SizedBox(height: 16),
             ],
