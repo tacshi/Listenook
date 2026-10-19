@@ -4705,12 +4705,16 @@ class _PermitPool {
     }
     final waiter = Completer<void>();
     _waiters.add(waiter);
+    // _release hands its permit straight to this waiter, so _active already
+    // counts it.
     await waiter.future;
-    _active++;
   }
 
   void _release() {
+    if (_waiters.isNotEmpty) {
+      _waiters.removeAt(0).complete();
+      return;
+    }
     _active--;
-    if (_waiters.isNotEmpty) _waiters.removeAt(0).complete();
   }
 }
