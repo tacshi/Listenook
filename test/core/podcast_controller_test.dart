@@ -402,6 +402,40 @@ void main() {
     },
   );
 
+  test('keeps followed feeds and only the most recent others cached', () async {
+    const limit = PodcastController.maxUnfollowedCachedFeeds;
+    final feeds = [
+      for (var index = 0; index < limit + 3; index++)
+        PodcastFeed(
+          feedUrl: 'https://feeds.example/show-$index',
+          title: 'Show $index',
+          episodes: const [],
+        ),
+    ];
+    final repository = _MemoryPodcastRepository();
+    final podcast = PodcastController(
+      gateway: MemoryPodcastGateway(
+        feeds: {for (final feed in feeds) feed.feedUrl: feed},
+      ),
+      repository: repository,
+    );
+    await podcast.initialize();
+    await podcast.openFeed(feeds.first.feedUrl);
+    await podcast.followOpenedFeed();
+    for (final feed in feeds.skip(1)) {
+      await podcast.openFeed(feed.feedUrl);
+    }
+
+    // The followed and opened feeds sit outside the limit, so only the
+    // oldest browsed feed is evicted.
+    final cached = repository.value.feeds.keys.toSet();
+    expect(cached, hasLength(limit + 2));
+    expect(cached, contains(feeds.first.feedUrl));
+    expect(cached, isNot(contains(feeds[1].feedUrl)));
+    expect(cached, contains(feeds[2].feedUrl));
+    expect(cached, contains(feeds.last.feedUrl));
+  });
+
   test('revealPlayingEpisode opens the episode with captions', () async {
     final episode = PodcastEpisode(
       id: 'https://feeds.example/show\nguid-1',

@@ -28,6 +28,11 @@ class PodcastController extends ChangeNotifier {
   static const browseCacheTtl = Duration(hours: 6);
   static const feedRefreshAfter = Duration(minutes: 30);
 
+  /// Feeds opened while browsing are cached with every episode, and the whole
+  /// catalog is rewritten on each save. Followed, opened and playing feeds are
+  /// always kept; beyond those, only this many recent feeds are.
+  static const maxUnfollowedCachedFeeds = 10;
+
   final PodcastGateway _gateway;
   final PodcastRepository _repository;
   final PodcastPlayer _player;
@@ -207,6 +212,7 @@ class PodcastController extends ChangeNotifier {
 
   Future<void> initialize() async {
     _state = await _repository.load();
+    _pruneCachedFeeds();
     await _player.initialize();
     _initialized = true;
     notifyListeners();
@@ -411,9 +417,7 @@ class PodcastController extends ChangeNotifier {
     _openedEpisode = episode;
     _captionsOpen = true;
     if (_state.feeds[_openedFeed!.feedUrl] == null) {
-      _state = _state.copyWith(
-        feeds: {..._state.feeds, _openedFeed!.feedUrl: _openedFeed!},
-      );
+      _cacheFeed(_openedFeed!);
       await _persist();
     }
     notifyListeners();
@@ -437,7 +441,7 @@ class PodcastController extends ChangeNotifier {
     try {
       final feed = await _gateway.fetchFeed(url);
       _openedFeed = feed;
-      _state = _state.copyWith(feeds: {..._state.feeds, feed.feedUrl: feed});
+      _cacheFeed(feed);
       await _persist();
     } on PodcastException catch (error) {
       _errorCode = error.code;
@@ -466,7 +470,7 @@ class PodcastController extends ChangeNotifier {
     try {
       final feed = await _gateway.fetchFeed(url);
       _openedFeed = feed;
-      _state = _state.copyWith(feeds: {..._state.feeds, feed.feedUrl: feed});
+      _cacheFeed(feed);
       await _persist();
     } on PodcastException catch (error) {
       _errorCode = error.code;
@@ -481,7 +485,7 @@ class PodcastController extends ChangeNotifier {
   Future<void> _refreshOpenedFeed(String feedUrl) async {
     try {
       final feed = await _gateway.fetchFeed(feedUrl);
-      _state = _state.copyWith(feeds: {..._state.feeds, feed.feedUrl: feed});
+      _cacheFeed(feed);
       if (_openedFeed != null &&
           (_openedFeed!.feedUrl == feed.feedUrl ||
               _openedFeed!.feedUrl == feedUrl)) {
@@ -576,7 +580,7 @@ class PodcastController extends ChangeNotifier {
   Future<void> _refreshFollowed(FollowedPodcast item) async {
     try {
       final feed = await _gateway.fetchFeed(item.feedUrl);
-      _state = _state.copyWith(feeds: {..._state.feeds, feed.feedUrl: feed});
+      _cacheFeed(feed);
       final unseen = feed.episodes
           .where((episode) => !item.lastSeenEpisodeIds.contains(episode.id))
           .length;
@@ -605,6 +609,33 @@ class PodcastController extends ChangeNotifier {
           if (item.feedUrl == updated.feedUrl) updated else item,
       ],
     );
+  }
+
+  void _cacheFeed(PodcastFeed feed) {
+    // Re-insert so map order runs from least to most recently cached.
+    _state = _state.copyWith(
+      feeds: {
+        for (final entry in _state.feeds.entries)
+          if (entry.key != feed.feedUrl) entry.key: entry.value,
+        feed.feedUrl: feed,
+      },
+    );
+    _pruneCachedFeeds(keep: feed.feedUrl);
+  }
+
+  void _pruneCachedFeeds({String? keep}) {
+    bool pinned(String url) =>
+        url == keep ||
+        url == _openedFeed?.feedUrl ||
+        url == _player.feed?.feedUrl ||
+        isFollowed(url);
+    var excess =
+        _state.feeds.keys.where((url) => !pinned(url)).length -
+        maxUnfollowedCachedFeeds;
+    if (excess <= 0) return;
+    final feeds = Map<String, PodcastFeed>.of(_state.feeds)
+      ..removeWhere((url, _) => !pinned(url) && excess-- > 0);
+    _state = _state.copyWith(feeds: feeds);
   }
 
   Future<void> _persist() => _repository.save(_state);
