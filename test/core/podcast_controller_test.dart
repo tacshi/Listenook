@@ -402,6 +402,44 @@ void main() {
     },
   );
 
+  test('opening a followed show clears its unseen badge', () async {
+    const url = 'https://feeds.example/show';
+    PodcastEpisode episode(int number) => PodcastEpisode(
+      id: '$url\nguid-$number',
+      feedUrl: url,
+      title: 'Episode $number',
+      enclosureUrl: 'https://cdn.example/$number.mp3',
+      mediaExtension: 'mp3',
+    );
+    final gateway = MemoryPodcastGateway(
+      feeds: {
+        url: PodcastFeed(feedUrl: url, title: 'Show', episodes: [episode(1)]),
+      },
+    );
+    final repository = _MemoryPodcastRepository();
+    final podcast = PodcastController(gateway: gateway, repository: repository);
+    await podcast.initialize();
+    await podcast.openFeed(url);
+    await podcast.followOpenedFeed();
+
+    gateway.feeds = {
+      url: PodcastFeed(
+        feedUrl: url,
+        title: 'Show',
+        episodes: [episode(2), episode(1)],
+      ),
+    };
+    await podcast.refreshFollowedNow();
+    expect(podcast.followed.single.unseenEpisodeCount, 1);
+
+    await podcast.openFollowed(podcast.followed.single);
+    expect(podcast.followed.single.unseenEpisodeCount, 0);
+    expect(repository.value.followed.single.unseenEpisodeCount, 0);
+
+    await podcast.refreshFollowedNow();
+    expect(podcast.followed.single.unseenEpisodeCount, 0);
+  });
+
   test('keeps followed feeds and only the most recent others cached', () async {
     const limit = PodcastController.maxUnfollowedCachedFeeds;
     final feeds = [

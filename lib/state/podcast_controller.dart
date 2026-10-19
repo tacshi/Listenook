@@ -430,6 +430,7 @@ class PodcastController extends ChangeNotifier {
       _loading = false;
       notifyListeners();
       await _refreshOpenedFeed(url);
+      await markOpenedFeedSeen();
       return;
     }
     _loading = true;
@@ -439,6 +440,7 @@ class PodcastController extends ChangeNotifier {
       _openedFeed = feed;
       _cacheFeed(feed);
       await _persist();
+      await markOpenedFeedSeen();
     } on PodcastException catch (error) {
       _errorCode = error.code;
     } on Object {
@@ -459,6 +461,7 @@ class PodcastController extends ChangeNotifier {
       _openedFeed = cached;
       notifyListeners();
       await _refreshOpenedFeed(url);
+      await markOpenedFeedSeen();
       return;
     }
     _loading = true;
@@ -468,6 +471,7 @@ class PodcastController extends ChangeNotifier {
       _openedFeed = feed;
       _cacheFeed(feed);
       await _persist();
+      await markOpenedFeedSeen();
     } on PodcastException catch (error) {
       _errorCode = error.code;
     } on Object {
@@ -543,16 +547,20 @@ class PodcastController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Opening a followed show counts its current episodes as seen, which
+  /// clears its unseen badge in Following.
   Future<void> markOpenedFeedSeen() async {
     final feed = _openedFeed;
     if (feed == null) return;
     final current = followedByUrl(feed.feedUrl);
     if (current == null) return;
+    final ids = {for (final episode in feed.episodes) episode.id};
+    if (current.unseenEpisodeCount == 0 &&
+        current.lastSeenEpisodeIds.containsAll(ids)) {
+      return;
+    }
     _replaceFollowed(
-      current.copyWith(
-        lastSeenEpisodeIds: {for (final episode in feed.episodes) episode.id},
-        unseenEpisodeCount: 0,
-      ),
+      current.copyWith(lastSeenEpisodeIds: ids, unseenEpisodeCount: 0),
     );
     await _persist();
     notifyListeners();
