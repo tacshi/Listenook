@@ -411,7 +411,11 @@ class _VideoFullscreenKeyboardRegionState
       return KeyEventResult.ignored;
     }
     if (widget.onListeningKey?.call(event) ?? false) {
-      _showControls();
+      // Option+arrow steps between sentences: a seek, like the plain arrows.
+      if (event.logicalKey != LogicalKeyboardKey.arrowLeft &&
+          event.logicalKey != LogicalKeyboardKey.arrowRight) {
+        _showControls();
+      }
       return KeyEventResult.handled;
     }
     if (event.logicalKey != LogicalKeyboardKey.keyR) {
@@ -503,10 +507,12 @@ class _VideoFullscreenKeyboardRegionState
         const SingleActivator(LogicalKeyboardKey.escape): _exit,
         const SingleActivator(LogicalKeyboardKey.space): () =>
             _runWithVisibleControls(widget.onPlayPause),
-        const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
-            _runWithVisibleControls(widget.onSeekBackward),
-        const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
-            _runWithVisibleControls(widget.onSeekForward),
+        // Seeking from the keyboard leaves the controls as they are, so the
+        // picture is not covered while stepping through it.
+        const SingleActivator(LogicalKeyboardKey.arrowLeft):
+            widget.onSeekBackward,
+        const SingleActivator(LogicalKeyboardKey.arrowRight):
+            widget.onSeekForward,
         const SingleActivator(LogicalKeyboardKey.keyX): () =>
             _runWithVisibleControls(widget.onDecreaseSpeed),
         const SingleActivator(LogicalKeyboardKey.keyC): () =>
@@ -757,6 +763,12 @@ class _VideoFullscreenKeyboardRegionState
                         thumbColor: Colors.white,
                         overlayColor: Colors.white24,
                         trackHeight: 3,
+                        thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 6,
+                        ),
+                        overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 14,
+                        ),
                       ),
                       child: Slider(
                         key: const Key('fullscreen-seek'),

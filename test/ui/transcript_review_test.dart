@@ -7125,6 +7125,8 @@ void main() {
     (tester) async {
       _setTestWindow(tester, const Size(1000, 600));
       var playing = true;
+      var keyboardSeeks = 0;
+      var sentenceSteps = 0;
       late StateSetter updatePlayback;
 
       await tester.pumpWidget(
@@ -7142,9 +7144,18 @@ void main() {
                 duration: const Duration(seconds: 10),
                 onExit: () {},
                 onPlayPause: () => setState(() => playing = !playing),
+                onListeningKey: (event) {
+                  final sentenceStep =
+                      event is KeyDownEvent &&
+                      HardwareKeyboard.instance.isAltPressed &&
+                      (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                          event.logicalKey == LogicalKeyboardKey.arrowRight);
+                  if (sentenceStep) sentenceSteps++;
+                  return sentenceStep;
+                },
                 onSeek: (_) {},
-                onSeekBackward: () {},
-                onSeekForward: () {},
+                onSeekBackward: () => keyboardSeeks++,
+                onSeekForward: () => keyboardSeeks++,
                 onDecreaseSpeed: () {},
                 onIncreaseSpeed: () {},
                 onRepeatHoldStart: _noop,
@@ -7184,6 +7195,20 @@ void main() {
       expect(controlsOpacity(), 0);
       expect(subtitleClearance(), 0);
       expect(cursor(), SystemMouseCursors.none);
+
+      // Seeking from the keyboard keeps the hidden controls out of the way.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump(
+        VideoFullscreenKeyboardRegion.controlsTransitionDuration,
+      );
+      expect(keyboardSeeks, 2);
+      expect(sentenceSteps, 1);
+      expect(controlsOpacity(), 0);
+      expect(subtitleClearance(), 0);
 
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       addTearDown(mouse.removePointer);
