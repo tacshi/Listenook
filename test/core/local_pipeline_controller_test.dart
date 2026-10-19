@@ -13,6 +13,7 @@ import 'package:listenook/data/podcast/http_podcast_gateway.dart';
 import 'package:listenook/data/timed_subtitle_import.dart';
 import 'package:listenook/data/transcript_exporter.dart';
 import 'package:listenook/state/app_controller.dart';
+import '../support/fakes.dart';
 
 void main() {
   test(
@@ -377,7 +378,7 @@ Replacement text
   test('startup selects and persists the sole installed aligner', () async {
     final fixture = await _Fixture.create();
     addTearDown(fixture.dispose);
-    final models = _AlignmentModels({
+    final models = _alignmentModels({
       LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id,
     });
 
@@ -406,7 +407,7 @@ Replacement text
     () async {
       final fixture = await _Fixture.create();
       addTearDown(fixture.dispose);
-      final models = _AlignmentModels({
+      final models = _alignmentModels({
         for (final descriptor in LocalSpeechModels.forcedAligners.values)
           descriptor.id,
       });
@@ -426,7 +427,7 @@ Replacement text
   test('the first downloaded aligner becomes the default', () async {
     final fixture = await _Fixture.create();
     addTearDown(fixture.dispose);
-    final models = _AlignmentModels({});
+    final models = _alignmentModels({});
     final controller = await fixture.controller(
       settings: const AppSettings(),
       localStt: _LocalStt(),
@@ -719,7 +720,9 @@ Replacement text
     () async {
       final fixture = await _Fixture.create();
       addTearDown(fixture.dispose);
-      final models = _QwenModels(failId: LocalSpeechModels.sileroVadCoreMl.id);
+      final models = _qwenModels(
+        failDownloadId: LocalSpeechModels.sileroVadCoreMl.id,
+      );
       final controller = await fixture.controller(
         settings: const AppSettings(),
         localStt: _QwenLocalStt(),
@@ -755,7 +758,7 @@ Replacement text
         LocalSpeechModels.sileroVadCoreMl.id,
       ]);
 
-      models.failId = null;
+      models.failDownloadId = null;
       await controller.localModels.downloadBundle(
         LocalSpeechModels.qwen3AsrBundle,
       );
@@ -791,7 +794,7 @@ Replacement text
       settings: const AppSettings(),
       localStt: _QwenLocalStt(),
       alignment: _Alignment(),
-      localModelManager: _QwenModels(),
+      localModelManager: _qwenModels(),
     );
     // Let the startup integrity check finish first.
     await pumpEventQueue();
@@ -917,8 +920,8 @@ Replacement text
         ),
         localStt: localStt,
         alignment: _Alignment(),
-        media: _FixedMetadataMedia(
-          const MediaMetadata(
+        media: FakeMediaService(
+          metadata: const MediaMetadata(
             sizeBytes: 576000044,
             durationMs: maxMediaDurationMs,
             hasAudio: true,
@@ -1059,7 +1062,9 @@ Replacement text
   test('installing a missing local model resumes eligible new work', () async {
     final fixture = await _Fixture.create();
     addTearDown(fixture.dispose);
-    final models = _InstallableModels();
+    final models = FakeLocalModelManager(
+      models: [LocalSpeechModels.mossDiarizeCoreMlInt8],
+    );
     final localStt = _CountingLocalStt();
     final controller = await fixture.controller(
       settings: const AppSettings(
@@ -1663,13 +1668,15 @@ class _Fixture {
         : settings;
     await settingsRepository.save(effectiveSettings);
     final controller = AppController(
-      credentialStore: _Credentials(),
+      credentialStore: MemoryCredentialStore('test'),
       settingsRepository: settingsRepository,
       jobRepository: LocalJobRepository(paths),
-      mediaService: media ?? _Media(),
+      mediaService: media ?? FakeMediaService(metadata: _metadata),
       sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: _RemoteClient(),
-      mossCredentialStore: mossClient == null ? null : _Credentials(),
+      mossCredentialStore: mossClient == null
+          ? null
+          : MemoryCredentialStore('test'),
       mossClient: mossClient,
       exporter: const DefaultTranscriptExporter(),
       localModelManager: localModelManager,
@@ -1693,143 +1700,7 @@ class _Fixture {
   }
 }
 
-class _BlockingVerificationModels implements LocalModelManager {
-  final verificationStarted = Completer<void>();
-  final releaseVerification = Completer<void>();
-
-  @override
-  List<LocalModelDescriptor> get models => [
-    LocalSpeechModels.mossDiarizeCoreMlInt8,
-  ];
-
-  @override
-  Future<void> delete(String modelId) async {}
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {}
-
-  @override
-  String pathFor(String modelId) => '/models/$modelId';
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async {
-    if (verifyIntegrity) {
-      if (!verificationStarted.isCompleted) verificationStarted.complete();
-      await releaseVerification.future;
-    }
-    return LocalModelStatus(
-      descriptor: LocalSpeechModels.mossDiarizeCoreMlInt8,
-      availability: LocalModelAvailability.ready,
-      downloadedBytes: LocalSpeechModels.mossDiarizeCoreMlInt8.sizeBytes,
-    );
-  }
-}
-
-class _InstallableModels implements LocalModelManager {
-  bool installed = false;
-
-  @override
-  List<LocalModelDescriptor> get models => [
-    LocalSpeechModels.mossDiarizeCoreMlInt8,
-  ];
-
-  @override
-  Future<void> delete(String modelId) async => installed = false;
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    installed = true;
-    onProgress?.call(
-      LocalSpeechModels.mossDiarizeCoreMlInt8.sizeBytes,
-      LocalSpeechModels.mossDiarizeCoreMlInt8.sizeBytes,
-    );
-  }
-
-  @override
-  String pathFor(String modelId) => '/models/$modelId';
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async => LocalModelStatus(
-    descriptor: LocalSpeechModels.mossDiarizeCoreMlInt8,
-    availability: installed
-        ? LocalModelAvailability.ready
-        : LocalModelAvailability.missing,
-    downloadedBytes: installed
-        ? LocalSpeechModels.mossDiarizeCoreMlInt8.sizeBytes
-        : 0,
-  );
-}
-
-class _Credentials implements CredentialStore {
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => 'test';
-
-  @override
-  Future<void> writeApiKey(String key) async {}
-}
-
-class _Media implements MediaService {
-  @override
-  bool canUploadDirectly(
-    String path,
-    MediaMetadata metadata, {
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-  }) => true;
-
-  @override
-  Future<void> deleteGeneratedMedia(String cacheKey) async {}
-
-  @override
-  Future<void> deleteTemporary(String path) async {}
-
-  @override
-  Future<MediaDiagnostics> diagnostics() async =>
-      const MediaDiagnostics(available: true);
-
-  @override
-  Future<String> extractAudio(
-    String sourcePath,
-    String jobId, {
-    required int durationMs,
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => sourcePath;
-
-  @override
-  Future<MediaMetadata> inspect(String sourcePath) async => _metadata;
-
-  @override
-  Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
-}
-
-class _FixedMetadataMedia extends _Media {
-  _FixedMetadataMedia(this.metadata);
-
-  final MediaMetadata metadata;
-
-  @override
-  Future<MediaMetadata> inspect(String sourcePath) async => metadata;
-}
-
-class _BlockingMedia extends _Media {
+class _BlockingMedia extends FakeMediaService {
   final inspectStarted = Completer<void>();
   final releaseInspect = Completer<void>();
 
@@ -2041,98 +1912,6 @@ class _TestInboxMonitor implements InboxFolderMonitor {
 
   @override
   Future<void> stop() async => _onCandidate = null;
-}
-
-class _AlignmentModels implements LocalModelManager {
-  _AlignmentModels(Set<String> installed) : installed = {...installed};
-
-  final Set<String> installed;
-
-  @override
-  List<LocalModelDescriptor> get models =>
-      LocalSpeechModels.forcedAligners.values.toList(growable: false);
-
-  @override
-  Future<void> delete(String modelId) async => installed.remove(modelId);
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    installed.add(modelId);
-    final descriptor = LocalSpeechModels.forcedAlignerById(modelId)!;
-    onProgress?.call(descriptor.sizeBytes, descriptor.sizeBytes);
-  }
-
-  @override
-  String pathFor(String modelId) => '/models/$modelId';
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async {
-    final descriptor = LocalSpeechModels.forcedAlignerById(modelId)!;
-    final ready = installed.contains(modelId);
-    return LocalModelStatus(
-      descriptor: descriptor,
-      availability: ready
-          ? LocalModelAvailability.ready
-          : LocalModelAvailability.missing,
-      downloadedBytes: ready ? descriptor.sizeBytes : 0,
-    );
-  }
-}
-
-class _QwenModels implements LocalModelManager {
-  _QwenModels({this.failId});
-
-  String? failId;
-  final installed = <String>{};
-  final downloads = <String>[];
-
-  @override
-  List<LocalModelDescriptor> get models =>
-      LocalSpeechModels.qwen3AsrBundle.artifacts;
-
-  @override
-  Future<void> delete(String modelId) async => installed.remove(modelId);
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    downloads.add(modelId);
-    if (modelId == failId) {
-      throw const LocalModelException('model_checksum_mismatch');
-    }
-    installed.add(modelId);
-    final descriptor = models.singleWhere((model) => model.id == modelId);
-    onProgress?.call(descriptor.sizeBytes, descriptor.sizeBytes);
-  }
-
-  @override
-  String pathFor(String modelId) => '/models/$modelId';
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async {
-    final descriptor = models.singleWhere((model) => model.id == modelId);
-    final ready = installed.contains(modelId);
-    return LocalModelStatus(
-      descriptor: descriptor,
-      availability: ready
-          ? LocalModelAvailability.ready
-          : LocalModelAvailability.missing,
-      downloadedBytes: ready ? descriptor.sizeBytes : 0,
-    );
-  }
 }
 
 class _CountingAlignment implements ForcedAlignmentService {
@@ -2369,4 +2148,40 @@ class _MossRemote implements TranscriptionClient {
 
   @override
   Future<void> validateKey({String? apiKey}) async {}
+}
+
+FakeLocalModelManager _alignmentModels(Set<String> installed) =>
+    FakeLocalModelManager(
+      models: LocalSpeechModels.forcedAligners.values.toList(growable: false),
+      installed: installed,
+    );
+
+FakeLocalModelManager _qwenModels({String? failDownloadId}) =>
+    FakeLocalModelManager(
+      models: LocalSpeechModels.qwen3AsrBundle.artifacts,
+      failDownloadId: failDownloadId,
+    );
+
+/// An installed MOSS model whose integrity check waits for the test.
+class _BlockingVerificationModels extends FakeLocalModelManager {
+  _BlockingVerificationModels()
+    : super(
+        models: [LocalSpeechModels.mossDiarizeCoreMlInt8],
+        installed: [LocalSpeechModels.mossDiarizeCoreMlInt8.id],
+      );
+
+  final verificationStarted = Completer<void>();
+  final releaseVerification = Completer<void>();
+
+  @override
+  Future<LocalModelStatus> status(
+    String modelId, {
+    bool verifyIntegrity = false,
+  }) async {
+    if (verifyIntegrity) {
+      if (!verificationStarted.isCompleted) verificationStarted.complete();
+      await releaseVerification.future;
+    }
+    return super.status(modelId, verifyIntegrity: verifyIntegrity);
+  }
 }

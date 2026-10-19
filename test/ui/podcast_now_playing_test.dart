@@ -21,6 +21,7 @@ import 'package:listenook/ui/podcast_now_playing.dart';
 import 'package:listenook/ui/podcast_page.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
+import '../support/fakes.dart';
 
 void main() {
   testWidgets('mini player speed button lists and applies playback rates', (
@@ -437,19 +438,19 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
     await podcast.openFeed(feed.feedUrl);
 
     final app = AppController(
-      credentialStore: _EmptyCredentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(app.dispose);
@@ -537,19 +538,19 @@ void main() {
 
     final podcast = PodcastController(
       gateway: gateway,
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
     await podcast.openFeed(feed.feedUrl);
 
     final app = AppController(
-      credentialStore: _EmptyCredentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
       podcastGateway: gateway,
       podcastManagedRoot: directory.path,
@@ -642,7 +643,7 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: gateway,
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
@@ -668,12 +669,12 @@ void main() {
       ),
     );
     final app = AppController(
-      credentialStore: _EmptyCredentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([job]),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository([job]),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
       podcastGateway: gateway,
       podcastManagedRoot: directory.path,
@@ -887,7 +888,7 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
@@ -934,7 +935,7 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: gateway,
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
@@ -986,7 +987,7 @@ void main() {
   ) async {
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(),
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
@@ -1028,7 +1029,7 @@ void main() {
   ) async {
     final podcast = PodcastController(
       gateway: _MissingFeedBrowseGateway(),
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
@@ -1087,19 +1088,19 @@ void main() {
 
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(),
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
     podcast.setPane(PodcastPane.library);
 
     final app = AppController(
-      credentialStore: _EmptyCredentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(jobs),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(jobs),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(app.dispose);
@@ -1236,7 +1237,7 @@ void main() {
           updatedAt: now,
         ),
       );
-      final repository = _MemoryPodcastRepo()
+      final repository = MemoryPodcastRepository()
         ..value = PodcastLibraryState(
           followed: [
             FollowedPodcast(
@@ -1257,12 +1258,12 @@ void main() {
       await podcast.initialize();
       podcast.setPane(PodcastPane.library);
       final app = AppController(
-        credentialStore: _EmptyCredentials(),
-        settingsRepository: _Settings(),
-        jobRepository: _Jobs([job]),
-        mediaService: _Media(),
+        credentialStore: MemoryCredentialStore(),
+        settingsRepository: MemorySettingsRepository(),
+        jobRepository: MemoryJobRepository([job]),
+        mediaService: FakeMediaService(metadata: fakePodcastMetadata),
         sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
+        sonioxClient: FakeSonioxClient(),
         exporter: const DefaultTranscriptExporter(),
       );
       addTearDown(app.dispose);
@@ -1365,18 +1366,18 @@ void main() {
     addTearDown(gateway.release);
     final podcast = PodcastController(
       gateway: gateway,
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
     podcast.setPane(PodcastPane.library);
     final app = AppController(
-      credentialStore: _EmptyCredentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(readyJobs),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(readyJobs),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
       podcastGateway: gateway,
       podcastManagedRoot: '${directory.path}/managed',
@@ -1447,7 +1448,7 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
-      repository: _MemoryPodcastRepo(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
     await podcast.initialize();
@@ -1457,12 +1458,12 @@ void main() {
     podcast.setPane(PodcastPane.library);
 
     final app = AppController(
-      credentialStore: _EmptyCredentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(app.dispose);
@@ -1511,26 +1512,6 @@ void main() {
       findsOneWidget,
     );
   });
-}
-
-class _MemoryPodcastRepo implements PodcastRepository {
-  PodcastLibraryState value = const PodcastLibraryState();
-  Map<String, PodcastListenProgress> playback = {};
-
-  @override
-  Future<PodcastLibraryState> load() async => value;
-
-  @override
-  Future<void> save(PodcastLibraryState state) async => value = state;
-
-  @override
-  Future<Map<String, PodcastListenProgress>> loadPlaybackProgress() async =>
-      playback;
-
-  @override
-  Future<void> savePlaybackProgress(
-    Map<String, PodcastListenProgress> progress,
-  ) async => playback = Map.of(progress);
 }
 
 class _MissingFeedBrowseGateway extends MemoryPodcastGateway {
@@ -1595,114 +1576,6 @@ class _RemovalPodcastPlayer extends PodcastPlayer {
     stopped = true;
     currentEpisode = null;
   }
-}
-
-class _Jobs implements JobRepository {
-  _Jobs([this.jobs = const []]);
-
-  final List<TranscriptionJob> jobs;
-
-  @override
-  Future<void> delete(String id) async {}
-
-  @override
-  Future<List<TranscriptionJob>> loadAll() async => jobs;
-
-  @override
-  Future<void> save(TranscriptionJob job) async {}
-}
-
-class _Settings implements SettingsRepository {
-  @override
-  Future<AppSettings> load() async => const AppSettings();
-
-  @override
-  Future<void> save(AppSettings settings) async {}
-}
-
-class _EmptyCredentials implements CredentialStore {
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => null;
-
-  @override
-  Future<void> writeApiKey(String key) async {}
-}
-
-class _Media implements MediaService {
-  @override
-  bool canUploadDirectly(
-    String path,
-    MediaMetadata metadata, {
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-  }) => true;
-
-  @override
-  Future<void> deleteGeneratedMedia(String cacheKey) async {}
-
-  @override
-  Future<void> deleteTemporary(String path) async {}
-
-  @override
-  Future<MediaDiagnostics> diagnostics() async =>
-      const MediaDiagnostics(available: true);
-
-  @override
-  Future<String> extractAudio(
-    String sourcePath,
-    String jobId, {
-    required int durationMs,
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => sourcePath;
-
-  @override
-  Future<MediaMetadata> inspect(String sourcePath) async => const MediaMetadata(
-    sizeBytes: 4,
-    durationMs: 1000,
-    hasAudio: true,
-    hasVideo: false,
-    formatName: 'mp3',
-  );
-
-  @override
-  Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
-}
-
-class _Soniox implements SonioxClient {
-  @override
-  Future<void> validateKey({String? apiKey}) async {}
-
-  @override
-  Future<String> createTranscription(
-    String fileId,
-    TranscriptionOptions options,
-  ) async => 'tx';
-
-  @override
-  Future<void> deleteFile(String fileId) async {}
-
-  @override
-  Future<void> deleteTranscription(String transcriptionId) async {}
-
-  @override
-  Future<Map<String, dynamic>> getTranscript(String transcriptionId) async =>
-      const {'tokens': []};
-
-  @override
-  Future<SonioxTranscriptionState> getTranscription(
-    String transcriptionId,
-  ) async => const SonioxTranscriptionState(status: 'completed');
-
-  @override
-  Future<String> uploadFile(
-    String path, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => 'file';
 }
 
 void _ignore(double value) {}

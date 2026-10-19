@@ -8,6 +8,7 @@ import 'package:listenook/core/local_speech.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/local_speech_process.dart';
 import 'package:listenook/data/local_speech_services.dart';
+import '../support/fakes.dart';
 
 void main() {
   final manifestPath = AppIdentity.environment(
@@ -60,8 +61,8 @@ void main() {
       if (requestedSegmentIds != null && !useExactSegments) {
         final captureWorker = _RequestCapturingWorker();
         final planningService = ProcessForcedAlignmentService(
-          models: _InstalledAlignmentModel(modelDirectory!, alignmentModel),
-          pcm: _ExistingPcm(pcmPath!),
+          models: _installedAlignmentModel(modelDirectory!),
+          pcm: FixedPcmPreparer(pcmPath!),
           worker: captureWorker,
           platformSupported: true,
         );
@@ -113,8 +114,8 @@ void main() {
         ),
       );
       final service = ProcessForcedAlignmentService(
-        models: _InstalledAlignmentModel(modelDirectory!, alignmentModel),
-        pcm: _ExistingPcm(pcmPath!),
+        models: _installedAlignmentModel(modelDirectory!),
+        pcm: FixedPcmPreparer(pcmPath!),
         worker: worker,
         platformSupported: true,
       );
@@ -288,52 +289,6 @@ class _RequestCapturingWorker implements LocalSpeechWorker {
   }
 }
 
-class _InstalledAlignmentModel implements LocalModelManager {
-  _InstalledAlignmentModel(this.modelDirectory, this.model);
-
-  final String modelDirectory;
-  final LocalModelDescriptor model;
-
-  @override
-  List<LocalModelDescriptor> get models => LocalSpeechModels.all;
-
-  @override
-  String pathFor(String modelId) => modelDirectory;
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async => LocalModelStatus(
-    descriptor: model,
-    availability: LocalModelAvailability.ready,
-    downloadedBytes: model.sizeBytes,
-  );
-
-  @override
-  Future<void> delete(String modelId) async {}
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {}
-}
-
-class _ExistingPcm implements LocalPcmPreparer {
-  _ExistingPcm(this.path);
-
-  final String path;
-
-  @override
-  Future<PreparedLocalPcm> prepare(
-    String sourcePath, {
-    required int durationMs,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => PreparedLocalPcm(path);
-
-  @override
-  Future<void> release(PreparedLocalPcm pcm) async {}
-}
+/// Every model is installed in [directory].
+FakeLocalModelManager _installedAlignmentModel(String directory) =>
+    FakeLocalModelManager.allInstalled(pathFor: (_) => directory);

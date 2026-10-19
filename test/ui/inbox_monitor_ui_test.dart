@@ -13,6 +13,7 @@ import 'package:listenook/ui/inbox_page.dart';
 import 'package:listenook/ui/subtitle_import_review_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
+import '../support/fakes.dart';
 
 void main() {
   testWidgets('subtitle pairing review enqueues a completed job', (
@@ -91,7 +92,9 @@ Hello locally
 Install locally
 ''');
     final controller = _controller(
-      localModelManager: _AlignmentModels(),
+      localModelManager: FakeLocalModelManager(
+        models: [LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8],
+      ),
       forcedAlignmentService: _SupportedAlignment(),
     );
     addTearDown(controller.dispose);
@@ -272,56 +275,18 @@ AppController _controller({
   LocalModelManager? localModelManager,
   ForcedAlignmentService? forcedAlignmentService,
 }) => AppController(
-  credentialStore: _Credentials(),
-  settingsRepository: _Settings(),
-  jobRepository: _Jobs(),
-  mediaService: _Media(),
+  credentialStore: MemoryCredentialStore('configured'),
+  settingsRepository: MemorySettingsRepository(
+    const AppSettings(onboardingComplete: true),
+  ),
+  jobRepository: MemoryJobRepository(),
+  mediaService: FakeMediaService(),
   sourceResolver: const LocalMediaSourceResolver(),
-  sonioxClient: _Soniox(),
+  sonioxClient: FakeSonioxClient(),
   exporter: const DefaultTranscriptExporter(),
   localModelManager: localModelManager,
   forcedAlignmentService: forcedAlignmentService,
 );
-
-class _AlignmentModels implements LocalModelManager {
-  bool installed = false;
-
-  @override
-  List<LocalModelDescriptor> get models => [
-    LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8,
-  ];
-
-  @override
-  Future<void> delete(String modelId) async => installed = false;
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    installed = true;
-    final size = LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.sizeBytes;
-    onProgress?.call(size, size);
-  }
-
-  @override
-  String pathFor(String modelId) => '/models/$modelId';
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async => LocalModelStatus(
-    descriptor: LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8,
-    availability: installed
-        ? LocalModelAvailability.ready
-        : LocalModelAvailability.missing,
-    downloadedBytes: installed
-        ? LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.sizeBytes
-        : 0,
-  );
-}
 
 class _SupportedAlignment implements ForcedAlignmentService {
   @override
@@ -338,110 +303,4 @@ class _SupportedAlignment implements ForcedAlignmentService {
     alignedSegments: 0,
     totalSegments: request.document.segments.length,
   );
-}
-
-class _Credentials implements CredentialStore {
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => 'configured';
-
-  @override
-  Future<void> writeApiKey(String key) async {}
-}
-
-class _Settings implements SettingsRepository {
-  AppSettings value = const AppSettings(onboardingComplete: true);
-
-  @override
-  Future<AppSettings> load() async => value;
-
-  @override
-  Future<void> save(AppSettings settings) async => value = settings;
-}
-
-class _Jobs implements JobRepository {
-  final jobs = <String, TranscriptionJob>{};
-
-  @override
-  Future<void> delete(String id) async => jobs.remove(id);
-
-  @override
-  Future<List<TranscriptionJob>> loadAll() async => jobs.values.toList();
-
-  @override
-  Future<void> save(TranscriptionJob job) async => jobs[job.id] = job;
-}
-
-class _Media implements MediaService {
-  @override
-  bool canUploadDirectly(
-    String path,
-    MediaMetadata metadata, {
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-  }) => true;
-
-  @override
-  Future<void> deleteGeneratedMedia(String cacheKey) async {}
-
-  @override
-  Future<void> deleteTemporary(String path) async {}
-
-  @override
-  Future<MediaDiagnostics> diagnostics() async =>
-      const MediaDiagnostics(available: true);
-
-  @override
-  Future<String> extractAudio(
-    String sourcePath,
-    String jobId, {
-    required int durationMs,
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => sourcePath;
-
-  @override
-  Future<MediaMetadata> inspect(String sourcePath) async => const MediaMetadata(
-    sizeBytes: 1,
-    durationMs: 1000,
-    hasAudio: true,
-    hasVideo: false,
-    formatName: 'wav',
-  );
-
-  @override
-  Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
-}
-
-class _Soniox implements SonioxClient {
-  @override
-  Future<String> createTranscription(
-    String fileId,
-    TranscriptionOptions options,
-  ) async => 'transcription';
-
-  @override
-  Future<void> deleteFile(String id) async {}
-
-  @override
-  Future<void> deleteTranscription(String id) async {}
-
-  @override
-  Future<Map<String, dynamic>> getTranscript(String id) async => const {};
-
-  @override
-  Future<SonioxTranscriptionState> getTranscription(String id) async =>
-      const SonioxTranscriptionState(status: 'completed');
-
-  @override
-  Future<String> uploadFile(
-    String path, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => 'file';
-
-  @override
-  Future<void> validateKey({String? apiKey}) async {}
 }

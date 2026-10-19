@@ -2,11 +2,11 @@ import 'package:listenook/core/app_identity.dart';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/local_speech.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/local_speech_process.dart';
 import 'package:listenook/data/local_speech_services.dart';
+import '../support/fakes.dart';
 
 void main() {
   final pcmPath = AppIdentity.environment('LISTENOOK_TEST_QWEN_PCM');
@@ -83,12 +83,12 @@ void main() {
       if (alignmentDirectory != null && document.segments.isNotEmpty) {
         final alignment =
             await ProcessForcedAlignmentService(
-              models: _InstalledQwenModels(
+              models: _installedQwenModels(
                 qwenDirectory: qwenDirectory!,
                 vadDirectory: vadDirectory!,
                 alignmentDirectory: alignmentDirectory,
               ),
-              pcm: _ExistingPcm(pcmPath!),
+              pcm: FixedPcmPreparer(pcmPath!),
               worker: worker,
               platformSupported: true,
             ).align(
@@ -113,64 +113,14 @@ void main() {
   );
 }
 
-class _InstalledQwenModels implements LocalModelManager {
-  const _InstalledQwenModels({
-    required this.qwenDirectory,
-    required this.vadDirectory,
-    required this.alignmentDirectory,
-  });
-
-  final String qwenDirectory;
-  final String vadDirectory;
-  final String alignmentDirectory;
-
-  @override
-  List<LocalModelDescriptor> get models => LocalSpeechModels.all;
-
-  @override
-  String pathFor(String modelId) => switch (modelId) {
+FakeLocalModelManager _installedQwenModels({
+  required String qwenDirectory,
+  required String vadDirectory,
+  required String alignmentDirectory,
+}) => FakeLocalModelManager.allInstalled(
+  pathFor: (modelId) => switch (modelId) {
     'qwen3-asr-1.7b-mlx-8bit' => qwenDirectory,
     'silero-vad-v6.2.1-coreml' => vadDirectory,
     _ => alignmentDirectory,
-  };
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async {
-    final descriptor = models.singleWhere((model) => model.id == modelId);
-    return LocalModelStatus(
-      descriptor: descriptor,
-      availability: LocalModelAvailability.ready,
-      downloadedBytes: descriptor.sizeBytes,
-    );
-  }
-
-  @override
-  Future<void> delete(String modelId) async {}
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {}
-}
-
-class _ExistingPcm implements LocalPcmPreparer {
-  const _ExistingPcm(this.path);
-
-  final String path;
-
-  @override
-  Future<PreparedLocalPcm> prepare(
-    String sourcePath, {
-    required int durationMs,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => PreparedLocalPcm(path);
-
-  @override
-  Future<void> release(PreparedLocalPcm pcm) async {}
-}
+  },
+);

@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/moss_api_client.dart';
+import '../support/fakes.dart';
 
 void main() {
   test(
@@ -29,7 +29,7 @@ void main() {
         await request.response.close();
       });
       final client = MossApiClient(
-        _Credential(),
+        MemoryCredentialStore('stored-key'),
         baseUri: Uri.parse(
           'http://${server.address.address}:${server.port}/v1',
         ),
@@ -57,7 +57,7 @@ void main() {
       await request.response.close();
     });
     final client = MossApiClient(
-      _Credential(),
+      MemoryCredentialStore('stored-key'),
       baseUri: Uri.parse('http://${server.address.address}:${server.port}/v1'),
     );
 
@@ -138,7 +138,7 @@ void main() {
         await request.response.close();
       });
       final client = MossApiClient(
-        _Credential(),
+        MemoryCredentialStore('stored-key'),
         baseUri: Uri.parse(
           'http://${server.address.address}:${server.port}/v1',
         ),
@@ -222,7 +222,7 @@ void main() {
       await request.response.close();
     });
     final client = MossApiClient(
-      _Credential(),
+      MemoryCredentialStore('stored-key'),
       baseUri: Uri.parse('http://${server.address.address}:${server.port}/v1'),
     );
 
@@ -255,7 +255,7 @@ void main() {
       await request.response.close();
     });
     final client = MossApiClient(
-      _Credential(),
+      MemoryCredentialStore('stored-key'),
       baseUri: Uri.parse('http://${server.address.address}:${server.port}/v1'),
     );
 
@@ -272,15 +272,4 @@ void main() {
       ),
     );
   });
-}
-
-class _Credential implements CredentialStore {
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => 'stored-key';
-
-  @override
-  Future<void> writeApiKey(String key) async {}
 }

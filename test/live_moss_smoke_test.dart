@@ -1,9 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/moss_api_client.dart';
+import 'support/fakes.dart';
 
 void main() {
   final key = Platform.environment['MOSS_API_KEY']?.trim();
@@ -16,7 +16,7 @@ void main() {
       );
       final aiff = '${directory.path}/speech.aiff';
       final audio = '${directory.path}/speech.wav';
-      final client = MossApiClient(_EnvironmentCredential(key!));
+      final client = MossApiClient(MemoryCredentialStore(key!));
       String? fileId;
       try {
         final spoken = await Process.run('say', [
@@ -69,19 +69,4 @@ void main() {
         : 'Set MOSS_API_KEY on macOS to opt into billable live smoke testing.',
     timeout: const Timeout(Duration(minutes: 8)),
   );
-}
-
-class _EnvironmentCredential implements CredentialStore {
-  const _EnvironmentCredential(this.key);
-
-  final String key;
-
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => key;
-
-  @override
-  Future<void> writeApiKey(String key) async {}
 }
