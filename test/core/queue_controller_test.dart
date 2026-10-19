@@ -1422,56 +1422,6 @@ void main() {
   );
 
   test(
-    'clear inactive history retains active work and repairs selection',
-    () async {
-      final directory = await Directory.systemTemp.createTemp('meow-clear-');
-      addTearDown(() => directory.delete(recursive: true));
-      final activeFile = File('${directory.path}/active.wav');
-      await activeFile.writeAsBytes([1]);
-      final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
-        TranscriptionJob(
-          id: 'history',
-          batchId: 'old-batch',
-          sourcePath: '/missing/history.wav',
-          createdAt: now.subtract(const Duration(days: 1)),
-          updatedAt: now,
-          status: JobStatus.completed,
-          document: _document(now),
-        ),
-      ]);
-      final media = _Media();
-      final controller = _controller(
-        jobs: jobs,
-        soniox: _Soniox(uploadDelay: const Duration(milliseconds: 100)),
-        media: media,
-      );
-      await controller.initialize();
-      controller.openInWorkspace('history');
-      await controller.enqueueSources([activeFile.path]);
-      await _waitFor(() => controller.readyCount == 1);
-      final activeId = controller.inboxJobs.last.id;
-      final run = controller.startReady();
-      await _waitFor(
-        () => controller.inboxJobs.last.status == JobStatus.uploading,
-      );
-
-      expect(controller.processingCount, 1);
-      expect(controller.inactiveHistoryCount, 1);
-      await controller.clearInactiveHistory();
-
-      expect(jobs.saved.containsKey('history'), isFalse);
-      expect(media.deletedGeneratedMedia, contains('history'));
-      expect(media.retainedGeneratedMedia, {activeId});
-      expect(controller.inboxJobs.single.id, activeId);
-      expect(controller.activeWorkspaceJobId, isNull);
-      expect(controller.inboxJobs.single.status, JobStatus.uploading);
-      await run;
-      expect(controller.processingCount, 0);
-    },
-  );
-
-  test(
     'AI Brief refresh failure preserves the last successful brief',
     () async {
       final now = DateTime.utc(2026, 8, 12);
@@ -2543,7 +2493,6 @@ class _Jobs implements JobRepository {
 
 class _Media implements MediaService {
   final deletedGeneratedMedia = <String>[];
-  Set<String>? retainedGeneratedMedia;
   bool uploadDirectly = true;
   final checkedUploadProfiles = <MediaUploadProfile>[];
   final extractedUploadProfiles = <MediaUploadProfile>[];
@@ -2564,10 +2513,6 @@ class _Media implements MediaService {
   @override
   Future<void> deleteGeneratedMedia(String cacheKey) async =>
       deletedGeneratedMedia.add(cacheKey);
-
-  @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async =>
-      retainedGeneratedMedia = retainedCacheKeys;
 
   @override
   Future<MediaDiagnostics> diagnostics() async =>

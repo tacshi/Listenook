@@ -75,10 +75,6 @@ class PodcastController extends ChangeNotifier {
       _openedCollection == null &&
       _openedEpisode == null;
   List<FollowedPodcast> get followed => _state.followed;
-  int get unseenCount => _state.followed.fold<int>(
-    0,
-    (sum, item) => sum + item.unseenEpisodeCount,
-  );
   PodcastPlayer get playback => _player;
 
   PodcastEpisodeDisplayState episodeDisplayState(

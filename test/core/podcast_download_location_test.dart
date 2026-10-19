@@ -25,7 +25,6 @@ void main() {
     expect(location.directory, '/tmp/Listenook/podcasts/job-1');
     expect(location.fileName, contains('Listen Today Tomorrow'));
     expect(location.fileName, endsWith('.mp3'));
-    expect(location.partPath, endsWith('.mp3.part'));
   });
 
   test('episode identity owns serialization and filename shortening', () {

@@ -147,14 +147,6 @@ class PodcastPlayer extends ChangeNotifier {
     return _progress[episodeId]?.positionMs ?? 0;
   }
 
-  PodcastPlayerCue? get currentCue {
-    final index = currentCueIndex;
-    if (index < 0) return null;
-    return _cues[index];
-  }
-
-  int get currentCueIndex => cueIndexAt(_cues, _position.inMilliseconds);
-
   int get displayPositionMs => _clock.at();
 
   static int cueIndexAt(List<PodcastPlayerCue> cues, int positionMs) {

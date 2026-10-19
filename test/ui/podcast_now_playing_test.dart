@@ -1640,9 +1640,6 @@ class _Media implements MediaService {
   }) => true;
 
   @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
-
-  @override
   Future<void> deleteGeneratedMedia(String cacheKey) async {}
 
   @override

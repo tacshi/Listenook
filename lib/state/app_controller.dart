@@ -158,25 +158,16 @@ class AppController extends ChangeNotifier {
       TranscriptionProvider.soniox;
   InboxMonitorStorage _inboxMonitorStorage = const InboxMonitorStorage();
   InboxMonitorStatus _inboxMonitorStatus = InboxMonitorStatus.unconfigured;
-  String? _inboxMonitorError;
 
   AppSettings get settings => _settings;
   InboxMonitorConfig get inboxMonitorConfig => _inboxMonitorStorage.config;
   InboxMonitorStatus get inboxMonitorStatus => _inboxMonitorStatus;
-  String? get inboxMonitorError => _inboxMonitorError;
   bool get inboxMonitorConfigured => inboxMonitorConfig.isConfigured;
   int get monitoredWaitingCount => inboxJobs
       .where(
         (job) =>
             job.sourceOrigin == JobSourceOrigin.monitoredFolder &&
             job.document == null,
-      )
-      .length;
-  int get monitoredHandledCount => _inboxMonitorStorage.records.values
-      .where(
-        (record) =>
-            record.disposition == MonitoredFileDisposition.completed ||
-            record.disposition == MonitoredFileDisposition.dismissed,
       )
       .length;
   LibraryCatalog get libraryCatalog => _libraryCatalog;
@@ -224,7 +215,6 @@ class AppController extends ChangeNotifier {
   TranscriptionOptions get sessionOptions => _sessionOptions;
   TranscriptionProvider get sessionTranscriptionProvider =>
       _sessionTranscriptionProvider;
-  bool get initializing => _initializing;
   bool get processing => _processing;
   bool get hasActiveWork => _jobs.values.any((job) => job.isBusy);
   bool get keyConfigured => _keyConfigured;
@@ -243,15 +233,6 @@ class AppController extends ChangeNotifier {
               ),
       };
   bool get localSpeechSupported => _localSttService?.isSupported ?? false;
-  bool get localForcedAlignmentSupported =>
-      _forcedAlignmentService?.isSupported ?? false;
-  LocalModelDescriptor? get defaultForcedAligner => _defaultForcedAligner;
-  bool get defaultForcedAlignerReady {
-    final model = _defaultForcedAligner;
-    return localForcedAlignmentSupported &&
-        model != null &&
-        localModels.isReady(model.id);
-  }
 
   List<TranscriptionProvider> get availableTranscriptionProviders => [
     TranscriptionProvider.soniox,
@@ -380,8 +361,6 @@ class AppController extends ChangeNotifier {
             job.status == JobStatus.missingSource,
       )
       .length;
-  int get inactiveHistoryCount =>
-      _jobs.values.where((job) => !job.isBusy).length;
   int get untranscribedInboxCount =>
       inboxJobs.where((job) => job.document == null).length;
   bool get canStartNewInboxBatch =>
@@ -819,10 +798,10 @@ class AppController extends ChangeNotifier {
     };
   }
 
-  void _setInboxMonitorStatus(InboxMonitorStatus status, String? error) {
-    if (_inboxMonitorStatus == status && _inboxMonitorError == error) return;
+  // The monitor also reports an error code with each status; nothing shows it.
+  void _setInboxMonitorStatus(InboxMonitorStatus status, String? _) {
+    if (_inboxMonitorStatus == status) return;
     _inboxMonitorStatus = status;
-    _inboxMonitorError = error;
     notifyListeners();
   }
 
@@ -1101,40 +1080,6 @@ class AppController extends ChangeNotifier {
     _libraryCatalog = _libraryCatalog.copyWith(
       groups: _libraryCatalog.groups
           .where((group) => group.id != id)
-          .toList(growable: false),
-    );
-    await _libraryCatalogRepository?.save(_libraryCatalog);
-    notifyListeners();
-  }
-
-  Future<void> renameLibraryTag(String id, String name) async {
-    final normalized = _validateOrganizerName(name);
-    if (_libraryCatalog.tags.any(
-      (tag) =>
-          tag.id != id && tag.name.toLowerCase() == normalized.toLowerCase(),
-    )) {
-      throw ArgumentError.value(name, 'name', 'Tag name already exists.');
-    }
-    if (libraryTagById(id) == null) return;
-    _libraryCatalog = _libraryCatalog.copyWith(
-      tags: [
-        for (final tag in _libraryCatalog.tags)
-          if (tag.id == id) tag.copyWith(name: normalized) else tag,
-      ],
-    );
-    await _libraryCatalogRepository?.save(_libraryCatalog);
-    notifyListeners();
-  }
-
-  Future<void> deleteLibraryTag(String id) async {
-    if (libraryTagById(id) == null) return;
-    for (final job
-        in _jobs.values.where((job) => job.tagIds.contains(id)).toList()) {
-      await _transition(job, tagIds: Set<String>.of(job.tagIds)..remove(id));
-    }
-    _libraryCatalog = _libraryCatalog.copyWith(
-      tags: _libraryCatalog.tags
-          .where((tag) => tag.id != id)
           .toList(growable: false),
     );
     await _libraryCatalogRepository?.save(_libraryCatalog);
@@ -2580,17 +2525,6 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> cancelAll() async {
-    for (final job in inboxJobs.where((item) => item.status.isActive)) {
-      _cancelledIds.add(job.id);
-    }
-    for (final job in inboxJobs.where(
-      (item) => item.translationState.status.isActive,
-    )) {
-      _translationCancelledIds.add(job.id);
-    }
-  }
-
   Future<void> cancelRemoteJobsForQuit() async {
     final active = inboxJobs.where((job) => job.isBusy).toList();
     for (final job in active) {
@@ -2836,35 +2770,6 @@ class AppController extends ChangeNotifier {
     await _deleteManagedPodcastAudio(job);
     await _media.deleteGeneratedMedia(id);
     await _jobsRepository.delete(id);
-    notifyListeners();
-  }
-
-  Future<void> clearInactiveHistory() async {
-    final deletable = _jobs.values
-        .where((job) => !job.isBusy)
-        .map((job) => job.id)
-        .toList(growable: false);
-    if (deletable.isEmpty) return;
-    for (final id in deletable) {
-      final job = _jobs[id];
-      if (job != null) await _deleteManagedPodcastAudio(job);
-      await _media.deleteGeneratedMedia(id);
-      await _jobsRepository.delete(id);
-      _jobs.remove(id);
-      _localAutoStartCandidates.remove(id);
-      _forgetPlaybackPosition(id);
-      _inboxIds.remove(id);
-    }
-    await _media.clearGeneratedMediaExcept(_jobs.keys.toSet());
-    if (_activeWorkspaceJobId != null &&
-        !_jobs.containsKey(_activeWorkspaceJobId)) {
-      _activeWorkspaceJobId = null;
-    }
-    final savedWorkspaceJobId = _settings.lastWorkspaceJobId;
-    if (savedWorkspaceJobId != null &&
-        !_jobs.containsKey(savedWorkspaceJobId)) {
-      _forgetWorkspaceJob(savedWorkspaceJobId);
-    }
     notifyListeners();
   }
 
@@ -4304,16 +4209,6 @@ class AppController extends ChangeNotifier {
     AiLanguageNoteKind.expression => 'Useful expressions',
     AiLanguageNoteKind.grammar => 'Grammar & usage',
   };
-
-  Future<String> exportJob(
-    String id,
-    String directory,
-    ExportOptions options,
-  ) async {
-    final job = _jobs[id];
-    if (job == null) throw StateError('Job not found.');
-    return _exporter.exportToDirectory(job, directory, options);
-  }
 
   Future<String> exportPodcastMedia(String id, String destinationPath) async {
     final job = _jobs[id];

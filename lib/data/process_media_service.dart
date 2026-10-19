@@ -554,19 +554,6 @@ class ProcessMediaService implements MediaService {
   }
 
   @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {
-    if (!await paths.temporary.exists()) return;
-    final retained = retainedCacheKeys.map(_safeCacheKey).toSet();
-    await for (final entity in paths.temporary.list(followLinks: false)) {
-      if (entity is! File) continue;
-      final cacheKey = generatedMediaCacheKey(p.basename(entity.path));
-      if (cacheKey != null && !retained.contains(cacheKey)) {
-        await deleteTemporary(entity.path);
-      }
-    }
-  }
-
-  @override
   Future<MediaDiagnostics> diagnostics() async {
     Player? player;
     try {
@@ -665,23 +652,6 @@ bool _hasMediaTracks(Tracks tracks) =>
 
 String _safeCacheKey(String cacheKey) =>
     cacheKey.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
-
-String? generatedMediaCacheKey(String filename) {
-  for (final suffix in const [
-    '-waveform-v3.png',
-    '-waveform-v2.png',
-    '-waveform.png',
-    '-waveform.wav',
-    '-extract.wav',
-    '.flac',
-    '.m4a',
-  ]) {
-    if (filename.endsWith(suffix)) {
-      return filename.substring(0, filename.length - suffix.length);
-    }
-  }
-  return null;
-}
 
 String _playerError(List<String> errors, String fallback) =>
     errors.isEmpty ? fallback : errors.take(3).join(' ');

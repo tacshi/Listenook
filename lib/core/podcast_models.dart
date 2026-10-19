@@ -466,8 +466,6 @@ class PodcastDownloadLocation {
       ? '$directory$fileName'
       : '$directory${_separator(directory)}$fileName';
 
-  String get partPath => '$filePath.part';
-
   static String _separator(String directory) =>
       directory.contains('\\') && !directory.contains('/') ? '\\' : '/';
 }

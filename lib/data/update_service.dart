@@ -45,8 +45,6 @@ class UpdateService extends ChangeNotifier {
        _platformKey = platformKey ?? currentUpdatePlatformKey,
        _automaticEnabled = automaticEnabled ?? kReleaseMode;
 
-  static const releaseRepoUrl =
-      'https://github.com/${AppIdentity.releaseRepository}';
   static const defaultManifestUrl =
       'https://raw.githubusercontent.com/${AppIdentity.releaseRepository}/main/${AppIdentity.manifestName}';
 
@@ -80,7 +78,6 @@ class UpdateService extends ChangeNotifier {
   AppVersion? get currentVersion => _currentVersion;
   AppRelease? get release => _release;
   Object? get error => _error;
-  int get receivedBytes => _receivedBytes;
   int get totalBytes => _totalBytes;
   bool get readyToRestart =>
       _downloadedFile != null &&

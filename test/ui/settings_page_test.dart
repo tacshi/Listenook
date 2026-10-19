@@ -1523,9 +1523,6 @@ class _Media implements MediaService {
   Future<void> deleteGeneratedMedia(String cacheKey) async {}
 
   @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
-
-  @override
   Future<MediaDiagnostics> diagnostics() async =>
       const MediaDiagnostics(available: true);
 

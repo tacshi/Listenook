@@ -360,7 +360,8 @@ Replacement text
     addTearDown(fixture.dispose);
     final models = _BlockingVerificationModels();
 
-    final controller = await fixture
+    // initialize() returns before verification finishes.
+    await fixture
         .controller(
           settings: const AppSettings(),
           localStt: _LocalStt(),
@@ -369,7 +370,6 @@ Replacement text
         )
         .timeout(const Duration(seconds: 1));
 
-    expect(controller.initializing, isFalse);
     await models.verificationStarted.future.timeout(const Duration(seconds: 1));
     models.releaseVerification.complete();
   });
@@ -1792,9 +1792,6 @@ class _Media implements MediaService {
     MediaMetadata metadata, {
     MediaUploadProfile profile = MediaUploadProfile.standard,
   }) => true;
-
-  @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
 
   @override
   Future<void> deleteGeneratedMedia(String cacheKey) async {}

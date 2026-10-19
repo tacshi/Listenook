@@ -118,11 +118,6 @@ class SecureLlmCredentialStore
   Future<void> deleteApiKey() => _value.delete();
 }
 
-@Deprecated('Use SecureLlmCredentialStore.')
-class SecureTranslationCredentialStore extends SecureLlmCredentialStore {
-  SecureTranslationCredentialStore({super.storage});
-}
-
 class JsonSettingsRepository implements SettingsRepository {
   JsonSettingsRepository(this.paths);
   final AppPaths paths;

@@ -804,7 +804,7 @@ void main() {
     expect(await File(exported).readAsBytes(), [1, 2, 3, 4]);
 
     final managed = controller.inboxJobs.single.sourcePath;
-    await controller.clearInactiveHistory();
+    await controller.deleteHistory(controller.inboxJobs.single.id);
     expect(File(managed).existsSync(), isFalse);
     expect(await File(exported).readAsBytes(), [1, 2, 3, 4]);
   });
@@ -913,9 +913,6 @@ class _Media implements MediaService {
     MediaMetadata metadata, {
     MediaUploadProfile profile = MediaUploadProfile.standard,
   }) => true;
-
-  @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
 
   @override
   Future<void> deleteGeneratedMedia(String cacheKey) async {}
