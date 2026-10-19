@@ -594,6 +594,20 @@ void main() {
     expect(restored.config.launchAtLogin, isTrue);
     expect(restored.config.showTrayIcon, isFalse);
     expect(InboxMonitorConfig.fromJson(const {}).showTrayIcon, isTrue);
+    expect(restored.config.showDockIcon, isTrue);
+    expect(InboxMonitorConfig.fromJson(const {}).showDockIcon, isTrue);
+    expect(
+      InboxMonitorConfig.fromJson(const {'show_dock_icon': false}).showDockIcon,
+      isFalse,
+    );
+    // A file with both icons off still leaves the Dock icon to get back in.
+    expect(
+      InboxMonitorConfig.fromJson(const {
+        'show_tray_icon': false,
+        'show_dock_icon': false,
+      }).showDockIcon,
+      isTrue,
+    );
     expect(
       restored.records[fingerprint.identity]?.disposition,
       MonitoredFileDisposition.dismissed,

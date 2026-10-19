@@ -696,6 +696,39 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.inboxMonitorConfig.showTrayIcon, isFalse);
     expect(find.text('Starts hidden in the menu bar.'), findsNothing);
+
+    // The Dock icon can only be hidden while the menu bar icon is shown, and
+    // the other way round, so the app always stays reachable.
+    final dockSetting = find.byKey(const Key('settings-show-dock-icon'));
+    final dockSwitch = find.descendant(
+      of: dockSetting,
+      matching: find.byType(Switch),
+    );
+    expect(find.text('Show Dock icon'), findsOneWidget);
+    expect(tester.widget<Switch>(dockSwitch).value, isTrue);
+    expect(tester.widget<Switch>(dockSwitch).onChanged, isNull);
+    expect(
+      find.text('Show the menu bar icon first, so Listenook stays reachable.'),
+      findsOneWidget,
+    );
+    await tester.tap(traySwitch);
+    await tester.pumpAndSettle();
+    await tester.tap(dockSwitch);
+    await tester.pumpAndSettle();
+    expect(controller.inboxMonitorConfig.showDockIcon, isFalse);
+    expect(tester.widget<Switch>(traySwitch).onChanged, isNull);
+    expect(
+      find.text('Show the Dock icon first, so Listenook stays reachable.'),
+      findsOneWidget,
+    );
+    await controller.setDesktopTrayIconVisible(false);
+    expect(controller.inboxMonitorConfig.showTrayIcon, isTrue);
+    await tester.tap(dockSwitch);
+    await tester.pumpAndSettle();
+    expect(controller.inboxMonitorConfig.showDockIcon, isTrue);
+    await tester.tap(traySwitch);
+    await tester.pumpAndSettle();
+    expect(controller.inboxMonitorConfig.showTrayIcon, isFalse);
     final startupSetting = find.byKey(const Key('settings-launch-at-login'));
     final startupSwitch = tester.widget<Switch>(
       find.descendant(of: startupSetting, matching: find.byType(Switch)),

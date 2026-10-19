@@ -182,6 +182,11 @@ Future<void> main(List<String> arguments) async {
     await desktopRuntime.setLaunchAtLogin(
       controller.inboxMonitorConfig.launchAtLogin,
     );
+    // The runner applies the last saved choice before any window shows; this
+    // catches up if the settings file says otherwise.
+    await desktopRuntime.setDockIconVisible(
+      controller.inboxMonitorConfig.showDockIcon,
+    );
     if (backgroundLaunch &&
         !videoLaunch &&
         !controller.inboxMonitorConfig.showTrayIcon) {

@@ -249,6 +249,13 @@ class AppStrings {
     'desktop_icon_hint':
         'Keeps Listenook available after its window is closed.',
     'desktop_menu_bar_launch_hint': 'Starts hidden in the menu bar.',
+    'desktop_menu_bar_needs_dock':
+        'Show the Dock icon first, so Listenook stays reachable.',
+    'desktop_dock_icon': 'Show Dock icon',
+    'desktop_dock_icon_hint':
+        'When hidden, the menu bar icon opens Listenook and its settings.',
+    'desktop_dock_needs_menu_bar':
+        'Show the menu bar icon first, so Listenook stays reachable.',
     'desktop_tray_launch_hint': 'Starts hidden in the system tray.',
     'inbox_monitor_file_type_required': 'Select at least one file type.',
     'inbox_monitor_folder_required': 'Choose an accessible folder.',
@@ -1068,6 +1075,10 @@ class AppStrings {
     'desktop_tray_icon': '显示系统托盘图标',
     'desktop_icon_hint': '窗口关闭后仍可使用聆页。',
     'desktop_menu_bar_launch_hint': '启动后隐藏在菜单栏中。',
+    'desktop_menu_bar_needs_dock': '请先显示程序坞图标，以便随时打开聆页。',
+    'desktop_dock_icon': '显示程序坞图标',
+    'desktop_dock_icon_hint': '隐藏后，可通过菜单栏图标打开聆页和设置。',
+    'desktop_dock_needs_menu_bar': '请先显示菜单栏图标，以便随时打开聆页。',
     'desktop_tray_launch_hint': '启动后隐藏在系统托盘中。',
     'inbox_monitor_file_type_required': '请至少选择一种文件类型。',
     'inbox_monitor_folder_required': '请选择可访问的文件夹。',

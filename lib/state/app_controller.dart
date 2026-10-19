@@ -676,6 +676,7 @@ class AppController extends ChangeNotifier {
         extensions: normalizedExtensions,
         launchAtLogin: launchAtLogin,
         showTrayIcon: inboxMonitorConfig.showTrayIcon,
+        showDockIcon: inboxMonitorConfig.showDockIcon,
       ),
     );
     await _seedMonitorLedgerFromJobs(allJobs);
@@ -702,6 +703,7 @@ class AppController extends ChangeNotifier {
         extensions: config.extensions,
         launchAtLogin: config.launchAtLogin,
         showTrayIcon: config.showTrayIcon,
+        showDockIcon: config.showDockIcon,
       ),
     );
     await _persistInboxMonitor();
@@ -722,8 +724,21 @@ class AppController extends ChangeNotifier {
 
   Future<void> setDesktopTrayIconVisible(bool visible) async {
     if (inboxMonitorConfig.showTrayIcon == visible) return;
+    // Without either icon the app could not be reached once its window is
+    // closed.
+    if (!visible && !inboxMonitorConfig.showDockIcon) return;
     _inboxMonitorStorage = _inboxMonitorStorage.copyWith(
       config: inboxMonitorConfig.copyWith(showTrayIcon: visible),
+    );
+    await _persistInboxMonitor();
+    notifyListeners();
+  }
+
+  Future<void> setDesktopDockIconVisible(bool visible) async {
+    if (inboxMonitorConfig.showDockIcon == visible) return;
+    if (!visible && !inboxMonitorConfig.showTrayIcon) return;
+    _inboxMonitorStorage = _inboxMonitorStorage.copyWith(
+      config: inboxMonitorConfig.copyWith(showDockIcon: visible),
     );
     await _persistInboxMonitor();
     notifyListeners();
