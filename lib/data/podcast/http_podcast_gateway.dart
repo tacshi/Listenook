@@ -17,6 +17,8 @@ class HttpPodcastGateway implements PodcastGateway {
     this.searchEndpoint = 'https://itunes.apple.com/search',
     PodcastRssParser parser = const PodcastRssParser(),
     this.maxFeedBytes = defaultMaxFeedBytes,
+    this.requestTimeout = const Duration(seconds: 30),
+    this.idleTimeout = const Duration(seconds: 60),
   }) : _client = client ?? http.Client(),
        _parser = parser;
 
@@ -24,11 +26,18 @@ class HttpPodcastGateway implements PodcastGateway {
   static const maxTranscriptBytes = 20 * 1024 * 1024;
   static const maxRedirects = 5;
   static const _minSearchInterval = Duration(milliseconds: 3000);
+  static const _watchdogInterval = Duration(seconds: 1);
 
   final http.Client _client;
   final String searchEndpoint;
   final PodcastRssParser _parser;
   final int maxFeedBytes;
+
+  /// How long a server may take to send response headers.
+  final Duration requestTimeout;
+
+  /// How long a response body may go without sending any bytes.
+  final Duration idleTimeout;
   DateTime _lastSearchAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
@@ -177,17 +186,14 @@ class HttpPodcastGateway implements PodcastGateway {
     var received = offset;
     final sink = part.openWrite(mode: FileMode.append);
     try {
-      await for (final chunk in response.stream) {
-        if (shouldCancel?.call() ?? false) {
-          throw const OperationCancelledException();
-        }
+      await _consume(response.stream, shouldCancel: shouldCancel, (chunk) {
         sink.add(chunk);
         received += chunk.length;
         onProgress?.call(
           total == null || total == 0 ? null : received / total,
           null,
         );
-      }
+      });
       await sink.flush();
     } finally {
       await sink.close();
@@ -228,7 +234,12 @@ class HttpPodcastGateway implements PodcastGateway {
         HttpHeaders.userAgentHeader,
         () => 'Listenook/1.2 (podcast)',
       );
-      final response = await _client.send(current);
+      final response = await _client
+          .send(current)
+          .timeout(
+            requestTimeout,
+            onTimeout: () => throw const PodcastException('podcast_timeout'),
+          );
       if (response.isRedirect) {
         final location = response.headers[HttpHeaders.locationHeader];
         await response.stream.drain<void>();
@@ -254,12 +265,12 @@ class HttpPodcastGateway implements PodcastGateway {
           throw const PodcastException('podcast_payload_too_large');
         }
         final bytes = BytesBuilder(copy: false);
-        await for (final chunk in response.stream) {
+        await _consume(response.stream, shouldCancel: shouldCancel, (chunk) {
           bytes.add(chunk);
           if (maxBytes != null && bytes.length > maxBytes) {
             throw const PodcastException('podcast_payload_too_large');
           }
-        }
+        });
         return http.StreamedResponse(
           Stream<List<int>>.fromIterable([bytes.takeBytes()]),
           response.statusCode,
@@ -270,6 +281,59 @@ class HttpPodcastGateway implements PodcastGateway {
       return response;
     }
     throw const PodcastException('podcast_too_many_redirects');
+  }
+
+  /// Reads [stream] into [onChunk]. A timer checks [shouldCancel] and the time
+  /// since the last bytes arrived, so a stalled connection fails with
+  /// `podcast_timeout` and Cancel works even while no data is coming in.
+  Future<void> _consume(
+    Stream<List<int>> stream,
+    void Function(List<int> chunk) onChunk, {
+    CancelCheck? shouldCancel,
+  }) {
+    final done = Completer<void>();
+    var idle = Duration.zero;
+    StreamSubscription<List<int>>? subscription;
+    Timer? watchdog;
+    void finish([Object? error, StackTrace? stackTrace]) {
+      if (done.isCompleted) return;
+      watchdog?.cancel();
+      if (error == null) {
+        done.complete();
+      } else {
+        unawaited(subscription?.cancel());
+        done.completeError(error, stackTrace);
+      }
+    }
+
+    bool cancelled() {
+      if (!(shouldCancel?.call() ?? false)) return false;
+      finish(const OperationCancelledException());
+      return true;
+    }
+
+    subscription = stream.listen(
+      (chunk) {
+        idle = Duration.zero;
+        if (cancelled()) return;
+        try {
+          onChunk(chunk);
+        } on Object catch (error, stackTrace) {
+          finish(error, stackTrace);
+        }
+      },
+      onError: finish,
+      onDone: finish,
+      cancelOnError: true,
+    );
+    watchdog = Timer.periodic(_watchdogInterval, (_) {
+      if (cancelled()) return;
+      idle += _watchdogInterval;
+      if (idle >= idleTimeout) {
+        finish(const PodcastException('podcast_timeout'));
+      }
+    });
+    return done.future;
   }
 
   int? _totalBytes(http.StreamedResponse response, int offset) {

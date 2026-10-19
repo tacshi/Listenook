@@ -857,6 +857,8 @@ class AppStrings {
     'error_podcast_invalid_feed_url': 'Enter a public HTTP or HTTPS feed URL.',
     'error_podcast_feed_empty': 'This feed has no supported audio episodes.',
     'error_podcast_download_failed': 'The episode could not be downloaded.',
+    'error_podcast_timeout':
+        'The podcast server stopped responding. Try again later.',
     'error_podcast_invalid_media_url': 'This episode has an invalid media URL.',
     'error_podcast_payload_too_large': 'This podcast file is too large.',
     'error_podcast_feed_too_large':
@@ -1599,6 +1601,7 @@ class AppStrings {
     'error_podcast_invalid_feed_url': '请输入公开的 HTTP 或 HTTPS Feed 地址。',
     'error_podcast_feed_empty': '这个 Feed 没有支持的音频单集。',
     'error_podcast_download_failed': '无法下载这一集。',
+    'error_podcast_timeout': '播客服务器没有响应，请稍后再试。',
     'error_podcast_invalid_media_url': '这一集的媒体地址无效。',
     'error_podcast_payload_too_large': '这个播客文件过大。',
     'error_podcast_feed_too_large': '这个节目的单集列表太大，打不开。',
