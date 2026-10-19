@@ -71,7 +71,8 @@ class NativeDesktopTray implements DesktopTray {
     final previous = _menu;
     final next = _NativeTrayMenu(
       menu,
-      onSelected: (key) => listener?.onTrayMenuItemSelected(key),
+      onSelected: (key) =>
+          _deliver(() => listener?.onTrayMenuItemSelected(key)),
     );
     icon.setContextMenu(next.menu);
     _menu = next;
@@ -113,9 +114,16 @@ class NativeDesktopTray implements DesktopTray {
   void _handleEvent(TrayIconEvent event) {
     if (event is TrayIconClickedEvent &&
         _menuTrigger != ContextMenuTrigger.clicked) {
-      listener?.onTrayIconClicked();
+      _deliver(() => listener?.onTrayIconClicked());
     }
   }
+
+  // nativeapi calls back synchronously from inside the native menu or tray
+  // message handling, outside any Dart event. Microtasks queued there, which
+  // is every await continuation, only run once the next Dart event arrives;
+  // with the window hidden and the app idle none may come, so Quit stalled at
+  // its first await. A timer runs the handler as a Dart event of its own.
+  static void _deliver(void Function() handler) => Timer.run(handler);
 
   // The selected item's own callback may be what replaces or removes the
   // menu, so the old one has to outlive it.
