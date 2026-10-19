@@ -1,8 +1,8 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:listenook/ui/review_fullscreen_controller.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:listenook/ui/review_fullscreen_controller.dart';
 
 void main() {
   testWidgets('exiting a fullscreen video is lifecycle safe', (tester) async {

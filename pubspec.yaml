@@ -30,8 +30,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_localizations:
-    sdk: flutter
 
   archive: ^4.0.9
   crypto: ^3.0.7
@@ -45,6 +43,8 @@ dependencies:
   flutter_widget_from_html_core: ^0.17.4
   http: ^1.6.0
   intl: ^0.20.2
+  # The framework's Material library, now a separate package.
+  material_ui: ^1.7.0
   media_kit: ^1.2.6
   media_kit_libs_video: ^1.0.7
   media_kit_video: ^2.0.1

@@ -3,22 +3,18 @@ import 'dart:io';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/local_speech.dart';
 import 'package:listenook/core/models.dart';
+import 'package:listenook/core/podcast_models.dart';
 import 'package:listenook/core/transcript_structure_editor.dart';
 import 'package:listenook/core/windowing/main_window_host.dart';
-import 'package:listenook/core/podcast_models.dart';
 import 'package:listenook/data/desktop_tray.dart';
-import 'package:listenook/data/podcast/http_podcast_gateway.dart';
 import 'package:listenook/data/local_media_source_resolver.dart';
+import 'package:listenook/data/podcast/http_podcast_gateway.dart';
 import 'package:listenook/data/transcript_exporter.dart';
 import 'package:listenook/l10n/strings.dart';
 import 'package:listenook/state/app_controller.dart';
@@ -29,6 +25,9 @@ import 'package:listenook/ui/inbox_page.dart';
 import 'package:listenook/ui/review_fullscreen_controller.dart';
 import 'package:listenook/ui/transcript_review.dart';
 import 'package:listenook/ui/workspace_page.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
@@ -2770,9 +2769,7 @@ void main() {
             supportedLocales: AppStrings.supportedLocales,
             localizationsDelegates: const [
               AppStrings.delegate,
-              GlobalMaterialLocalizations.delegate,
-              GlobalWidgetsLocalizations.delegate,
-              GlobalCupertinoLocalizations.delegate,
+              ...GlobalMaterialLocalizations.delegates,
             ],
             home: const Scaffold(body: TranscriptReview(jobId: 'job')),
           ),
@@ -3935,9 +3932,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: Scaffold(body: TranscriptReview(jobId: 'job')),
         ),
@@ -5332,9 +5327,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: const [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: AppShell(),
         ),
@@ -5857,9 +5850,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: const [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: const AppShell(),
         ),
@@ -6688,9 +6679,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: Scaffold(body: TranscriptReview(jobId: 'job')),
         ),
@@ -8522,9 +8511,7 @@ void main() {
             supportedLocales: AppStrings.supportedLocales,
             localizationsDelegates: const [
               AppStrings.delegate,
-              GlobalMaterialLocalizations.delegate,
-              GlobalWidgetsLocalizations.delegate,
-              GlobalCupertinoLocalizations.delegate,
+              ...GlobalMaterialLocalizations.delegates,
             ],
             home: const Scaffold(body: TranscriptReview(jobId: 'job')),
           ),
@@ -9021,9 +9008,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: Scaffold(body: TranscriptReview(jobId: 'job')),
         ),
@@ -9651,9 +9636,7 @@ Future<_ReviewFakePlatformPlayer> _pumpMimicReview(
         supportedLocales: AppStrings.supportedLocales,
         localizationsDelegates: const [
           AppStrings.delegate,
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
+          ...GlobalMaterialLocalizations.delegates,
         ],
         home: const Scaffold(body: TranscriptReview(jobId: 'job')),
       ),

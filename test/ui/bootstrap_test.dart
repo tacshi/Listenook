@@ -1,10 +1,10 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:listenook/main.dart';
 import 'package:listenook/data/app_data_migration.dart';
 import 'package:listenook/data/migrating_secure_value.dart';
+import 'package:listenook/main.dart';
+import 'package:material_ui/material_ui.dart';
 
 void main() {
   testWidgets('startup paints a visible loading screen before initialization', (

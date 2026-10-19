@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import 'package:listenook/core/contracts.dart';
@@ -17,10 +15,11 @@ import 'package:listenook/l10n/strings.dart';
 import 'package:listenook/state/app_controller.dart';
 import 'package:listenook/state/podcast_controller.dart';
 import 'package:listenook/state/podcast_player.dart';
-import 'package:listenook/ui/podcast_now_playing.dart';
-import 'package:listenook/ui/podcast_mini_bar.dart';
 import 'package:listenook/ui/podcast_episode_description.dart';
+import 'package:listenook/ui/podcast_mini_bar.dart';
+import 'package:listenook/ui/podcast_now_playing.dart';
 import 'package:listenook/ui/podcast_page.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 void main() {
@@ -467,9 +466,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: Scaffold(body: PodcastPage()),
         ),
@@ -1490,9 +1487,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: Scaffold(body: PodcastPage()),
         ),

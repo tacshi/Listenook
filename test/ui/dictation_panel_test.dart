@@ -1,9 +1,9 @@
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:listenook/l10n/strings.dart';
 import 'package:listenook/core/dictation_comparison.dart';
+import 'package:listenook/l10n/strings.dart';
 import 'package:listenook/ui/dictation_panel.dart';
+import 'package:material_ui/material_ui.dart';
 
 void main() {
   testWidgets(

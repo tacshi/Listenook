@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:ffi' as ffi;
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:windows_single_instance/windows_single_instance.dart';
 

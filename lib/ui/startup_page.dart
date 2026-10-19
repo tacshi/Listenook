@@ -1,5 +1,5 @@
-import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../data/app_data_migration.dart';
 import '../data/migrating_secure_value.dart';
