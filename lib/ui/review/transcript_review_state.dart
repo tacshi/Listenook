@@ -129,6 +129,13 @@ class TranscriptReviewState extends State<TranscriptReview> {
   String? _editingSegmentId;
   String? _editingTranslationSegmentId;
   TranscriptDocument? _mappedDocument;
+  ({
+    TranscriptDocument document,
+    AppStrings strings,
+    String query,
+    List<TranscriptSegment> segments,
+  })?
+  _searchCache;
   Map<String, List<TranscriptToken>> _tokensBySegment = const {};
   String _openedPath = '';
   String _waveformSource = '';
@@ -541,12 +548,8 @@ class TranscriptReviewState extends State<TranscriptReview> {
     return TranslationViewMode.original;
   }
 
-  TranscriptDocument? get _document => context
-      .read<AppController>()
-      .allJobs
-      .where((item) => item.id == widget.jobId)
-      .firstOrNull
-      ?.document;
+  TranscriptDocument? get _document =>
+      context.read<AppController>().jobById(widget.jobId)?.document;
 
   String? get _repeatingSegmentId =>
       _heldRepeatingSegmentId ?? _manualRepeatingSegmentId;
@@ -637,9 +640,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
 
   Future<void> _openSource() async {
     if (!mounted) return;
-    final job = _appController.allJobs
-        .where((item) => item.id == widget.jobId)
-        .firstOrNull;
+    final job = _appController.jobById(widget.jobId);
     if (job == null) return;
     if (job.sourcePath == _openedPath && _player != null && _video != null) {
       return;
@@ -817,9 +818,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
-    final job = controller.allJobs
-        .where((item) => item.id == widget.jobId)
-        .firstOrNull;
+    final job = controller.jobById(widget.jobId);
     final document = job?.document;
     if (job == null || document == null) return const SizedBox.shrink();
     _syncDictation(document);
@@ -827,18 +826,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
     final query = _search.text.trim().toLowerCase();
     final segments = query.isEmpty
         ? document.segments
-        : document.segments
-              .where(
-                (segment) =>
-                    segment.text.toLowerCase().contains(query) ||
-                    (segment.translatedText?.toLowerCase().contains(query) ??
-                        false) ||
-                    context.strings
-                        .speakerName(document.speakerName(segment.speaker))
-                        .toLowerCase()
-                        .contains(query),
-              )
-              .toList();
+        : _searchResults(context.strings, document, query);
     final currentIndex = query.isEmpty
         ? _blindListening
               ? currentListeningSegmentIndex(
@@ -2931,6 +2919,41 @@ class TranscriptReviewState extends State<TranscriptReview> {
         tone: AppNoticeTone.error,
       );
     }
+  }
+
+  /// Playback rebuilds this page on every position tick; filter the
+  /// transcript again only when the document, query or locale changes.
+  List<TranscriptSegment> _searchResults(
+    AppStrings strings,
+    TranscriptDocument document,
+    String query,
+  ) {
+    final cached = _searchCache;
+    if (cached != null &&
+        identical(cached.document, document) &&
+        identical(cached.strings, strings) &&
+        cached.query == query) {
+      return cached.segments;
+    }
+    final segments = document.segments
+        .where(
+          (segment) =>
+              segment.text.toLowerCase().contains(query) ||
+              (segment.translatedText?.toLowerCase().contains(query) ??
+                  false) ||
+              strings
+                  .speakerName(document.speakerName(segment.speaker))
+                  .toLowerCase()
+                  .contains(query),
+        )
+        .toList();
+    _searchCache = (
+      document: document,
+      strings: strings,
+      query: query,
+      segments: segments,
+    );
+    return segments;
   }
 
   void _ensureTokenMap(TranscriptDocument document) {

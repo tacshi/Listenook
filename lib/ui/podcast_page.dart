@@ -1174,13 +1174,18 @@ class _PodcastPageState extends State<PodcastPage> {
                       child: Column(
                         children: [
                           Expanded(
-                            child: PodcastCaptionPane(
-                              player: player,
-                              document: job?.document,
-                              episodeId: episode.id,
-                              hasCompletedTranscript:
-                                  job?.status == JobStatus.completed,
-                              compact: true,
+                            // The page rebuilds at whole-second detail; the
+                            // captions follow every player change.
+                            child: ListenableBuilder(
+                              listenable: player,
+                              builder: (context, _) => PodcastCaptionPane(
+                                player: player,
+                                document: job?.document,
+                                episodeId: episode.id,
+                                hasCompletedTranscript:
+                                    job?.status == JobStatus.completed,
+                                compact: true,
+                              ),
                             ),
                           ),
                         ],

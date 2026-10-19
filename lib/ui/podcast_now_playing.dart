@@ -20,6 +20,13 @@ class PodcastNowPlaying extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final podcast = context.watch<PodcastController>();
+    return ListenableBuilder(
+      listenable: podcast.playback,
+      builder: (context, _) => _build(context, podcast),
+    );
+  }
+
+  Widget _build(BuildContext context, PodcastController podcast) {
     final player = podcast.playback;
     final app = Provider.of<AppController>(context, listen: false);
     final episode = player.episode;

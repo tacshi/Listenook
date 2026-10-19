@@ -115,7 +115,30 @@ class PodcastController extends ChangeNotifier {
         episode.durationMs,
   );
 
-  void _handlePlaybackChange() => notifyListeners();
+  Object? _playbackSnapshot;
+
+  /// The player notifies on every position tick. Pages that watch this
+  /// controller only show playback at whole-second detail (episode rows,
+  /// shell, tray), so forward a change only when that view of it differs;
+  /// widgets that track the position closely listen to [playback] directly.
+  void _handlePlaybackChange() {
+    final player = _player;
+    final snapshot = (
+      player.episode,
+      player.feed,
+      player.document,
+      player.cues,
+      player.loadingCues,
+      player.playing,
+      player.expanded,
+      player.rate,
+      player.duration.inSeconds,
+      player.position.inSeconds,
+    );
+    if (snapshot == _playbackSnapshot) return;
+    _playbackSnapshot = snapshot;
+    notifyListeners();
+  }
 
   FollowedPodcast? followedByUrl(String feedUrl) {
     final url = canonicalizeHttpUrl(feedUrl) ?? feedUrl;

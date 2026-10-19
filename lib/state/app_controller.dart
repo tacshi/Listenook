@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:math';
 
@@ -115,7 +116,10 @@ class AppController extends ChangeNotifier {
   final Uuid _uuid;
   final Set<String> _downloadCancelledIds = {};
   int _activePodcastDownloads = 0;
-  final Map<String, TranscriptionJob> _jobs = {};
+  final _jobs = _JobMap();
+  (int, List<TranscriptionJob>)? _sortedJobs;
+  (LibraryCatalog, List<LibraryGroup>)? _sortedGroups;
+  (LibraryCatalog, List<LibraryTag>)? _sortedTags;
   final Map<String, Duration> _playbackPositions = {};
   final Map<String, _TranscriptStructureHistory> _structureHistories = {};
   final List<String> _inboxIds = [];
@@ -177,14 +181,28 @@ class AppController extends ChangeNotifier {
       .length;
   LibraryCatalog get libraryCatalog => _libraryCatalog;
   List<LibraryGroup> get libraryGroups {
-    final groups = List<LibraryGroup>.of(_libraryCatalog.groups)
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final cached = _sortedGroups;
+    if (cached != null && identical(cached.$1, _libraryCatalog)) {
+      return cached.$2;
+    }
+    final groups = List<LibraryGroup>.unmodifiable(
+      List<LibraryGroup>.of(_libraryCatalog.groups)
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase())),
+    );
+    _sortedGroups = (_libraryCatalog, groups);
     return groups;
   }
 
   List<LibraryTag> get libraryTags {
-    final tags = List<LibraryTag>.of(_libraryCatalog.tags)
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final cached = _sortedTags;
+    if (cached != null && identical(cached.$1, _libraryCatalog)) {
+      return cached.$2;
+    }
+    final tags = List<LibraryTag>.unmodifiable(
+      List<LibraryTag>.of(_libraryCatalog.tags)
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase())),
+    );
+    _sortedTags = (_libraryCatalog, tags);
     return tags;
   }
 
@@ -256,9 +274,15 @@ class AppController extends ChangeNotifier {
   AppDestination get destination => _destination;
   String? get activeWorkspaceJobId => _activeWorkspaceJobId;
 
+  /// Newest first. Sorted once per change to the jobs, since pages read this
+  /// on every rebuild.
   List<TranscriptionJob> get allJobs {
-    final list = _jobs.values.toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final cached = _sortedJobs;
+    if (cached != null && cached.$1 == _jobs.version) return cached.$2;
+    final list = List<TranscriptionJob>.unmodifiable(
+      _jobs.values.toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt)),
+    );
+    _sortedJobs = (_jobs.version, list);
     return list;
   }
 
@@ -4679,6 +4703,47 @@ class _TranscriptStructureHistory {
     undo.add(entry);
     if (undo.length > _limit) undo.removeAt(0);
     redo.clear();
+  }
+}
+
+/// Counts writes so derived views such as [AppController.allJobs] can be
+/// cached until the jobs change.
+class _JobMap extends MapBase<String, TranscriptionJob> {
+  final Map<String, TranscriptionJob> _inner = {};
+  int version = 0;
+
+  @override
+  TranscriptionJob? operator [](Object? key) => _inner[key];
+
+  @override
+  void operator []=(String key, TranscriptionJob value) {
+    _inner[key] = value;
+    version++;
+  }
+
+  @override
+  void clear() {
+    _inner.clear();
+    version++;
+  }
+
+  @override
+  Iterable<String> get keys => _inner.keys;
+
+  @override
+  Iterable<TranscriptionJob> get values => _inner.values;
+
+  @override
+  int get length => _inner.length;
+
+  @override
+  bool containsKey(Object? key) => _inner.containsKey(key);
+
+  @override
+  TranscriptionJob? remove(Object? key) {
+    final removed = _inner.remove(key);
+    if (removed != null) version++;
+    return removed;
   }
 }
 
