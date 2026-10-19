@@ -1,12 +1,8 @@
-import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-
-import 'package:http/http.dart' as http;
-import 'package:path/path.dart' as p;
 
 import '../core/contracts.dart';
 import '../core/models.dart';
+import 'remote_transcription_api.dart';
 
 String canonicalMossErrorCode(
   String? value, {
@@ -28,52 +24,27 @@ String canonicalMossErrorCode(
   return fallback;
 }
 
-class MossApiClient implements TranscriptionClient {
-  MossApiClient(this._credentials, {http.Client? httpClient, Uri? baseUri})
-    : _http = httpClient ?? http.Client(),
-      _base = (baseUri ?? Uri.parse('https://api.mosi.cn/v1'))
-          .toString()
-          .replaceFirst(RegExp(r'/$'), '');
+class MossApiClient extends RemoteTranscriptionApi
+    implements TranscriptionClient {
+  MossApiClient(super.credentials, {super.httpClient, super.baseUri})
+    : super(
+        serviceName: 'MOSS',
+        codePrefix: 'moss_',
+        defaultBaseUri: Uri.parse('https://api.mosi.cn/v1'),
+      );
 
   static const model = 'moss-transcribe-diarize';
   static const version = 'v20260410-streamparam-20260703';
   static const maxUploadBytes = 512 * 1024 * 1024;
 
-  final CredentialStore _credentials;
-  final http.Client _http;
-  final String _base;
-
-  Future<Map<String, String>> _headers({
-    bool json = false,
-    String? apiKey,
-  }) async {
-    final candidate = apiKey?.trim();
-    final key = candidate == null || candidate.isEmpty
-        ? await _credentials.readApiKey()
-        : candidate;
-    if (key == null || key.isEmpty) {
-      throw const MossException(
-        code: 'moss_missing_credentials',
-        message: 'A MOSS API key is required.',
-      );
-    }
-    return {
-      'Authorization': 'Bearer $key',
-      if (json) 'Content-Type': 'application/json',
-    };
-  }
-
   @override
   Future<void> validateKey({String? apiKey}) async {
-    final response = await _http
-        .get(
-          Uri.parse('$_base/models'),
-          headers: await _headers(apiKey: apiKey),
-        )
-        .timeout(const Duration(seconds: 20));
-    _ensureSuccess(response.statusCode, response.body);
-    final json = _object(response.body);
-    final models = (json['data'] as List? ?? const [])
+    final response = await get(
+      '/models',
+      timeout: const Duration(seconds: 20),
+      apiKey: apiKey,
+    );
+    final models = (object(response.body)['data'] as List? ?? const [])
         .whereType<Map>()
         .map((item) => item['id']?.toString())
         .whereType<String>();
@@ -91,41 +62,20 @@ class MossApiClient implements TranscriptionClient {
     ProgressCallback? onProgress,
     CancelCheck? shouldCancel,
   }) async {
-    final file = File(path);
-    final length = await file.length();
-    if (length > maxUploadBytes) {
+    if (await File(path).length() > maxUploadBytes) {
       throw const MossException(
         code: 'moss_file_too_large',
         message: 'MOSS accepts files up to 512 MB.',
       );
     }
-    var sent = 0;
-    final stream = file.openRead().transform(
-      StreamTransformer<List<int>, List<int>>.fromHandlers(
-        handleData: (chunk, sink) {
-          if (shouldCancel?.call() ?? false) {
-            sink.addError(const OperationCancelledException());
-            sink.close();
-            return;
-          }
-          sent += chunk.length;
-          onProgress?.call(length == 0 ? null : sent / length, '$sent/$length');
-          sink.add(chunk);
-        },
-      ),
+    final body = await upload(
+      '/files',
+      path,
+      fields: const {'purpose': 'audio'},
+      onProgress: onProgress,
+      shouldCancel: shouldCancel,
     );
-    final request = http.MultipartRequest('POST', Uri.parse('$_base/files'))
-      ..headers.addAll(await _headers())
-      ..fields['purpose'] = 'audio'
-      ..files.add(
-        http.MultipartFile('file', stream, length, filename: p.basename(path)),
-      );
-    final response = await _http
-        .send(request)
-        .timeout(const Duration(hours: 2));
-    final body = await response.stream.bytesToString();
-    _ensureSuccess(response.statusCode, body);
-    return _requiredId(body, keys: const ['id'], operation: 'upload');
+    return requiredId(body, operation: 'upload');
   }
 
   @override
@@ -133,23 +83,16 @@ class MossApiClient implements TranscriptionClient {
     String fileId,
     TranscriptionOptions options,
   ) async {
-    final response = await _http
-        .post(
-          Uri.parse('$_base/audio/transcriptions'),
-          headers: await _headers(json: true),
-          body: jsonEncode({
-            'model': model,
-            'version': version,
-            'file_id': fileId,
-            'diarize': true,
-            'response_format': 'json',
-            'async': true,
-          }),
-        )
-        .timeout(const Duration(seconds: 60));
-    _ensureSuccess(response.statusCode, response.body);
-    return _requiredId(
-      response.body,
+    final body = await postJson('/audio/transcriptions', {
+      'model': model,
+      'version': version,
+      'file_id': fileId,
+      'diarize': true,
+      'response_format': 'json',
+      'async': true,
+    }, timeout: const Duration(seconds: 60));
+    return requiredId(
+      body,
       keys: const ['task_id', 'id'],
       operation: 'transcription',
     );
@@ -182,90 +125,48 @@ class MossApiClient implements TranscriptionClient {
   Future<void> deleteTranscription(String id) async {}
 
   @override
-  Future<void> deleteFile(String id) async {
-    final response = await _http
-        .delete(
-          Uri.parse('$_base/files/${Uri.encodeComponent(id)}'),
-          headers: await _headers(),
-        )
-        .timeout(const Duration(seconds: 30));
-    if (response.statusCode == 404) return;
-    _ensureSuccess(response.statusCode, response.body);
-  }
+  Future<void> deleteFile(String id) =>
+      delete('/files/${Uri.encodeComponent(id)}');
 
-  Future<Map<String, dynamic>> _getTask(String id) async {
-    final response = await _http
-        .get(
-          Uri.parse('$_base/audio/tasks/${Uri.encodeComponent(id)}'),
-          headers: await _headers(),
-        )
-        .timeout(const Duration(minutes: 2));
-    _ensureSuccess(response.statusCode, response.body);
-    return _object(response.body);
-  }
+  Future<Map<String, dynamic>> _getTask(String id) => getObject(
+    '/audio/tasks/${Uri.encodeComponent(id)}',
+    timeout: const Duration(minutes: 2),
+  );
 
-  String _requiredId(
-    String body, {
-    required List<String> keys,
-    required String operation,
-  }) {
-    final json = _object(body);
-    for (final key in keys) {
-      final value = json[key]?.toString();
-      if (value != null && value.isNotEmpty) return value;
-    }
-    throw MossException(
-      code: 'moss_invalid_response',
-      message: 'MOSS $operation response did not contain an id.',
-    );
-  }
-
-  Map<String, dynamic> _object(String body) {
-    try {
-      return (jsonDecode(body) as Map).cast<String, dynamic>();
-    } on Object {
-      throw const MossException(
-        code: 'moss_invalid_response',
-        message: 'MOSS returned an unreadable response.',
-      );
-    }
-  }
-
-  void _ensureSuccess(int statusCode, String body) {
-    if (statusCode >= 200 && statusCode < 300) return;
-    var type = '';
-    var message = 'MOSS request failed (HTTP $statusCode).';
-    try {
-      final json = (jsonDecode(body) as Map).cast<String, dynamic>();
-      final error = (json['error'] as Map?)?.cast<String, dynamic>();
-      type =
+  @override
+  RemoteErrorBody parseErrorBody(Map<String, dynamic> json) {
+    final error = (json['error'] as Map?)?.cast<String, dynamic>();
+    return (
+      type:
           error?['code']?.toString() ??
           error?['type']?.toString() ??
           json['code']?.toString() ??
-          '';
-      message =
-          error?['message']?.toString() ??
-          json['message']?.toString() ??
-          message;
-    } on Object {
-      // The HTTP status still provides a stable category.
-    }
-    final code = switch (statusCode) {
-      401 || 403 => 'moss_bad_credentials',
-      402 => 'moss_exhausted_balance',
-      413 => 'moss_file_too_large',
-      429 => 'moss_rate_limit',
-      >= 500 => 'moss_server_failure',
-      _ => canonicalMossErrorCode(type),
-    };
-    throw MossException(
-      code: code,
-      message: message,
-      statusCode: statusCode,
-      errorType: type.isEmpty ? null : type,
-      retryable: statusCode == 408 || statusCode == 429 || statusCode >= 500,
+          '',
+      message: error?['message']?.toString() ?? json['message']?.toString(),
     );
   }
+
+  @override
+  String errorCodeFor(int statusCode, String type) => switch (statusCode) {
+    402 => 'moss_exhausted_balance',
+    413 => 'moss_file_too_large',
+    _ => canonicalMossErrorCode(type),
+  };
+
+  @override
+  Exception exception({
+    required String code,
+    required String message,
+    int? statusCode,
+    String? errorType,
+    bool retryable = false,
+  }) => MossException(
+    code: code,
+    message: message,
+    statusCode: statusCode,
+    errorType: errorType,
+    retryable: retryable,
+  );
 }
 
 class MossTranscriptParser {
