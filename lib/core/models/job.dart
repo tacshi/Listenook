@@ -639,7 +639,7 @@ class TranscriptionJob {
     'forced_alignment': forcedAlignment.toJson(),
   };
 
-  String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
+  String toJsonString() => jsonEncode(toJson());
 
   factory TranscriptionJob.fromJson(Map<String, dynamic> json) {
     final status =

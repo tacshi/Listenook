@@ -28,6 +28,7 @@ enum AppDestination { inbox, podcast, workspace, library, settings }
 
 class AppController extends ChangeNotifier {
   static const _playbackHistorySaveInterval = Duration(seconds: 2);
+  static const _progressPublishInterval = Duration(milliseconds: 250);
 
   AppController({
     required CredentialStore credentialStore,
@@ -124,6 +125,9 @@ class AppController extends ChangeNotifier {
   final Set<String> _alignmentInterruptedIds = {};
   final Set<String> _monitorCandidatesInFlight = {};
   final Set<String> _localAutoStartCandidates = {};
+  final Map<String, Timer> _progressCooldowns = {};
+  final Set<String> _progressPending = {};
+  bool _progressDisposed = false;
   final _remoteLane = _PermitPool(4);
   final _localModelLane = _PermitPool(1);
   late final LocalModelsController localModels = LocalModelsController(
@@ -271,16 +275,26 @@ class AppController extends ChangeNotifier {
   Duration playbackPositionFor(String jobId) =>
       _playbackPositions[jobId] ?? Duration.zero;
 
-  void rememberPlaybackPosition(String jobId, Duration position) {
+  /// Saves are throttled while playback reports positions; pass [flush] when
+  /// leaving a job so its last position is written now.
+  void rememberPlaybackPosition(
+    String jobId,
+    Duration position, {
+    bool flush = false,
+  }) {
+    final bool changed;
     if (position <= Duration.zero) {
-      if (_playbackPositions.remove(jobId) == null) return;
-      if (_jobs.containsKey(jobId)) _markPlaybackHistoryDirty();
-      return;
+      changed = _playbackPositions.remove(jobId) != null;
+    } else {
+      final normalized = Duration(milliseconds: position.inMilliseconds);
+      changed = _playbackPositions[jobId] != normalized;
+      _playbackPositions[jobId] = normalized;
     }
-    final normalized = Duration(milliseconds: position.inMilliseconds);
-    if (_playbackPositions[jobId] == normalized) return;
-    _playbackPositions[jobId] = normalized;
-    if (_jobs.containsKey(jobId)) _markPlaybackHistoryDirty();
+    if (changed && _jobs.containsKey(jobId)) {
+      _markPlaybackHistoryDirty(force: flush);
+    } else if (flush && _playbackHistoryDirty) {
+      _requestPlaybackHistorySave(force: true);
+    }
   }
 
   void _forgetPlaybackPosition(String jobId) {
@@ -289,18 +303,18 @@ class AppController extends ChangeNotifier {
     _markPlaybackHistoryDirty();
   }
 
-  void _markPlaybackHistoryDirty() {
-    _settings = _settings.copyWith(
-      playbackPositionsMs: {
-        for (final entry in _playbackPositions.entries)
-          if (_jobs.containsKey(entry.key))
-            entry.key: entry.value.inMilliseconds,
-      },
-    );
+  void _markPlaybackHistoryDirty({bool force = false}) {
+    // Called on every playback position tick: only flag the change here and
+    // copy the positions into settings when they are actually saved.
     _playbackHistoryDirty = true;
+    _requestPlaybackHistorySave(force: force);
+  }
+
+  void _requestPlaybackHistorySave({bool force = false}) {
     final now = DateTime.now();
     final lastSavedAt = _lastPlaybackHistorySaveAt;
-    if (lastSavedAt != null &&
+    if (!force &&
+        lastSavedAt != null &&
         now.difference(lastSavedAt) < _playbackHistorySaveInterval) {
       return;
     }
@@ -315,6 +329,13 @@ class AppController extends ChangeNotifier {
   Future<void> _savePlaybackHistory() async {
     if (!_playbackHistoryDirty) return;
     _playbackHistoryDirty = false;
+    _settings = _settings.copyWith(
+      playbackPositionsMs: {
+        for (final entry in _playbackPositions.entries)
+          if (_jobs.containsKey(entry.key))
+            entry.key: entry.value.inMilliseconds,
+      },
+    );
     try {
       await _queueSettingsSave(_settings);
     } on Object {
@@ -4397,15 +4418,41 @@ class AppController extends ChangeNotifier {
     final effectiveFraction =
         fraction ??
         (job.progress.stage == stage ? job.progress.fraction : null);
-    return _transition(
-      job,
-      status: status,
-      progress: JobProgress(
-        stage: stage,
-        fraction: effectiveFraction,
-        detail: detail,
-      ),
+    final progress = JobProgress(
+      stage: stage,
+      fraction: effectiveFraction,
+      detail: detail,
     );
+    // Downloads and uploads report every network chunk. Within a stage, keep
+    // the latest value in memory and publish it at most once per interval so
+    // progress does not rewrite the manifest and rebuild the UI per chunk.
+    final sameStage =
+        job.progress.stage == stage && (status == null || status == job.status);
+    if (sameStage && _progressCooldowns.containsKey(id)) {
+      final updated = job.copyWith(progress: progress);
+      _jobs[id] = updated;
+      _progressPending.add(id);
+      return updated;
+    }
+    _startProgressCooldown(id);
+    return _transition(job, status: status, progress: progress);
+  }
+
+  void _startProgressCooldown(String id) {
+    _progressCooldowns[id]?.cancel();
+    _progressCooldowns[id] = Timer(_progressPublishInterval, () {
+      _progressCooldowns.remove(id);
+      if (!_progressPending.remove(id)) return;
+      final job = _jobs[id];
+      if (job == null || _progressDisposed) return;
+      _startProgressCooldown(id);
+      _transition(job).then<void>(
+        (_) {},
+        onError: (Object error) {
+          debugPrint('Unable to save job progress: $error');
+        },
+      );
+    });
   }
 
   Future<TranscriptionJob> _fail(
@@ -4496,6 +4543,8 @@ class AppController extends ChangeNotifier {
     bool clearTranscriptionModel = false,
     bool preserveTranscriptStructureHistory = false,
   }) async {
+    // This save carries any progress held back by _progress.
+    _progressPending.remove(job.id);
     final current = _jobs[job.id] ?? job;
     if (!preserveTranscriptStructureHistory &&
         document != null &&
@@ -4577,6 +4626,11 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _progressDisposed = true;
+    for (final timer in _progressCooldowns.values) {
+      timer.cancel();
+    }
+    _progressCooldowns.clear();
     unawaited(shutdown());
     localModels.dispose();
     super.dispose();

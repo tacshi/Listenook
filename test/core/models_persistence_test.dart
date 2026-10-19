@@ -895,6 +895,24 @@ void main() {
     },
   );
 
+  test('back-to-back saves all complete and leave the newest state', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'listenook-coalesced-writes-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final repository = JsonSettingsRepository(
+      AppPaths.forTesting(temporary.path),
+    );
+
+    await Future.wait([
+      for (var goal = 1; goal <= 20; goal++)
+        repository.save(AppSettings(mimicRepGoal: goal)),
+    ]);
+
+    expect((await repository.load()).mimicRepGoal, 20);
+    expect(File('${temporary.path}/settings.json.tmp').existsSync(), isFalse);
+  });
+
   test(
     'missing or corrupt catalogs do not prevent jobs from loading',
     () async {

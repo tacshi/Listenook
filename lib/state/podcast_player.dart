@@ -496,8 +496,10 @@ class PodcastPlayer extends ChangeNotifier {
 
   void _schedulePersist() {
     if (_repository == null) return;
-    _persistTimer?.cancel();
-    _persistTimer = Timer(const Duration(milliseconds: 400), () {
+    // Throttle rather than debounce: position ticks arrive faster than the
+    // delay, so re-arming the timer on each one would never save while
+    // playing.
+    _persistTimer ??= Timer(const Duration(seconds: 2), () {
       unawaited(_persistNow());
     });
   }

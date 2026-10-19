@@ -811,7 +811,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
   }
 
   void _rememberPlaybackPosition(String jobId) {
-    _appController.rememberPlaybackPosition(jobId, _position);
+    _appController.rememberPlaybackPosition(jobId, _position, flush: true);
   }
 
   @override
