@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/core/podcast_models.dart';
 import 'package:listenook/data/local_media_source_resolver.dart';
@@ -11,6 +10,7 @@ import 'package:listenook/data/transcript_exporter.dart';
 import 'package:listenook/state/app_controller.dart';
 import 'package:listenook/state/podcast_controller.dart';
 import 'package:listenook/state/podcast_player.dart';
+import '../support/fakes.dart';
 
 void main() {
   test('search, follow, and enqueue a podcast episode into Inbox', () async {
@@ -56,7 +56,7 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: gateway,
-      repository: _MemoryPodcastRepository(),
+      repository: MemoryPodcastRepository(),
     );
     await podcast.initialize();
     await podcast.search('Study');
@@ -68,14 +68,14 @@ void main() {
     await _waitFor(() => !podcast.browseLoading);
     expect(podcast.popular, isNotEmpty);
 
-    final jobs = _Jobs();
+    final jobs = MemoryJobRepository();
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore('configured'),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
       podcastGateway: gateway,
       podcastManagedRoot: directory.path,
@@ -132,14 +132,14 @@ void main() {
           episode.enclosureUrl: [1, 2, 3, 4],
         },
       );
-      final jobs = _Jobs();
+      final jobs = MemoryJobRepository();
       final controller = AppController(
-        credentialStore: _Credentials(),
-        settingsRepository: _Settings(),
+        credentialStore: MemoryCredentialStore('configured'),
+        settingsRepository: MemorySettingsRepository(),
         jobRepository: jobs,
-        mediaService: _Media(),
+        mediaService: FakeMediaService(metadata: fakePodcastMetadata),
         sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
+        sonioxClient: FakeSonioxClient(),
         exporter: const DefaultTranscriptExporter(),
         podcastGateway: gateway,
         podcastManagedRoot: directory.path,
@@ -188,7 +188,7 @@ void main() {
     await media.parent.create(recursive: true);
     await media.writeAsBytes(const [1, 2, 3, 4]);
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs();
+    final jobs = MemoryJobRepository();
     jobs.saved[jobId] = TranscriptionJob(
       id: jobId,
       batchId: 'batch',
@@ -201,12 +201,12 @@ void main() {
       sourceOrigin: JobSourceOrigin.manual,
     );
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore('configured'),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
       podcastManagedRoot: directory.path,
     );
@@ -236,7 +236,7 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
-      repository: _MemoryPodcastRepository(),
+      repository: MemoryPodcastRepository(),
     );
     await podcast.initialize();
     expect(podcast.showsRootTabs, isTrue);
@@ -272,7 +272,7 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
-      repository: _MemoryPodcastRepository(),
+      repository: MemoryPodcastRepository(),
     );
     podcast.setPane(PodcastPane.library);
     podcast.openEpisode(episode, feed: feed, captions: true);
@@ -300,7 +300,7 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
-      repository: _MemoryPodcastRepository(),
+      repository: MemoryPodcastRepository(),
     );
     await podcast.initialize();
     await podcast.openFeed(feed.feedUrl);
@@ -337,7 +337,7 @@ void main() {
       final player = _RecordingPodcastPlayer();
       final podcast = PodcastController(
         gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
-        repository: _MemoryPodcastRepository(),
+        repository: MemoryPodcastRepository(),
         player: player,
       );
       await podcast.initialize();
@@ -380,7 +380,7 @@ void main() {
       );
       final podcast = PodcastController(
         gateway: gateway,
-        repository: _MemoryPodcastRepository(),
+        repository: MemoryPodcastRepository(),
       );
       await podcast.initialize();
       await podcast.openFeed('https://feeds.example/show');
@@ -402,6 +402,78 @@ void main() {
     },
   );
 
+  test('opening a followed show clears its unseen badge', () async {
+    const url = 'https://feeds.example/show';
+    PodcastEpisode episode(int number) => PodcastEpisode(
+      id: '$url\nguid-$number',
+      feedUrl: url,
+      title: 'Episode $number',
+      enclosureUrl: 'https://cdn.example/$number.mp3',
+      mediaExtension: 'mp3',
+    );
+    final gateway = MemoryPodcastGateway(
+      feeds: {
+        url: PodcastFeed(feedUrl: url, title: 'Show', episodes: [episode(1)]),
+      },
+    );
+    final repository = MemoryPodcastRepository();
+    final podcast = PodcastController(gateway: gateway, repository: repository);
+    await podcast.initialize();
+    await podcast.openFeed(url);
+    await podcast.followOpenedFeed();
+
+    gateway.feeds = {
+      url: PodcastFeed(
+        feedUrl: url,
+        title: 'Show',
+        episodes: [episode(2), episode(1)],
+      ),
+    };
+    await podcast.refreshFollowedNow();
+    expect(podcast.followed.single.unseenEpisodeCount, 1);
+
+    await podcast.openFollowed(podcast.followed.single);
+    expect(podcast.followed.single.unseenEpisodeCount, 0);
+    expect(repository.value.followed.single.unseenEpisodeCount, 0);
+
+    await podcast.refreshFollowedNow();
+    expect(podcast.followed.single.unseenEpisodeCount, 0);
+  });
+
+  test('keeps followed feeds and only the most recent others cached', () async {
+    const limit = PodcastController.maxUnfollowedCachedFeeds;
+    final feeds = [
+      for (var index = 0; index < limit + 3; index++)
+        PodcastFeed(
+          feedUrl: 'https://feeds.example/show-$index',
+          title: 'Show $index',
+          episodes: const [],
+        ),
+    ];
+    final repository = MemoryPodcastRepository();
+    final podcast = PodcastController(
+      gateway: MemoryPodcastGateway(
+        feeds: {for (final feed in feeds) feed.feedUrl: feed},
+      ),
+      repository: repository,
+    );
+    await podcast.initialize();
+    await podcast.openFeed(feeds.first.feedUrl);
+    await podcast.followOpenedFeed();
+    for (final feed in feeds.skip(1)) {
+      await podcast.openFeed(feed.feedUrl);
+    }
+
+    // The followed and opened feeds sit outside the limit, so only the
+    // oldest browsed feed is evicted.
+    final cached = repository.value.feeds.keys.toSet();
+    expect(cached, hasLength(limit + 2));
+    expect(cached, contains(feeds.first.feedUrl));
+    expect(cached, isNot(contains(feeds[1].feedUrl)));
+    expect(cached, contains(feeds[2].feedUrl));
+    expect(cached, contains(feeds.last.feedUrl));
+  });
+
   test('revealPlayingEpisode opens the episode with captions', () async {
     final episode = PodcastEpisode(
       id: 'https://feeds.example/show\nguid-1',
@@ -417,7 +489,7 @@ void main() {
     );
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(feeds: {feed.feedUrl: feed}),
-      repository: _MemoryPodcastRepository(),
+      repository: MemoryPodcastRepository(),
     );
     await podcast.initialize();
     await podcast.revealPlayingEpisode(episode, feed);
@@ -435,7 +507,7 @@ void main() {
   test('feed errors stay dismissible without leaving browse', () async {
     final podcast = PodcastController(
       gateway: MemoryPodcastGateway(),
-      repository: _MemoryPodcastRepository(),
+      repository: MemoryPodcastRepository(),
     );
     await podcast.openFeed('https://feeds.example/missing');
     expect(podcast.openedFeed, isNull);
@@ -448,7 +520,7 @@ void main() {
     final gateway = _DeferredSearchGateway();
     final podcast = PodcastController(
       gateway: gateway,
-      repository: _MemoryPodcastRepository(),
+      repository: MemoryPodcastRepository(),
     );
     addTearDown(podcast.dispose);
 
@@ -538,12 +610,12 @@ void main() {
       },
     );
     final controller = AppController(
-      credentialStore: _EmptyCredentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
       podcastGateway: gateway,
       podcastManagedRoot: directory.path,
@@ -610,12 +682,12 @@ void main() {
         },
       );
       final controller = AppController(
-        credentialStore: _EmptyCredentials(),
-        settingsRepository: _Settings(),
-        jobRepository: _Jobs(),
-        mediaService: _Media(),
+        credentialStore: MemoryCredentialStore(),
+        settingsRepository: MemorySettingsRepository(),
+        jobRepository: MemoryJobRepository(),
+        mediaService: FakeMediaService(metadata: fakePodcastMetadata),
         sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
+        sonioxClient: FakeSonioxClient(),
         exporter: const DefaultTranscriptExporter(),
         podcastGateway: gateway,
         podcastManagedRoot: directory.path,
@@ -685,12 +757,12 @@ void main() {
         'https://cdn.example/missing-caption.mp3': [1, 2, 3],
       },
     );
-    final soniox = _Soniox();
+    final soniox = FakeSonioxClient();
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore('configured'),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(metadata: fakePodcastMetadata),
       sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: soniox,
       exporter: const DefaultTranscriptExporter(),
@@ -710,7 +782,7 @@ void main() {
 
     expect(controller.inboxJobs.single.status, JobStatus.failed);
     expect(controller.inboxJobs.single.errorCode, 'podcast_transcript_failed');
-    expect(soniox.uploads, 0);
+    expect(soniox.uploadCalls, 0);
   });
 
   test('retry discards invalid final media and downloads it again', () async {
@@ -737,12 +809,12 @@ void main() {
       },
     );
     final controller = AppController(
-      credentialStore: _EmptyCredentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
       mediaService: _FlakyMedia(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
       podcastGateway: gateway,
       podcastManagedRoot: directory.path,
@@ -770,7 +842,7 @@ void main() {
     expect(await File(exported).readAsBytes(), [1, 2, 3, 4]);
 
     final managed = controller.inboxJobs.single.sourcePath;
-    await controller.clearInactiveHistory();
+    await controller.deleteHistory(controller.inboxJobs.single.id);
     expect(File(managed).existsSync(), isFalse);
     expect(await File(exported).readAsBytes(), [1, 2, 3, 4]);
   });
@@ -794,26 +866,6 @@ class _DeferredSearchGateway extends MemoryPodcastGateway {
   }
 }
 
-class _MemoryPodcastRepository implements PodcastRepository {
-  PodcastLibraryState value = const PodcastLibraryState();
-  Map<String, PodcastListenProgress> playback = {};
-
-  @override
-  Future<PodcastLibraryState> load() async => value;
-
-  @override
-  Future<void> save(PodcastLibraryState state) async => value = state;
-
-  @override
-  Future<Map<String, PodcastListenProgress>> loadPlaybackProgress() async =>
-      playback;
-
-  @override
-  Future<void> savePlaybackProgress(
-    Map<String, PodcastListenProgress> progress,
-  ) async => playback = Map.of(progress);
-}
-
 class _RecordingPodcastPlayer extends PodcastPlayer {
   int? feedDurationMs;
 
@@ -829,94 +881,9 @@ class _RecordingPodcastPlayer extends PodcastPlayer {
   }
 }
 
-class _Jobs implements JobRepository {
-  final saved = <String, TranscriptionJob>{};
+class _FlakyMedia extends FakeMediaService {
+  _FlakyMedia() : super(metadata: fakePodcastMetadata);
 
-  @override
-  Future<void> delete(String id) async => saved.remove(id);
-
-  @override
-  Future<List<TranscriptionJob>> loadAll() async => saved.values.toList();
-
-  @override
-  Future<void> save(TranscriptionJob job) async => saved[job.id] = job;
-}
-
-class _Settings implements SettingsRepository {
-  @override
-  Future<AppSettings> load() async => const AppSettings();
-
-  @override
-  Future<void> save(AppSettings settings) async {}
-}
-
-class _Credentials implements CredentialStore {
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => 'configured';
-
-  @override
-  Future<void> writeApiKey(String key) async {}
-}
-
-class _EmptyCredentials implements CredentialStore {
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => null;
-
-  @override
-  Future<void> writeApiKey(String key) async {}
-}
-
-class _Media implements MediaService {
-  @override
-  bool canUploadDirectly(
-    String path,
-    MediaMetadata metadata, {
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-  }) => true;
-
-  @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
-
-  @override
-  Future<void> deleteGeneratedMedia(String cacheKey) async {}
-
-  @override
-  Future<void> deleteTemporary(String path) async {}
-
-  @override
-  Future<MediaDiagnostics> diagnostics() async =>
-      const MediaDiagnostics(available: true);
-
-  @override
-  Future<String> extractAudio(
-    String sourcePath,
-    String jobId, {
-    required int durationMs,
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => sourcePath;
-
-  @override
-  Future<MediaMetadata> inspect(String sourcePath) async => const MediaMetadata(
-    sizeBytes: 4,
-    durationMs: 1000,
-    hasAudio: true,
-    hasVideo: false,
-    formatName: 'mp3',
-  );
-
-  @override
-  Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
-}
-
-class _FlakyMedia extends _Media {
   var inspections = 0;
 
   @override
@@ -926,44 +893,6 @@ class _FlakyMedia extends _Media {
       throw StateError('The media is invalid.');
     }
     return super.inspect(sourcePath);
-  }
-}
-
-class _Soniox implements SonioxClient {
-  var uploads = 0;
-
-  @override
-  Future<void> validateKey({String? apiKey}) async {}
-
-  @override
-  Future<String> createTranscription(
-    String fileId,
-    TranscriptionOptions options,
-  ) async => 'tx';
-
-  @override
-  Future<void> deleteFile(String fileId) async {}
-
-  @override
-  Future<void> deleteTranscription(String transcriptionId) async {}
-
-  @override
-  Future<Map<String, dynamic>> getTranscript(String transcriptionId) async =>
-      const {'tokens': []};
-
-  @override
-  Future<SonioxTranscriptionState> getTranscription(
-    String transcriptionId,
-  ) async => const SonioxTranscriptionState(status: 'completed');
-
-  @override
-  Future<String> uploadFile(
-    String path, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    uploads++;
-    return 'file';
   }
 }
 

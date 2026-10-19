@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/soniox_api_client.dart';
+import '../support/fakes.dart';
 
 void main() {
   late HttpServer server;
@@ -22,7 +22,7 @@ void main() {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     directory = await Directory.systemTemp.createTemp('soniox-client-');
     client = SonioxApiClient(
-      _Credential(),
+      MemoryCredentialStore('test-key'),
       baseUri: Uri.parse('http://${server.address.address}:${server.port}/v1'),
     );
     server.listen((request) async {
@@ -179,15 +179,4 @@ void main() {
       'budget_exhausted',
     );
   });
-}
-
-class _Credential implements CredentialStore {
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => 'test-key';
-
-  @override
-  Future<void> writeApiKey(String key) async {}
 }

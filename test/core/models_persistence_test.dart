@@ -594,6 +594,20 @@ void main() {
     expect(restored.config.launchAtLogin, isTrue);
     expect(restored.config.showTrayIcon, isFalse);
     expect(InboxMonitorConfig.fromJson(const {}).showTrayIcon, isTrue);
+    expect(restored.config.showDockIcon, isTrue);
+    expect(InboxMonitorConfig.fromJson(const {}).showDockIcon, isTrue);
+    expect(
+      InboxMonitorConfig.fromJson(const {'show_dock_icon': false}).showDockIcon,
+      isFalse,
+    );
+    // A file with both icons off still leaves the Dock icon to get back in.
+    expect(
+      InboxMonitorConfig.fromJson(const {
+        'show_tray_icon': false,
+        'show_dock_icon': false,
+      }).showDockIcon,
+      isTrue,
+    );
     expect(
       restored.records[fingerprint.identity]?.disposition,
       MonitoredFileDisposition.dismissed,
@@ -894,6 +908,24 @@ void main() {
       );
     },
   );
+
+  test('back-to-back saves all complete and leave the newest state', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'listenook-coalesced-writes-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final repository = JsonSettingsRepository(
+      AppPaths.forTesting(temporary.path),
+    );
+
+    await Future.wait([
+      for (var goal = 1; goal <= 20; goal++)
+        repository.save(AppSettings(mimicRepGoal: goal)),
+    ]);
+
+    expect((await repository.load()).mimicRepGoal, 20);
+    expect(File('${temporary.path}/settings.json.tmp').existsSync(), isFalse);
+  });
 
   test(
     'missing or corrupt catalogs do not prevent jobs from loading',

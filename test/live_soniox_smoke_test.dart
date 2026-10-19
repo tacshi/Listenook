@@ -2,9 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/soniox_api_client.dart';
+import 'support/fakes.dart';
 
 void main() {
   final key = Platform.environment['SONIOX_API_KEY']?.trim();
@@ -14,7 +14,7 @@ void main() {
       final directory = await Directory.systemTemp.createTemp('meow-live-');
       final audio = File('${directory.path}/silence.wav');
       await audio.writeAsBytes(_silentWav());
-      final client = SonioxApiClient(_EnvironmentCredential(key!));
+      final client = SonioxApiClient(MemoryCredentialStore(key!));
       String? fileId;
       String? transcriptionId;
       try {
@@ -77,18 +77,4 @@ Uint8List _silentWav() {
   ascii(36, 'data');
   bytes.setUint32(40, dataLength, Endian.little);
   return bytes.buffer.asUint8List();
-}
-
-class _EnvironmentCredential implements CredentialStore {
-  const _EnvironmentCredential(this.key);
-  final String key;
-
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => key;
-
-  @override
-  Future<void> writeApiKey(String key) async {}
 }

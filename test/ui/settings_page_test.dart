@@ -2,10 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:listenook/core/contracts.dart';
@@ -20,6 +19,7 @@ import 'package:listenook/l10n/strings.dart';
 import 'package:listenook/state/app_controller.dart';
 import 'package:listenook/ui/settings_page.dart';
 import 'package:provider/provider.dart';
+import '../support/fakes.dart';
 
 void main() {
   testWidgets('configured Inbox monitor can return to no-folder state', (
@@ -30,12 +30,12 @@ void main() {
     );
     addTearDown(() => directory.delete(recursive: true));
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -81,19 +81,19 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final credentials = _Credentials()..value = 'soniox-secret';
-    final mossCredentials = _Credentials()..value = 'moss-secret';
-    final translationCredentials = _TranslationCredentials()
+    final credentials = MemoryCredentialStore()..value = 'soniox-secret';
+    final mossCredentials = MemoryCredentialStore()..value = 'moss-secret';
+    final translationCredentials = MemoryCredentialStore()
       ..value = 'translation-secret';
     final controller = AppController(
       credentialStore: credentials,
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       mossCredentialStore: mossCredentials,
-      mossClient: _Soniox(),
+      mossClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
       translationCredentialStore: translationCredentials,
     );
@@ -152,19 +152,19 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final settings = _Settings()
+      final settings = MemorySettingsRepository()
         ..value = const AppSettings(
           defaultTranscriptionProvider: TranscriptionProvider.mossPro,
         );
       final controller = AppController(
-        credentialStore: _Credentials(),
+        credentialStore: MemoryCredentialStore(),
         settingsRepository: settings,
-        jobRepository: _Jobs(),
-        mediaService: _Media(),
+        jobRepository: MemoryJobRepository(),
+        mediaService: FakeMediaService(),
         sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
-        mossCredentialStore: _Credentials(),
-        mossClient: _Soniox(),
+        sonioxClient: FakeSonioxClient(),
+        mossCredentialStore: MemoryCredentialStore(),
+        mossClient: FakeSonioxClient(),
         exporter: const DefaultTranscriptExporter(),
       );
       addTearDown(controller.dispose);
@@ -259,16 +259,16 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final settings = _Settings();
+    final settings = MemorySettingsRepository();
     final controller = AppController(
-      credentialStore: _Credentials(),
+      credentialStore: MemoryCredentialStore(),
       settingsRepository: settings,
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
-      localSttService: _SupportedLocalStt(),
+      localSttService: SupportedLocalStt(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
@@ -468,14 +468,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
-      localSttService: _SupportedLocalStt(),
+      localSttService: SupportedLocalStt(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
@@ -546,17 +546,21 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final settings = _Settings();
+    final settings = MemorySettingsRepository();
     final controller = AppController(
-      credentialStore: _Credentials(),
+      credentialStore: MemoryCredentialStore(),
       settingsRepository: settings,
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
-      localModelManager: _UiModels(),
-      localSttService: _SupportedLocalStt(),
+      localModelManager: FakeLocalModelManager(
+        installed: [
+          for (final model in LocalSpeechModels.forcedAligners.values) model.id,
+        ],
+      ),
+      localSttService: SupportedLocalStt(),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
@@ -606,13 +610,13 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     Uri? launchedUrl;
-    final credentials = _Credentials();
-    final soniox = _Soniox();
+    final credentials = MemoryCredentialStore();
+    final soniox = FakeSonioxClient();
     final controller = AppController(
       credentialStore: credentials,
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
       sonioxClient: soniox,
       exporter: const DefaultTranscriptExporter(),
@@ -629,9 +633,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: const [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: Scaffold(
             body: SettingsPage(
@@ -699,6 +701,39 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.inboxMonitorConfig.showTrayIcon, isFalse);
     expect(find.text('Starts hidden in the menu bar.'), findsNothing);
+
+    // The Dock icon can only be hidden while the menu bar icon is shown, and
+    // the other way round, so the app always stays reachable.
+    final dockSetting = find.byKey(const Key('settings-show-dock-icon'));
+    final dockSwitch = find.descendant(
+      of: dockSetting,
+      matching: find.byType(Switch),
+    );
+    expect(find.text('Show Dock icon'), findsOneWidget);
+    expect(tester.widget<Switch>(dockSwitch).value, isTrue);
+    expect(tester.widget<Switch>(dockSwitch).onChanged, isNull);
+    expect(
+      find.text('Show the menu bar icon first, so Listenook stays reachable.'),
+      findsOneWidget,
+    );
+    await tester.tap(traySwitch);
+    await tester.pumpAndSettle();
+    await tester.tap(dockSwitch);
+    await tester.pumpAndSettle();
+    expect(controller.inboxMonitorConfig.showDockIcon, isFalse);
+    expect(tester.widget<Switch>(traySwitch).onChanged, isNull);
+    expect(
+      find.text('Show the Dock icon first, so Listenook stays reachable.'),
+      findsOneWidget,
+    );
+    await controller.setDesktopTrayIconVisible(false);
+    expect(controller.inboxMonitorConfig.showTrayIcon, isTrue);
+    await tester.tap(dockSwitch);
+    await tester.pumpAndSettle();
+    expect(controller.inboxMonitorConfig.showDockIcon, isTrue);
+    await tester.tap(traySwitch);
+    await tester.pumpAndSettle();
+    expect(controller.inboxMonitorConfig.showTrayIcon, isFalse);
     final startupSetting = find.byKey(const Key('settings-launch-at-login'));
     final startupSwitch = tester.widget<Switch>(
       find.descendant(of: startupSetting, matching: find.byType(Switch)),
@@ -935,12 +970,12 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -955,9 +990,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: const [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: const Scaffold(body: SettingsPage()),
         ),
@@ -1015,16 +1048,16 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      final translationCredentials = _TranslationCredentials();
+      final translationCredentials = MemoryCredentialStore();
       final translationService = _TranslationService();
-      final settings = _Settings();
+      final settings = MemorySettingsRepository();
       final controller = AppController(
-        credentialStore: _Credentials(),
+        credentialStore: MemoryCredentialStore(),
         settingsRepository: settings,
-        jobRepository: _Jobs(),
-        mediaService: _Media(),
+        jobRepository: MemoryJobRepository(),
+        mediaService: FakeMediaService(),
         sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
+        sonioxClient: FakeSonioxClient(),
         exporter: const DefaultTranscriptExporter(),
         translationCredentialStore: translationCredentials,
         translationService: translationService,
@@ -1179,12 +1212,12 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1230,9 +1263,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: Scaffold(body: SettingsPage()),
         ),
@@ -1261,12 +1292,12 @@ void main() {
     );
     addTearDown(() => directory.delete(recursive: true));
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(),
-      mediaService: _Media(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1320,9 +1351,7 @@ void main() {
           supportedLocales: AppStrings.supportedLocales,
           localizationsDelegates: const [
             AppStrings.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           home: Scaffold(body: SettingsPage(onRestartUpdate: () => restarts++)),
         ),
@@ -1360,44 +1389,6 @@ Future<void> _selectDefaultProvider(
   await tester.pumpAndSettle();
 }
 
-class _Credentials implements CredentialStore {
-  String? value;
-
-  @override
-  Future<void> deleteApiKey() async => value = null;
-
-  @override
-  Future<String?> readApiKey() async => value;
-
-  @override
-  Future<void> writeApiKey(String key) async => value = key;
-}
-
-class _SupportedLocalStt implements LocalSttService {
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<LocalSttResult> transcribe(
-    LocalSttRequest request, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) => throw UnimplementedError();
-}
-
-class _TranslationCredentials implements TranslationCredentialStore {
-  String? value;
-
-  @override
-  Future<void> deleteApiKey() async => value = null;
-
-  @override
-  Future<String?> readApiKey() async => value;
-
-  @override
-  Future<void> writeApiKey(String key) async => value = key;
-}
-
 class _TranslationService implements TranslationService {
   TranslationSettings? testedSettings;
   String? candidateKey;
@@ -1425,140 +1416,4 @@ class _TranslationService implements TranslationService {
     onBatch,
     CancelCheck? shouldCancel,
   }) async {}
-}
-
-class _Settings implements SettingsRepository {
-  AppSettings value = const AppSettings();
-
-  @override
-  Future<AppSettings> load() async => value;
-
-  @override
-  Future<void> save(AppSettings settings) async => value = settings;
-}
-
-class _UiModels implements LocalModelManager {
-  @override
-  List<LocalModelDescriptor> get models => LocalSpeechModels.all;
-
-  @override
-  Future<void> delete(String modelId) async {}
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {}
-
-  @override
-  String pathFor(String modelId) => '/models/$modelId';
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async {
-    final descriptor = LocalSpeechModels.all.singleWhere(
-      (model) => model.id == modelId,
-    );
-    final installed = LocalSpeechModels.forcedAlignerById(modelId) != null;
-    return LocalModelStatus(
-      descriptor: descriptor,
-      availability: installed
-          ? LocalModelAvailability.ready
-          : LocalModelAvailability.missing,
-      downloadedBytes: installed ? descriptor.sizeBytes : 0,
-    );
-  }
-}
-
-class _Jobs implements JobRepository {
-  @override
-  Future<void> delete(String id) async {}
-
-  @override
-  Future<List<TranscriptionJob>> loadAll() async => [];
-
-  @override
-  Future<void> save(TranscriptionJob job) async {}
-}
-
-class _Media implements MediaService {
-  @override
-  bool canUploadDirectly(
-    String path,
-    MediaMetadata metadata, {
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-  }) => true;
-
-  @override
-  Future<void> deleteTemporary(String path) async {}
-
-  @override
-  Future<void> deleteGeneratedMedia(String cacheKey) async {}
-
-  @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
-
-  @override
-  Future<MediaDiagnostics> diagnostics() async =>
-      const MediaDiagnostics(available: true);
-
-  @override
-  Future<String> extractAudio(
-    String sourcePath,
-    String jobId, {
-    required int durationMs,
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => sourcePath;
-
-  @override
-  Future<MediaMetadata> inspect(String sourcePath) async => const MediaMetadata(
-    sizeBytes: 1,
-    durationMs: 1000,
-    hasAudio: true,
-    hasVideo: false,
-    formatName: 'wav',
-  );
-
-  @override
-  Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
-}
-
-class _Soniox implements SonioxClient {
-  String? validatedKey;
-
-  @override
-  Future<String> createTranscription(
-    String fileId,
-    TranscriptionOptions options,
-  ) async => 'transcription';
-
-  @override
-  Future<void> deleteFile(String id) async {}
-
-  @override
-  Future<void> deleteTranscription(String id) async {}
-
-  @override
-  Future<Map<String, dynamic>> getTranscript(String id) async => {};
-
-  @override
-  Future<SonioxTranscriptionState> getTranscription(String id) async =>
-      const SonioxTranscriptionState(status: 'completed');
-
-  @override
-  Future<String> uploadFile(
-    String path, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => 'file';
-
-  @override
-  Future<void> validateKey({String? apiKey}) async {
-    validatedKey = apiKey;
-  }
 }

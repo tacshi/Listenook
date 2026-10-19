@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:listenook/core/local_speech.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/local_speech_services.dart';
+import '../support/fakes.dart';
 
 void main() {
   const alignmentModel = LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8;
@@ -117,8 +118,8 @@ void main() {
         ],
       });
       final service = ProcessLocalSttService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -163,8 +164,8 @@ void main() {
         ],
       });
       final service = ProcessLocalSttService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -192,10 +193,10 @@ void main() {
           {'start_ms': 800, 'end_ms': 5000, 'text': '世界', 'language': 'en'},
         ],
       });
-      final models = _Models(ready: true);
+      final models = FakeLocalModelManager.allInstalled();
       final service = ProcessLocalSttService(
         models: models,
-        pcm: _Pcm(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -241,8 +242,8 @@ void main() {
 
   test('Qwen silence completes as an empty transcript', () async {
     final service = ProcessLocalSttService(
-      models: _Models(ready: true),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager.allInstalled(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: _Worker(const {'text': '', 'segments': []}),
       platformSupported: true,
     );
@@ -266,11 +267,10 @@ void main() {
     () async {
       final worker = _Worker(const {});
       final service = ProcessLocalSttService(
-        models: _Models(
-          ready: false,
-          readyIds: {LocalSpeechModels.qwen3AsrMlx8Bit.id},
+        models: FakeLocalModelManager(
+          installed: {LocalSpeechModels.qwen3AsrMlx8Bit.id},
         ),
-        pcm: _Pcm(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -299,8 +299,8 @@ void main() {
   test('local MOSS rejects media above the application limit', () async {
     final worker = _Worker(const {});
     final service = ProcessLocalSttService(
-      models: _Models(ready: true),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager.allInstalled(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -327,8 +327,8 @@ void main() {
   test('local MOSS refuses to start without its verified model', () async {
     final worker = _Worker(const {});
     final service = ProcessLocalSttService(
-      models: _Models(ready: false),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -374,8 +374,8 @@ void main() {
         'aligned_segment_ids': ['one', 'two'],
       });
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -407,8 +407,8 @@ void main() {
       ],
     });
     final service = ProcessForcedAlignmentService(
-      models: _Models(ready: true),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager.allInstalled(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -477,8 +477,8 @@ void main() {
         ],
       });
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -514,8 +514,8 @@ void main() {
       ];
       final worker = _CapacityLimitedAlignmentWorker();
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -556,8 +556,8 @@ void main() {
       final worker = _WindowLimitedAlignmentWorker(maxWindows: 8);
       final checkpoints = <AlignmentResult>[];
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -604,8 +604,8 @@ void main() {
           ),
       ];
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: _SelectiveFailureAlignmentWorker(failedSegmentId: 'cue-7'),
         platformSupported: true,
       );
@@ -671,8 +671,8 @@ void main() {
     );
     final worker = _ResumeAlignmentWorker();
     final service = ProcessForcedAlignmentService(
-      models: _Models(ready: true),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager.allInstalled(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -700,8 +700,8 @@ void main() {
     () async {
       final worker = _ResumeAlignmentWorker();
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -755,8 +755,8 @@ void main() {
       ],
     });
     final service = ProcessForcedAlignmentService(
-      models: _Models(ready: true),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager.allInstalled(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -791,8 +791,8 @@ void main() {
       ],
     });
     final service = ProcessForcedAlignmentService(
-      models: _Models(ready: true),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager.allInstalled(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -893,8 +893,8 @@ void main() {
         ],
       });
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -938,8 +938,8 @@ void main() {
         ],
       });
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -981,8 +981,8 @@ void main() {
       ],
     });
     final service = ProcessForcedAlignmentService(
-      models: _Models(ready: true),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager.allInstalled(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -1020,8 +1020,8 @@ void main() {
       ],
     });
     final service = ProcessForcedAlignmentService(
-      models: _Models(ready: true),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager.allInstalled(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -1074,8 +1074,8 @@ void main() {
         ],
       });
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -1105,8 +1105,8 @@ void main() {
     () async {
       final worker = _Worker(const {});
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -1159,8 +1159,8 @@ void main() {
         ],
       });
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -1186,8 +1186,8 @@ void main() {
     () async {
       final worker = _Worker(const {});
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: false),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -1212,10 +1212,10 @@ void main() {
       'tokens': <Object>[],
       'failed_window_ids': <Object>[],
     });
-    final models = _Models(ready: true);
+    final models = FakeLocalModelManager.allInstalled();
     final service = ProcessForcedAlignmentService(
       models: models,
-      pcm: _Pcm(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -1240,13 +1240,12 @@ void main() {
 
   test('missing selected FP16 model does not fall back to INT8', () async {
     final worker = _Worker(const {});
-    final models = _Models(
-      ready: false,
-      readyIds: {LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id},
+    final models = FakeLocalModelManager(
+      installed: {LocalSpeechModels.qwen3ForcedAlignerCoreMlInt8.id},
     );
     final service = ProcessForcedAlignmentService(
       models: models,
-      pcm: _Pcm(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -1277,8 +1276,8 @@ void main() {
         ],
       });
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -1315,8 +1314,8 @@ void main() {
       );
       final worker = _Worker(const {'tokens': []});
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -1355,8 +1354,8 @@ void main() {
     );
     final worker = _Worker(const {});
     final service = ProcessForcedAlignmentService(
-      models: _Models(ready: true),
-      pcm: _Pcm(),
+      models: FakeLocalModelManager.allInstalled(),
+      pcm: const FixedPcmPreparer('/tmp/local.wav'),
       worker: worker,
       platformSupported: true,
     );
@@ -1392,8 +1391,8 @@ void main() {
         ],
       });
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav'),
         worker: worker,
         platformSupported: true,
       );
@@ -1426,8 +1425,8 @@ void main() {
         ],
       }, progressFraction: 0.5);
       final service = ProcessForcedAlignmentService(
-        models: _Models(ready: true),
-        pcm: _Pcm(progressFraction: 0.5),
+        models: FakeLocalModelManager.allInstalled(),
+        pcm: const FixedPcmPreparer('/tmp/local.wav', progressFraction: 0.5),
         worker: worker,
         platformSupported: true,
       );
@@ -1479,66 +1478,6 @@ TranscriptDocument _document() => TranscriptDocument(
   ],
   updatedAt: DateTime.utc(2026, 8, 16),
 );
-
-class _Models implements LocalModelManager {
-  _Models({required this.ready, this.readyIds});
-  final bool ready;
-  final Set<String>? readyIds;
-  final statusRequests = <String>[];
-
-  @override
-  List<LocalModelDescriptor> get models => LocalSpeechModels.all;
-
-  @override
-  Future<void> delete(String modelId) async {}
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    bool Function()? shouldCancel,
-  }) async {}
-
-  @override
-  String pathFor(String modelId) => '/models/$modelId';
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async {
-    statusRequests.add(modelId);
-    return LocalModelStatus(
-      descriptor: models.singleWhere((model) => model.id == modelId),
-      availability: (readyIds?.contains(modelId) ?? ready)
-          ? LocalModelAvailability.ready
-          : LocalModelAvailability.missing,
-      downloadedBytes: 0,
-    );
-  }
-}
-
-class _Pcm implements LocalPcmPreparer {
-  _Pcm({this.progressFraction});
-
-  final double? progressFraction;
-
-  @override
-  Future<PreparedLocalPcm> prepare(
-    String sourcePath, {
-    required int durationMs,
-    void Function(double? fraction, String? detail)? onProgress,
-    bool Function()? shouldCancel,
-  }) async {
-    if (progressFraction case final fraction?) {
-      onProgress?.call(fraction, 'converting');
-    }
-    return const PreparedLocalPcm('/tmp/local.wav');
-  }
-
-  @override
-  Future<void> release(PreparedLocalPcm pcm) async {}
-}
 
 class _Worker implements LocalSpeechWorker {
   _Worker(this.response, {this.progressFraction});

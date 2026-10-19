@@ -1,11 +1,11 @@
 import 'dart:io';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:listenook/l10n/strings.dart';
 import 'package:listenook/ui/video_player/video_player_controller.dart';
 import 'package:listenook/ui/video_player/video_player_page.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'video_player_fakes.dart';

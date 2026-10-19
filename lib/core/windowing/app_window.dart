@@ -10,7 +10,6 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/src/foundation/_features.dart' show isWindowingEnabled;
 import 'package:flutter/src/widgets/_window.dart';
-import 'package:flutter/src/widgets/_window_io.dart' show createDefaultOwner;
 import 'package:flutter/src/widgets/_window_linux.dart'
     show BaseWindowControllerLinux;
 import 'package:flutter/src/widgets/_window_macos.dart'
@@ -28,14 +27,6 @@ bool get appWindowingAvailable =>
     isWindowingEnabled &&
     !kIsWeb &&
     (Platform.isMacOS || Platform.isWindows || Platform.isLinux);
-
-/// flutter_test installs a fake windowing owner even in integration tests on a
-/// real device. Integration tests that need real OS windows call this first.
-@visibleForTesting
-void useNativeWindowingOwner() {
-  final owner = createDefaultOwner();
-  if (owner != null) WidgetsBinding.instance.windowingOwner = owner;
-}
 
 /// One top-level OS window: a view of the app's single engine.
 ///
@@ -143,11 +134,6 @@ class AppWindow {
   /// (mobile, web, widget tests without a window).
   static AppWindow? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<_AppWindowScope>()?.window;
-
-  /// Whether the window hosting [context] is fullscreen, rebuilding [context]
-  /// when that changes. False outside a window.
-  static bool isFullscreenOf(BuildContext context) =>
-      WindowScope.maybeIsFullscreenOf(context) ?? false;
 }
 
 class _AppWindowDelegate with WindowControllerDelegate {

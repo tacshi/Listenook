@@ -1,8 +1,7 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:listenook/l10n/strings.dart';
 import 'package:listenook/ui/app_shell.dart';
+import 'package:material_ui/material_ui.dart';
 
 void main() {
   testWidgets('shows update as a compact title-bar action', (tester) async {
@@ -48,9 +47,7 @@ void main() {
         supportedLocales: AppStrings.supportedLocales,
         localizationsDelegates: const [
           AppStrings.delegate,
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
+          ...GlobalMaterialLocalizations.delegates,
         ],
         home: Scaffold(
           body: AppWindowToolbar(

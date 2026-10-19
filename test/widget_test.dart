@@ -1,6 +1,6 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:listenook/l10n/strings.dart';
+import 'package:material_ui/material_ui.dart';
 
 void main() {
   testWidgets('English localization loads', (tester) async {
@@ -20,7 +20,6 @@ void main() {
 
     expect(strings.t('context_terms_hint'), '产品名称、人名、缩写…');
     expect(strings.t('automatic'), '自动识别');
-    expect(strings.t('none'), '无');
     expect(strings.t('delete_history'), '从资料库移除');
     expect(strings.t('remove_podcast_title'), '移除播客项目？');
     expect(strings.t('remove_podcast_body'), contains('从“已下载”和“资料库”中移除'));

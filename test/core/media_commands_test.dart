@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
@@ -296,13 +297,6 @@ void main() {
     expect(await priorWaveform.exists(), isFalse);
     expect(await waveform.exists(), isFalse);
     expect(await unrelated.exists(), isTrue);
-
-    final orphan = File('${paths.temporary.path}/orphan-waveform.png');
-    await orphan.writeAsBytes([4]);
-    await ProcessMediaService(paths).clearGeneratedMediaExcept({'other'});
-
-    expect(await unrelated.exists(), isTrue);
-    expect(await orphan.exists(), isFalse);
   });
 }
 
@@ -378,4 +372,17 @@ Uint8List _extensiblePcmWave(List<int> samples) {
     bytes.setInt16(68 + index * 2, samples[index], Endian.little);
   }
   return bytes.buffer.asUint8List();
+}
+
+/// The largest magnitude in each of [width] buckets.
+Future<Uint16List> readPcm16MonoPeaks(String path, int width) async {
+  final envelope = await readPcm16MonoEnvelope(path, width);
+  final peaks = Uint16List(width);
+  for (var index = 0; index < width; index++) {
+    final negative = envelope.minima[index] == -32768
+        ? 32768
+        : envelope.minima[index].abs();
+    peaks[index] = math.max(negative, envelope.maxima[index]);
+  }
+  return peaks;
 }

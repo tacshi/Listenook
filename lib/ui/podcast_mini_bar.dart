@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../data/podcast/podcast_formatters.dart';
@@ -14,6 +14,13 @@ class PodcastMiniBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PodcastController>().playback;
+    return ListenableBuilder(
+      listenable: player,
+      builder: (context, _) => _build(context, player),
+    );
+  }
+
+  Widget _build(BuildContext context, PodcastPlayer player) {
     final episode = player.episode;
     if (episode == null) return const SizedBox.shrink();
     final color = Theme.of(context).colorScheme;

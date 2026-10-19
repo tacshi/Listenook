@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
@@ -20,6 +20,13 @@ class PodcastNowPlaying extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final podcast = context.watch<PodcastController>();
+    return ListenableBuilder(
+      listenable: podcast.playback,
+      builder: (context, _) => _build(context, podcast),
+    );
+  }
+
+  Widget _build(BuildContext context, PodcastController podcast) {
     final player = podcast.playback;
     final app = Provider.of<AppController>(context, listen: false);
     final episode = player.episode;

@@ -196,7 +196,6 @@ abstract interface class MediaService {
   Future<String> renderWaveform(String sourcePath, String cacheKey);
   Future<void> deleteTemporary(String path);
   Future<void> deleteGeneratedMedia(String cacheKey);
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys);
   Future<MediaDiagnostics> diagnostics();
 }
 
@@ -302,12 +301,4 @@ abstract interface class TranscriptExporter {
     String destination,
     ExportOptions options,
   );
-}
-
-abstract interface class MediaPlayerController {
-  Future<void> open(String path);
-  Future<void> play();
-  Future<void> pause();
-  Future<void> seek(Duration position);
-  Future<void> dispose();
 }

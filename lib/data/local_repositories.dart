@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -115,11 +116,6 @@ class SecureLlmCredentialStore
 
   @override
   Future<void> deleteApiKey() => _value.delete();
-}
-
-@Deprecated('Use SecureLlmCredentialStore.')
-class SecureTranslationCredentialStore extends SecureLlmCredentialStore {
-  SecureTranslationCredentialStore({super.storage});
 }
 
 class JsonSettingsRepository implements SettingsRepository {
@@ -411,45 +407,63 @@ Future<void> pendingFileWrites() => _atomicFileWriter.idle();
 
 class _AtomicFileWriter {
   final Map<String, Future<void>> _pendingWrites = {};
+  final Map<String, _QueuedWrite> _queuedWrites = {};
 
   Future<void> write(File target, String contents) {
     final key = p.normalize(p.absolute(target.path));
-    final operation = _writeAfter(_pendingWrites[key], target, contents);
+    // A write still waiting for an earlier one to finish takes the newest
+    // contents instead of queueing another full rewrite of the same file.
+    final queued = _queuedWrites[key];
+    if (queued != null) {
+      queued.contents = contents;
+      return queued.completer.future;
+    }
+    final next = _QueuedWrite(contents);
+    final previous = _pendingWrites[key];
+    if (previous != null) _queuedWrites[key] = next;
+    final operation = _writeAfter(previous, key, target, next);
     _pendingWrites[key] = operation;
-    return operation.whenComplete(() {
+    operation.whenComplete(() {
       if (identical(_pendingWrites[key], operation)) {
         _pendingWrites.remove(key);
       }
     });
+    return next.completer.future;
   }
 
   Future<void> idle() async {
     while (_pendingWrites.isNotEmpty) {
-      try {
-        await Future.wait(_pendingWrites.values.toList());
-      } on Object {
-        // Callers of write() own its errors.
-      }
+      await Future.wait(_pendingWrites.values.toList());
     }
   }
 
+  /// Never completes with an error: the outcome goes to [next]'s completer,
+  /// so a failed write does not prevent a later state from being persisted.
   Future<void> _writeAfter(
     Future<void>? previous,
+    String key,
     File target,
-    String contents,
+    _QueuedWrite next,
   ) async {
-    if (previous != null) {
-      try {
-        await previous;
-      } on Object {
-        // A failed write must not prevent a later state from being persisted.
-      }
+    if (previous != null) await previous;
+    if (identical(_queuedWrites[key], next)) _queuedWrites.remove(key);
+    try {
+      await target.parent.create(recursive: true);
+      final temporary = File('${target.path}.tmp');
+      await temporary.writeAsString(next.contents, flush: true);
+      // rename replaces an existing target in one step, so readers never see
+      // the file missing.
+      await temporary.rename(target.path);
+      next.completer.complete();
+    } on Object catch (error, stackTrace) {
+      next.completer.completeError(error, stackTrace);
     }
-    await target.parent.create(recursive: true);
-    final temporary = File('${target.path}.tmp');
-    await temporary.writeAsString(contents, flush: true);
-    // rename replaces an existing target in one step, so readers never see
-    // the file missing.
-    await temporary.rename(target.path);
   }
+}
+
+class _QueuedWrite {
+  _QueuedWrite(this.contents);
+
+  String contents;
+  final completer = Completer<void>();
 }

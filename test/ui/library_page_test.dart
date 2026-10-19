@@ -1,7 +1,5 @@
 import 'dart:io';
 
-import 'package:flutter/material.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
@@ -10,7 +8,9 @@ import 'package:listenook/data/transcript_exporter.dart';
 import 'package:listenook/l10n/strings.dart';
 import 'package:listenook/state/app_controller.dart';
 import 'package:listenook/ui/library_page.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
+import '../support/fakes.dart';
 
 void main() {
   testWidgets('Library visuals keep organizer metadata compact', (
@@ -28,9 +28,9 @@ void main() {
         ],
       );
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository([
         TranscriptionJob(
           id: 'organized',
           batchId: 'batch',
@@ -51,9 +51,9 @@ void main() {
         ),
       ]),
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -129,9 +129,9 @@ void main() {
         ],
       );
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository([
         TranscriptionJob(
           id: 'a',
           batchId: 'batch',
@@ -161,9 +161,9 @@ void main() {
         ),
       ]),
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -204,13 +204,13 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(const []),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(const []),
       libraryCatalogRepository: _Catalog(),
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -309,9 +309,9 @@ void main() {
       JobStatus.empty,
     ];
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository([
         for (final status in actionableStatuses)
           TranscriptionJob(
             id: status.name,
@@ -330,9 +330,9 @@ void main() {
           status: JobStatus.completed,
         ),
       ]),
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -378,11 +378,11 @@ void main() {
       final source = File('${directory.path}/ready.wav');
       await tester.runAsync(() => source.writeAsBytes(const [0]));
       final now = DateTime.now().toUtc();
-      final soniox = _Soniox();
+      final soniox = FakeSonioxClient();
       final controller = AppController(
-        credentialStore: _Credentials(),
-        settingsRepository: _Settings(),
-        jobRepository: _Jobs([
+        credentialStore: MemoryCredentialStore(),
+        settingsRepository: MemorySettingsRepository(),
+        jobRepository: MemoryJobRepository([
           TranscriptionJob(
             id: 'ready',
             batchId: 'batch',
@@ -402,7 +402,7 @@ void main() {
             errorMessage: 'The audio could not be extracted.',
           ),
         ]),
-        mediaService: _Media(),
+        mediaService: FakeMediaService(),
         sourceResolver: const LocalMediaSourceResolver(),
         sonioxClient: soniox,
         exporter: const DefaultTranscriptExporter(),
@@ -463,9 +463,9 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final now = DateTime.now().toUtc();
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository([
         TranscriptionJob(
           id: 'completed',
           batchId: 'batch',
@@ -488,9 +488,9 @@ void main() {
           ),
         ),
       ]),
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -553,7 +553,7 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(1200, 800));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'organized',
           batchId: 'batch',
@@ -564,13 +564,13 @@ void main() {
         ),
       ]);
       final controller = AppController(
-        credentialStore: _Credentials(),
-        settingsRepository: _Settings(),
+        credentialStore: MemoryCredentialStore(),
+        settingsRepository: MemorySettingsRepository(),
         jobRepository: jobs,
         libraryCatalogRepository: _Catalog(),
-        mediaService: _Media(),
+        mediaService: FakeMediaService(),
         sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
+        sonioxClient: FakeSonioxClient(),
         exporter: const DefaultTranscriptExporter(),
       );
       addTearDown(controller.dispose);
@@ -613,7 +613,7 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'renamed',
         batchId: 'batch',
@@ -625,13 +625,13 @@ void main() {
       ),
     ]);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
       libraryCatalogRepository: _Catalog(),
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -668,13 +668,13 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final catalog = _Catalog();
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(const []),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(const []),
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -715,13 +715,13 @@ void main() {
         groups: [LibraryGroup(id: 'group-work', name: 'Work')],
       );
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs(const []),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository(const []),
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -762,7 +762,7 @@ void main() {
       ..value = const LibraryCatalog(
         groups: [LibraryGroup(id: 'group-work', name: 'Work')],
       );
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'meeting',
         batchId: 'batch',
@@ -781,13 +781,13 @@ void main() {
       ),
     ]);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -833,9 +833,9 @@ void main() {
         ],
       );
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository([
         TranscriptionJob(
           id: 'meeting',
           batchId: 'batch',
@@ -847,9 +847,9 @@ void main() {
         ),
       ]),
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -888,7 +888,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final now = DateTime.now().toUtc();
     final catalog = _Catalog();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'meeting',
         batchId: 'batch',
@@ -907,13 +907,13 @@ void main() {
       ),
     ]);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -965,7 +965,7 @@ void main() {
         ..value = const LibraryCatalog(
           tags: [LibraryTag(id: 'tag-important', name: 'Important')],
         );
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'meeting',
           batchId: 'batch',
@@ -977,13 +977,13 @@ void main() {
         ),
       ]);
       final controller = AppController(
-        credentialStore: _Credentials(),
-        settingsRepository: _Settings(),
+        credentialStore: MemoryCredentialStore(),
+        settingsRepository: MemorySettingsRepository(),
         jobRepository: jobs,
         libraryCatalogRepository: catalog,
-        mediaService: _Media(),
+        mediaService: FakeMediaService(),
         sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
+        sonioxClient: FakeSonioxClient(),
         exporter: const DefaultTranscriptExporter(),
       );
       addTearDown(controller.dispose);
@@ -1039,7 +1039,7 @@ void main() {
       ..value = const LibraryCatalog(
         tags: [LibraryTag(id: 'tag-important', name: 'Important')],
       );
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'meeting',
         batchId: 'batch',
@@ -1051,13 +1051,13 @@ void main() {
       ),
     ]);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1101,7 +1101,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final now = DateTime.now().toUtc();
     final catalog = _Catalog();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'meeting',
         batchId: 'batch',
@@ -1112,13 +1112,13 @@ void main() {
       ),
     ]);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1180,7 +1180,7 @@ void main() {
           ..value = const LibraryCatalog(
             tags: [LibraryTag(id: 'tag-important', name: 'Important')],
           );
-        final jobs = _Jobs([
+        final jobs = MemoryJobRepository([
           TranscriptionJob(
             id: 'meeting',
             batchId: 'batch',
@@ -1191,13 +1191,13 @@ void main() {
           ),
         ]);
         final controller = AppController(
-          credentialStore: _Credentials(),
-          settingsRepository: _Settings(),
+          credentialStore: MemoryCredentialStore(),
+          settingsRepository: MemorySettingsRepository(),
           jobRepository: jobs,
           libraryCatalogRepository: catalog,
-          mediaService: _Media(),
+          mediaService: FakeMediaService(),
           sourceResolver: const LocalMediaSourceResolver(),
-          sonioxClient: _Soniox(),
+          sonioxClient: FakeSonioxClient(),
           exporter: const DefaultTranscriptExporter(),
         );
         addTearDown(controller.dispose);
@@ -1211,9 +1211,7 @@ void main() {
               supportedLocales: AppStrings.supportedLocales,
               localizationsDelegates: const [
                 AppStrings.delegate,
-                GlobalMaterialLocalizations.delegate,
-                GlobalWidgetsLocalizations.delegate,
-                GlobalCupertinoLocalizations.delegate,
+                ...GlobalMaterialLocalizations.delegates,
               ],
               home: const Scaffold(body: LibraryPage()),
             ),
@@ -1270,7 +1268,7 @@ void main() {
       ..value = const LibraryCatalog(
         groups: [LibraryGroup(id: 'group-work', name: 'Work')],
       );
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'meeting',
         batchId: 'batch',
@@ -1282,13 +1280,13 @@ void main() {
       ),
     ]);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1329,7 +1327,7 @@ void main() {
       ..value = const LibraryCatalog(
         groups: [LibraryGroup(id: 'group-work', name: 'Work')],
       );
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       for (final id in ['one', 'two'])
         TranscriptionJob(
           id: id,
@@ -1341,13 +1339,13 @@ void main() {
         ),
     ]);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1389,7 +1387,7 @@ void main() {
         ..value = const LibraryCatalog(
           tags: [LibraryTag(id: 'tag-important', name: 'Important')],
         );
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'one',
           batchId: 'batch',
@@ -1409,13 +1407,13 @@ void main() {
         ),
       ]);
       final controller = AppController(
-        credentialStore: _Credentials(),
-        settingsRepository: _Settings(),
+        credentialStore: MemoryCredentialStore(),
+        settingsRepository: MemorySettingsRepository(),
         jobRepository: jobs,
         libraryCatalogRepository: catalog,
-        mediaService: _Media(),
+        mediaService: FakeMediaService(),
         sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
+        sonioxClient: FakeSonioxClient(),
         exporter: const DefaultTranscriptExporter(),
       );
       addTearDown(controller.dispose);
@@ -1480,7 +1478,7 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       for (final id in ['one', 'two'])
         TranscriptionJob(
           id: id,
@@ -1492,13 +1490,13 @@ void main() {
         ),
     ]);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
       libraryCatalogRepository: _Catalog(),
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1546,7 +1544,7 @@ void main() {
       media.parent.createSync(recursive: true);
       media.writeAsBytesSync(const [1, 2, 3]);
       final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'podcast-job',
           batchId: 'batch',
@@ -1566,13 +1564,13 @@ void main() {
         ),
       ]);
       final controller = AppController(
-        credentialStore: _Credentials(),
-        settingsRepository: _Settings(),
+        credentialStore: MemoryCredentialStore(),
+        settingsRepository: MemorySettingsRepository(),
         jobRepository: jobs,
         libraryCatalogRepository: _Catalog(),
-        mediaService: _Media(),
+        mediaService: FakeMediaService(),
         sourceResolver: const LocalMediaSourceResolver(),
-        sonioxClient: _Soniox(),
+        sonioxClient: FakeSonioxClient(),
         exporter: const DefaultTranscriptExporter(),
       );
       addTearDown(controller.dispose);
@@ -1613,7 +1611,7 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'meeting',
         batchId: 'batch',
@@ -1625,13 +1623,13 @@ void main() {
       ),
     ]);
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
       jobRepository: jobs,
       libraryCatalogRepository: _Catalog(),
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1690,9 +1688,9 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final now = DateTime.now().toUtc();
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository([
         for (final id in ['one', 'two'])
           TranscriptionJob(
             id: id,
@@ -1704,9 +1702,9 @@ void main() {
           ),
       ]),
       libraryCatalogRepository: _Catalog(),
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1754,9 +1752,9 @@ void main() {
         tags: [LibraryTag(id: 'tag-important', name: 'Important')],
       );
     final controller = AppController(
-      credentialStore: _Credentials(),
-      settingsRepository: _Settings(),
-      jobRepository: _Jobs([
+      credentialStore: MemoryCredentialStore(),
+      settingsRepository: MemorySettingsRepository(),
+      jobRepository: MemoryJobRepository([
         TranscriptionJob(
           id: 'meeting',
           batchId: 'batch',
@@ -1777,9 +1775,9 @@ void main() {
         ),
       ]),
       libraryCatalogRepository: catalog,
-      mediaService: _Media(),
+      mediaService: FakeMediaService(),
       sourceResolver: const LocalMediaSourceResolver(),
-      sonioxClient: _Soniox(),
+      sonioxClient: FakeSonioxClient(),
       exporter: const DefaultTranscriptExporter(),
     );
     addTearDown(controller.dispose);
@@ -1814,44 +1812,6 @@ void main() {
   });
 }
 
-class _Credentials implements CredentialStore {
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => null;
-
-  @override
-  Future<void> writeApiKey(String key) async {}
-}
-
-class _Settings implements SettingsRepository {
-  @override
-  Future<AppSettings> load() async => const AppSettings();
-
-  @override
-  Future<void> save(AppSettings settings) async {}
-}
-
-class _Jobs implements JobRepository {
-  _Jobs(Iterable<TranscriptionJob> initial) {
-    for (final job in initial) {
-      saved[job.id] = job;
-    }
-  }
-
-  final Map<String, TranscriptionJob> saved = {};
-
-  @override
-  Future<void> delete(String id) async => saved.remove(id);
-
-  @override
-  Future<List<TranscriptionJob>> loadAll() async => saved.values.toList();
-
-  @override
-  Future<void> save(TranscriptionJob job) async => saved[job.id] = job;
-}
-
 class _Catalog implements LibraryCatalogRepository {
   LibraryCatalog value = const LibraryCatalog();
 
@@ -1860,84 +1820,4 @@ class _Catalog implements LibraryCatalogRepository {
 
   @override
   Future<void> save(LibraryCatalog catalog) async => value = catalog;
-}
-
-class _Media implements MediaService {
-  @override
-  bool canUploadDirectly(
-    String path,
-    MediaMetadata metadata, {
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-  }) => true;
-
-  @override
-  Future<void> deleteTemporary(String path) async {}
-
-  @override
-  Future<void> deleteGeneratedMedia(String cacheKey) async {}
-
-  @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async {}
-
-  @override
-  Future<MediaDiagnostics> diagnostics() async =>
-      const MediaDiagnostics(available: true);
-
-  @override
-  Future<String> extractAudio(
-    String sourcePath,
-    String jobId, {
-    required int durationMs,
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => sourcePath;
-
-  @override
-  Future<MediaMetadata> inspect(String sourcePath) async => const MediaMetadata(
-    sizeBytes: 1,
-    durationMs: 1000,
-    hasAudio: true,
-    hasVideo: false,
-    formatName: 'wav',
-  );
-
-  @override
-  Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
-}
-
-class _Soniox implements SonioxClient {
-  int uploadCalls = 0;
-
-  @override
-  Future<String> createTranscription(
-    String fileId,
-    TranscriptionOptions options,
-  ) async => 'tx';
-
-  @override
-  Future<void> deleteFile(String id) async {}
-
-  @override
-  Future<void> deleteTranscription(String id) async {}
-
-  @override
-  Future<Map<String, dynamic>> getTranscript(String id) async => {};
-
-  @override
-  Future<SonioxTranscriptionState> getTranscription(String id) async =>
-      const SonioxTranscriptionState(status: 'completed');
-
-  @override
-  Future<String> uploadFile(
-    String path, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    uploadCalls++;
-    return 'file';
-  }
-
-  @override
-  Future<void> validateKey({String? apiKey}) async {}
 }

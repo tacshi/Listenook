@@ -138,6 +138,19 @@ class DesktopRuntime {
     }
   }
 
+  /// macOS: shows or hides the Dock icon. Hiding it also hides the app's
+  /// menus and its place in the app switcher until it is shown again.
+  Future<void> setDockIconVisible(bool visible) async {
+    if (!Platform.isMacOS) return;
+    try {
+      await _startupChannel.invokeMethod<void>('setDockIconVisible', visible);
+    } on MissingPluginException {
+      // Desktop plugins are intentionally unavailable in widget tests.
+    } on Object catch (error) {
+      debugPrint('Unable to update the Dock icon: $error');
+    }
+  }
+
   Future<void> setDisplayName(String name, String languageCode) async {
     _displayName = name;
     if (Platform.isMacOS) {

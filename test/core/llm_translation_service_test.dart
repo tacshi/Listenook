@@ -7,6 +7,7 @@ import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/llm_translation_service.dart';
 import 'package:listenook/data/openai_llm_client.dart';
+import '../support/fakes.dart';
 
 void main() {
   test('translation settings require HTTPS except on loopback hosts', () {
@@ -43,7 +44,7 @@ void main() {
   test(
     'model discovery tests candidate values without saving the key',
     () async {
-      final credentials = _Credentials('stored-key');
+      final credentials = MemoryCredentialStore('stored-key');
       final service = _service(
         credentials,
         httpClient: MockClient((request) async {
@@ -75,7 +76,7 @@ void main() {
 
   test('loopback discovery does not send a stored cloud key', () async {
     final service = _service(
-      _Credentials('stored-cloud-key'),
+      MemoryCredentialStore('stored-cloud-key'),
       httpClient: MockClient((request) async {
         expect(request.url.toString(), 'http://localhost:11434/v1/models');
         expect(request.headers, isNot(contains('authorization')));
@@ -93,7 +94,7 @@ void main() {
   test(
     'chat completions use official shape and align numbered output',
     () async {
-      final credentials = _Credentials('secret');
+      final credentials = MemoryCredentialStore('secret');
       late Map<String, dynamic> requestBody;
       final service = _service(
         credentials,
@@ -153,7 +154,7 @@ void main() {
     'credential failures map to a stable error without exposing keys',
     () async {
       final service = _service(
-        _Credentials('top-secret'),
+        MemoryCredentialStore('top-secret'),
         httpClient: MockClient(
           (_) async => http.Response(
             jsonEncode({
@@ -189,7 +190,7 @@ void main() {
     var attempts = 0;
     final delays = <Duration>[];
     final service = _service(
-      _Credentials('secret'),
+      MemoryCredentialStore('secret'),
       delay: (duration) async => delays.add(duration),
       httpClient: MockClient((_) async {
         attempts++;
@@ -234,7 +235,7 @@ void main() {
     () async {
       var calls = 0;
       final service = _service(
-        _Credentials('secret'),
+        MemoryCredentialStore('secret'),
         httpClient: MockClient((request) async {
           calls++;
           final body = (jsonDecode(request.body) as Map)
@@ -314,7 +315,7 @@ void main() {
   test('cancelling aborts the in-flight request', () async {
     var requestSent = false;
     final service = _service(
-      _Credentials('secret'),
+      MemoryCredentialStore('secret'),
       // MockClient leaves aborting to the handler: wait for the trigger.
       httpClient: MockClient.streaming((request, _) async {
         requestSent = true;
@@ -351,18 +352,3 @@ LlmTranslationService _service(
 }) => LlmTranslationService(
   OpenAiCompatibleLlmClient(credentials, httpClient: httpClient, delay: delay),
 );
-
-class _Credentials implements TranslationCredentialStore {
-  _Credentials(this.value);
-
-  String? value;
-
-  @override
-  Future<void> deleteApiKey() async => value = null;
-
-  @override
-  Future<String?> readApiKey() async => value;
-
-  @override
-  Future<void> writeApiKey(String key) async => value = key;
-}

@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -847,11 +847,40 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: context.strings.t(
                   macOS ? 'desktop_menu_bar_icon' : 'desktop_tray_icon',
                 ),
-                subtitle: context.strings.t('desktop_icon_hint'),
+                subtitle: context.strings.t(
+                  config.showDockIcon
+                      ? 'desktop_icon_hint'
+                      : 'desktop_menu_bar_needs_dock',
+                ),
                 icon: macOS ? Icons.menu_rounded : Icons.move_to_inbox_outlined,
                 value: config.showTrayIcon,
-                onChanged: controller.setDesktopTrayIconVisible,
+                // Hiding both icons would leave no way back in.
+                onChanged: config.showDockIcon
+                    ? controller.setDesktopTrayIconVisible
+                    : null,
               ),
+              if (macOS)
+                _CompactToggleRow(
+                  key: const Key('settings-show-dock-icon'),
+                  title: context.strings.t('desktop_dock_icon'),
+                  subtitle: context.strings.t(
+                    config.showTrayIcon
+                        ? 'desktop_dock_icon_hint'
+                        : 'desktop_dock_needs_menu_bar',
+                  ),
+                  icon: Icons.dock_outlined,
+                  value: config.showDockIcon,
+                  onChanged: config.showTrayIcon
+                      ? (visible) async {
+                          await controller.setDesktopDockIconVisible(visible);
+                          if (!context.mounted) return;
+                          await Provider.of<DesktopRuntime?>(
+                            context,
+                            listen: false,
+                          )?.setDockIconVisible(visible);
+                        }
+                      : null,
+                ),
             ],
           ),
         ),
@@ -2133,7 +2162,9 @@ class _CompactToggleRow extends StatelessWidget {
   final String? subtitle;
   final IconData icon;
   final bool value;
-  final ValueChanged<bool> onChanged;
+
+  /// Null shows the switch disabled.
+  final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) => Padding(

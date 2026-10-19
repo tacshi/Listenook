@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:ffi' as ffi;
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:windows_single_instance/windows_single_instance.dart';
 
@@ -181,6 +181,11 @@ Future<void> main(List<String> arguments) async {
     );
     await desktopRuntime.setLaunchAtLogin(
       controller.inboxMonitorConfig.launchAtLogin,
+    );
+    // The runner applies the last saved choice before any window shows; this
+    // catches up if the settings file says otherwise.
+    await desktopRuntime.setDockIconVisible(
+      controller.inboxMonitorConfig.showDockIcon,
     );
     if (backgroundLaunch &&
         !videoLaunch &&

@@ -2,11 +2,11 @@ import 'package:listenook/core/app_identity.dart';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/local_speech.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/local_speech_process.dart';
 import 'package:listenook/data/local_speech_services.dart';
+import '../support/fakes.dart';
 
 void main() {
   final pcmPath = AppIdentity.environment('LISTENOOK_TEST_MOSS_PCM');
@@ -77,11 +77,11 @@ void main() {
       if (alignmentModelDirectory != null) {
         final alignment =
             await ProcessForcedAlignmentService(
-              models: _InstalledModels(
+              models: _installedModels(
                 mossDirectory: modelDirectory!,
                 alignmentDirectory: alignmentModelDirectory,
               ),
-              pcm: _ExistingPcm(pcmPath!),
+              pcm: FixedPcmPreparer(pcmPath!),
               worker: worker,
               platformSupported: true,
             ).align(
@@ -104,63 +104,11 @@ void main() {
   );
 }
 
-class _InstalledModels implements LocalModelManager {
-  const _InstalledModels({
-    required this.mossDirectory,
-    required this.alignmentDirectory,
-  });
-
-  final String mossDirectory;
-  final String alignmentDirectory;
-
-  @override
-  List<LocalModelDescriptor> get models => LocalSpeechModels.all;
-
-  @override
-  String pathFor(String modelId) =>
-      modelId == LocalSpeechModels.mossDiarizeCoreMlInt8.id
+FakeLocalModelManager _installedModels({
+  required String mossDirectory,
+  required String alignmentDirectory,
+}) => FakeLocalModelManager.allInstalled(
+  pathFor: (modelId) => modelId == LocalSpeechModels.mossDiarizeCoreMlInt8.id
       ? mossDirectory
-      : alignmentDirectory;
-
-  @override
-  Future<LocalModelStatus> status(
-    String modelId, {
-    bool verifyIntegrity = false,
-  }) async {
-    final descriptor = LocalSpeechModels.all.singleWhere(
-      (model) => model.id == modelId,
-    );
-    return LocalModelStatus(
-      descriptor: descriptor,
-      availability: LocalModelAvailability.ready,
-      downloadedBytes: descriptor.sizeBytes,
-    );
-  }
-
-  @override
-  Future<void> delete(String modelId) async {}
-
-  @override
-  Future<void> download(
-    String modelId, {
-    ModelDownloadProgress? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {}
-}
-
-class _ExistingPcm implements LocalPcmPreparer {
-  const _ExistingPcm(this.path);
-
-  final String path;
-
-  @override
-  Future<PreparedLocalPcm> prepare(
-    String sourcePath, {
-    required int durationMs,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async => PreparedLocalPcm(path);
-
-  @override
-  Future<void> release(PreparedLocalPcm pcm) async {}
-}
+      : alignmentDirectory,
+);

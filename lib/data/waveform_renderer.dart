@@ -51,18 +51,6 @@ Future<void> renderPcmWaveform(
   await output.writeAsBytes(png.takeBytes(), flush: true);
 }
 
-Future<Uint16List> readPcm16MonoPeaks(String path, int width) async {
-  final envelope = await readPcm16MonoEnvelope(path, width);
-  final peaks = Uint16List(width);
-  for (var index = 0; index < width; index++) {
-    final negative = envelope.minima[index] == -32768
-        ? 32768
-        : envelope.minima[index].abs();
-    peaks[index] = math.max(negative, envelope.maxima[index]);
-  }
-  return peaks;
-}
-
 class Pcm16MonoEnvelope {
   const Pcm16MonoEnvelope({
     required this.minima,

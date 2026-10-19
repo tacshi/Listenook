@@ -11,12 +11,16 @@ import 'package:listenook/data/local_media_source_resolver.dart';
 import 'package:listenook/data/process_media_service.dart';
 import 'package:listenook/data/transcript_exporter.dart';
 import 'package:listenook/state/app_controller.dart';
+import '../support/fakes.dart';
 
 void main() {
   test(
     'playback position survives destination changes for the app session',
     () async {
-      final controller = _controller(jobs: _Jobs(), soniox: _Soniox());
+      final controller = _controller(
+        jobs: MemoryJobRepository(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+      );
       addTearDown(controller.dispose);
       await controller.initialize();
 
@@ -41,7 +45,7 @@ void main() {
 
   test('playback position survives an app controller restart', () async {
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'transcript',
         batchId: 'batch',
@@ -52,10 +56,10 @@ void main() {
         document: _document(now),
       ),
     ]);
-    final settings = _Settings();
+    final settings = MemorySettingsRepository();
     final first = _controller(
       jobs: jobs,
-      soniox: _Soniox(),
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
       settings: settings,
     );
     addTearDown(first.dispose);
@@ -69,7 +73,7 @@ void main() {
 
     final restored = _controller(
       jobs: jobs,
-      soniox: _Soniox(),
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
       settings: settings,
     );
     addTearDown(restored.dispose);
@@ -84,14 +88,14 @@ void main() {
   test(
     'startup restores Podcast and Library but ignores transient views',
     () async {
-      final settings = _Settings(
+      final settings = MemorySettingsRepository(
         const AppSettings(
           lastContentDestination: AppContentDestination.library,
         ),
       );
       final controller = _controller(
-        jobs: _Jobs(),
-        soniox: _Soniox(),
+        jobs: MemoryJobRepository(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         settings: settings,
       );
       addTearDown(controller.dispose);
@@ -117,14 +121,14 @@ void main() {
 
   test('startup restores a valid Workspace transcript', () async {
     final now = DateTime.now().toUtc();
-    final settings = _Settings(
+    final settings = MemorySettingsRepository(
       const AppSettings(
         lastContentDestination: AppContentDestination.workspace,
         lastWorkspaceJobId: 'transcript',
       ),
     );
     final controller = _controller(
-      jobs: _Jobs([
+      jobs: MemoryJobRepository([
         TranscriptionJob(
           id: 'transcript',
           batchId: 'batch',
@@ -135,7 +139,7 @@ void main() {
           document: _document(now),
         ),
       ]),
-      soniox: _Soniox(),
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
       settings: settings,
     );
     addTearDown(controller.dispose);
@@ -149,15 +153,15 @@ void main() {
   test(
     'invalid saved Workspace state falls back to Podcast and is cleared',
     () async {
-      final settings = _Settings(
+      final settings = MemorySettingsRepository(
         const AppSettings(
           lastContentDestination: AppContentDestination.workspace,
           lastWorkspaceJobId: 'missing',
         ),
       );
       final controller = _controller(
-        jobs: _Jobs(),
-        soniox: _Soniox(),
+        jobs: MemoryJobRepository(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         settings: settings,
       );
       addTearDown(controller.dispose);
@@ -179,8 +183,8 @@ void main() {
       final credentials = _AvailabilityCredentials();
       final translationCredentials = _AvailabilityTranslationCredentials();
       final controller = _controller(
-        jobs: _Jobs(),
-        soniox: _Soniox(),
+        jobs: MemoryJobRepository(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         credentials: credentials,
         translationCredentials: translationCredentials,
       );
@@ -205,9 +209,12 @@ void main() {
       await file.writeAsBytes([1, 2, 3]);
       files.add(file.path);
     }
-    final jobs = _Jobs();
-    final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 40));
-    final media = _Media()..uploadDirectly = false;
+    final jobs = MemoryJobRepository();
+    final soniox = FakeSonioxClient(
+      transcriptPayload: fakeDoneTranscript,
+      uploadDelay: const Duration(milliseconds: 40),
+    );
+    final media = FakeMediaService()..uploadDirectly = false;
     final controller = _controller(jobs: jobs, soniox: soniox, media: media);
     await controller.initialize();
     expect(controller.destination, AppDestination.podcast);
@@ -246,16 +253,16 @@ void main() {
       addTearDown(() => directory.delete(recursive: true));
       final file = File('${directory.path}/meeting.wav');
       await file.writeAsBytes([1, 2, 3]);
-      final soniox = _Soniox();
+      final soniox = FakeSonioxClient(transcriptPayload: fakeDoneTranscript);
       final moss = _Moss();
-      final media = _Media()..uploadDirectly = false;
+      final media = FakeMediaService()..uploadDirectly = false;
       final controller = _controller(
-        jobs: _Jobs(),
+        jobs: MemoryJobRepository(),
         soniox: soniox,
         media: media,
         moss: moss,
-        mossCredentials: _Credentials(),
-        settings: _Settings(
+        mossCredentials: MemoryCredentialStore('configured'),
+        settings: MemorySettingsRepository(
           const AppSettings(
             defaultTranscriptionProvider: TranscriptionProvider.mossPro,
           ),
@@ -299,12 +306,12 @@ void main() {
       addTearDown(() => directory.delete(recursive: true));
       final file = File('${directory.path}/meeting.wav');
       await file.writeAsBytes([1]);
-      final settings = _Settings();
+      final settings = MemorySettingsRepository();
       final controller = _controller(
-        jobs: _Jobs(),
-        soniox: _Soniox(),
+        jobs: MemoryJobRepository(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         moss: _Moss(),
-        mossCredentials: _Credentials(),
+        mossCredentials: MemoryCredentialStore('configured'),
         settings: settings,
       );
       addTearDown(controller.dispose);
@@ -341,8 +348,14 @@ void main() {
           await file.writeAsBytes([1, 2, 3]);
           files.add(file.path);
         }
-        final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 40));
-        final controller = _controller(jobs: _Jobs(), soniox: soniox);
+        final soniox = FakeSonioxClient(
+          transcriptPayload: fakeDoneTranscript,
+          uploadDelay: const Duration(milliseconds: 40),
+        );
+        final controller = _controller(
+          jobs: MemoryJobRepository(),
+          soniox: soniox,
+        );
         addTearDown(controller.dispose);
         await controller.initialize();
         await controller.enqueueSources(files);
@@ -361,10 +374,11 @@ void main() {
     addTearDown(() => directory.delete(recursive: true));
     final file = File('${directory.path}/balance.wav');
     await file.writeAsBytes([1, 2, 3]);
-    final jobs = _Jobs();
+    final jobs = MemoryJobRepository();
     final controller = _controller(
       jobs: jobs,
-      soniox: _Soniox(
+      soniox: FakeSonioxClient(
+        transcriptPayload: fakeDoneTranscript,
         transcriptionState: const SonioxTranscriptionState(
           status: 'failed',
           errorType: 'organization_balance_exhausted',
@@ -393,7 +407,7 @@ void main() {
         if (await file.exists()) await file.delete();
       });
       final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'recover',
           batchId: 'batch',
@@ -413,7 +427,7 @@ void main() {
           cleanupState: CleanupState.pending,
         ),
       ]);
-      final soniox = _Soniox();
+      final soniox = FakeSonioxClient(transcriptPayload: fakeDoneTranscript);
       final controller = _controller(jobs: jobs, soniox: soniox);
 
       await controller.initialize();
@@ -435,7 +449,7 @@ void main() {
       if (await file.exists()) await file.delete();
     });
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'moss-recover',
         batchId: 'batch',
@@ -456,13 +470,13 @@ void main() {
         transcriptionProvider: TranscriptionProvider.mossPro,
       ),
     ]);
-    final soniox = _Soniox();
+    final soniox = FakeSonioxClient(transcriptPayload: fakeDoneTranscript);
     final moss = _Moss();
     final controller = _controller(
       jobs: jobs,
       soniox: soniox,
       moss: moss,
-      mossCredentials: _Credentials(),
+      mossCredentials: MemoryCredentialStore('configured'),
     );
     addTearDown(controller.dispose);
 
@@ -488,7 +502,7 @@ void main() {
     final source = File('${directory.path}/ready.wav');
     await source.writeAsBytes(const [1]);
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'ready',
         batchId: 'batch',
@@ -498,7 +512,7 @@ void main() {
         status: JobStatus.ready,
       ),
     ]);
-    final soniox = _Soniox();
+    final soniox = FakeSonioxClient(transcriptPayload: fakeDoneTranscript);
     final controller = _controller(jobs: jobs, soniox: soniox);
     addTearDown(controller.dispose);
     await controller.initialize();
@@ -524,7 +538,7 @@ void main() {
       final source = File('${directory.path}/completed.wav');
       await source.writeAsBytes(const [1]);
       final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'completed',
           batchId: 'old-batch',
@@ -542,7 +556,10 @@ void main() {
           document: _document(now),
         ),
       ]);
-      final controller = _controller(jobs: jobs, soniox: _Soniox());
+      final controller = _controller(
+        jobs: jobs,
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+      );
       addTearDown(controller.dispose);
       await controller.initialize();
       await controller.updateSessionOptions(
@@ -575,7 +592,7 @@ void main() {
 
   test('adding a ready library job defers missing-source validation', () async {
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'ready',
         batchId: 'batch',
@@ -585,7 +602,7 @@ void main() {
         status: JobStatus.ready,
       ),
     ]);
-    final soniox = _Soniox();
+    final soniox = FakeSonioxClient(transcriptPayload: fakeDoneTranscript);
     final controller = _controller(jobs: jobs, soniox: soniox);
     addTearDown(controller.dispose);
     await controller.initialize();
@@ -613,8 +630,11 @@ void main() {
       addTearDown(() => directory.delete(recursive: true));
       final file = File('${directory.path}/cancel.wav');
       await file.writeAsBytes([1]);
-      final jobs = _Jobs();
-      final soniox = _Soniox(uploadDelay: const Duration(milliseconds: 80));
+      final jobs = MemoryJobRepository();
+      final soniox = FakeSonioxClient(
+        transcriptPayload: fakeDoneTranscript,
+        uploadDelay: const Duration(milliseconds: 80),
+      );
       final controller = _controller(jobs: jobs, soniox: soniox);
       await controller.initialize();
       await controller.enqueueSources([file.path]);
@@ -643,8 +663,11 @@ void main() {
       await completedFile.writeAsBytes([1]);
       await draftFile.writeAsBytes([2]);
       await nextFile.writeAsBytes([3]);
-      final jobs = _Jobs();
-      final controller = _controller(jobs: jobs, soniox: _Soniox());
+      final jobs = MemoryJobRepository();
+      final controller = _controller(
+        jobs: jobs,
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+      );
       await controller.initialize();
       await controller.updateSessionOptions(
         const TranscriptionOptions(
@@ -687,7 +710,7 @@ void main() {
     final now = DateTime.now().toUtc();
     final exporter = _RecordingExporter();
     final controller = _controller(
-      jobs: _Jobs([
+      jobs: MemoryJobRepository([
         for (final id in ['first', 'second'])
           TranscriptionJob(
             id: id,
@@ -707,7 +730,7 @@ void main() {
           status: JobStatus.ready,
         ),
       ]),
-      soniox: _Soniox(),
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
       exporter: exporter,
     );
     addTearDown(controller.dispose);
@@ -726,7 +749,7 @@ void main() {
     'initialization repairs legacy mid-sentence and punctuation fragments',
     () async {
       final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'legacy',
           batchId: 'batch',
@@ -765,7 +788,10 @@ void main() {
           ),
         ),
       ]);
-      final controller = _controller(jobs: jobs, soniox: _Soniox());
+      final controller = _controller(
+        jobs: jobs,
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+      );
 
       await controller.initialize();
 
@@ -780,7 +806,7 @@ void main() {
     'relinking a completed transcript preserves its completed state',
     () async {
       final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'completed',
           batchId: 'batch',
@@ -793,7 +819,10 @@ void main() {
           cleanupState: CleanupState.complete,
         ),
       ]);
-      final controller = _controller(jobs: jobs, soniox: _Soniox());
+      final controller = _controller(
+        jobs: jobs,
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+      );
       await controller.initialize();
       controller.openInWorkspace('completed');
 
@@ -813,7 +842,7 @@ void main() {
 
   test('an invalid relink leaves the completed transcript unchanged', () async {
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'completed',
         batchId: 'batch',
@@ -826,7 +855,7 @@ void main() {
     ]);
     final controller = _controller(
       jobs: jobs,
-      soniox: _Soniox(),
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
       media: _FailingMedia(),
     );
     await controller.initialize();
@@ -843,7 +872,7 @@ void main() {
     'translation failure never changes completed transcription state',
     () async {
       final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'completed',
           batchId: 'batch',
@@ -854,7 +883,7 @@ void main() {
           document: _document(now),
         ),
       ]);
-      final settings = _Settings(
+      final settings = MemorySettingsRepository(
         const AppSettings(
           translationSettings: TranslationSettings(
             provider: TranslationProviderTemplate.openAi,
@@ -866,9 +895,9 @@ void main() {
       );
       final controller = _controller(
         jobs: jobs,
-        soniox: _Soniox(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         settings: settings,
-        translationCredentials: _TranslationCredentials(),
+        translationCredentials: MemoryCredentialStore('translation-key'),
         translationService: _FailingTranslation(),
       );
       await controller.initialize();
@@ -887,8 +916,8 @@ void main() {
   test(
     'changed remote endpoint needs a new key and local save clears cloud key',
     () async {
-      final credentials = _TranslationCredentials();
-      final settings = _Settings(
+      final credentials = MemoryCredentialStore('translation-key');
+      final settings = MemorySettingsRepository(
         const AppSettings(
           translationSettings: TranslationSettings(
             provider: TranslationProviderTemplate.openAi,
@@ -898,8 +927,8 @@ void main() {
         ),
       );
       final controller = _controller(
-        jobs: _Jobs(),
-        soniox: _Soniox(),
+        jobs: MemoryJobRepository(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         settings: settings,
         translationCredentials: credentials,
         translationService: _FailingTranslation(),
@@ -954,7 +983,7 @@ void main() {
       speakers: const [],
       updatedAt: now,
     );
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'completed',
         batchId: 'batch',
@@ -971,7 +1000,10 @@ void main() {
         ),
       ),
     ]);
-    final controller = _controller(jobs: jobs, soniox: _Soniox());
+    final controller = _controller(
+      jobs: jobs,
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+    );
     await controller.initialize();
 
     await controller.updateSegment('completed', 'one', 'Edited one');
@@ -1041,8 +1073,11 @@ void main() {
         sourceTranscriptUpdatedAt: now,
       ),
     );
-    final jobs = _Jobs([job]);
-    final controller = _controller(jobs: jobs, soniox: _Soniox());
+    final jobs = MemoryJobRepository([job]);
+    final controller = _controller(
+      jobs: jobs,
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+    );
     addTearDown(controller.dispose);
     await controller.initialize();
 
@@ -1069,7 +1104,7 @@ void main() {
       addTearDown(() => directory.delete(recursive: true));
       final file = File('${directory.path}/translated.wav');
       await file.writeAsBytes([1, 2, 3]);
-      final soniox = _Soniox(
+      final soniox = FakeSonioxClient(
         transcriptPayload: {
           'tokens': [
             {
@@ -1090,7 +1125,7 @@ void main() {
         },
       );
       final llm = _SuccessfulTranslation();
-      final settings = _Settings(
+      final settings = MemorySettingsRepository(
         const AppSettings(
           sonioxTranslation: SonioxTranslationOptions(
             enabled: true,
@@ -1106,10 +1141,10 @@ void main() {
         ),
       );
       final controller = _controller(
-        jobs: _Jobs(),
+        jobs: MemoryJobRepository(),
         soniox: soniox,
         settings: settings,
-        translationCredentials: _TranslationCredentials(),
+        translationCredentials: MemoryCredentialStore('translation-key'),
         translationService: llm,
       );
       await controller.initialize();
@@ -1138,11 +1173,11 @@ void main() {
       await file.writeAsBytes([1]);
       final llm = _SuccessfulTranslation();
       final controller = _controller(
-        jobs: _Jobs(),
-        soniox: _Soniox(),
+        jobs: MemoryJobRepository(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         moss: _Moss(),
-        mossCredentials: _Credentials(),
-        settings: _Settings(
+        mossCredentials: MemoryCredentialStore('configured'),
+        settings: MemorySettingsRepository(
           const AppSettings(
             defaultTranscriptionProvider: TranscriptionProvider.mossPro,
             sonioxTranslation: SonioxTranslationOptions(
@@ -1158,7 +1193,7 @@ void main() {
             ),
           ),
         ),
-        translationCredentials: _TranslationCredentials(),
+        translationCredentials: MemoryCredentialStore('translation-key'),
         translationService: llm,
       );
       addTearDown(controller.dispose);
@@ -1180,7 +1215,7 @@ void main() {
     addTearDown(() => directory.delete(recursive: true));
     final file = File('${directory.path}/queued.wav');
     await file.writeAsBytes([1]);
-    final settings = _Settings(
+    final settings = MemorySettingsRepository(
       const AppSettings(
         sonioxTranslation: SonioxTranslationOptions(targetLanguage: 'es'),
         translationSettings: TranslationSettings(
@@ -1193,10 +1228,10 @@ void main() {
       ),
     );
     final controller = _controller(
-      jobs: _Jobs(),
-      soniox: _Soniox(),
+      jobs: MemoryJobRepository(),
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
       settings: settings,
-      translationCredentials: _TranslationCredentials(),
+      translationCredentials: MemoryCredentialStore('translation-key'),
       translationService: _SuccessfulTranslation(),
     );
     await controller.initialize();
@@ -1237,7 +1272,7 @@ void main() {
     final file = File('${directory.path}/submitted.wav');
     await file.writeAsBytes([1]);
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'submitted',
         batchId: 'batch',
@@ -1267,7 +1302,7 @@ void main() {
       ),
     ]);
     final pollingGate = Completer<void>();
-    final settings = _Settings(
+    final settings = MemorySettingsRepository(
       const AppSettings(
         sonioxTranslation: SonioxTranslationOptions(targetLanguage: 'es'),
         translationSettings: TranslationSettings(
@@ -1281,9 +1316,12 @@ void main() {
     );
     final controller = _controller(
       jobs: jobs,
-      soniox: _Soniox(pollingGate: pollingGate),
+      soniox: FakeSonioxClient(
+        transcriptPayload: fakeDoneTranscript,
+        pollingGate: pollingGate,
+      ),
       settings: settings,
-      translationCredentials: _TranslationCredentials(),
+      translationCredentials: MemoryCredentialStore('translation-key'),
       translationService: _SuccessfulTranslation(),
     );
     await controller.initialize();
@@ -1311,7 +1349,7 @@ void main() {
     final file = File('${directory.path}/submitted.wav');
     await file.writeAsBytes([1]);
     final now = DateTime.now().toUtc();
-    final jobs = _Jobs([
+    final jobs = MemoryJobRepository([
       TranscriptionJob(
         id: 'submitted',
         batchId: 'batch',
@@ -1334,7 +1372,10 @@ void main() {
     final pollingGate = Completer<void>();
     final controller = _controller(
       jobs: jobs,
-      soniox: _Soniox(pollingGate: pollingGate),
+      soniox: FakeSonioxClient(
+        transcriptPayload: fakeDoneTranscript,
+        pollingGate: pollingGate,
+      ),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
@@ -1354,7 +1395,7 @@ void main() {
     'retry ignores empty transcript segments and completes partial job',
     () async {
       final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
+      final jobs = MemoryJobRepository([
         TranscriptionJob(
           id: 'completed',
           batchId: 'batch',
@@ -1393,8 +1434,8 @@ void main() {
       final translation = _SuccessfulTranslation();
       final controller = _controller(
         jobs: jobs,
-        soniox: _Soniox(),
-        settings: _Settings(
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+        settings: MemorySettingsRepository(
           const AppSettings(
             translationSettings: TranslationSettings(
               provider: TranslationProviderTemplate.openAi,
@@ -1404,7 +1445,7 @@ void main() {
             ),
           ),
         ),
-        translationCredentials: _TranslationCredentials(),
+        translationCredentials: MemoryCredentialStore('translation-key'),
         translationService: translation,
       );
       await controller.initialize();
@@ -1418,56 +1459,6 @@ void main() {
       expect(result.translationState.totalSegments, 1);
       expect(result.document!.segments, hasLength(1));
       expect(result.document!.segments.single.translatedText, '已翻译。');
-    },
-  );
-
-  test(
-    'clear inactive history retains active work and repairs selection',
-    () async {
-      final directory = await Directory.systemTemp.createTemp('meow-clear-');
-      addTearDown(() => directory.delete(recursive: true));
-      final activeFile = File('${directory.path}/active.wav');
-      await activeFile.writeAsBytes([1]);
-      final now = DateTime.now().toUtc();
-      final jobs = _Jobs([
-        TranscriptionJob(
-          id: 'history',
-          batchId: 'old-batch',
-          sourcePath: '/missing/history.wav',
-          createdAt: now.subtract(const Duration(days: 1)),
-          updatedAt: now,
-          status: JobStatus.completed,
-          document: _document(now),
-        ),
-      ]);
-      final media = _Media();
-      final controller = _controller(
-        jobs: jobs,
-        soniox: _Soniox(uploadDelay: const Duration(milliseconds: 100)),
-        media: media,
-      );
-      await controller.initialize();
-      controller.openInWorkspace('history');
-      await controller.enqueueSources([activeFile.path]);
-      await _waitFor(() => controller.readyCount == 1);
-      final activeId = controller.inboxJobs.last.id;
-      final run = controller.startReady();
-      await _waitFor(
-        () => controller.inboxJobs.last.status == JobStatus.uploading,
-      );
-
-      expect(controller.processingCount, 1);
-      expect(controller.inactiveHistoryCount, 1);
-      await controller.clearInactiveHistory();
-
-      expect(jobs.saved.containsKey('history'), isFalse);
-      expect(media.deletedGeneratedMedia, contains('history'));
-      expect(media.retainedGeneratedMedia, {activeId});
-      expect(controller.inboxJobs.single.id, activeId);
-      expect(controller.activeWorkspaceJobId, isNull);
-      expect(controller.inboxJobs.single.status, JobStatus.uploading);
-      await run;
-      expect(controller.processingCount, 0);
     },
   );
 
@@ -1486,9 +1477,9 @@ void main() {
       );
       final briefService = _AiBrief();
       final controller = _controller(
-        jobs: _Jobs([job]),
-        soniox: _Soniox(),
-        settings: _Settings(
+        jobs: MemoryJobRepository([job]),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+        settings: MemorySettingsRepository(
           const AppSettings(
             translationSettings: TranslationSettings(
               baseUrl: 'https://llm.example/v1',
@@ -1496,7 +1487,7 @@ void main() {
             ),
           ),
         ),
-        translationCredentials: _TranslationCredentials(),
+        translationCredentials: MemoryCredentialStore('translation-key'),
         aiBriefService: briefService,
       );
       await controller.initialize();
@@ -1546,7 +1537,10 @@ void main() {
         sourceTranscriptUpdatedAt: now,
       ),
     );
-    final controller = _controller(jobs: _Jobs([job]), soniox: _Soniox());
+    final controller = _controller(
+      jobs: MemoryJobRepository([job]),
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+    );
     await controller.initialize();
 
     await controller.updateSegment(job.id, 'segment', 'Edited transcript');
@@ -1642,10 +1636,10 @@ void main() {
           totalSegments: 1,
         ),
       );
-      final jobs = _Jobs([job]);
+      final jobs = MemoryJobRepository([job]);
       final controller = _controller(
         jobs: jobs,
-        soniox: _Soniox(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         structureEditor: TranscriptStructureEditor(idGenerator: () => 'right'),
       );
       addTearDown(controller.dispose);
@@ -1755,8 +1749,8 @@ void main() {
       ),
     );
     final controller = _controller(
-      jobs: _Jobs([job]),
-      soniox: _Soniox(),
+      jobs: MemoryJobRepository([job]),
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
       structureEditor: TranscriptStructureEditor(idGenerator: () => 'right'),
     );
     addTearDown(controller.dispose);
@@ -1830,9 +1824,9 @@ void main() {
       ),
     );
     final controller = _controller(
-      jobs: _Jobs([job]),
-      soniox: _Soniox(),
-      settings: _Settings(
+      jobs: MemoryJobRepository([job]),
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+      settings: MemorySettingsRepository(
         const AppSettings(
           translationSettings: TranslationSettings(
             provider: TranslationProviderTemplate.openAi,
@@ -1842,7 +1836,7 @@ void main() {
           ),
         ),
       ),
-      translationCredentials: _TranslationCredentials(),
+      translationCredentials: MemoryCredentialStore('translation-key'),
       translationService: _SuccessfulTranslation(),
     );
     await controller.initialize();
@@ -1900,8 +1894,11 @@ void main() {
         outputLanguage: 'en',
       ),
     );
-    final jobs = _Jobs([job]);
-    final controller = _controller(jobs: jobs, soniox: _Soniox());
+    final jobs = MemoryJobRepository([job]);
+    final controller = _controller(
+      jobs: jobs,
+      soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+    );
 
     await controller.initialize();
 
@@ -1929,9 +1926,9 @@ void main() {
       );
       final briefService = _AiBrief();
       final controller = _controller(
-        jobs: _Jobs([job]),
-        soniox: _Soniox(),
-        settings: _Settings(
+        jobs: MemoryJobRepository([job]),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
+        settings: MemorySettingsRepository(
           const AppSettings(
             translationSettings: TranslationSettings(
               baseUrl: 'https://llm.example/v1',
@@ -1939,7 +1936,7 @@ void main() {
             ),
           ),
         ),
-        translationCredentials: _TranslationCredentials(),
+        translationCredentials: MemoryCredentialStore('translation-key'),
         aiBriefService: briefService,
       );
       await controller.initialize();
@@ -1999,9 +1996,9 @@ void main() {
       await source.writeAsBytes(const [1, 2, 3]);
       final monitor = _InboxMonitor();
       final monitorRepository = _InboxMonitorRepository();
-      final soniox = _Soniox();
+      final soniox = FakeSonioxClient(transcriptPayload: fakeDoneTranscript);
       final controller = _controller(
-        jobs: _Jobs(),
+        jobs: MemoryJobRepository(),
         soniox: soniox,
         inboxMonitor: monitor,
         inboxMonitorRepository: monitorRepository,
@@ -2055,8 +2052,8 @@ void main() {
       final monitor = _InboxMonitor();
       final monitorRepository = _InboxMonitorRepository();
       final controller = _controller(
-        jobs: _Jobs(),
-        soniox: _Soniox(),
+        jobs: MemoryJobRepository(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         inboxMonitor: monitor,
         inboxMonitorRepository: monitorRepository,
       );
@@ -2104,10 +2101,10 @@ void main() {
       await source.writeAsBytes(const [1, 2, 3]);
       final monitor = _InboxMonitor();
       final monitorRepository = _InboxMonitorRepository();
-      final jobs = _Jobs();
+      final jobs = MemoryJobRepository();
       final controller = _controller(
         jobs: jobs,
-        soniox: _Soniox(),
+        soniox: FakeSonioxClient(transcriptPayload: fakeDoneTranscript),
         inboxMonitor: monitor,
         inboxMonitorRepository: monitorRepository,
       );
@@ -2148,8 +2145,11 @@ void main() {
       final monitor = _InboxMonitor();
       final pollingGate = Completer<void>();
       final controller = _controller(
-        jobs: _Jobs(),
-        soniox: _Soniox(pollingGate: pollingGate),
+        jobs: MemoryJobRepository(),
+        soniox: FakeSonioxClient(
+          transcriptPayload: fakeDoneTranscript,
+          pollingGate: pollingGate,
+        ),
         inboxMonitor: monitor,
         inboxMonitorRepository: _InboxMonitorRepository(),
       );
@@ -2194,8 +2194,8 @@ TranscriptDocument _document(DateTime now) => TranscriptDocument(
 );
 
 AppController _controller({
-  required _Jobs jobs,
-  required _Soniox soniox,
+  required MemoryJobRepository jobs,
+  required FakeSonioxClient soniox,
   CredentialStore? credentials,
   MediaService? media,
   SettingsRepository? settings,
@@ -2209,10 +2209,10 @@ AppController _controller({
   CredentialStore? mossCredentials,
   TranscriptStructureEditor? structureEditor,
 }) => AppController(
-  credentialStore: credentials ?? _Credentials(),
-  settingsRepository: settings ?? _Settings(),
+  credentialStore: credentials ?? MemoryCredentialStore('configured'),
+  settingsRepository: settings ?? MemorySettingsRepository(),
   jobRepository: jobs,
-  mediaService: media ?? _Media(),
+  mediaService: media ?? FakeMediaService(),
   sourceResolver: const LocalMediaSourceResolver(),
   sonioxClient: soniox,
   mossClient: moss,
@@ -2265,17 +2265,6 @@ Future<void> _waitFor(bool Function() condition) async {
   }
 }
 
-class _Credentials implements CredentialStore {
-  @override
-  Future<void> deleteApiKey() async {}
-
-  @override
-  Future<String?> readApiKey() async => 'configured';
-
-  @override
-  Future<void> writeApiKey(String key) async {}
-}
-
 class _AvailabilityCredentials
     implements CredentialStore, CredentialAvailabilityStore {
   int availabilityChecks = 0;
@@ -2298,18 +2287,6 @@ class _AvailabilityCredentials
 
   @override
   Future<void> deleteApiKey() async {}
-}
-
-class _Settings implements SettingsRepository {
-  _Settings([this.value = const AppSettings()]);
-
-  AppSettings value;
-
-  @override
-  Future<AppSettings> load() async => value;
-
-  @override
-  Future<void> save(AppSettings settings) async => value = settings;
 }
 
 class _InboxMonitorRepository implements InboxMonitorRepository {
@@ -2367,19 +2344,6 @@ class _InboxMonitor implements InboxFolderMonitor {
     _onCandidate = null;
     _onSnapshot = null;
   }
-}
-
-class _TranslationCredentials implements TranslationCredentialStore {
-  String? value = 'translation-key';
-
-  @override
-  Future<void> deleteApiKey() async => value = null;
-
-  @override
-  Future<String?> readApiKey() async => value;
-
-  @override
-  Future<void> writeApiKey(String key) async => value = key;
 }
 
 class _AvailabilityTranslationCredentials
@@ -2522,158 +2486,10 @@ class _AiBrief implements AiBriefService {
   }
 }
 
-class _Jobs implements JobRepository {
-  _Jobs([Iterable<TranscriptionJob> initial = const []]) {
-    for (final job in initial) {
-      saved[job.id] = job;
-    }
-  }
-
-  final Map<String, TranscriptionJob> saved = {};
-
-  @override
-  Future<void> delete(String id) async => saved.remove(id);
-
-  @override
-  Future<List<TranscriptionJob>> loadAll() async => saved.values.toList();
-
-  @override
-  Future<void> save(TranscriptionJob job) async => saved[job.id] = job;
-}
-
-class _Media implements MediaService {
-  final deletedGeneratedMedia = <String>[];
-  Set<String>? retainedGeneratedMedia;
-  bool uploadDirectly = true;
-  final checkedUploadProfiles = <MediaUploadProfile>[];
-  final extractedUploadProfiles = <MediaUploadProfile>[];
-
-  @override
-  bool canUploadDirectly(
-    String path,
-    MediaMetadata metadata, {
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-  }) {
-    checkedUploadProfiles.add(profile);
-    return uploadDirectly;
-  }
-
-  @override
-  Future<void> deleteTemporary(String path) async {}
-
-  @override
-  Future<void> deleteGeneratedMedia(String cacheKey) async =>
-      deletedGeneratedMedia.add(cacheKey);
-
-  @override
-  Future<void> clearGeneratedMediaExcept(Set<String> retainedCacheKeys) async =>
-      retainedGeneratedMedia = retainedCacheKeys;
-
-  @override
-  Future<MediaDiagnostics> diagnostics() async =>
-      const MediaDiagnostics(available: true);
-
-  @override
-  Future<String> extractAudio(
-    String sourcePath,
-    String jobId, {
-    required int durationMs,
-    MediaUploadProfile profile = MediaUploadProfile.standard,
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    extractedUploadProfiles.add(profile);
-    return sourcePath;
-  }
-
-  @override
-  Future<MediaMetadata> inspect(String sourcePath) async => const MediaMetadata(
-    sizeBytes: 3,
-    durationMs: 1000,
-    hasAudio: true,
-    hasVideo: false,
-    formatName: 'wav',
-  );
-
-  @override
-  Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
-}
-
-class _FailingMedia extends _Media {
+class _FailingMedia extends FakeMediaService {
   @override
   Future<MediaMetadata> inspect(String sourcePath) =>
       throw const MediaException('invalid_media', 'Invalid media.');
-}
-
-class _Soniox implements SonioxClient {
-  _Soniox({
-    this.uploadDelay = Duration.zero,
-    this.transcriptPayload,
-    this.pollingGate,
-    this.transcriptionState,
-  });
-  final Duration uploadDelay;
-  final Map<String, dynamic>? transcriptPayload;
-  final Completer<void>? pollingGate;
-  final SonioxTranscriptionState? transcriptionState;
-  int currentUploads = 0;
-  int maximumUploads = 0;
-  int uploadCalls = 0;
-  final deletedFiles = <String>[];
-  final deletedTranscriptions = <String>[];
-  TranscriptionOptions? createdOptions;
-
-  @override
-  Future<String> createTranscription(
-    String fileId,
-    TranscriptionOptions options,
-  ) async {
-    createdOptions = options;
-    return 'tx-$fileId';
-  }
-
-  @override
-  Future<void> deleteFile(String id) async => deletedFiles.add(id);
-
-  @override
-  Future<void> deleteTranscription(String id) async =>
-      deletedTranscriptions.add(id);
-
-  @override
-  Future<Map<String, dynamic>> getTranscript(String id) async =>
-      transcriptPayload ??
-      {
-        'tokens': [
-          {'text': 'Done.', 'start_ms': 0, 'end_ms': 800, 'speaker': '1'},
-        ],
-      };
-
-  @override
-  Future<SonioxTranscriptionState> getTranscription(String id) async {
-    await pollingGate?.future;
-    return transcriptionState ??
-        const SonioxTranscriptionState(status: 'completed');
-  }
-
-  @override
-  Future<String> uploadFile(
-    String path, {
-    ProgressCallback? onProgress,
-    CancelCheck? shouldCancel,
-  }) async {
-    uploadCalls++;
-    final call = uploadCalls;
-    currentUploads++;
-    if (currentUploads > maximumUploads) maximumUploads = currentUploads;
-    onProgress?.call(.5, null);
-    await Future<void>.delayed(uploadDelay);
-    currentUploads--;
-    onProgress?.call(1, null);
-    return 'file-$call';
-  }
-
-  @override
-  Future<void> validateKey({String? apiKey}) async {}
 }
 
 class _Moss implements TranscriptionClient {

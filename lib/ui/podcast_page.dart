@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -1174,13 +1174,18 @@ class _PodcastPageState extends State<PodcastPage> {
                       child: Column(
                         children: [
                           Expanded(
-                            child: PodcastCaptionPane(
-                              player: player,
-                              document: job?.document,
-                              episodeId: episode.id,
-                              hasCompletedTranscript:
-                                  job?.status == JobStatus.completed,
-                              compact: true,
+                            // The page rebuilds at whole-second detail; the
+                            // captions follow every player change.
+                            child: ListenableBuilder(
+                              listenable: player,
+                              builder: (context, _) => PodcastCaptionPane(
+                                player: player,
+                                document: job?.document,
+                                episodeId: episode.id,
+                                hasCompletedTranscript:
+                                    job?.status == JobStatus.completed,
+                                compact: true,
+                              ),
                             ),
                           ),
                         ],

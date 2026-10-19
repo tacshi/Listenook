@@ -62,6 +62,7 @@ class AppDelegate: FlutterAppDelegate {
       NSApp.terminate(nil)
       return
     }
+    DockIconPolicy.applySaved()
     super.applicationWillFinishLaunching(notification)
   }
 
@@ -211,6 +212,29 @@ final class OpenFileInbox {
   }
 }
 
+/// Shows or hides the Dock icon by switching between the regular and
+/// accessory activation policies. The choice is also kept in UserDefaults so
+/// the next launch applies it before any window appears.
+enum DockIconPolicy {
+  private static let defaultsKey = "ShowDockIcon"
+
+  static func applySaved() {
+    if UserDefaults.standard.object(forKey: defaultsKey) as? Bool == false {
+      NSApp.setActivationPolicy(.accessory)
+    }
+  }
+
+  static func setVisible(_ visible: Bool) {
+    UserDefaults.standard.set(visible, forKey: defaultsKey)
+    let policy: NSApplication.ActivationPolicy = visible ? .regular : .accessory
+    guard NSApp.activationPolicy() != policy else { return }
+    let wasActive = NSApp.isActive
+    NSApp.setActivationPolicy(policy)
+    // Switching policy deactivates the app; keep its windows in front.
+    if wasActive { NSApp.activate(ignoringOtherApps: true) }
+  }
+}
+
 final class ApplicationChannels {
   private let compactAudioEncoder = CompactAudioEncoder()
   private var launchAtLoginChannel: FlutterMethodChannel?
@@ -227,6 +251,11 @@ final class ApplicationChannels {
       binaryMessenger: messenger
     )
     launchAtLoginChannel.setMethodCallHandler { call, result in
+      if call.method == "setDockIconVisible", let visible = call.arguments as? Bool {
+        DockIconPolicy.setVisible(visible)
+        result(nil)
+        return
+      }
       if call.method == "isLegacyRunning" {
         result(!NSRunningApplication.runningApplications(
           withBundleIdentifier: ApplicationIdentity.legacyBundleIdentifier

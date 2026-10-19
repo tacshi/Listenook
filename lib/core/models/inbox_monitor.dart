@@ -28,6 +28,7 @@ class InboxMonitorConfig {
     this.extensions = supportedMonitoredMediaExtensions,
     this.launchAtLogin = false,
     this.showTrayIcon = true,
+    this.showDockIcon = true,
   });
 
   final String folderPath;
@@ -35,6 +36,10 @@ class InboxMonitorConfig {
   final Set<String> extensions;
   final bool launchAtLogin;
   final bool showTrayIcon;
+
+  /// macOS only. Hiding it also hides the app's menus, so the menu bar icon
+  /// is the way back in: the two are never both off.
+  final bool showDockIcon;
 
   bool get isConfigured => folderPath.trim().isNotEmpty;
 
@@ -44,12 +49,14 @@ class InboxMonitorConfig {
     Set<String>? extensions,
     bool? launchAtLogin,
     bool? showTrayIcon,
+    bool? showDockIcon,
   }) => InboxMonitorConfig(
     folderPath: folderPath ?? this.folderPath,
     paused: paused ?? this.paused,
     extensions: extensions ?? this.extensions,
     launchAtLogin: launchAtLogin ?? this.launchAtLogin,
     showTrayIcon: showTrayIcon ?? this.showTrayIcon,
+    showDockIcon: showDockIcon ?? this.showDockIcon,
   );
 
   Map<String, dynamic> toJson() => {
@@ -58,6 +65,7 @@ class InboxMonitorConfig {
     'extensions': extensions.toList()..sort(),
     'launch_at_login': launchAtLogin,
     'show_tray_icon': showTrayIcon,
+    'show_dock_icon': showDockIcon,
   };
 
   factory InboxMonitorConfig.fromJson(Map<String, dynamic>? json) {
@@ -65,6 +73,7 @@ class InboxMonitorConfig {
         .map((value) => value.trim().toLowerCase().replaceFirst('.', ''))
         .where(supportedMonitoredMediaExtensions.contains)
         .toSet();
+    final showTrayIcon = json?['show_tray_icon'] as bool? ?? true;
     return InboxMonitorConfig(
       folderPath: json?['folder_path'] as String? ?? '',
       paused: json?['paused'] as bool? ?? false,
@@ -72,7 +81,8 @@ class InboxMonitorConfig {
           ? supportedMonitoredMediaExtensions
           : extensions,
       launchAtLogin: json?['launch_at_login'] as bool? ?? false,
-      showTrayIcon: json?['show_tray_icon'] as bool? ?? true,
+      showTrayIcon: showTrayIcon,
+      showDockIcon: !showTrayIcon || (json?['show_dock_icon'] as bool? ?? true),
     );
   }
 }

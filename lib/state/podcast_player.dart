@@ -147,14 +147,6 @@ class PodcastPlayer extends ChangeNotifier {
     return _progress[episodeId]?.positionMs ?? 0;
   }
 
-  PodcastPlayerCue? get currentCue {
-    final index = currentCueIndex;
-    if (index < 0) return null;
-    return _cues[index];
-  }
-
-  int get currentCueIndex => cueIndexAt(_cues, _position.inMilliseconds);
-
   int get displayPositionMs => _clock.at();
 
   static int cueIndexAt(List<PodcastPlayerCue> cues, int positionMs) {
@@ -496,8 +488,10 @@ class PodcastPlayer extends ChangeNotifier {
 
   void _schedulePersist() {
     if (_repository == null) return;
-    _persistTimer?.cancel();
-    _persistTimer = Timer(const Duration(milliseconds: 400), () {
+    // Throttle rather than debounce: position ticks arrive faster than the
+    // delay, so re-arming the timer on each one would never save while
+    // playing.
+    _persistTimer ??= Timer(const Duration(seconds: 2), () {
       unawaited(_persistNow());
     });
   }
