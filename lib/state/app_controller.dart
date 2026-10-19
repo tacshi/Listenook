@@ -1015,8 +1015,10 @@ class AppController extends ChangeNotifier {
     }
     await _transition(
       job,
-      displayTitle: normalized,
-      clearDisplayTitle: normalized == null || normalized.isEmpty,
+      (prior) => prior.copyWith(
+        displayTitle: normalized,
+        clearDisplayTitle: normalized == null || normalized.isEmpty,
+      ),
     );
   }
 
@@ -1075,7 +1077,7 @@ class AppController extends ChangeNotifier {
   Future<void> deleteLibraryGroup(String id) async {
     if (libraryGroupById(id) == null) return;
     for (final job in _jobs.values.where((job) => job.groupId == id).toList()) {
-      await _transition(job, clearGroupId: true);
+      await _transition(job, (prior) => prior.copyWith(clearGroupId: true));
     }
     _libraryCatalog = _libraryCatalog.copyWith(
       groups: _libraryCatalog.groups
@@ -1093,7 +1095,11 @@ class AppController extends ChangeNotifier {
     for (final id in ids.toSet()) {
       final job = _jobs[id];
       if (job == null || job.groupId == groupId) continue;
-      await _transition(job, groupId: groupId, clearGroupId: groupId == null);
+      await _transition(
+        job,
+        (prior) =>
+            prior.copyWith(groupId: groupId, clearGroupId: groupId == null),
+      );
     }
   }
 
@@ -1113,7 +1119,7 @@ class AppController extends ChangeNotifier {
         ..addAll(addTagIds)
         ..removeAll(removeTagIds);
       if (setEquals(updatedTagIds, job.tagIds)) continue;
-      await _transition(job, tagIds: updatedTagIds);
+      await _transition(job, (prior) => prior.copyWith(tagIds: updatedTagIds));
     }
   }
 
@@ -1143,7 +1149,7 @@ class AppController extends ChangeNotifier {
     for (var index = 0; index < _inboxIds.length; index++) {
       final job = _jobs[_inboxIds[index]];
       if (job != null && job.queueIndex != index) {
-        await _transition(job, queueIndex: index);
+        await _transition(job, (prior) => prior.copyWith(queueIndex: index));
       }
     }
   }
@@ -1211,10 +1217,12 @@ class AppController extends ChangeNotifier {
     final transcriptionModel = _localTranscriptionModelForMode(mode);
     await _transition(
       job,
-      transcriptAcquisitionMode: mode,
-      transcriptionProvider: provider,
-      transcriptionModel: transcriptionModel,
-      clearTranscriptionModel: transcriptionModel == null,
+      (prior) => prior.copyWith(
+        transcriptAcquisitionMode: mode,
+        transcriptionProvider: provider,
+        transcriptionModel: transcriptionModel,
+        clearTranscriptionModel: transcriptionModel == null,
+      ),
     );
   }
 
@@ -1332,10 +1340,12 @@ class AppController extends ChangeNotifier {
       if (current != null) {
         await _transition(
           current,
-          status: JobStatus.cancelled,
-          progress: const JobProgress(stage: 'cancelled'),
-          errorCode: 'cancelled',
-          errorMessage: 'Cancelled by the user.',
+          (prior) => prior.copyWith(
+            status: JobStatus.cancelled,
+            progress: const JobProgress(stage: 'cancelled'),
+            errorCode: 'cancelled',
+            errorMessage: 'Cancelled by the user.',
+          ),
         );
       }
     } on PodcastException catch (error) {
@@ -1360,14 +1370,16 @@ class AppController extends ChangeNotifier {
     final classified = await _classifyPublisherTranscript(_jobs[job.id] ?? job);
     var updated = await _transition(
       _jobs[job.id] ?? job,
-      sourcePath: path,
-      status: JobStatus.ready,
-      metadata: metadata,
-      sourceFingerprint: fingerprint,
-      podcastProvenance: classified.$1,
-      transcriptAcquisitionMode: classified.$2,
-      progress: const JobProgress(stage: 'ready', fraction: 1),
-      clearError: true,
+      (prior) => prior.copyWith(
+        sourcePath: path,
+        status: JobStatus.ready,
+        metadata: metadata,
+        sourceFingerprint: fingerprint,
+        podcastProvenance: classified.$1,
+        transcriptAcquisitionMode: classified.$2,
+        progress: const JobProgress(stage: 'ready', fraction: 1),
+        clearError: true,
+      ),
     );
     if (fingerprint != null && _pathIsInMonitoredFolder(path)) {
       await _recordMonitoredFile(
@@ -1586,24 +1598,29 @@ class AppController extends ChangeNotifier {
       if (parsed.document.segments.isEmpty) {
         return 'subtitle_no_valid_cues';
       }
+      final subtitleFingerprint = await fingerprintMonitoredFile(
+        candidate.path,
+      );
       final updated = await _transition(
         job,
-        status: JobStatus.completed,
-        progress: const JobProgress(stage: 'complete', fraction: 1),
-        metadata: metadata,
-        document: parsed.document,
-        importedSubtitleProvenance: ImportedSubtitleProvenance(
-          sourcePath: candidate.path,
-          displayName: candidate.displayName,
-          format: candidate.format,
-          importedAt: DateTime.now().toUtc(),
-          sourceFingerprint: await fingerprintMonitoredFile(candidate.path),
+        (prior) => prior.copyWith(
+          status: JobStatus.completed,
+          progress: const JobProgress(stage: 'complete', fraction: 1),
+          metadata: metadata,
+          document: parsed.document,
+          importedSubtitleProvenance: ImportedSubtitleProvenance(
+            sourcePath: candidate.path,
+            displayName: candidate.displayName,
+            format: candidate.format,
+            importedAt: DateTime.now().toUtc(),
+            sourceFingerprint: subtitleFingerprint,
+          ),
+          translationState: const TranslationState(),
+          aiGenerationState: const AiGenerationState(),
+          forcedAlignment: const ForcedAlignmentState(),
+          clearAiBrief: true,
+          clearError: true,
         ),
-        translationState: const TranslationState(),
-        aiGenerationState: const AiGenerationState(),
-        forcedAlignment: const ForcedAlignmentState(),
-        clearAiBrief: true,
-        clearError: true,
       );
       if (_autoTranslationApplies(updated)) unawaited(_autoTranslate(updated));
       return null;
@@ -1684,20 +1701,24 @@ class AppController extends ChangeNotifier {
     if (job == null || job.status != JobStatus.pending) return;
     job = await _transition(
       job,
-      status: JobStatus.probing,
-      progress: const JobProgress(stage: 'probing'),
-      clearError: true,
+      (prior) => prior.copyWith(
+        status: JobStatus.probing,
+        progress: const JobProgress(stage: 'probing'),
+        clearError: true,
+      ),
     );
     try {
       final metadata = await _media.inspect(job.sourcePath);
       if (!_jobs.containsKey(id)) return;
       await _transition(
         job,
-        status: _processing ? JobStatus.paused : JobStatus.ready,
-        metadata: metadata,
-        progress: JobProgress(
-          stage: _processing ? 'paused' : 'ready',
-          fraction: 0,
+        (prior) => prior.copyWith(
+          status: _processing ? JobStatus.paused : JobStatus.ready,
+          metadata: metadata,
+          progress: JobProgress(
+            stage: _processing ? 'paused' : 'ready',
+            fraction: 0,
+          ),
         ),
       );
       _scheduleLocalAutoStart();
@@ -1705,12 +1726,14 @@ class AppController extends ChangeNotifier {
       if (!_jobs.containsKey(id)) return;
       await _transition(
         job,
-        status: error.code == 'missing_source'
-            ? JobStatus.missingSource
-            : JobStatus.failed,
-        errorCode: error.code,
-        errorMessage: error.message,
-        progress: const JobProgress(stage: 'failed'),
+        (prior) => prior.copyWith(
+          status: error.code == 'missing_source'
+              ? JobStatus.missingSource
+              : JobStatus.failed,
+          errorCode: error.code,
+          errorMessage: error.message,
+          progress: const JobProgress(stage: 'failed'),
+        ),
       );
     } on Object catch (error) {
       if (!_jobs.containsKey(id)) return;
@@ -1822,10 +1845,12 @@ class AppController extends ChangeNotifier {
         }
         job = await _transition(
           job,
-          status: JobStatus.completed,
-          forcedAlignment: const ForcedAlignmentState(),
-          progress: const JobProgress(stage: 'complete', fraction: 1),
-          clearError: true,
+          (prior) => prior.copyWith(
+            status: JobStatus.completed,
+            forcedAlignment: const ForcedAlignmentState(),
+            progress: const JobProgress(stage: 'complete', fraction: 1),
+            clearError: true,
+          ),
         );
       } else {
         job = _isLocalProvider(job.transcriptionProvider)
@@ -1841,8 +1866,10 @@ class AppController extends ChangeNotifier {
         } else if (job.status == JobStatus.aligning) {
           job = await _transition(
             job,
-            status: JobStatus.completed,
-            progress: const JobProgress(stage: 'complete', fraction: 1),
+            (prior) => prior.copyWith(
+              status: JobStatus.completed,
+              progress: const JobProgress(stage: 'complete', fraction: 1),
+            ),
           );
         }
       }
@@ -1852,10 +1879,12 @@ class AppController extends ChangeNotifier {
       job = _jobs[id] ?? job;
       await _transition(
         job,
-        status: JobStatus.cancelled,
-        progress: const JobProgress(stage: 'cancelled'),
-        errorCode: 'cancelled',
-        errorMessage: 'Cancelled by the user.',
+        (prior) => prior.copyWith(
+          status: JobStatus.cancelled,
+          progress: const JobProgress(stage: 'cancelled'),
+          errorCode: 'cancelled',
+          errorMessage: 'Cancelled by the user.',
+        ),
       );
       await _cleanupIfRemote(_jobs[id] ?? job);
     } on MediaException catch (error) {
@@ -1900,10 +1929,12 @@ class AppController extends ChangeNotifier {
     final metadata = job.metadata ?? await _media.inspect(job.sourcePath);
     job = await _transition(
       job,
-      status: JobStatus.converting,
-      metadata: metadata,
-      progress: const JobProgress(stage: 'converting', fraction: 0),
-      clearError: true,
+      (prior) => prior.copyWith(
+        status: JobStatus.converting,
+        metadata: metadata,
+        progress: const JobProgress(stage: 'converting', fraction: 0),
+        clearError: true,
+      ),
     );
     final engine = switch (job.transcriptionProvider) {
       TranscriptionProvider.mossLocal => LocalSttEngine.mossDiarize,
@@ -1937,29 +1968,31 @@ class AppController extends ChangeNotifier {
         document.segments.isNotEmpty && _settings.automaticWordTiming;
     return _transition(
       _jobs[job.id] ?? job,
-      status: document.segments.isEmpty
-          ? JobStatus.empty
-          : shouldAlign
-          ? JobStatus.aligning
-          : JobStatus.completed,
-      document: document,
-      transcriptSource: engine == LocalSttEngine.qwen3Asr
-          ? TranscriptSource.qwen3Local
-          : TranscriptSource.mossLocal,
-      transcriptionModel: result.model,
-      forcedAlignment: shouldAlign
-          ? _queuedAlignmentState(
-              document.segments.length,
-              model: _defaultForcedAligner,
-              languageAutomaticallyDetermined:
-                  job.options.languageHints.isEmpty,
-            )
-          : null,
-      progress: JobProgress(
-        stage: shouldAlign ? 'aligning' : 'complete',
-        fraction: shouldAlign ? 0 : 1,
+      (prior) => prior.copyWith(
+        status: document.segments.isEmpty
+            ? JobStatus.empty
+            : shouldAlign
+            ? JobStatus.aligning
+            : JobStatus.completed,
+        document: document,
+        transcriptSource: engine == LocalSttEngine.qwen3Asr
+            ? TranscriptSource.qwen3Local
+            : TranscriptSource.mossLocal,
+        transcriptionModel: result.model,
+        forcedAlignment: shouldAlign
+            ? _queuedAlignmentState(
+                document.segments.length,
+                model: _defaultForcedAligner,
+                languageAutomaticallyDetermined:
+                    job.options.languageHints.isEmpty,
+              )
+            : null,
+        progress: JobProgress(
+          stage: shouldAlign ? 'aligning' : 'complete',
+          fraction: shouldAlign ? 0 : 1,
+        ),
+        clearError: true,
       ),
-      clearError: true,
     );
   }
 
@@ -1990,9 +2023,11 @@ class AppController extends ChangeNotifier {
       )) {
         job = await _transition(
           job,
-          status: JobStatus.converting,
-          metadata: metadata,
-          progress: const JobProgress(stage: 'converting', fraction: 0),
+          (prior) => prior.copyWith(
+            status: JobStatus.converting,
+            metadata: metadata,
+            progress: const JobProgress(stage: 'converting', fraction: 0),
+          ),
         );
         temporary = await _media.extractAudio(
           job.sourcePath,
@@ -2010,8 +2045,10 @@ class AppController extends ChangeNotifier {
       if (fileId == null) {
         job = await _transition(
           _jobs[job.id] ?? job,
-          status: JobStatus.uploading,
-          progress: const JobProgress(stage: 'uploading', fraction: 0),
+          (prior) => prior.copyWith(
+            status: JobStatus.uploading,
+            progress: const JobProgress(stage: 'uploading', fraction: 0),
+          ),
         );
         fileId = await transcriptionClient.uploadFile(
           uploadPath,
@@ -2021,8 +2058,10 @@ class AppController extends ChangeNotifier {
         );
         job = await _transition(
           _jobs[job.id] ?? job,
-          remoteFileId: fileId,
-          cleanupState: CleanupState.pending,
+          (prior) => prior.copyWith(
+            remoteFileId: fileId,
+            cleanupState: CleanupState.pending,
+          ),
         );
       }
       _checkCancelled(job.id);
@@ -2034,10 +2073,12 @@ class AppController extends ChangeNotifier {
         );
         job = await _transition(
           job,
-          remoteTranscriptionId: transcriptionId,
-          cleanupState: CleanupState.pending,
-          status: JobStatus.queuedRemote,
-          progress: const JobProgress(stage: 'queued_remote'),
+          (prior) => prior.copyWith(
+            remoteTranscriptionId: transcriptionId,
+            cleanupState: CleanupState.pending,
+            status: JobStatus.queuedRemote,
+            progress: const JobProgress(stage: 'queued_remote'),
+          ),
         );
       }
       await _poll(
@@ -2049,8 +2090,10 @@ class AppController extends ChangeNotifier {
       _checkCancelled(job.id);
       job = await _transition(
         _jobs[job.id] ?? job,
-        status: JobStatus.fetching,
-        progress: const JobProgress(stage: 'fetching'),
+        (prior) => prior.copyWith(
+          status: JobStatus.fetching,
+          progress: const JobProgress(stage: 'fetching'),
+        ),
       );
       final payload = await transcriptionClient.getTranscript(transcriptionId);
       final usesSoniox =
@@ -2070,34 +2113,36 @@ class AppController extends ChangeNotifier {
           _settings.automaticWordTiming;
       job = await _transition(
         job,
-        status: document.segments.isEmpty
-            ? JobStatus.empty
-            : shouldAlign
-            ? JobStatus.aligning
-            : JobStatus.completed,
-        document: document,
-        translationState: embedded
-            ? _sonioxTranslationState(
-                document,
-                job.options.sonioxTranslation.targetLanguage,
-              )
-            : null,
-        transcriptSource: usesSoniox
-            ? TranscriptSource.soniox
-            : TranscriptSource.mossPro,
-        forcedAlignment: shouldAlign
-            ? _queuedAlignmentState(
-                document.segments.length,
-                model: _defaultForcedAligner,
-                languageAutomaticallyDetermined:
-                    job.options.languageHints.isEmpty,
-              )
-            : null,
-        progress: JobProgress(
-          stage: shouldAlign ? 'aligning' : 'complete',
-          fraction: shouldAlign ? 0 : 1,
+        (prior) => prior.copyWith(
+          status: document.segments.isEmpty
+              ? JobStatus.empty
+              : shouldAlign
+              ? JobStatus.aligning
+              : JobStatus.completed,
+          document: document,
+          translationState: embedded
+              ? _sonioxTranslationState(
+                  document,
+                  job.options.sonioxTranslation.targetLanguage,
+                )
+              : null,
+          transcriptSource: usesSoniox
+              ? TranscriptSource.soniox
+              : TranscriptSource.mossPro,
+          forcedAlignment: shouldAlign
+              ? _queuedAlignmentState(
+                  document.segments.length,
+                  model: _defaultForcedAligner,
+                  languageAutomaticallyDetermined:
+                      job.options.languageHints.isEmpty,
+                )
+              : null,
+          progress: JobProgress(
+            stage: shouldAlign ? 'aligning' : 'complete',
+            fraction: shouldAlign ? 0 : 1,
+          ),
+          clearError: true,
         ),
-        clearError: true,
       );
       await _cleanup(job);
       return _jobs[job.id] ?? job;
@@ -2180,16 +2225,18 @@ class AppController extends ChangeNotifier {
     }
     job = await _transition(
       job,
-      status: JobStatus.aligning,
-      forcedAlignment: ForcedAlignmentState(
-        status: ForcedAlignmentStatus.running,
-        modelId: model.id,
-        modelRevision: model.revision,
-        alignedSegments: job.forcedAlignment.alignedSegments,
-        totalSegments: document.segments.length,
-        languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
+      (prior) => prior.copyWith(
+        status: JobStatus.aligning,
+        forcedAlignment: ForcedAlignmentState(
+          status: ForcedAlignmentStatus.running,
+          modelId: model.id,
+          modelRevision: model.revision,
+          alignedSegments: job.forcedAlignment.alignedSegments,
+          totalSegments: document.segments.length,
+          languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
+        ),
+        progress: const JobProgress(stage: 'aligning', fraction: 0),
       ),
-      progress: const JobProgress(stage: 'aligning', fraction: 0),
     );
     var checkpointTail = Future<void>.value();
 
@@ -2234,13 +2281,15 @@ class AppController extends ChangeNotifier {
           result.status == ForcedAlignmentStatus.partial;
       return await _transition(
         _jobs[job.id] ?? job,
-        status: JobStatus.completed,
-        document: publishTokens
-            ? document.copyWith(tokens: result.tokens)
-            : document,
-        forcedAlignment: result.toState(model),
-        progress: const JobProgress(stage: 'complete', fraction: 1),
-        clearError: true,
+        (prior) => prior.copyWith(
+          status: JobStatus.completed,
+          document: publishTokens
+              ? document.copyWith(tokens: result.tokens)
+              : document,
+          forcedAlignment: result.toState(model),
+          progress: const JobProgress(stage: 'complete', fraction: 1),
+          clearError: true,
+        ),
       );
     } on OperationCancelledException {
       await flushCheckpoints();
@@ -2285,17 +2334,20 @@ class AppController extends ChangeNotifier {
     if (current == null || current.status != JobStatus.aligning) return;
     await _transition(
       current,
-      status: JobStatus.aligning,
-      document: source.copyWith(tokens: result.tokens),
-      forcedAlignment: ForcedAlignmentState(
-        status: ForcedAlignmentStatus.running,
-        modelId: model.id,
-        modelRevision: model.revision,
-        alignedSegments: result.alignedSegments,
-        totalSegments: result.totalSegments,
-        languageAutomaticallyDetermined: result.languageAutomaticallyDetermined,
+      (prior) => prior.copyWith(
+        status: JobStatus.aligning,
+        document: source.copyWith(tokens: result.tokens),
+        forcedAlignment: ForcedAlignmentState(
+          status: ForcedAlignmentStatus.running,
+          modelId: model.id,
+          modelRevision: model.revision,
+          alignedSegments: result.alignedSegments,
+          totalSegments: result.totalSegments,
+          languageAutomaticallyDetermined:
+              result.languageAutomaticallyDetermined,
+        ),
+        progress: current.progress,
       ),
-      progress: current.progress,
     );
   }
 
@@ -2306,24 +2358,26 @@ class AppController extends ChangeNotifier {
     String? warningMessage,
   ]) => _transition(
     job,
-    status: job.document?.segments.isEmpty == true
-        ? JobStatus.empty
-        : JobStatus.completed,
-    forcedAlignment: ForcedAlignmentState(
-      status: status,
-      modelId: job.forcedAlignment.modelId,
-      modelRevision: job.forcedAlignment.modelRevision,
-      alignedSegments: job.forcedAlignment.alignedSegments,
-      totalSegments:
-          job.document?.segments.length ?? job.forcedAlignment.totalSegments,
-      languageAutomaticallyDetermined:
-          job.forcedAlignment.languageAutomaticallyDetermined ||
-          job.options.languageHints.isEmpty,
-      warningCode: warningCode,
-      warningMessage: warningMessage,
+    (prior) => prior.copyWith(
+      status: job.document?.segments.isEmpty == true
+          ? JobStatus.empty
+          : JobStatus.completed,
+      forcedAlignment: ForcedAlignmentState(
+        status: status,
+        modelId: job.forcedAlignment.modelId,
+        modelRevision: job.forcedAlignment.modelRevision,
+        alignedSegments: job.forcedAlignment.alignedSegments,
+        totalSegments:
+            job.document?.segments.length ?? job.forcedAlignment.totalSegments,
+        languageAutomaticallyDetermined:
+            job.forcedAlignment.languageAutomaticallyDetermined ||
+            job.options.languageHints.isEmpty,
+        warningCode: warningCode,
+        warningMessage: warningMessage,
+      ),
+      progress: const JobProgress(stage: 'complete', fraction: 1),
+      clearError: true,
     ),
-    progress: const JobProgress(stage: 'complete', fraction: 1),
-    clearError: true,
   );
 
   Future<void> _cleanupIfRemote(TranscriptionJob job) async {
@@ -2367,20 +2421,23 @@ class AppController extends ChangeNotifier {
         );
         return;
       }
+      final publisherDocument = parsed.document;
       await _transition(
         _jobs[job.id] ?? job,
-        status: parsed.document.segments.isEmpty
-            ? JobStatus.empty
-            : JobStatus.completed,
-        document: TranscriptDocument(
-          tokens: const [],
-          segments: parsed.document.segments,
-          speakers: parsed.document.speakers,
-          updatedAt: parsed.document.updatedAt,
+        (prior) => prior.copyWith(
+          status: publisherDocument.segments.isEmpty
+              ? JobStatus.empty
+              : JobStatus.completed,
+          document: TranscriptDocument(
+            tokens: const [],
+            segments: publisherDocument.segments,
+            speakers: publisherDocument.speakers,
+            updatedAt: publisherDocument.updatedAt,
+          ),
+          transcriptSource: TranscriptSource.publisher,
+          progress: const JobProgress(stage: 'complete', fraction: 1),
+          clearError: true,
         ),
-        transcriptSource: TranscriptSource.publisher,
-        progress: const JobProgress(stage: 'complete', fraction: 1),
-        clearError: true,
       );
     } on PodcastException catch (error) {
       await _fail(
@@ -2477,8 +2534,10 @@ class AppController extends ChangeNotifier {
             : JobStatus.processing;
         await _transition(
           _jobs[id]!,
-          status: status,
-          progress: JobProgress(stage: status.name),
+          (prior) => prior.copyWith(
+            status: status,
+            progress: JobProgress(stage: status.name),
+          ),
         );
         await Future<void>.delayed(
           state.retryAfter ?? const Duration(seconds: 2),
@@ -2517,10 +2576,12 @@ class AppController extends ChangeNotifier {
     if (job != null && !job.status.isActive) {
       await _transition(
         job,
-        status: JobStatus.cancelled,
-        progress: const JobProgress(stage: 'cancelled'),
-        errorCode: 'cancelled',
-        errorMessage: 'Cancelled by the user.',
+        (prior) => prior.copyWith(
+          status: JobStatus.cancelled,
+          progress: const JobProgress(stage: 'cancelled'),
+          errorCode: 'cancelled',
+          errorMessage: 'Cancelled by the user.',
+        ),
       );
     }
   }
@@ -2537,32 +2598,36 @@ class AppController extends ChangeNotifier {
           _alignmentInterruptedIds.add(job.id);
           await _transition(
             _jobs[job.id] ?? job,
-            status: job.document!.segments.isEmpty
-                ? JobStatus.empty
-                : JobStatus.completed,
-            forcedAlignment: ForcedAlignmentState(
-              status: ForcedAlignmentStatus.interrupted,
-              modelId: job.forcedAlignment.modelId,
-              modelRevision: job.forcedAlignment.modelRevision,
-              alignedSegments: job.forcedAlignment.alignedSegments,
-              totalSegments: job.document!.segments.length,
-              languageAutomaticallyDetermined:
-                  job.forcedAlignment.languageAutomaticallyDetermined ||
-                  job.options.languageHints.isEmpty,
-              warningCode: 'alignment_interrupted',
+            (prior) => prior.copyWith(
+              status: job.document!.segments.isEmpty
+                  ? JobStatus.empty
+                  : JobStatus.completed,
+              forcedAlignment: ForcedAlignmentState(
+                status: ForcedAlignmentStatus.interrupted,
+                modelId: job.forcedAlignment.modelId,
+                modelRevision: job.forcedAlignment.modelRevision,
+                alignedSegments: job.forcedAlignment.alignedSegments,
+                totalSegments: job.document!.segments.length,
+                languageAutomaticallyDetermined:
+                    job.forcedAlignment.languageAutomaticallyDetermined ||
+                    job.options.languageHints.isEmpty,
+                warningCode: 'alignment_interrupted',
+              ),
+              progress: const JobProgress(stage: 'complete', fraction: 1),
+              clearError: true,
             ),
-            progress: const JobProgress(stage: 'complete', fraction: 1),
-            clearError: true,
           );
           continue;
         }
         await _cleanup(job);
         await _transition(
           _jobs[job.id] ?? job,
-          status: JobStatus.cancelled,
-          progress: const JobProgress(stage: 'cancelled'),
-          errorCode: 'cancelled',
-          errorMessage: 'Cancelled while quitting.',
+          (prior) => prior.copyWith(
+            status: JobStatus.cancelled,
+            progress: const JobProgress(stage: 'cancelled'),
+            errorCode: 'cancelled',
+            errorMessage: 'Cancelled while quitting.',
+          ),
         );
       }
     }
@@ -2586,15 +2651,17 @@ class AppController extends ChangeNotifier {
     _cancelledIds.remove(id);
     final queued = await _transition(
       job,
-      status: JobStatus.aligning,
-      forcedAlignment: _queuedAlignmentState(
-        job.document!.segments.length,
-        model: _defaultForcedAligner,
-        languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
-        alignedSegments: _alignedSegmentCount(job.document!),
+      (prior) => prior.copyWith(
+        status: JobStatus.aligning,
+        forcedAlignment: _queuedAlignmentState(
+          job.document!.segments.length,
+          model: _defaultForcedAligner,
+          languageAutomaticallyDetermined: job.options.languageHints.isEmpty,
+          alignedSegments: _alignedSegmentCount(job.document!),
+        ),
+        progress: const JobProgress(stage: 'aligning', fraction: 0),
+        clearError: true,
       ),
-      progress: const JobProgress(stage: 'aligning', fraction: 0),
-      clearError: true,
     );
     await _runForcedAlignment(queued);
     _cancelledIds.remove(id);
@@ -2628,10 +2695,12 @@ class AppController extends ChangeNotifier {
       }
       await _transition(
         job,
-        sourcePath: location.filePath,
-        status: JobStatus.downloading,
-        progress: const JobProgress(stage: 'downloading', fraction: 0),
-        clearError: true,
+        (prior) => prior.copyWith(
+          sourcePath: location.filePath,
+          status: JobStatus.downloading,
+          progress: const JobProgress(stage: 'downloading', fraction: 0),
+          clearError: true,
+        ),
       );
       if (!_inboxIds.contains(id)) _inboxIds.add(id);
       unawaited(_downloadPodcastJob(_jobs[id] ?? job, location));
@@ -2648,14 +2717,16 @@ class AppController extends ChangeNotifier {
     }
     final updated = await _transition(
       job,
-      status: JobStatus.ready,
-      progress: const JobProgress(stage: 'ready', fraction: 0),
-      clearError: true,
-      clearRemoteFileId: job.cleanupState == CleanupState.complete,
-      clearRemoteTranscriptionId: job.cleanupState == CleanupState.complete,
-      cleanupState: job.cleanupState == CleanupState.complete
-          ? CleanupState.none
-          : job.cleanupState,
+      (prior) => prior.copyWith(
+        status: JobStatus.ready,
+        progress: const JobProgress(stage: 'ready', fraction: 0),
+        clearError: true,
+        clearRemoteFileId: job.cleanupState == CleanupState.complete,
+        clearRemoteTranscriptionId: job.cleanupState == CleanupState.complete,
+        cleanupState: job.cleanupState == CleanupState.complete
+            ? CleanupState.none
+            : job.cleanupState,
+      ),
     );
     if (!_inboxIds.contains(id)) _inboxIds.add(id);
     notifyListeners();
@@ -2691,15 +2762,20 @@ class AppController extends ChangeNotifier {
       final metadata = await _media.inspect(sourcePath);
       await _transition(
         job,
-        sourcePath: sourcePath,
-        metadata: metadata,
-        status: job.document == null
-            ? (_processing ? JobStatus.paused : JobStatus.ready)
-            : job.status,
-        progress: job.document == null
-            ? JobProgress(stage: _processing ? 'paused' : 'ready', fraction: 0)
-            : job.progress,
-        clearError: true,
+        (prior) => prior.copyWith(
+          sourcePath: sourcePath,
+          metadata: metadata,
+          status: job.document == null
+              ? (_processing ? JobStatus.paused : JobStatus.ready)
+              : job.status,
+          progress: job.document == null
+              ? JobProgress(
+                  stage: _processing ? 'paused' : 'ready',
+                  fraction: 0,
+                )
+              : job.progress,
+          clearError: true,
+        ),
       );
       return null;
     } on MediaException catch (error) {
@@ -2837,15 +2913,17 @@ class AppController extends ChangeNotifier {
         : job.translationState;
     final updated = await _transition(
       job,
-      document: outcome.document,
-      translationState: translationState,
-      forcedAlignment: _structureAlignmentState(
-        job.forcedAlignment,
-        outcome.document,
-      ),
-      aiBrief: _remapAiBriefEvidence(
-        job.aiBrief,
-        outcome.segmentIdReplacements,
+      (prior) => prior.copyWith(
+        document: outcome.document,
+        translationState: translationState,
+        forcedAlignment: _structureAlignmentState(
+          job.forcedAlignment,
+          outcome.document,
+        ),
+        aiBrief: _remapAiBriefEvidence(
+          job.aiBrief,
+          outcome.segmentIdReplacements,
+        ),
       ),
       preserveTranscriptStructureHistory: true,
     );
@@ -2891,11 +2969,13 @@ class AppController extends ChangeNotifier {
     _TranscriptStructureSnapshot snapshot,
   ) => _transition(
     job,
-    document: snapshot.document,
-    translationState: snapshot.translationState,
-    forcedAlignment: snapshot.forcedAlignment,
-    aiBrief: snapshot.aiBrief,
-    clearAiBrief: snapshot.aiBrief == null,
+    (prior) => prior.copyWith(
+      document: snapshot.document,
+      translationState: snapshot.translationState,
+      forcedAlignment: snapshot.forcedAlignment,
+      aiBrief: snapshot.aiBrief,
+      clearAiBrief: snapshot.aiBrief == null,
+    ),
     preserveTranscriptStructureHistory: true,
   );
 
@@ -2986,17 +3066,19 @@ class AppController extends ChangeNotifier {
         .any((segment) => segment.hasTranslation);
     await _transition(
       job,
-      document: document.copyWith(segments: segments),
-      translationState: invalidated
-          ? job.translationState.copyWith(
-              status: progress.completed == progress.total
-                  ? TranslationStatus.completed
-                  : TranslationStatus.partial,
-              completedSegments: progress.completed,
-              totalSegments: progress.total,
-              clearError: true,
-            )
-          : null,
+      (prior) => prior.copyWith(
+        document: document.copyWith(segments: segments),
+        translationState: invalidated
+            ? job.translationState.copyWith(
+                status: progress.completed == progress.total
+                    ? TranslationStatus.completed
+                    : TranslationStatus.partial,
+                completedSegments: progress.completed,
+                totalSegments: progress.total,
+                clearError: true,
+              )
+            : null,
+      ),
     );
   }
 
@@ -3015,7 +3097,11 @@ class AppController extends ChangeNotifier {
         else
           speaker,
     ];
-    await _transition(job, document: document.copyWith(speakers: speakers));
+    await _transition(
+      job,
+      (prior) =>
+          prior.copyWith(document: document.copyWith(speakers: speakers)),
+    );
   }
 
   Future<void> updateSegmentSpeaker(
@@ -3038,7 +3124,11 @@ class AppController extends ChangeNotifier {
         else
           segment,
     ];
-    await _transition(job, document: document.copyWith(segments: segments));
+    await _transition(
+      job,
+      (prior) =>
+          prior.copyWith(document: document.copyWith(segments: segments)),
+    );
   }
 
   Future<void> updateSettings(AppSettings value) async {
@@ -3065,7 +3155,7 @@ class AppController extends ChangeNotifier {
           TranscriptAcquisitionMode.importedSubtitles) {
         continue;
       }
-      await _transition(job, options: value);
+      await _transition(job, (prior) => prior.copyWith(options: value));
     }
     notifyListeners();
   }
@@ -3087,8 +3177,10 @@ class AppController extends ChangeNotifier {
       }
       await _transition(
         job,
-        transcriptionProvider: provider,
-        transcriptAcquisitionMode: _providerAcquisitionMode(provider),
+        (prior) => prior.copyWith(
+          transcriptionProvider: provider,
+          transcriptAcquisitionMode: _providerAcquisitionMode(provider),
+        ),
       );
     }
     notifyListeners();
@@ -3334,12 +3426,14 @@ class AppController extends ChangeNotifier {
     }
     final updated = await _transition(
       job,
-      document: updatedDocument,
-      translationOptions: TranslationOptions(
-        enabled: false,
-        targetLanguage: targetLanguage,
-        baseUrl: settings.baseUrl,
-        model: settings.model,
+      (prior) => prior.copyWith(
+        document: updatedDocument,
+        translationOptions: TranslationOptions(
+          enabled: false,
+          targetLanguage: targetLanguage,
+          baseUrl: settings.baseUrl,
+          model: settings.model,
+        ),
       ),
     );
     await _runTranslation(
@@ -3397,14 +3491,19 @@ class AppController extends ChangeNotifier {
     final progress = _translationProgress(segments);
     await _transition(
       job,
-      document: document.copyWith(segments: segments, preserveUpdatedAt: true),
-      translationState: job.translationState.copyWith(
-        status: progress.completed == progress.total
-            ? TranslationStatus.completed
-            : TranslationStatus.partial,
-        completedSegments: progress.completed,
-        totalSegments: progress.total,
-        clearError: true,
+      (prior) => prior.copyWith(
+        document: document.copyWith(
+          segments: segments,
+          preserveUpdatedAt: true,
+        ),
+        translationState: job.translationState.copyWith(
+          status: progress.completed == progress.total
+              ? TranslationStatus.completed
+              : TranslationStatus.partial,
+          completedSegments: progress.completed,
+          totalSegments: progress.total,
+          clearError: true,
+        ),
       ),
     );
   }
@@ -3465,16 +3564,18 @@ class AppController extends ChangeNotifier {
       final progress = _translationProgress(translatableSegments);
       await _transition(
         current,
-        translationState: current.translationState.copyWith(
-          status: progress.completed == progress.total
-              ? TranslationStatus.completed
-              : TranslationStatus.partial,
-          targetLanguage: targetLanguage,
-          model: settings.model,
-          origin: TranslationOrigin.llm,
-          completedSegments: progress.completed,
-          totalSegments: progress.total,
-          clearError: true,
+        (prior) => prior.copyWith(
+          translationState: current.translationState.copyWith(
+            status: progress.completed == progress.total
+                ? TranslationStatus.completed
+                : TranslationStatus.partial,
+            targetLanguage: targetLanguage,
+            model: settings.model,
+            origin: TranslationOrigin.llm,
+            completedSegments: progress.completed,
+            totalSegments: progress.total,
+            clearError: true,
+          ),
         ),
       );
       return;
@@ -3483,13 +3584,17 @@ class AppController extends ChangeNotifier {
     _translationCancelledIds.remove(job.id);
     current = await _transition(
       current,
-      translationState: TranslationState(
-        status: TranslationStatus.translating,
-        targetLanguage: targetLanguage,
-        model: settings.model,
-        origin: TranslationOrigin.llm,
-        completedSegments: _translationProgress(translatableSegments).completed,
-        totalSegments: translatableSegments.length,
+      (prior) => prior.copyWith(
+        translationState: TranslationState(
+          status: TranslationStatus.translating,
+          targetLanguage: targetLanguage,
+          model: settings.model,
+          origin: TranslationOrigin.llm,
+          completedSegments: _translationProgress(
+            translatableSegments,
+          ).completed,
+          totalSegments: translatableSegments.length,
+        ),
       ),
     );
 
@@ -3513,15 +3618,17 @@ class AppController extends ChangeNotifier {
           final progress = _translationProgress(segments);
           current = await _transition(
             current,
-            document: latest.copyWith(
-              segments: segments,
-              preserveUpdatedAt: true,
-            ),
-            translationState: current.translationState.copyWith(
-              status: TranslationStatus.translating,
-              completedSegments: progress.completed,
-              totalSegments: progress.total,
-              clearError: true,
+            (prior) => prior.copyWith(
+              document: latest.copyWith(
+                segments: segments,
+                preserveUpdatedAt: true,
+              ),
+              translationState: current.translationState.copyWith(
+                status: TranslationStatus.translating,
+                completedSegments: progress.completed,
+                totalSegments: progress.total,
+                clearError: true,
+              ),
             ),
           );
         },
@@ -3531,16 +3638,18 @@ class AppController extends ChangeNotifier {
       final progress = _translationProgress(segments);
       await _transition(
         current,
-        translationState: current.translationState.copyWith(
-          status: progress.completed == progress.total
-              ? TranslationStatus.completed
-              : TranslationStatus.partial,
-          completedSegments: progress.completed,
-          totalSegments: progress.total,
-          errorCode: progress.completed == progress.total
-              ? null
-              : 'translation_incomplete_response',
-          clearError: progress.completed == progress.total,
+        (prior) => prior.copyWith(
+          translationState: current.translationState.copyWith(
+            status: progress.completed == progress.total
+                ? TranslationStatus.completed
+                : TranslationStatus.partial,
+            completedSegments: progress.completed,
+            totalSegments: progress.total,
+            errorCode: progress.completed == progress.total
+                ? null
+                : 'translation_incomplete_response',
+            clearError: progress.completed == progress.total,
+          ),
         ),
       );
     } on OperationCancelledException {
@@ -3549,14 +3658,16 @@ class AppController extends ChangeNotifier {
       final progress = _translationProgress(segments);
       await _transition(
         current,
-        translationState: current.translationState.copyWith(
-          status: progress.completed > 0
-              ? TranslationStatus.partial
-              : TranslationStatus.cancelled,
-          completedSegments: progress.completed,
-          totalSegments: progress.total,
-          errorCode: 'translation_cancelled',
-          errorMessage: 'Translation was cancelled.',
+        (prior) => prior.copyWith(
+          translationState: current.translationState.copyWith(
+            status: progress.completed > 0
+                ? TranslationStatus.partial
+                : TranslationStatus.cancelled,
+            completedSegments: progress.completed,
+            totalSegments: progress.total,
+            errorCode: 'translation_cancelled',
+            errorMessage: 'Translation was cancelled.',
+          ),
         ),
       );
     } on TranslationException catch (error) {
@@ -3595,17 +3706,19 @@ class AppController extends ChangeNotifier {
     final progress = _translationProgress(segments);
     await _transition(
       job,
-      translationState: TranslationState(
-        status: progress.completed > 0 && progress.completed < progress.total
-            ? TranslationStatus.partial
-            : TranslationStatus.failed,
-        targetLanguage: job.translationState.targetLanguage,
-        model: job.translationState.model,
-        origin: job.translationState.origin,
-        completedSegments: progress.completed,
-        totalSegments: progress.total,
-        errorCode: code,
-        errorMessage: message == null ? null : _safeError(message),
+      (prior) => prior.copyWith(
+        translationState: TranslationState(
+          status: progress.completed > 0 && progress.completed < progress.total
+              ? TranslationStatus.partial
+              : TranslationStatus.failed,
+          targetLanguage: job.translationState.targetLanguage,
+          model: job.translationState.model,
+          origin: job.translationState.origin,
+          completedSegments: progress.completed,
+          totalSegments: progress.total,
+          errorCode: code,
+          errorMessage: message == null ? null : _safeError(message),
+        ),
       ),
     );
   }
@@ -3617,7 +3730,10 @@ class AppController extends ChangeNotifier {
     for (final job in inboxJobs.where(
       (job) => job.document == null && job.remoteTranscriptionId == null,
     )) {
-      await _transition(job, translationOptions: options);
+      await _transition(
+        job,
+        (prior) => prior.copyWith(translationOptions: options),
+      );
     }
   }
 
@@ -3627,8 +3743,10 @@ class AppController extends ChangeNotifier {
     )) {
       await _transition(
         job,
-        options: job.options.copyWith(
-          sonioxTranslation: _settings.sonioxTranslation,
+        (prior) => prior.copyWith(
+          options: job.options.copyWith(
+            sonioxTranslation: _settings.sonioxTranslation,
+          ),
         ),
       );
     }
@@ -3728,16 +3846,18 @@ class AppController extends ChangeNotifier {
     _aiBriefCancelledIds.remove(jobId);
     current = await _transition(
       current,
-      aiGenerationState: AiGenerationState(
-        status: AiGenerationStatus.generating,
-        stage: 'analyzing',
-        totalChunks: estimated,
-        outputLanguage: outputLanguage,
-        learningLanguage: learningLanguage,
-        learningLevel: learningLevel,
-        model: provider.model,
-        selectedSections: Set<AiBriefSection>.of(sections),
-        mergeSections: mergeSections,
+      (prior) => prior.copyWith(
+        aiGenerationState: AiGenerationState(
+          status: AiGenerationStatus.generating,
+          stage: 'analyzing',
+          totalChunks: estimated,
+          outputLanguage: outputLanguage,
+          learningLanguage: learningLanguage,
+          learningLevel: learningLevel,
+          model: provider.model,
+          selectedSections: Set<AiBriefSection>.of(sections),
+          mergeSections: mergeSections,
+        ),
       ),
     );
     try {
@@ -3753,12 +3873,14 @@ class AppController extends ChangeNotifier {
           final latest = (_jobs[jobId] ?? current)!;
           current = await _transition(
             latest,
-            aiGenerationState: latest.aiGenerationState.copyWith(
-              status: AiGenerationStatus.generating,
-              stage: stage,
-              completedChunks: completed,
-              totalChunks: total,
-              clearError: true,
+            (prior) => prior.copyWith(
+              aiGenerationState: latest.aiGenerationState.copyWith(
+                status: AiGenerationStatus.generating,
+                stage: stage,
+                completedChunks: completed,
+                totalChunks: total,
+                clearError: true,
+              ),
             ),
           );
         },
@@ -3770,23 +3892,27 @@ class AppController extends ChangeNotifier {
           : generated;
       await _transition(
         latest,
-        aiBrief: brief,
-        aiGenerationState: latest.aiGenerationState.copyWith(
-          status: AiGenerationStatus.completed,
-          stage: 'complete',
-          completedChunks: estimated,
-          totalChunks: estimated,
-          clearError: true,
+        (prior) => prior.copyWith(
+          aiBrief: brief,
+          aiGenerationState: latest.aiGenerationState.copyWith(
+            status: AiGenerationStatus.completed,
+            stage: 'complete',
+            completedChunks: estimated,
+            totalChunks: estimated,
+            clearError: true,
+          ),
         ),
       );
     } on OperationCancelledException {
       final latest = (_jobs[jobId] ?? current)!;
       await _transition(
         latest,
-        aiGenerationState: latest.aiGenerationState.copyWith(
-          status: AiGenerationStatus.cancelled,
-          errorCode: 'ai_brief_cancelled',
-          errorMessage: 'AI Brief generation was cancelled.',
+        (prior) => prior.copyWith(
+          aiGenerationState: latest.aiGenerationState.copyWith(
+            status: AiGenerationStatus.cancelled,
+            errorCode: 'ai_brief_cancelled',
+            errorMessage: 'AI Brief generation was cancelled.',
+          ),
         ),
       );
     } on AiBriefException catch (error) {
@@ -3853,7 +3979,9 @@ class AppController extends ChangeNotifier {
     if (job == null || brief == null) return;
     await _transition(
       job,
-      aiBrief: brief.copyWith(overview: value.trim(), edited: true),
+      (prior) => prior.copyWith(
+        aiBrief: brief.copyWith(overview: value.trim(), edited: true),
+      ),
     );
   }
 
@@ -3879,7 +4007,9 @@ class AppController extends ChangeNotifier {
     ];
     await _transition(
       job,
-      aiBrief: brief.copyWith(chapters: chapters, edited: true),
+      (prior) => prior.copyWith(
+        aiBrief: brief.copyWith(chapters: chapters, edited: true),
+      ),
     );
   }
 
@@ -3889,9 +4019,13 @@ class AppController extends ChangeNotifier {
     if (job == null || brief == null) return;
     await _transition(
       job,
-      aiBrief: brief.copyWith(
-        chapters: brief.chapters.where((item) => item.id != chapterId).toList(),
-        edited: true,
+      (prior) => prior.copyWith(
+        aiBrief: brief.copyWith(
+          chapters: brief.chapters
+              .where((item) => item.id != chapterId)
+              .toList(),
+          edited: true,
+        ),
       ),
     );
   }
@@ -3922,7 +4056,9 @@ class AppController extends ChangeNotifier {
     ];
     await _transition(
       job,
-      aiBrief: brief.copyWith(insights: insights, edited: true),
+      (prior) => prior.copyWith(
+        aiBrief: brief.copyWith(insights: insights, edited: true),
+      ),
     );
   }
 
@@ -3944,9 +4080,11 @@ class AppController extends ChangeNotifier {
     );
     await _transition(
       job,
-      aiBrief: brief.copyWith(
-        insights: [...brief.insights, insight],
-        edited: true,
+      (prior) => prior.copyWith(
+        aiBrief: brief.copyWith(
+          insights: [...brief.insights, insight],
+          edited: true,
+        ),
       ),
     );
   }
@@ -3957,9 +4095,13 @@ class AppController extends ChangeNotifier {
     if (job == null || brief == null) return;
     await _transition(
       job,
-      aiBrief: brief.copyWith(
-        insights: brief.insights.where((item) => item.id != insightId).toList(),
-        edited: true,
+      (prior) => prior.copyWith(
+        aiBrief: brief.copyWith(
+          insights: brief.insights
+              .where((item) => item.id != insightId)
+              .toList(),
+          edited: true,
+        ),
       ),
     );
   }
@@ -3997,7 +4139,9 @@ class AppController extends ChangeNotifier {
     ];
     await _transition(
       job,
-      aiBrief: brief.copyWith(languageNotes: notes, edited: true),
+      (prior) => prior.copyWith(
+        aiBrief: brief.copyWith(languageNotes: notes, edited: true),
+      ),
     );
   }
 
@@ -4007,11 +4151,13 @@ class AppController extends ChangeNotifier {
     if (job == null || brief == null) return;
     await _transition(
       job,
-      aiBrief: brief.copyWith(
-        languageNotes: brief.languageNotes
-            .where((item) => item.id != noteId)
-            .toList(),
-        edited: true,
+      (prior) => prior.copyWith(
+        aiBrief: brief.copyWith(
+          languageNotes: brief.languageNotes
+              .where((item) => item.id != noteId)
+              .toList(),
+          edited: true,
+        ),
       ),
     );
   }
@@ -4173,10 +4319,12 @@ class AppController extends ChangeNotifier {
     String? message,
   ]) => _transition(
     job,
-    aiGenerationState: job.aiGenerationState.copyWith(
-      status: AiGenerationStatus.failed,
-      errorCode: code,
-      errorMessage: message,
+    (prior) => prior.copyWith(
+      aiGenerationState: job.aiGenerationState.copyWith(
+        status: AiGenerationStatus.failed,
+        errorCode: code,
+        errorMessage: message,
+      ),
     ),
   );
 
@@ -4286,9 +4434,11 @@ class AppController extends ChangeNotifier {
       } else {
         await _transition(
           job,
-          status: JobStatus.ready,
-          progress: const JobProgress(stage: 'ready', fraction: 0),
-          clearError: true,
+          (prior) => prior.copyWith(
+            status: JobStatus.ready,
+            progress: const JobProgress(stage: 'ready', fraction: 0),
+            clearError: true,
+          ),
         );
       }
     }
@@ -4336,7 +4486,9 @@ class AppController extends ChangeNotifier {
     }
     await _transition(
       _jobs[job.id] ?? job,
-      cleanupState: success ? CleanupState.complete : CleanupState.pending,
+      (prior) => prior.copyWith(
+        cleanupState: success ? CleanupState.complete : CleanupState.pending,
+      ),
     );
   }
 
@@ -4369,7 +4521,10 @@ class AppController extends ChangeNotifier {
       return updated;
     }
     _startProgressCooldown(id);
-    return _transition(job, status: status, progress: progress);
+    return _transition(
+      job,
+      (prior) => prior.copyWith(status: status, progress: progress),
+    );
   }
 
   void _startProgressCooldown(String id) {
@@ -4380,7 +4535,7 @@ class AppController extends ChangeNotifier {
       final job = _jobs[id];
       if (job == null || _progressDisposed) return;
       _startProgressCooldown(id);
-      _transition(job).then<void>(
+      _transition(job, (prior) => prior).then<void>(
         (_) {},
         onError: (Object error) {
           debugPrint('Unable to save job progress: $error');
@@ -4396,10 +4551,12 @@ class AppController extends ChangeNotifier {
     JobStatus status = JobStatus.failed,
   }) => _transition(
     job,
-    status: status,
-    errorCode: code,
-    errorMessage: message,
-    progress: const JobProgress(stage: 'failed'),
+    (prior) => prior.copyWith(
+      status: status,
+      errorCode: code,
+      errorMessage: message,
+      progress: const JobProgress(stage: 'failed'),
+    ),
   );
 
   Future<void> _deleteManagedPodcastAudio(TranscriptionJob job) async {
@@ -4439,88 +4596,22 @@ class AppController extends ChangeNotifier {
         );
   }
 
+  /// Stores [update] applied to the latest stored version of [job], then
+  /// notifies listeners. A new document clears the job's structure-edit
+  /// history unless [preserveTranscriptStructureHistory].
   Future<TranscriptionJob> _transition(
-    TranscriptionJob job, {
-    String? sourcePath,
-    JobStatus? status,
-    int? queueIndex,
-    JobProgress? progress,
-    MediaMetadata? metadata,
-    TranscriptionOptions? options,
-    TranslationOptions? translationOptions,
-    TranslationState? translationState,
-    AiBrief? aiBrief,
-    AiGenerationState? aiGenerationState,
-    TranscriptDocument? document,
-    String? errorCode,
-    String? errorMessage,
-    String? remoteFileId,
-    String? remoteTranscriptionId,
-    CleanupState? cleanupState,
-    String? displayTitle,
-    String? groupId,
-    Set<String>? tagIds,
-    SourceFingerprint? sourceFingerprint,
-    PodcastEpisodeProvenance? podcastProvenance,
-    ImportedSubtitleProvenance? importedSubtitleProvenance,
-    TranscriptAcquisitionMode? transcriptAcquisitionMode,
-    TranscriptionProvider? transcriptionProvider,
-    TranscriptSource? transcriptSource,
-    TranscriptionModelReference? transcriptionModel,
-    ForcedAlignmentState? forcedAlignment,
-    bool clearError = false,
-    bool clearRemoteFileId = false,
-    bool clearRemoteTranscriptionId = false,
-    bool clearAiBrief = false,
-    bool clearDisplayTitle = false,
-    bool clearGroupId = false,
-    bool clearTranscriptionModel = false,
+    TranscriptionJob job,
+    TranscriptionJob Function(TranscriptionJob prior) update, {
     bool preserveTranscriptStructureHistory = false,
   }) async {
     // This save carries any progress held back by _progress.
     _progressPending.remove(job.id);
     final current = _jobs[job.id] ?? job;
+    final updated = update(current);
     if (!preserveTranscriptStructureHistory &&
-        document != null &&
-        !identical(document, current.document)) {
+        !identical(updated.document, current.document)) {
       _structureHistories.remove(job.id);
     }
-    final updated = current.copyWith(
-      sourcePath: sourcePath,
-      status: status,
-      queueIndex: queueIndex,
-      progress: progress,
-      metadata: metadata,
-      options: options,
-      translationOptions: translationOptions,
-      translationState: translationState,
-      aiBrief: aiBrief,
-      aiGenerationState: aiGenerationState,
-      document: document,
-      errorCode: errorCode,
-      errorMessage: errorMessage,
-      remoteFileId: remoteFileId,
-      remoteTranscriptionId: remoteTranscriptionId,
-      cleanupState: cleanupState,
-      displayTitle: displayTitle,
-      groupId: groupId,
-      tagIds: tagIds,
-      sourceFingerprint: sourceFingerprint,
-      podcastProvenance: podcastProvenance,
-      importedSubtitleProvenance: importedSubtitleProvenance,
-      transcriptAcquisitionMode: transcriptAcquisitionMode,
-      transcriptionProvider: transcriptionProvider,
-      transcriptSource: transcriptSource,
-      transcriptionModel: transcriptionModel,
-      forcedAlignment: forcedAlignment,
-      clearError: clearError,
-      clearRemoteFileId: clearRemoteFileId,
-      clearRemoteTranscriptionId: clearRemoteTranscriptionId,
-      clearAiBrief: clearAiBrief,
-      clearDisplayTitle: clearDisplayTitle,
-      clearGroupId: clearGroupId,
-      clearTranscriptionModel: clearTranscriptionModel,
-    );
     _jobs[job.id] = updated;
     if (updated.document != null || updated.status.isTerminal) {
       _localAutoStartCandidates.remove(updated.id);
