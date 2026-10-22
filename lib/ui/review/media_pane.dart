@@ -916,6 +916,7 @@ class AudioTransport extends StatelessWidget {
           Text(
             formatClock(position.inMilliseconds),
             key: const Key('audio-current-time'),
+            style: _clockStyle,
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -934,6 +935,7 @@ class AudioTransport extends StatelessWidget {
           Text(
             formatClock(duration.inMilliseconds),
             key: const Key('audio-duration'),
+            style: _clockStyle,
           ),
           if (onSwitchToVideoMode != null)
             MediaModeButton(
@@ -945,6 +947,9 @@ class AudioTransport extends StatelessWidget {
     ),
   );
 }
+
+// Fixed-width digits keep the ticking clock from resizing the waveform.
+const _clockStyle = TextStyle(fontFeatures: [FontFeature.tabularFigures()]);
 
 class WaveformScrubber extends StatefulWidget {
   const WaveformScrubber({
