@@ -3,66 +3,44 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-Future<void> renderPcmWaveform(
+/// Writes one loudness level (0–255) per bucket of [inputPath] to
+/// [outputPath], scaled so that the loud passages of the recording reach the
+/// top of the range.
+Future<void> writePcmWaveformLevels(
   String inputPath,
   String outputPath, {
-  int width = 1200,
-  int height = 160,
+  int buckets = 1200,
 }) async {
-  if (width <= 0 || height <= 0) {
-    throw const FormatException('Waveform dimensions must be positive.');
-  }
-  final envelope = await readPcm16MonoEnvelope(inputPath, width);
-  final rowBytes = width * 4 + 1;
-  final pixels = Uint8List(rowBytes * height);
-  final center = height ~/ 2;
-  for (var x = 0; x < width; x++) {
-    final positive = math.sqrt(envelope.positiveAverages[x] / 32767.0);
-    final negative = math.sqrt(envelope.negativeAverages[x] / 32768.0);
-    final top = math.max(0, center - (positive * center).round());
-    final bottom = math.min(
-      height - 1,
-      center + (negative * (height - 1 - center)).round(),
-    );
-    if (top == center && bottom == center) continue;
-    for (var y = top; y <= bottom; y++) {
-      final offset = y * rowBytes + 1 + x * 4;
-      pixels[offset] = 255;
-      pixels[offset + 1] = 255;
-      pixels[offset + 2] = 255;
-      pixels[offset + 3] = 255;
-    }
-  }
-
-  final png = BytesBuilder(copy: false)..add(_pngSignature);
-  final header = ByteData(13)
-    ..setUint32(0, width)
-    ..setUint32(4, height)
-    ..setUint8(8, 8)
-    ..setUint8(9, 6)
-    ..setUint8(10, 0)
-    ..setUint8(11, 0)
-    ..setUint8(12, 0);
-  _addPngChunk(png, 'IHDR', header.buffer.asUint8List());
-  _addPngChunk(png, 'IDAT', Uint8List.fromList(ZLibCodec().encode(pixels)));
-  _addPngChunk(png, 'IEND', Uint8List(0));
+  final envelope = await readPcm16MonoEnvelope(inputPath, buckets);
   final output = File(outputPath);
   await output.parent.create(recursive: true);
-  await output.writeAsBytes(png.takeBytes(), flush: true);
+  await output.writeAsBytes(waveformLevels(envelope.rms), flush: true);
+}
+
+/// Scales RMS values to 0–255 against the 98th percentile, so a single loud
+/// burst cannot flatten the rest of the recording.
+Uint8List waveformLevels(Uint16List rms) {
+  final levels = Uint8List(rms.length);
+  final sorted = rms.where((value) => value > 0).toList()..sort();
+  if (sorted.isEmpty) return levels;
+  final reference = sorted[((sorted.length - 1) * .98).round()];
+  for (var index = 0; index < rms.length; index++) {
+    final scaled = math.min(1.0, rms[index] / reference);
+    levels[index] = (math.pow(scaled, .8) * 255).round();
+  }
+  return levels;
 }
 
 class Pcm16MonoEnvelope {
   const Pcm16MonoEnvelope({
     required this.minima,
     required this.maxima,
-    required this.positiveAverages,
-    required this.negativeAverages,
+    required this.rms,
   });
 
   final Int16List minima;
   final Int16List maxima;
-  final Uint16List positiveAverages;
-  final Uint16List negativeAverages;
+  final Uint16List rms;
 }
 
 Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
@@ -124,8 +102,7 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
     final sampleCount = dataLength ~/ 2;
     final minima = Int16List(width);
     final maxima = Int16List(width);
-    final positiveSums = List<int>.filled(width, 0);
-    final negativeSums = List<int>.filled(width, 0);
+    final squareSums = List<int>.filled(width, 0);
     final bucketCounts = Uint32List(width);
     await input.setPosition(dataOffset);
     var sampleIndex = 0;
@@ -142,11 +119,7 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
         final bucket = math.min(width - 1, sampleIndex * width ~/ sampleCount);
         if (signed < minima[bucket]) minima[bucket] = signed;
         if (signed > maxima[bucket]) maxima[bucket] = signed;
-        if (signed > 0) {
-          positiveSums[bucket] += signed;
-        } else if (signed < 0) {
-          negativeSums[bucket] += signed == -32768 ? 32768 : -signed;
-        }
+        squareSums[bucket] += signed * signed;
         bucketCounts[bucket]++;
         sampleIndex++;
       }
@@ -155,47 +128,14 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
     if (sampleIndex != sampleCount) {
       throw const FormatException('WAVE audio data is truncated.');
     }
-    final positiveAverages = Uint16List(width);
-    final negativeAverages = Uint16List(width);
+    final rms = Uint16List(width);
     for (var index = 0; index < width; index++) {
       final count = bucketCounts[index];
       if (count == 0) continue;
-      positiveAverages[index] = (positiveSums[index] / count).round();
-      negativeAverages[index] = (negativeSums[index] / count).round();
+      rms[index] = math.sqrt(squareSums[index] / count).round();
     }
-    return Pcm16MonoEnvelope(
-      minima: minima,
-      maxima: maxima,
-      positiveAverages: positiveAverages,
-      negativeAverages: negativeAverages,
-    );
+    return Pcm16MonoEnvelope(minima: minima, maxima: maxima, rms: rms);
   } finally {
     await input.close();
   }
-}
-
-const _pngSignature = <int>[137, 80, 78, 71, 13, 10, 26, 10];
-
-void _addPngChunk(BytesBuilder output, String type, Uint8List data) {
-  final typeBytes = ascii.encode(type);
-  final length = ByteData(4)..setUint32(0, data.length);
-  output.add(length.buffer.asUint8List());
-  output.add(typeBytes);
-  output.add(data);
-  final crcInput = BytesBuilder(copy: false)
-    ..add(typeBytes)
-    ..add(data);
-  final crc = ByteData(4)..setUint32(0, _crc32(crcInput.takeBytes()));
-  output.add(crc.buffer.asUint8List());
-}
-
-int _crc32(List<int> bytes) {
-  var crc = 0xffffffff;
-  for (final byte in bytes) {
-    crc ^= byte;
-    for (var bit = 0; bit < 8; bit++) {
-      crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xedb88320 : crc >> 1;
-    }
-  }
-  return (crc ^ 0xffffffff) & 0xffffffff;
 }

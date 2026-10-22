@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
@@ -945,7 +946,7 @@ class AudioTransport extends StatelessWidget {
   );
 }
 
-class WaveformScrubber extends StatelessWidget {
+class WaveformScrubber extends StatefulWidget {
   const WaveformScrubber({
     super.key,
     required this.path,
@@ -962,8 +963,40 @@ class WaveformScrubber extends StatelessWidget {
   final Future<void> Function(Duration) onSeek;
 
   @override
+  State<WaveformScrubber> createState() => _WaveformScrubberState();
+}
+
+class _WaveformScrubberState extends State<WaveformScrubber> {
+  Uint8List? _levels;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadLevels());
+  }
+
+  @override
+  void didUpdateWidget(WaveformScrubber oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.path != widget.path) unawaited(_loadLevels());
+  }
+
+  Future<void> _loadLevels() async {
+    final path = widget.path;
+    Uint8List? levels;
+    if (path != null) {
+      try {
+        levels = await File(path).readAsBytes();
+      } on FileSystemException {
+        levels = null;
+      }
+    }
+    if (mounted && widget.path == path) setState(() => _levels = levels);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (loading) {
+    if (widget.loading) {
       return Center(
         child: SizedBox.square(
           dimension: 20,
@@ -974,6 +1007,8 @@ class WaveformScrubber extends StatelessWidget {
         ),
       );
     }
+    final duration = widget.duration;
+    final position = widget.position;
     final enabled = duration.inMilliseconds > 0;
     final progress = enabled
         ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
@@ -986,7 +1021,7 @@ class WaveformScrubber extends StatelessWidget {
           if (!enabled || width <= 0) return;
           final fraction = (dx / width).clamp(0.0, 1.0);
           unawaited(
-            onSeek(
+            widget.onSeek(
               Duration(
                 milliseconds: (duration.inMilliseconds * fraction).round(),
               ),
@@ -1036,10 +1071,15 @@ class WaveformScrubber extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  _waveformLayer(context, colors.outlineVariant),
-                  ClipRect(
-                    clipper: _WaveformProgressClipper(progress),
-                    child: _waveformLayer(context, colors.primary),
+                  CustomPaint(
+                    painter: _WaveformPainter(
+                      levels: _levels,
+                      progress: progress,
+                      playedColor: colors.primary,
+                      unplayedColor: colors.onSurfaceVariant.withValues(
+                        alpha: .35,
+                      ),
+                    ),
                   ),
                   if (enabled)
                     Positioned(
@@ -1063,44 +1103,83 @@ class WaveformScrubber extends StatelessWidget {
       },
     );
   }
-
-  Widget _waveformLayer(BuildContext context, Color color) {
-    if (path case final value?) {
-      return Image.file(
-        File(value),
-        key: ValueKey('$value-${color.toARGB32()}'),
-        fit: BoxFit.fill,
-        color: color,
-        colorBlendMode: BlendMode.srcIn,
-        filterQuality: FilterQuality.medium,
-        gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => _fallback(color),
-      );
-    }
-    return _fallback(color);
-  }
-
-  Widget _fallback(Color color) => Center(
-    child: Container(
-      height: 2,
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(99),
-      ),
-    ),
-  );
 }
 
-class _WaveformProgressClipper extends CustomClipper<Rect> {
-  const _WaveformProgressClipper(this.progress);
+/// Draws the loudness levels as rounded bars, or a flat line until they are
+/// available, tinting the part before [progress] as played.
+class _WaveformPainter extends CustomPainter {
+  const _WaveformPainter({
+    required this.levels,
+    required this.progress,
+    required this.playedColor,
+    required this.unplayedColor,
+  });
 
+  static const _barWidth = 2.0;
+  static const _barPitch = 3.0;
+  static const _minBarHeight = 2.0;
+
+  final Uint8List? levels;
   final double progress;
+  final Color playedColor;
+  final Color unplayedColor;
 
   @override
-  Rect getClip(Size size) =>
-      Rect.fromLTWH(0, 0, size.width * progress, size.height);
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final path = Path();
+    final centerY = size.height / 2;
+    final levels = this.levels;
+    if (levels == null || levels.isEmpty) {
+      path.addRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(0, centerY - 1, size.width, 2),
+          const Radius.circular(1),
+        ),
+      );
+    } else {
+      final bars = math.max(
+        1,
+        (size.width + _barPitch - _barWidth) ~/ _barPitch,
+      );
+      final offset = (size.width - (bars - 1) * _barPitch - _barWidth) / 2;
+      for (var bar = 0; bar < bars; bar++) {
+        final start = bar * levels.length ~/ bars;
+        final end = math.max(start + 1, (bar + 1) * levels.length ~/ bars);
+        var level = 0;
+        for (var index = start; index < end; index++) {
+          level = math.max(level, levels[index]);
+        }
+        final height = math.max(_minBarHeight, size.height * level / 255);
+        path.addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(
+              offset + bar * _barPitch,
+              centerY - height / 2,
+              _barWidth,
+              height,
+            ),
+            const Radius.circular(_barWidth / 2),
+          ),
+        );
+      }
+    }
+    final playedWidth = size.width * progress;
+    canvas
+      ..save()
+      ..clipRect(Rect.fromLTRB(playedWidth, 0, size.width, size.height))
+      ..drawPath(path, Paint()..color = unplayedColor)
+      ..restore()
+      ..save()
+      ..clipRect(Rect.fromLTRB(0, 0, playedWidth, size.height))
+      ..drawPath(path, Paint()..color = playedColor)
+      ..restore();
+  }
 
   @override
-  bool shouldReclip(_WaveformProgressClipper oldClipper) =>
-      oldClipper.progress != progress;
+  bool shouldRepaint(_WaveformPainter oldDelegate) =>
+      oldDelegate.levels != levels ||
+      oldDelegate.progress != progress ||
+      oldDelegate.playedColor != playedColor ||
+      oldDelegate.unplayedColor != unplayedColor;
 }

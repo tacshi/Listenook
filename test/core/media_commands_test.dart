@@ -4,7 +4,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image/image.dart' as image;
 import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/local_repositories.dart';
@@ -148,106 +147,41 @@ void main() {
     },
   );
 
-  test('PCM waveform renderer streams peaks and writes a valid PNG', () async {
+  test('PCM waveform levels stream loudness per bucket', () async {
     final root = await Directory.systemTemp.createTemp('meow-waveform-');
     addTearDown(() => root.delete(recursive: true));
     final wav = File('${root.path}/input.wav');
-    final png = File('${root.path}/output.png');
+    final levels = File('${root.path}/output.levels');
     await wav.writeAsBytes(
       _pcmWave(<int>[0, 1000, -2000, -3000, 32767, 1, -10, -20]),
     );
 
     expect(await readPcm16MonoPeaks(wav.path, 4), [1000, 3000, 32767, 20]);
-    await renderPcmWaveform(wav.path, png.path, width: 4, height: 8);
-    final bytes = await png.readAsBytes();
-    expect(bytes.take(8), [137, 80, 78, 71, 13, 10, 26, 10]);
-    expect(bytes.length, greaterThan(50));
+    expect((await readPcm16MonoEnvelope(wav.path, 4)).rms, [
+      707,
+      2550,
+      23170,
+      16,
+    ]);
+    await writePcmWaveformLevels(wav.path, levels.path, buckets: 4);
+    expect(await levels.readAsBytes(), [16, 44, 255, 1]);
   });
 
-  test('PCM waveform keeps quiet detail visible beside loud peaks', () async {
-    final root = await Directory.systemTemp.createTemp('meow-waveform-range-');
-    addTearDown(() => root.delete(recursive: true));
-    final wav = File('${root.path}/input.wav');
-    final png = File('${root.path}/output.png');
-    await wav.writeAsBytes(_pcmWave(<int>[0, 32767, 8192, 2048, 512]));
+  test('waveform levels are not flattened by an isolated burst', () {
+    final rms = Uint16List.fromList([
+      for (var index = 0; index < 99; index++) 1000,
+      30000,
+      250,
+    ]);
 
-    await renderPcmWaveform(wav.path, png.path, width: 5, height: 32);
-    final rendered = image.decodePng(await png.readAsBytes());
-    expect(rendered, isNotNull);
-    final background = rendered!.getPixel(0, 0);
-    final backgroundRgba = (
-      background.r,
-      background.g,
-      background.b,
-      background.a,
-    );
+    final levels = waveformLevels(rms);
 
-    int paintedRows(int x) =>
-        List<int>.generate(rendered.height, (y) => y).where((y) {
-          final pixel = rendered.getPixel(x, y);
-          return (pixel.r, pixel.g, pixel.b, pixel.a) != backgroundRgba;
-        }).length;
-
-    expect(paintedRows(1), greaterThanOrEqualTo(15));
-    expect(paintedRows(2), greaterThanOrEqualTo(7));
-    expect(paintedRows(3), greaterThanOrEqualTo(4));
-    expect(paintedRows(4), greaterThanOrEqualTo(2));
+    expect(levels.take(100), everyElement(255));
+    expect(levels.last, inInclusiveRange(60, 100));
   });
 
-  test('PCM waveform overview is not saturated by isolated peaks', () async {
-    final root = await Directory.systemTemp.createTemp(
-      'meow-waveform-transients-',
-    );
-    addTearDown(() => root.delete(recursive: true));
-    final wav = File('${root.path}/input.wav');
-    final png = File('${root.path}/output.png');
-    final samples = <int>[
-      for (var bucket = 0; bucket < 8; bucket++) ...[
-        32767,
-        for (var index = 1; index < 64; index++) index.isEven ? 1024 : -1024,
-      ],
-    ];
-    await wav.writeAsBytes(_pcmWave(samples));
-
-    await renderPcmWaveform(wav.path, png.path, width: 8, height: 100);
-    final rendered = image.decodePng(await png.readAsBytes())!;
-    var painted = 0;
-    for (final pixel in rendered) {
-      if (pixel.a > 0) painted++;
-    }
-
-    expect(painted / (rendered.width * rendered.height), lessThan(0.35));
-  });
-
-  test('PCM waveform preserves the signed average envelope', () async {
-    final root = await Directory.systemTemp.createTemp('meow-waveform-sign-');
-    addTearDown(() => root.delete(recursive: true));
-    final wav = File('${root.path}/input.wav');
-    final png = File('${root.path}/output.png');
-    await wav.writeAsBytes(_pcmWave(<int>[30000, -1000, 1000, -30000]));
-
-    await renderPcmWaveform(wav.path, png.path, width: 2, height: 32);
-    final rendered = image.decodePng(await png.readAsBytes())!;
-    final background = rendered.getPixel(0, 0);
-    final backgroundRgba = (
-      background.r,
-      background.g,
-      background.b,
-      background.a,
-    );
-
-    List<int> paintedRows(int x) =>
-        List<int>.generate(rendered.height, (y) => y).where((y) {
-          final pixel = rendered.getPixel(x, y);
-          return (pixel.r, pixel.g, pixel.b, pixel.a) != backgroundRgba;
-        }).toList();
-
-    final positiveHeavy = paintedRows(0);
-    final negativeHeavy = paintedRows(1);
-    expect(positiveHeavy.first, 5);
-    expect(positiveHeavy.last, 18);
-    expect(negativeHeavy.first, 14);
-    expect(negativeHeavy.last, 26);
+  test('silent audio has flat waveform levels', () {
+    expect(waveformLevels(Uint16List(3)), [0, 0, 0]);
   });
 
   test(

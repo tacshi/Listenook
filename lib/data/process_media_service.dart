@@ -291,7 +291,7 @@ class ProcessMediaService implements MediaService {
     }
     final safeKey = _safeCacheKey(cacheKey);
     final output = File(
-      p.join(paths.temporary.path, '$safeKey-waveform-v3.png'),
+      p.join(paths.temporary.path, '$safeKey-waveform-v4.levels'),
     );
     if (await output.exists() &&
         (await output.lastModified()).isAfter(await source.lastModified())) {
@@ -301,11 +301,11 @@ class ProcessMediaService implements MediaService {
     final pcmPath = p.join(paths.temporary.path, '$safeKey-waveform.wav');
     try {
       await _extractPcm(sourcePath, pcmPath, sampleRate: 8000);
-      await renderPcmWaveform(pcmPath, output.path);
+      await writePcmWaveformLevels(pcmPath, output.path);
       if (!await output.exists() || await output.length() == 0) {
         throw const MediaException(
           'waveform_failed',
-          'The waveform image could not be created.',
+          'The waveform could not be created.',
         );
       }
       return output.path;
@@ -545,6 +545,7 @@ class ProcessMediaService implements MediaService {
       '.m4a',
       '-extract.wav',
       '-waveform.wav',
+      '-waveform-v4.levels',
       '-waveform-v3.png',
       '-waveform-v2.png',
       '-waveform.png',
