@@ -200,8 +200,8 @@ macOS supports macOS 12+ on Apple Silicon and Intel. Local speech requires
 Apple Silicon and macOS 15+.
 
 ```sh
-scripts/build-debug.sh --arch arm64
-scripts/build-release.sh --arch all
+scripts/build-mac-debug.sh --arch arm64
+scripts/build-mac-release.sh --arch all
 ```
 
 For production signing, set `LISTENOOK_MAC_SIGN_IDENTITY` or
@@ -219,8 +219,8 @@ It falls back to ad-hoc signing when needed; set
 Windows requires Windows 10 22H2+ and a host matching the target architecture:
 
 ```powershell
-scripts\win-debug.ps1 -Arch x64
-scripts\win-release.ps1 1.2.3 -Arch x64
+scripts\build-win-debug.ps1 -Arch x64
+scripts\build-win-release.ps1 1.2.3 -Arch x64
 ```
 
 Release builds require Inno Setup 6 or 7; use `LISTENOOK_ISCC` if it is not on
@@ -229,16 +229,17 @@ PATH. Windows signing uses `LISTENOOK_WINDOWS_PFX`, with optional
 `LISTENOOK_WINDOWS_TIMESTAMP_URL`, and `LISTENOOK_SIGNTOOL`.
 `LISTENOOK_FLAC_DIR` can select a pre-provisioned native encoder directory.
 
-Artifacts are written to `dist/`, with platform, architecture, mode, and version
-in their filenames. macOS debug builds produce an app bundle; release builds
-produce a DMG and updater ZIP. Windows debug builds produce a portable folder;
-release builds produce a portable ZIP and Inno Setup installer.
+Artifacts are written to `build/`. Debug builds are named by architecture only:
+macOS produces `Listenook-arm64-debug.app` and Windows a portable
+`Listenook-x64-debug` folder. Release artifacts carry platform, architecture,
+mode, and version in their filenames: macOS produces a DMG and updater ZIP,
+Windows a portable ZIP and Inno Setup installer.
 
 Build scripts do not launch the macOS app. Run a launch check explicitly when
 needed:
 
 ```sh
-scripts/verify-macos-app.sh build/macos/Build/Products/Debug/Listenook.app
+scripts/verify-macos-app.sh build/Listenook-arm64-debug.app
 ```
 
 Publishing is a separate step described in [Release_Steps.md](Release_Steps.md).

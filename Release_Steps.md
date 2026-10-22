@@ -55,10 +55,10 @@ native x64 Windows host:
 ```powershell
 git switch main
 git pull
-.\scripts\win-release.ps1 1.2.0
+.\scripts\build-win-release.ps1 1.2.0
 ```
 
-Copy both generated files from `dist\` to `dist/` on the Mac:
+Copy both generated files from `build\` to `build/` on the Mac:
 
 - `Listenook-1.2.0-windows-x64-release-setup.exe`
 - `Listenook-1.2.0-windows-x64-release-setup.exe.build.json`
@@ -68,7 +68,7 @@ Then publish on the Mac:
 ```sh
 git switch main
 git pull
-./scripts/release.sh 1.2.0
+./scripts/publish.sh 1.2.0
 ```
 
 The script verifies that the Windows artifact came from the exact same commit,
@@ -87,14 +87,14 @@ review the updated text, and enter `y` to continue.
 An unsigned, non-publishing dry run that does not require the Windows artifact:
 
 ```sh
-LISTENOOK_MAC_SIGN_IDENTITY=- ./scripts/release.sh 1.2.0 --skip-windows --no-upload
+LISTENOOK_MAC_SIGN_IDENTITY=- ./scripts/publish.sh 1.2.0 --skip-windows --no-upload
 ```
 
 Useful publisher options:
 
 - `--skip-windows` publishes only the new macOS entries and preserves the last
   Windows entry in `listenook-latest.json`.
-- `--reuse-artifacts` reuses `dist/release/` after a late upload failure.
+- `--reuse-artifacts` reuses `build/release/` after a late upload failure.
 - `--no-upload` builds the artifacts and manifest without changing GitHub.
 - `--no-tag` publishes without creating the source tag.
 - `--allow-branch` bypasses the `main`/origin check for a deliberate test build.

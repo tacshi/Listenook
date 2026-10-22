@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:listenook/core/speech_boundaries.dart';
 import 'package:listenook/data/local_repositories.dart';
 import 'package:listenook/ui/video_player/video_player_controller.dart';
 import 'package:media_kit/media_kit.dart';
@@ -23,7 +26,11 @@ void main() {
     FakePlayerPlatform platform,
     RecordingRepeatLoop loop,
   })
-  create(String videoPath, {VideoPlaybackRepository? repository}) {
+  create(
+    String videoPath, {
+    VideoPlaybackRepository? repository,
+    Future<SpeechEnergy?> Function(String path)? loadSpeechEnergy,
+  }) {
     final platform = FakePlayerPlatform();
     final loop = RecordingRepeatLoop();
     final controller = VideoPlayerController(
@@ -32,6 +39,7 @@ void main() {
       repeatLoopFactory: (_) => loop,
       playbackRepository: repository,
       trackWaitTimeout: Duration.zero,
+      loadSpeechEnergy: loadSpeechEnergy,
     );
     addTearDown(controller.close);
     return (controller: controller, platform: platform, loop: loop);
@@ -122,6 +130,57 @@ Third line.
     expect(player.loop.events.last, 'clear');
     expect(player.controller.repeating, isFalse);
   });
+
+  test(
+    'a held repeat moves to the pauses once the audio is analyzed',
+    () async {
+      final video = writeVideo('movie.mp4');
+      writeSrt('movie.srt');
+      final analysis = Completer<SpeechEnergy?>();
+      final requested = <String>[];
+      final player = create(
+        video,
+        loadSpeechEnergy: (path) {
+          requested.add(path);
+          return analysis.future;
+        },
+      );
+      await player.controller.open();
+      expect(requested, [video]);
+      player.platform.emitPosition(const Duration(milliseconds: 3400));
+      await pumpEventQueue();
+
+      expect(player.controller.beginRepeatHold(), isTrue);
+      await pumpEventQueue();
+      expect(player.loop.events, ['range:2650:4500']);
+
+      // The second line is spoken from 3.1s to 4.4s, later than its cue.
+      const speech = 140;
+      const silence = 40;
+      analysis.complete(
+        SpeechEnergy(
+          Uint8List.fromList([
+            for (final (durationMs, level) in const [
+              (1000, silence),
+              (1000, speech),
+              (1100, silence),
+              (1300, speech),
+              (1600, silence),
+              (1000, speech),
+              (1000, silence),
+            ])
+              ...List<int>.filled(durationMs ~/ SpeechEnergy.frameMs, level),
+          ]),
+        ),
+      );
+      await pumpEventQueue();
+
+      final range = player.loop.events.last.split(':');
+      expect(range.first, 'range');
+      expect(int.parse(range[1]), inInclusiveRange(2950, 3100));
+      expect(int.parse(range[2]), inInclusiveRange(4400, 4700));
+    },
+  );
 
   test('without subtitles the arrows seek five seconds', () async {
     final video = writeVideo('plain.mp4');

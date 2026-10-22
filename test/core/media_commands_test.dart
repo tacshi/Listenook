@@ -1,10 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image/image.dart' as image;
 import 'package:listenook/core/contracts.dart';
 import 'package:listenook/core/models.dart';
 import 'package:listenook/data/local_repositories.dart';
@@ -148,106 +149,59 @@ void main() {
     },
   );
 
-  test('PCM waveform renderer streams peaks and writes a valid PNG', () async {
+  test('PCM waveform levels stream loudness per bucket', () async {
     final root = await Directory.systemTemp.createTemp('meow-waveform-');
     addTearDown(() => root.delete(recursive: true));
     final wav = File('${root.path}/input.wav');
-    final png = File('${root.path}/output.png');
+    final levels = File('${root.path}/output.levels');
     await wav.writeAsBytes(
       _pcmWave(<int>[0, 1000, -2000, -3000, 32767, 1, -10, -20]),
     );
 
     expect(await readPcm16MonoPeaks(wav.path, 4), [1000, 3000, 32767, 20]);
-    await renderPcmWaveform(wav.path, png.path, width: 4, height: 8);
-    final bytes = await png.readAsBytes();
-    expect(bytes.take(8), [137, 80, 78, 71, 13, 10, 26, 10]);
-    expect(bytes.length, greaterThan(50));
+    expect((await readPcm16MonoEnvelope(wav.path, 4)).rms, [
+      707,
+      2550,
+      23170,
+      16,
+    ]);
+    await writePcmWaveformLevels(wav.path, levels.path, buckets: 4);
+    expect(await levels.readAsBytes(), [16, 44, 255, 1]);
   });
 
-  test('PCM waveform keeps quiet detail visible beside loud peaks', () async {
-    final root = await Directory.systemTemp.createTemp('meow-waveform-range-');
+  test('speech energy has one half-decibel level per 10ms frame', () async {
+    final root = await Directory.systemTemp.createTemp('meow-energy-');
     addTearDown(() => root.delete(recursive: true));
     final wav = File('${root.path}/input.wav');
-    final png = File('${root.path}/output.png');
-    await wav.writeAsBytes(_pcmWave(<int>[0, 32767, 8192, 2048, 512]));
-
-    await renderPcmWaveform(wav.path, png.path, width: 5, height: 32);
-    final rendered = image.decodePng(await png.readAsBytes());
-    expect(rendered, isNotNull);
-    final background = rendered!.getPixel(0, 0);
-    final backgroundRgba = (
-      background.r,
-      background.g,
-      background.b,
-      background.a,
+    final energy = File('${root.path}/output.energy');
+    await wav.writeAsBytes(
+      _pcmWave(<int>[
+        ...List<int>.filled(80, 1000),
+        ...List<int>.filled(80, 0),
+        ...List<int>.filled(40, 100),
+      ]),
     );
 
-    int paintedRows(int x) =>
-        List<int>.generate(rendered.height, (y) => y).where((y) {
-          final pixel = rendered.getPixel(x, y);
-          return (pixel.r, pixel.g, pixel.b, pixel.a) != backgroundRgba;
-        }).length;
+    await writePcmSpeechEnergy(wav.path, energy.path);
 
-    expect(paintedRows(1), greaterThanOrEqualTo(15));
-    expect(paintedRows(2), greaterThanOrEqualTo(7));
-    expect(paintedRows(3), greaterThanOrEqualTo(4));
-    expect(paintedRows(4), greaterThanOrEqualTo(2));
+    expect(await energy.readAsBytes(), [120, 0, 80]);
   });
 
-  test('PCM waveform overview is not saturated by isolated peaks', () async {
-    final root = await Directory.systemTemp.createTemp(
-      'meow-waveform-transients-',
-    );
-    addTearDown(() => root.delete(recursive: true));
-    final wav = File('${root.path}/input.wav');
-    final png = File('${root.path}/output.png');
-    final samples = <int>[
-      for (var bucket = 0; bucket < 8; bucket++) ...[
-        32767,
-        for (var index = 1; index < 64; index++) index.isEven ? 1024 : -1024,
-      ],
-    ];
-    await wav.writeAsBytes(_pcmWave(samples));
+  test('waveform levels are not flattened by an isolated burst', () {
+    final rms = Uint16List.fromList([
+      for (var index = 0; index < 99; index++) 1000,
+      30000,
+      250,
+    ]);
 
-    await renderPcmWaveform(wav.path, png.path, width: 8, height: 100);
-    final rendered = image.decodePng(await png.readAsBytes())!;
-    var painted = 0;
-    for (final pixel in rendered) {
-      if (pixel.a > 0) painted++;
-    }
+    final levels = waveformLevels(rms);
 
-    expect(painted / (rendered.width * rendered.height), lessThan(0.35));
+    expect(levels.take(100), everyElement(255));
+    expect(levels.last, inInclusiveRange(60, 100));
   });
 
-  test('PCM waveform preserves the signed average envelope', () async {
-    final root = await Directory.systemTemp.createTemp('meow-waveform-sign-');
-    addTearDown(() => root.delete(recursive: true));
-    final wav = File('${root.path}/input.wav');
-    final png = File('${root.path}/output.png');
-    await wav.writeAsBytes(_pcmWave(<int>[30000, -1000, 1000, -30000]));
-
-    await renderPcmWaveform(wav.path, png.path, width: 2, height: 32);
-    final rendered = image.decodePng(await png.readAsBytes())!;
-    final background = rendered.getPixel(0, 0);
-    final backgroundRgba = (
-      background.r,
-      background.g,
-      background.b,
-      background.a,
-    );
-
-    List<int> paintedRows(int x) =>
-        List<int>.generate(rendered.height, (y) => y).where((y) {
-          final pixel = rendered.getPixel(x, y);
-          return (pixel.r, pixel.g, pixel.b, pixel.a) != backgroundRgba;
-        }).toList();
-
-    final positiveHeavy = paintedRows(0);
-    final negativeHeavy = paintedRows(1);
-    expect(positiveHeavy.first, 5);
-    expect(positiveHeavy.last, 18);
-    expect(negativeHeavy.first, 14);
-    expect(negativeHeavy.last, 26);
+  test('silent audio has flat waveform levels', () {
+    expect(waveformLevels(Uint16List(3)), [0, 0, 0]);
   });
 
   test(
@@ -261,6 +215,41 @@ void main() {
     },
   );
 
+  test('files outside the jobs keep their 20 most recent analyses', () async {
+    final root = await Directory.systemTemp.createTemp('meow-file-energy-');
+    addTearDown(() => root.delete(recursive: true));
+    final paths = AppPaths.forTesting(root.path);
+    await paths.temporary.create(recursive: true);
+    final video = File('${root.path}/movie.mkv')..writeAsBytesSync([1]);
+    final long = DateTime.now().subtract(const Duration(days: 30));
+    await video.setLastModified(long);
+    final key =
+        'file-${sha1.convert(utf8.encode(video.absolute.path)).toString().substring(0, 20)}';
+    final cached = File('${paths.temporary.path}/$key-speech-v1.energy')
+      ..writeAsBytesSync([1, 2, 3]);
+    final older = [
+      for (var index = 0; index < 20; index++)
+        File('${paths.temporary.path}/file-$index-speech-v1.energy')
+          ..writeAsBytesSync([1])
+          ..setLastModifiedSync(long.add(Duration(minutes: index))),
+    ];
+    final jobEnergy = File('${paths.temporary.path}/job-speech-v1.energy')
+      ..writeAsBytesSync([1])
+      ..setLastModifiedSync(long);
+    await cached.setLastModified(long.add(const Duration(days: 1)));
+
+    final path = await ProcessMediaService(
+      paths,
+    ).analyzeFileSpeechEnergy(video.path);
+
+    expect(path, cached.path);
+    expect(await cached.readAsBytes(), [1, 2, 3]);
+    expect(await older.first.exists(), isFalse);
+    expect(await older[1].exists(), isTrue);
+    expect(await older.last.exists(), isTrue);
+    expect(await jobEnergy.exists(), isTrue);
+  });
+
   test('generated media cleanup removes only job-owned cache files', () async {
     final root = await Directory.systemTemp.createTemp('meow-media-cleanup-');
     addTearDown(() => root.delete(recursive: true));
@@ -270,6 +259,8 @@ void main() {
     final macAudio = File('${paths.temporary.path}/job.m4a');
     final extraction = File('${paths.temporary.path}/job-extract.wav');
     final waveformPcm = File('${paths.temporary.path}/job-waveform.wav');
+    final levels = File('${paths.temporary.path}/job-waveform-v4.levels');
+    final speechEnergy = File('${paths.temporary.path}/job-speech-v1.energy');
     final currentWaveform = File('${paths.temporary.path}/job-waveform-v3.png');
     final priorWaveform = File('${paths.temporary.path}/job-waveform-v2.png');
     final waveform = File('${paths.temporary.path}/job-waveform.png');
@@ -279,6 +270,8 @@ void main() {
       macAudio,
       extraction,
       waveformPcm,
+      levels,
+      speechEnergy,
       currentWaveform,
       priorWaveform,
       waveform,
@@ -293,6 +286,8 @@ void main() {
     expect(await macAudio.exists(), isFalse);
     expect(await extraction.exists(), isFalse);
     expect(await waveformPcm.exists(), isFalse);
+    expect(await levels.exists(), isFalse);
+    expect(await speechEnergy.exists(), isFalse);
     expect(await currentWaveform.exists(), isFalse);
     expect(await priorWaveform.exists(), isFalse);
     expect(await waveform.exists(), isFalse);

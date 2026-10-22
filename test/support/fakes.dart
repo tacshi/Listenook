@@ -135,6 +135,15 @@ class FakeMediaService implements MediaService {
   Future<String> renderWaveform(String sourcePath, String cacheKey) async => '';
 
   @override
+  Future<String> analyzeSpeechEnergy(
+    String sourcePath,
+    String cacheKey,
+  ) async => '';
+
+  @override
+  Future<String> analyzeFileSpeechEnergy(String sourcePath) async => '';
+
+  @override
   Future<void> deleteTemporary(String path) async {}
 
   @override

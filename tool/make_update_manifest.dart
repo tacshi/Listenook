@@ -22,7 +22,7 @@ Future<void> main(List<String> arguments) async {
     exitCode = 64;
     return;
   }
-  final directory = Directory(options['dir'] ?? 'dist/release');
+  final directory = Directory(options['dir'] ?? 'build/release');
   if (!directory.existsSync()) {
     stderr.writeln('artifact directory not found: ${directory.path}');
     exitCode = 66;

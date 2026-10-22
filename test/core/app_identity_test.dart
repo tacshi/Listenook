@@ -62,7 +62,7 @@ void main() {
   });
 
   test('publisher cannot overwrite the legacy update manifest', () {
-    final publisher = File('scripts/release.sh').readAsStringSync();
+    final publisher = File('scripts/publish.sh').readAsStringSync();
     expect(
       publisher,
       contains(r'git -C "$RELEASE_REPO_DIR" add listenook-latest.json'),

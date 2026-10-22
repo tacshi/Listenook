@@ -251,6 +251,7 @@ Future<void> main(List<String> arguments) async {
         playbackRepository: services.videoPlayback,
         preferredLanguage:
             WidgetsBinding.instance.platformDispatcher.locale.languageCode,
+        loadSpeechEnergy: services.controller.loadFileSpeechEnergy,
       ),
       wrap: (_, player) => PlayerWindowApp(
         controller: services.controller,

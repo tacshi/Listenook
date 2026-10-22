@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/models.dart';
+import '../../core/speech_boundaries.dart';
 import 'highlighted_text.dart';
 
 class LatestSeekDispatcher {
@@ -52,10 +53,16 @@ const _sentenceRepeatPreviousCueSafetyMs = 100;
 const _repeatSeekUndershootToleranceMs = 250;
 const _overlappingRepeatBoundaryGuardMs = 120;
 
+/// Where a repeat of [segment] starts: in the pause before it when [speech]
+/// finds one, otherwise shortly before its timestamp without reaching back
+/// into [previousSegment].
 int sentenceRepeatStartMs(
   TranscriptSegment segment, {
   TranscriptSegment? previousSegment,
+  SpeechEnergy? speech,
 }) {
+  final pauseMs = speech?.sentenceStartMs(segment, previous: previousSegment);
+  if (pauseMs != null) return pauseMs;
   final requestedStartMs = segment.startMs - _sentenceRepeatPreRollMs;
   final clampedStartMs = requestedStartMs < 0 ? 0 : requestedStartMs;
   if (previousSegment == null) return clampedStartMs;
@@ -97,18 +104,36 @@ bool shouldRestartRepeatedSentence(
   int positionMs, {
   TranscriptSegment? previousSegment,
   TranscriptSegment? nextSegment,
-}) =>
-    sentenceRepeatEndMs(segment, nextSegment: nextSegment) > segment.startMs &&
-    (positionMs <
-            sentenceRepeatStartMs(segment, previousSegment: previousSegment) -
-                _repeatSeekUndershootToleranceMs ||
-        positionMs >=
-            sentenceRepeatRestartMs(segment, nextSegment: nextSegment));
+  SpeechEnergy? speech,
+}) {
+  final startMs = sentenceRepeatStartMs(
+    segment,
+    previousSegment: previousSegment,
+    speech: speech,
+  );
+  final endMs = sentenceRepeatEndMs(
+    segment,
+    nextSegment: nextSegment,
+    speech: speech,
+  );
+  return endMs > segment.startMs &&
+      endMs > startMs &&
+      (positionMs < startMs - _repeatSeekUndershootToleranceMs ||
+          positionMs >=
+              sentenceRepeatRestartMs(
+                segment,
+                nextSegment: nextSegment,
+                speech: speech,
+              ));
+}
 
 int sentenceRepeatRestartMs(
   TranscriptSegment segment, {
   TranscriptSegment? nextSegment,
+  SpeechEnergy? speech,
 }) {
+  final pauseMs = speech?.sentenceEndMs(segment, next: nextSegment);
+  if (pauseMs != null) return pauseMs;
   final endMs = sentenceRepeatEndMs(segment, nextSegment: nextSegment);
   final nextStartMs = nextSegment?.startMs;
   final hasOverlappingNext =
@@ -119,10 +144,15 @@ int sentenceRepeatRestartMs(
   return max(segment.startMs + 1, endMs - _overlappingRepeatBoundaryGuardMs);
 }
 
+/// Where a repeat of [segment] ends: in the pause after it when [speech]
+/// finds one, otherwise at its timestamp or where [nextSegment] overlaps it.
 int sentenceRepeatEndMs(
   TranscriptSegment segment, {
   TranscriptSegment? nextSegment,
+  SpeechEnergy? speech,
 }) {
+  final pauseMs = speech?.sentenceEndMs(segment, next: nextSegment);
+  if (pauseMs != null) return pauseMs;
   final nextStartMs = nextSegment?.startMs;
   if (nextStartMs == null ||
       nextStartMs <= segment.startMs ||
@@ -140,13 +170,19 @@ bool isRepeatLoopWrap(
   required int currentMs,
   TranscriptSegment? previousSegment,
   TranscriptSegment? nextSegment,
+  SpeechEnergy? speech,
 }) {
   if (currentMs >= previousMs) return false;
   final startMs = sentenceRepeatStartMs(
     segment,
     previousSegment: previousSegment,
+    speech: speech,
   );
-  final restartMs = sentenceRepeatRestartMs(segment, nextSegment: nextSegment);
+  final restartMs = sentenceRepeatRestartMs(
+    segment,
+    nextSegment: nextSegment,
+    speech: speech,
+  );
   const wrapToleranceMs = 1200;
   return previousMs >= restartMs - wrapToleranceMs &&
       currentMs <= startMs + wrapToleranceMs &&
@@ -161,12 +197,18 @@ bool isRepeatLoopEndCrossing(
   required int currentMs,
   TranscriptSegment? previousSegment,
   TranscriptSegment? nextSegment,
+  SpeechEnergy? speech,
 }) {
   final startMs = sentenceRepeatStartMs(
     segment,
     previousSegment: previousSegment,
+    speech: speech,
   );
-  final restartMs = sentenceRepeatRestartMs(segment, nextSegment: nextSegment);
+  final restartMs = sentenceRepeatRestartMs(
+    segment,
+    nextSegment: nextSegment,
+    speech: speech,
+  );
   return previousMs >= startMs &&
       previousMs < restartMs &&
       currentMs >= restartMs;

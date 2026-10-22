@@ -194,6 +194,8 @@ abstract interface class MediaService {
     CancelCheck? shouldCancel,
   });
   Future<String> renderWaveform(String sourcePath, String cacheKey);
+  Future<String> analyzeSpeechEnergy(String sourcePath, String cacheKey);
+  Future<String> analyzeFileSpeechEnergy(String sourcePath);
   Future<void> deleteTemporary(String path);
   Future<void> deleteGeneratedMedia(String cacheKey);
   Future<MediaDiagnostics> diagnostics();

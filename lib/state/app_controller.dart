@@ -11,6 +11,7 @@ import '../core/contracts.dart';
 import '../core/local_speech.dart';
 import '../core/models.dart';
 import '../core/podcast_models.dart';
+import '../core/speech_boundaries.dart';
 import '../core/transcript_parser.dart';
 import '../core/transcript_structure_editor.dart';
 import '../data/llm_translation_service.dart';
@@ -4419,6 +4420,28 @@ class AppController extends ChangeNotifier {
     if (job == null) return null;
     try {
       return await _media.renderWaveform(job.sourcePath, job.id);
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<SpeechEnergy?> loadSpeechEnergy(String jobId) async {
+    final job = _jobs[jobId];
+    if (job == null) return null;
+    return _readSpeechEnergy(
+      () => _media.analyzeSpeechEnergy(job.sourcePath, job.id),
+    );
+  }
+
+  /// The speech energy of a file played outside the jobs.
+  Future<SpeechEnergy?> loadFileSpeechEnergy(String path) =>
+      _readSpeechEnergy(() => _media.analyzeFileSpeechEnergy(path));
+
+  Future<SpeechEnergy?> _readSpeechEnergy(
+    Future<String> Function() analyze,
+  ) async {
+    try {
+      return SpeechEnergy(await File(await analyze()).readAsBytes());
     } on Object {
       return null;
     }

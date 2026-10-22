@@ -15,6 +15,7 @@ import '../../core/windowing/window_drag_area.dart';
 import '../../core/windowing/window_handle_channel.dart';
 import '../../data/local_repositories.dart';
 import '../../l10n/strings.dart';
+import '../../state/app_controller.dart';
 import '../../theme.dart';
 import '../transcript_review.dart';
 import 'video_player_controller.dart';
@@ -33,6 +34,7 @@ VideoPlayerController createVideoPlayerController(
       playbackRepository: _playbackRepository(context),
       preferredLanguage:
           WidgetsBinding.instance.platformDispatcher.locale.languageCode,
+      loadSpeechEnergy: _appController(context)?.loadFileSpeechEnergy,
     );
 
 /// Plays a video with its own subtitles, outside the transcription jobs:
@@ -555,6 +557,14 @@ class _SourceLabel extends StatelessWidget {
     if (format != null) return format.label;
     final codec = source.codec?.trim();
     return codec == null || codec.isEmpty ? null : codec.toUpperCase();
+  }
+}
+
+AppController? _appController(BuildContext context) {
+  try {
+    return context.read<AppController>();
+  } on ProviderNotFoundException {
+    return null;
   }
 }
 
