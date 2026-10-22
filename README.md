@@ -200,8 +200,8 @@ macOS supports macOS 12+ on Apple Silicon and Intel. Local speech requires
 Apple Silicon and macOS 15+.
 
 ```sh
-scripts/build-debug.sh --arch arm64
-scripts/build-release.sh --arch all
+scripts/build-mac-debug.sh --arch arm64
+scripts/build-mac-release.sh --arch all
 ```
 
 For production signing, set `LISTENOOK_MAC_SIGN_IDENTITY` or
@@ -219,8 +219,8 @@ It falls back to ad-hoc signing when needed; set
 Windows requires Windows 10 22H2+ and a host matching the target architecture:
 
 ```powershell
-scripts\win-debug.ps1 -Arch x64
-scripts\win-release.ps1 1.2.3 -Arch x64
+scripts\build-win-debug.ps1 -Arch x64
+scripts\build-win-release.ps1 1.2.3 -Arch x64
 ```
 
 Release builds require Inno Setup 6 or 7; use `LISTENOOK_ISCC` if it is not on
@@ -239,7 +239,7 @@ Build scripts do not launch the macOS app. Run a launch check explicitly when
 needed:
 
 ```sh
-scripts/verify-macos-app.sh build/macos/Build/Products/Debug/Listenook.app
+scripts/verify-macos-app.sh build/Listenook-arm64-debug.app
 ```
 
 Publishing is a separate step described in [Release_Steps.md](Release_Steps.md).

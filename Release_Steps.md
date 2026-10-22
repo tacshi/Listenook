@@ -55,7 +55,7 @@ native x64 Windows host:
 ```powershell
 git switch main
 git pull
-.\scripts\win-release.ps1 1.2.0
+.\scripts\build-win-release.ps1 1.2.0
 ```
 
 Copy both generated files from `build\` to `build/` on the Mac:
@@ -68,7 +68,7 @@ Then publish on the Mac:
 ```sh
 git switch main
 git pull
-./scripts/release.sh 1.2.0
+./scripts/publish.sh 1.2.0
 ```
 
 The script verifies that the Windows artifact came from the exact same commit,
@@ -87,7 +87,7 @@ review the updated text, and enter `y` to continue.
 An unsigned, non-publishing dry run that does not require the Windows artifact:
 
 ```sh
-LISTENOOK_MAC_SIGN_IDENTITY=- ./scripts/release.sh 1.2.0 --skip-windows --no-upload
+LISTENOOK_MAC_SIGN_IDENTITY=- ./scripts/publish.sh 1.2.0 --skip-windows --no-upload
 ```
 
 Useful publisher options:

@@ -29,7 +29,7 @@ step() { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 usage() {
   printf '%s\n' \
-    'usage: ./scripts/release.sh VERSION [options]' \
+    'usage: ./scripts/publish.sh VERSION [options]' \
     '' \
     '  --skip-windows     publish macOS while retaining the previous Windows entry' \
     '  --no-upload        build and generate listenook-latest.json without publishing' \
@@ -136,7 +136,7 @@ fi
 WIN_EXE="$OUT_DIR/Listenook-$VERSION-windows-x64-release-setup.exe"
 if [[ "$SKIP_WINDOWS" == false ]]; then
   [[ -f "$WIN_EXE" ]] || die "Windows installer not found: $WIN_EXE
-Build it on Windows with: .\\scripts\\win-release.ps1 $VERSION"
+Build it on Windows with: .\\scripts\\build-win-release.ps1 $VERSION"
   SIDECAR="$WIN_EXE.build.json"
   [[ -f "$SIDECAR" ]] || die "Windows provenance sidecar not found: $SIDECAR"
   read_json() { sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$SIDECAR" | head -1 | tr -d ' '; }
@@ -152,7 +152,7 @@ if [[ "$REUSE" == false ]]; then
   find "$STAGE_DIR" -maxdepth 1 -type f ! -name notes.md -delete
   step "building signed macOS arm64 and Intel packages"
   BUILD_NAME="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" \
-    bash "$ROOT/scripts/build-release.sh" --arch all
+    bash "$ROOT/scripts/build-mac-release.sh" --arch all
   cp "$OUT_DIR/Listenook-$VERSION-macos-arm64-release.dmg" "$STAGE_DIR/"
   cp "$OUT_DIR/Listenook-$VERSION-macos-arm64-release.zip" "$STAGE_DIR/"
   cp "$OUT_DIR/Listenook-$VERSION-macos-x64-release.dmg" "$STAGE_DIR/"

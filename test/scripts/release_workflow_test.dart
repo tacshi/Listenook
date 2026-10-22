@@ -17,7 +17,7 @@ Future<void> _git(Directory repository, List<String> arguments) async {
 
 void main() {
   test('publisher validates provenance and publishes the manifest last', () {
-    final source = File('scripts/release.sh').readAsStringSync();
+    final source = File('scripts/publish.sh').readAsStringSync();
 
     expect(source, contains('git rev-list --count HEAD'));
     expect(source, contains('Windows commit mismatch'));
@@ -99,7 +99,9 @@ write_release_notes "$3" v1.0.0..HEAD
   test('platform packages contain updater artifacts and relaunch support', () {
     final macos = File('scripts/build-macos.sh').readAsStringSync();
     final windows = File('packaging/windows/Listenook.iss').readAsStringSync();
-    final windowsRelease = File('scripts/win-release.ps1').readAsStringSync();
+    final windowsRelease = File(
+      'scripts/build-win-release.ps1',
+    ).readAsStringSync();
 
     expect(macos, contains(r'ditto -c -k --keepParent "$APP" "$APP_ZIP"'));
     expect(macos, contains('--build-name'));
@@ -111,8 +113,8 @@ write_release_notes "$3" v1.0.0..HEAD
   });
 
   test('Windows build entry points share the common build implementation', () {
-    final debug = File('scripts/win-debug.ps1').readAsStringSync();
-    final release = File('scripts/win-release.ps1').readAsStringSync();
+    final debug = File('scripts/build-win-debug.ps1').readAsStringSync();
+    final release = File('scripts/build-win-release.ps1').readAsStringSync();
 
     expect(debug, contains('build-windows.ps1'));
     expect(debug, contains('-Mode debug'));
