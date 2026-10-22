@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:listenook/core/contracts.dart';
@@ -167,6 +169,24 @@ void main() {
     expect(await levels.readAsBytes(), [16, 44, 255, 1]);
   });
 
+  test('speech energy has one half-decibel level per 10ms frame', () async {
+    final root = await Directory.systemTemp.createTemp('meow-energy-');
+    addTearDown(() => root.delete(recursive: true));
+    final wav = File('${root.path}/input.wav');
+    final energy = File('${root.path}/output.energy');
+    await wav.writeAsBytes(
+      _pcmWave(<int>[
+        ...List<int>.filled(80, 1000),
+        ...List<int>.filled(80, 0),
+        ...List<int>.filled(40, 100),
+      ]),
+    );
+
+    await writePcmSpeechEnergy(wav.path, energy.path);
+
+    expect(await energy.readAsBytes(), [120, 0, 80]);
+  });
+
   test('waveform levels are not flattened by an isolated burst', () {
     final rms = Uint16List.fromList([
       for (var index = 0; index < 99; index++) 1000,
@@ -195,6 +215,41 @@ void main() {
     },
   );
 
+  test('files outside the jobs keep their 20 most recent analyses', () async {
+    final root = await Directory.systemTemp.createTemp('meow-file-energy-');
+    addTearDown(() => root.delete(recursive: true));
+    final paths = AppPaths.forTesting(root.path);
+    await paths.temporary.create(recursive: true);
+    final video = File('${root.path}/movie.mkv')..writeAsBytesSync([1]);
+    final long = DateTime.now().subtract(const Duration(days: 30));
+    await video.setLastModified(long);
+    final key =
+        'file-${sha1.convert(utf8.encode(video.absolute.path)).toString().substring(0, 20)}';
+    final cached = File('${paths.temporary.path}/$key-speech-v1.energy')
+      ..writeAsBytesSync([1, 2, 3]);
+    final older = [
+      for (var index = 0; index < 20; index++)
+        File('${paths.temporary.path}/file-$index-speech-v1.energy')
+          ..writeAsBytesSync([1])
+          ..setLastModifiedSync(long.add(Duration(minutes: index))),
+    ];
+    final jobEnergy = File('${paths.temporary.path}/job-speech-v1.energy')
+      ..writeAsBytesSync([1])
+      ..setLastModifiedSync(long);
+    await cached.setLastModified(long.add(const Duration(days: 1)));
+
+    final path = await ProcessMediaService(
+      paths,
+    ).analyzeFileSpeechEnergy(video.path);
+
+    expect(path, cached.path);
+    expect(await cached.readAsBytes(), [1, 2, 3]);
+    expect(await older.first.exists(), isFalse);
+    expect(await older[1].exists(), isTrue);
+    expect(await older.last.exists(), isTrue);
+    expect(await jobEnergy.exists(), isTrue);
+  });
+
   test('generated media cleanup removes only job-owned cache files', () async {
     final root = await Directory.systemTemp.createTemp('meow-media-cleanup-');
     addTearDown(() => root.delete(recursive: true));
@@ -204,6 +259,8 @@ void main() {
     final macAudio = File('${paths.temporary.path}/job.m4a');
     final extraction = File('${paths.temporary.path}/job-extract.wav');
     final waveformPcm = File('${paths.temporary.path}/job-waveform.wav');
+    final levels = File('${paths.temporary.path}/job-waveform-v4.levels');
+    final speechEnergy = File('${paths.temporary.path}/job-speech-v1.energy');
     final currentWaveform = File('${paths.temporary.path}/job-waveform-v3.png');
     final priorWaveform = File('${paths.temporary.path}/job-waveform-v2.png');
     final waveform = File('${paths.temporary.path}/job-waveform.png');
@@ -213,6 +270,8 @@ void main() {
       macAudio,
       extraction,
       waveformPcm,
+      levels,
+      speechEnergy,
       currentWaveform,
       priorWaveform,
       waveform,
@@ -227,6 +286,8 @@ void main() {
     expect(await macAudio.exists(), isFalse);
     expect(await extraction.exists(), isFalse);
     expect(await waveformPcm.exists(), isFalse);
+    expect(await levels.exists(), isFalse);
+    expect(await speechEnergy.exists(), isFalse);
     expect(await currentWaveform.exists(), isFalse);
     expect(await priorWaveform.exists(), isFalse);
     expect(await waveform.exists(), isFalse);

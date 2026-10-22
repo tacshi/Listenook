@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
@@ -281,7 +282,63 @@ class ProcessMediaService implements MediaService {
   }
 
   @override
-  Future<String> renderWaveform(String sourcePath, String cacheKey) async {
+  Future<String> renderWaveform(String sourcePath, String cacheKey) =>
+      _audioAnalysisFile(sourcePath, cacheKey, _waveformSuffix);
+
+  @override
+  Future<String> analyzeSpeechEnergy(String sourcePath, String cacheKey) =>
+      _audioAnalysisFile(sourcePath, cacheKey, _speechEnergySuffix);
+
+  @override
+  Future<String> analyzeFileSpeechEnergy(String sourcePath) async {
+    final digest = sha1.convert(utf8.encode(File(sourcePath).absolute.path));
+    final cacheKey =
+        '$_fileAnalysisPrefix${digest.toString().substring(0, 20)}';
+    final path = await analyzeSpeechEnergy(sourcePath, cacheKey);
+    // Marks the analysis as recently used, so pruning keeps it.
+    await File(path).setLastModified(DateTime.now());
+    await _pruneFileAnalyses();
+    return path;
+  }
+
+  /// Files played outside the jobs, such as videos opened in the player, are
+  /// analyzed under this prefix and only the most recent are kept.
+  static const _fileAnalysisPrefix = 'file-';
+  static const _keptFileAnalyses = 20;
+
+  Future<void> _pruneFileAnalyses() async {
+    final energies = <File, DateTime>{};
+    await for (final entity in paths.temporary.list()) {
+      final name = p.basename(entity.path);
+      if (entity is File &&
+          name.startsWith(_fileAnalysisPrefix) &&
+          name.endsWith(_speechEnergySuffix)) {
+        energies[entity] = await entity.lastModified();
+      }
+    }
+    if (energies.length <= _keptFileAnalyses) return;
+    final oldestFirst = energies.keys.toList()
+      ..sort((a, b) => energies[a]!.compareTo(energies[b]!));
+    for (final energy in oldestFirst.take(
+      energies.length - _keptFileAnalyses,
+    )) {
+      final name = p.basename(energy.path);
+      await deleteGeneratedMedia(
+        name.substring(0, name.length - _speechEnergySuffix.length),
+      );
+    }
+  }
+
+  static const _waveformSuffix = '-waveform-v4.levels';
+  static const _speechEnergySuffix = '-speech-v1.energy';
+
+  /// Returns the cached analysis file of [sourcePath] ending in [suffix],
+  /// decoding the audio first when the cache is missing or stale.
+  Future<String> _audioAnalysisFile(
+    String sourcePath,
+    String cacheKey,
+    String suffix,
+  ) async {
     final source = File(sourcePath);
     if (!await source.exists()) {
       throw const MediaException(
@@ -290,30 +347,50 @@ class ProcessMediaService implements MediaService {
       );
     }
     final safeKey = _safeCacheKey(cacheKey);
-    final output = File(
-      p.join(paths.temporary.path, '$safeKey-waveform-v4.levels'),
-    );
-    if (await output.exists() &&
-        (await output.lastModified()).isAfter(await source.lastModified())) {
-      return output.path;
+    final output = File(p.join(paths.temporary.path, '$safeKey$suffix'));
+    Future<bool> fresh() async =>
+        await output.exists() &&
+        await output.length() > 0 &&
+        (await output.lastModified()).isAfter(await source.lastModified());
+    if (await fresh()) return output.path;
+    await (_audioAnalyses[safeKey] ??= _analyzeAudio(
+      sourcePath,
+      safeKey,
+    ).whenComplete(() => _audioAnalyses.remove(safeKey)));
+    if (!await fresh()) {
+      throw const MediaException(
+        'waveform_failed',
+        'The waveform could not be created.',
+      );
     }
-    await output.parent.create(recursive: true);
-    final pcmPath = p.join(paths.temporary.path, '$safeKey-waveform.wav');
+    return output.path;
+  }
+
+  /// Decodes in progress by cache key, so the waveform and the speech energy
+  /// never extract the same PCM file at the same time.
+  final Map<String, Future<void>> _audioAnalyses = {};
+
+  /// Decodes [sourcePath] once into both the waveform levels and the speech
+  /// energy.
+  Future<void> _analyzeAudio(String sourcePath, String safeKey) async {
+    String output(String suffix) =>
+        p.join(paths.temporary.path, '$safeKey$suffix');
+    final outputs = [output(_waveformSuffix), output(_speechEnergySuffix)];
+    await paths.temporary.create(recursive: true);
+    final pcmPath = output('-waveform.wav');
     try {
       await _extractPcm(sourcePath, pcmPath, sampleRate: 8000);
-      await writePcmWaveformLevels(pcmPath, output.path);
-      if (!await output.exists() || await output.length() == 0) {
-        throw const MediaException(
-          'waveform_failed',
-          'The waveform could not be created.',
-        );
-      }
-      return output.path;
+      await writePcmWaveformLevels(pcmPath, outputs[0]);
+      await writePcmSpeechEnergy(pcmPath, outputs[1]);
     } on MediaException {
-      await deleteTemporary(output.path);
+      for (final path in outputs) {
+        await deleteTemporary(path);
+      }
       rethrow;
     } on Object catch (error) {
-      await deleteTemporary(output.path);
+      for (final path in outputs) {
+        await deleteTemporary(path);
+      }
       throw MediaException('waveform_failed', error.toString());
     } finally {
       await deleteTemporary(pcmPath);
@@ -545,7 +622,8 @@ class ProcessMediaService implements MediaService {
       '.m4a',
       '-extract.wav',
       '-waveform.wav',
-      '-waveform-v4.levels',
+      _waveformSuffix,
+      _speechEnergySuffix,
       '-waveform-v3.png',
       '-waveform-v2.png',
       '-waveform.png',

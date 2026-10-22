@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
 
 import '../../core/models.dart';
+import '../../core/speech_boundaries.dart';
 import '../../data/embedded_subtitles.dart';
 import '../../data/local_repositories.dart';
 import '../../data/timed_subtitle_import.dart';
@@ -99,6 +100,7 @@ class VideoPlayerController extends ChangeNotifier {
     this.playbackRepository,
     this.trackWaitTimeout = const Duration(seconds: 5),
     this.preferredLanguage,
+    this.loadSpeechEnergy,
   }) : player = player ?? Player() {
     _repeatLoop = (repeatLoopFactory ?? _mpvRepeatLoop)(this.player);
   }
@@ -118,6 +120,10 @@ class VideoPlayerController extends ChangeNotifier {
   /// The UI language, used to choose among several built-in tracks.
   final String? preferredLanguage;
 
+  /// Analyzes the audio of the video, so repeats are cut at the pauses
+  /// between subtitles rather than at their timestamps.
+  final Future<SpeechEnergy?> Function(String path)? loadSpeechEnergy;
+
   SentenceRepeatLoopController? _repeatLoop;
   final List<StreamSubscription<Object?>> _subscriptions = [];
   Timer? _saveTimer;
@@ -132,6 +138,10 @@ class VideoPlayerController extends ChangeNotifier {
   String? _openError;
   bool _opened = false;
   String? _heldCueId;
+
+  /// The cue mpv reports, held while the cue list is unavailable.
+  TranscriptSegment? _playerCue;
+  SpeechEnergy? _speech;
 
   Duration position = Duration.zero;
   int? _videoWidth;
@@ -203,6 +213,7 @@ class VideoPlayerController extends ChangeNotifier {
       _notify();
       return;
     }
+    unawaited(_loadSpeech());
     await _waitForTracks();
     if (_disposed) return;
     _sources = await _discoverSources();
@@ -311,21 +322,9 @@ class VideoPlayerController extends ChangeNotifier {
     if (_heldCueId != null) return true;
     final index = _currentCueIndex(pinned: false);
     if (index != null) {
-      final cue = _cues[index];
-      _heldCueId = cue.id;
+      _heldCueId = _cues[index].id;
       _notify();
-      unawaited(
-        _repeatLoop?.setRange(
-          startMs: sentenceRepeatStartMs(
-            cue,
-            previousSegment: index > 0 ? _cues[index - 1] : null,
-          ),
-          endMs: sentenceRepeatEndMs(
-            cue,
-            nextSegment: index + 1 < _cues.length ? _cues[index + 1] : null,
-          ),
-        ),
-      );
+      unawaited(_loopHeldCue());
       if (!playing) unawaited(player.play());
       return true;
     }
@@ -337,6 +336,43 @@ class VideoPlayerController extends ChangeNotifier {
   }
 
   void endRepeatHold() => _endHold(notify: true);
+
+  Future<void> _loadSpeech() async {
+    final speech = await loadSpeechEnergy?.call(path);
+    if (_disposed || speech == null) return;
+    _speech = speech;
+    // A repeat that started on the timestamps moves to the pauses.
+    if (_heldCueId != null) unawaited(_loopHeldCue());
+  }
+
+  /// Loops the held subtitle, cut at the pauses around it once the audio has
+  /// been analyzed.
+  Future<void> _loopHeldCue() async {
+    final heldId = _heldCueId;
+    final playerCue = _playerCue;
+    if (playerCue != null && playerCue.id == heldId) {
+      await _repeatLoop?.setRange(
+        startMs: _speech?.sentenceStartMs(playerCue) ?? playerCue.startMs,
+        endMs: _speech?.sentenceEndMs(playerCue) ?? playerCue.endMs,
+      );
+      return;
+    }
+    final index = _cues.indexWhere((cue) => cue.id == heldId);
+    if (index < 0) return;
+    final cue = _cues[index];
+    await _repeatLoop?.setRange(
+      startMs: sentenceRepeatStartMs(
+        cue,
+        previousSegment: index > 0 ? _cues[index - 1] : null,
+        speech: _speech,
+      ),
+      endMs: sentenceRepeatEndMs(
+        cue,
+        nextSegment: index + 1 < _cues.length ? _cues[index + 1] : null,
+        speech: _speech,
+      ),
+    );
+  }
 
   Future<void> _navigate({required bool forward}) async {
     if (_cues.isNotEmpty) {
@@ -369,12 +405,15 @@ class VideoPlayerController extends ChangeNotifier {
       final start = double.tryParse(await native.getProperty('sub-start'));
       final end = double.tryParse(await native.getProperty('sub-end'));
       if (start == null || end == null || end <= start) return;
-      _heldCueId = 'player-cue';
-      _notify();
-      await _repeatLoop?.setRange(
+      _playerCue = TranscriptSegment(
+        id: 'player-cue',
         startMs: (start * 1000).round(),
         endMs: (end * 1000).round(),
+        text: '',
       );
+      _heldCueId = 'player-cue';
+      _notify();
+      await _loopHeldCue();
       if (!playing) await player.play();
     } on Object {
       // No subtitle is on screen; there is nothing to repeat.
@@ -384,6 +423,7 @@ class VideoPlayerController extends ChangeNotifier {
   void _endHold({required bool notify}) {
     if (_heldCueId == null) return;
     _heldCueId = null;
+    _playerCue = null;
     unawaited(_repeatLoop?.clear());
     if (notify) _notify();
   }

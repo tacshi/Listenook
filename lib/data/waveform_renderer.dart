@@ -45,6 +45,81 @@ class Pcm16MonoEnvelope {
 
 Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
   if (width <= 0) throw const FormatException('Peak count must be positive.');
+  final minima = Int16List(width);
+  final maxima = Int16List(width);
+  final squareSums = List<int>.filled(width, 0);
+  final bucketCounts = Uint32List(width);
+  var sampleCount = 0;
+  var sampleIndex = 0;
+  await _readPcm16Mono(
+    path,
+    onFormat: (_, count) => sampleCount = count,
+    onSample: (signed) {
+      final bucket = math.min(width - 1, sampleIndex * width ~/ sampleCount);
+      if (signed < minima[bucket]) minima[bucket] = signed;
+      if (signed > maxima[bucket]) maxima[bucket] = signed;
+      squareSums[bucket] += signed * signed;
+      bucketCounts[bucket]++;
+      sampleIndex++;
+    },
+  );
+  final rms = Uint16List(width);
+  for (var index = 0; index < width; index++) {
+    final count = bucketCounts[index];
+    if (count == 0) continue;
+    rms[index] = math.sqrt(squareSums[index] / count).round();
+  }
+  return Pcm16MonoEnvelope(minima: minima, maxima: maxima, rms: rms);
+}
+
+/// Writes the loudness of [inputPath] in 10ms frames to [outputPath], one
+/// byte of half-decibels per frame, for finding the pauses between sentences.
+Future<void> writePcmSpeechEnergy(String inputPath, String outputPath) async {
+  final energy = await readPcm16MonoEnergy(inputPath);
+  final output = File(outputPath);
+  await output.parent.create(recursive: true);
+  await output.writeAsBytes(energy, flush: true);
+}
+
+/// The mean power of each 10ms frame in half-decibels above digital silence.
+Future<Uint8List> readPcm16MonoEnergy(String path) async {
+  var frameLength = 1;
+  var frames = Uint8List(0);
+  var frame = 0;
+  var squareSum = 0;
+  var count = 0;
+  void closeFrame() {
+    final meanSquare = squareSum / count;
+    frames[frame++] = math.min(
+      255,
+      (20 * math.log(meanSquare + 1) / math.ln10).round(),
+    );
+    squareSum = 0;
+    count = 0;
+  }
+
+  await _readPcm16Mono(
+    path,
+    onFormat: (sampleRate, sampleCount) {
+      frameLength = math.max(1, sampleRate ~/ 100);
+      frames = Uint8List((sampleCount + frameLength - 1) ~/ frameLength);
+    },
+    onSample: (signed) {
+      squareSum += signed * signed;
+      if (++count == frameLength) closeFrame();
+    },
+  );
+  if (count > 0) closeFrame();
+  return frames;
+}
+
+/// Streams the samples of a mono 16-bit PCM WAVE file to [onSample], after
+/// reporting its sample rate and sample count to [onFormat].
+Future<void> _readPcm16Mono(
+  String path, {
+  required void Function(int sampleRate, int sampleCount) onFormat,
+  required void Function(int sample) onSample,
+}) async {
   final file = File(path);
   final input = await file.open(mode: FileMode.read);
   try {
@@ -57,6 +132,7 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
 
     bool? pcmFormat;
     int? channels;
+    int? sampleRate;
     int? bitsPerSample;
     int? dataOffset;
     int? dataLength;
@@ -83,6 +159,7 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
                 bytes.length >= 40 &&
                 data.getUint32(24, Endian.little) == 1);
         channels = data.getUint16(2, Endian.little);
+        sampleRate = data.getUint32(4, Endian.little);
         bitsPerSample = data.getUint16(14, Endian.little);
       } else if (id == 'data') {
         dataOffset = start;
@@ -100,10 +177,7 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
     }
 
     final sampleCount = dataLength ~/ 2;
-    final minima = Int16List(width);
-    final maxima = Int16List(width);
-    final squareSums = List<int>.filled(width, 0);
-    final bucketCounts = Uint32List(width);
+    onFormat(sampleRate ?? 0, sampleCount);
     await input.setPosition(dataOffset);
     var sampleIndex = 0;
     var remaining = sampleCount * 2;
@@ -115,12 +189,7 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
         Uint8List.fromList(bytes.sublist(0, evenLength)),
       );
       for (var offset = 0; offset < evenLength; offset += 2) {
-        final signed = data.getInt16(offset, Endian.little);
-        final bucket = math.min(width - 1, sampleIndex * width ~/ sampleCount);
-        if (signed < minima[bucket]) minima[bucket] = signed;
-        if (signed > maxima[bucket]) maxima[bucket] = signed;
-        squareSums[bucket] += signed * signed;
-        bucketCounts[bucket]++;
+        onSample(data.getInt16(offset, Endian.little));
         sampleIndex++;
       }
       remaining -= evenLength;
@@ -128,13 +197,6 @@ Future<Pcm16MonoEnvelope> readPcm16MonoEnvelope(String path, int width) async {
     if (sampleIndex != sampleCount) {
       throw const FormatException('WAVE audio data is truncated.');
     }
-    final rms = Uint16List(width);
-    for (var index = 0; index < width; index++) {
-      final count = bucketCounts[index];
-      if (count == 0) continue;
-      rms[index] = math.sqrt(squareSums[index] / count).round();
-    }
-    return Pcm16MonoEnvelope(minima: minima, maxima: maxima, rms: rms);
   } finally {
     await input.close();
   }

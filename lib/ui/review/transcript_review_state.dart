@@ -13,6 +13,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../../core/dictation_comparison.dart';
 import '../../core/models.dart';
+import '../../core/speech_boundaries.dart';
 import '../../core/windowing/app_window.dart';
 import '../../core/transcript_structure_editor.dart';
 import '../../data/transcript_exporter.dart';
@@ -141,6 +142,8 @@ class TranscriptReviewState extends State<TranscriptReview> {
   String _waveformSource = '';
   String? _waveformPath;
   bool _waveformLoading = false;
+  String _speechEnergySource = '';
+  SpeechEnergy? _speechEnergy;
   ReviewMediaMode _mediaMode = ReviewMediaMode.video;
   double? _transcriptPaneWidth;
   double? _companionLeftPaneFraction;
@@ -313,6 +316,8 @@ class TranscriptReviewState extends State<TranscriptReview> {
       _waveformSource = '';
       _waveformPath = null;
       _waveformLoading = false;
+      _speechEnergySource = '';
+      _speechEnergy = null;
       _mediaMode = ReviewMediaMode.video;
       _companionLeftPaneFraction = null;
       _companionLayoutActive = false;
@@ -377,6 +382,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
           currentMs: value.inMilliseconds,
           previousSegment: previousSegment,
           nextSegment: nextSegment,
+          speech: _speechEnergy,
         )) {
           _mimicPassCounted = false;
           _countMimicRep(repeatedSegment);
@@ -388,6 +394,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
           currentMs: value.inMilliseconds,
           previousSegment: previousSegment,
           nextSegment: nextSegment,
+          speech: _speechEnergy,
         )) {
           _countMimicRep(repeatedSegment);
         }
@@ -397,6 +404,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
               value.inMilliseconds,
               previousSegment: previousSegment,
               nextSegment: nextSegment,
+              speech: _speechEnergy,
             )) {
           _queueRepeatRestart(resumeAfterSeek: true);
         }
@@ -481,6 +489,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
           _position.inMilliseconds,
           previousSegment: _previousSegmentFor(repeatedSegment),
           nextSegment: _nextSegmentFor(repeatedSegment),
+          speech: _speechEnergy,
         )) {
       _queueRepeatRestart(resumeAfterSeek: true);
     }
@@ -509,6 +518,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
             sentenceRepeatStartMs(
               segment,
               previousSegment: _previousSegmentFor(segment),
+              speech: _speechEnergy,
             )) {
       _countMimicRep(segment);
     }
@@ -600,10 +610,12 @@ class TranscriptReviewState extends State<TranscriptReview> {
           startMs: sentenceRepeatStartMs(
             segment,
             previousSegment: _previousSegmentFor(segment),
+            speech: _speechEnergy,
           ),
           endMs: sentenceRepeatEndMs(
             segment,
             nextSegment: _nextSegmentFor(segment),
+            speech: _speechEnergy,
           ),
         );
         final active =
@@ -656,6 +668,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
       }
       _ensurePlayer();
       _openedPath = job.sourcePath;
+      unawaited(_loadSpeechEnergy(job));
       if (!(job.metadata?.hasVideo ?? false) ||
           _mediaMode == ReviewMediaMode.audio) {
         unawaited(_loadWaveform(job));
@@ -724,6 +737,20 @@ class TranscriptReviewState extends State<TranscriptReview> {
       _waveformPath = path;
       _waveformLoading = false;
     });
+  }
+
+  Future<void> _loadSpeechEnergy(TranscriptionJob job) async {
+    final source = job.sourcePath;
+    if (_speechEnergySource == source) return;
+    _speechEnergySource = source;
+    _speechEnergy = null;
+    final energy = await _appController.loadSpeechEnergy(job.id);
+    if (!mounted || _speechEnergySource != source) return;
+    _speechEnergy = energy;
+    // A loop that started on the transcript timestamps moves to the pauses.
+    if (energy != null && _nativeSentenceRepeatActive) {
+      unawaited(_setNativeSentenceRepeat(_repeatingSegment));
+    }
   }
 
   void _toggleMediaMode(TranscriptionJob job) {
@@ -1867,7 +1894,11 @@ class TranscriptReviewState extends State<TranscriptReview> {
 
   bool _canRepeat(TranscriptSegment segment) =>
       _player != null &&
-      sentenceRepeatEndMs(segment, nextSegment: _nextSegmentFor(segment)) >
+      sentenceRepeatEndMs(
+            segment,
+            nextSegment: _nextSegmentFor(segment),
+            speech: _speechEnergy,
+          ) >
           segment.startMs;
 
   void _toggleSentenceRepeat(TranscriptSegment segment) {
@@ -1949,6 +1980,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
         milliseconds: sentenceRepeatStartMs(
           segment,
           previousSegment: _previousSegmentFor(segment),
+          speech: _speechEnergy,
         ),
       ),
       reason: TranscriptSeekReason.repeatRestart,
@@ -1957,6 +1989,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
     _dictationReplayEndMs = sentenceRepeatEndMs(
       segment,
       nextSegment: _nextSegmentFor(segment),
+      speech: _speechEnergy,
     );
     await player.play();
   }
@@ -2109,7 +2142,11 @@ class TranscriptReviewState extends State<TranscriptReview> {
     final segment = _mimicTargetSegment;
     if (player == null || segment == null || segment.id != segmentId) return;
     final sentenceMs =
-        sentenceRepeatEndMs(segment, nextSegment: _nextSegmentFor(segment)) -
+        sentenceRepeatEndMs(
+          segment,
+          nextSegment: _nextSegmentFor(segment),
+          speech: _speechEnergy,
+        ) -
         segment.startMs;
     final pauseSeconds = _appController.settings.mimicPauseSeconds;
     final pause = pauseSeconds > 0
@@ -2568,6 +2605,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
       milliseconds: sentenceRepeatStartMs(
         segment,
         previousSegment: _previousSegmentFor(segment),
+        speech: _speechEnergy,
       ),
     );
     if (_mimicGoalReached(segmentId)) {
