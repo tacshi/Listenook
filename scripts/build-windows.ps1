@@ -196,14 +196,13 @@ try {
     }
   }
 
-  $Out = Join-Path $Root "dist"
+  $Out = Join-Path $Root "build"
   New-Item -ItemType Directory -Force -Path $Out | Out-Null
   $Base = "Listenook-$Version-windows-$Arch-$Mode"
   $Zip = Join-Path $Out "$Base-portable.zip"
   if ($Mode -eq "debug") {
-    $Portable = Join-Path $Out "$Base-portable"
-    $PortableStage = Join-Path $Out ".$Base-portable.staging"
-    if (Test-Path $Zip) { Remove-Item $Zip -Force }
+    $Portable = Join-Path $Out "Listenook-$Arch-debug"
+    $PortableStage = Join-Path $Out ".Listenook-$Arch-debug.staging"
     if (Test-Path $PortableStage) { Remove-Item $PortableStage -Recurse -Force }
     Copy-Item -LiteralPath $Build -Destination $PortableStage -Recurse -Force
     if (Test-Path $Portable) { Remove-Item $Portable -Recurse -Force }

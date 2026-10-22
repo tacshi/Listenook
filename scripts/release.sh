@@ -14,8 +14,8 @@ if [[ -z "${RELEASE_REPO_DIR:-}" ]]; then
     RELEASE_REPO_DIR="$ROOT/../MeowSTT-Release"
   fi
 fi
-DIST_DIR="$ROOT/dist"
-STAGE_DIR="$DIST_DIR/release"
+OUT_DIR="$ROOT/build"
+STAGE_DIR="$OUT_DIR/release"
 VERSION=""
 SKIP_WINDOWS=false
 NO_UPLOAD=false
@@ -33,7 +33,7 @@ usage() {
     '' \
     '  --skip-windows     publish macOS while retaining the previous Windows entry' \
     '  --no-upload        build and generate listenook-latest.json without publishing' \
-    '  --reuse-artifacts  reuse the matching files already in dist/release' \
+    '  --reuse-artifacts  reuse the matching files already in build/release' \
     '  --no-tag           do not create the source-repository tag' \
     '  --allow-branch     bypass the main/origin publication check'
 }
@@ -133,7 +133,7 @@ if [[ "$NO_UPLOAD" == false ]]; then
   done
 fi
 
-WIN_EXE="$DIST_DIR/Listenook-$VERSION-windows-x64-release-setup.exe"
+WIN_EXE="$OUT_DIR/Listenook-$VERSION-windows-x64-release-setup.exe"
 if [[ "$SKIP_WINDOWS" == false ]]; then
   [[ -f "$WIN_EXE" ]] || die "Windows installer not found: $WIN_EXE
 Build it on Windows with: .\\scripts\\win-release.ps1 $VERSION"
@@ -153,10 +153,10 @@ if [[ "$REUSE" == false ]]; then
   step "building signed macOS arm64 and Intel packages"
   BUILD_NAME="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" \
     bash "$ROOT/scripts/build-release.sh" --arch all
-  cp "$DIST_DIR/Listenook-$VERSION-macos-arm64-release.dmg" "$STAGE_DIR/"
-  cp "$DIST_DIR/Listenook-$VERSION-macos-arm64-release.zip" "$STAGE_DIR/"
-  cp "$DIST_DIR/Listenook-$VERSION-macos-x64-release.dmg" "$STAGE_DIR/"
-  cp "$DIST_DIR/Listenook-$VERSION-macos-x64-release.zip" "$STAGE_DIR/"
+  cp "$OUT_DIR/Listenook-$VERSION-macos-arm64-release.dmg" "$STAGE_DIR/"
+  cp "$OUT_DIR/Listenook-$VERSION-macos-arm64-release.zip" "$STAGE_DIR/"
+  cp "$OUT_DIR/Listenook-$VERSION-macos-x64-release.dmg" "$STAGE_DIR/"
+  cp "$OUT_DIR/Listenook-$VERSION-macos-x64-release.zip" "$STAGE_DIR/"
   if [[ "$SKIP_WINDOWS" == false ]]; then cp "$WIN_EXE" "$STAGE_DIR/"; fi
 else
   step "reusing staged artifacts"

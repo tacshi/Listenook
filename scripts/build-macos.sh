@@ -33,6 +33,20 @@ fi
 ARCHES=("$ARCH")
 if [[ "$ARCH" == "all" ]]; then ARCHES=(arm64 x64); fi
 NOTARY_PROFILE="${LISTENOOK_NOTARY_PROFILE:-Listenook}"
+LOG="$ROOT/build/macos/listenook-$MODE.log"
+mkdir -p "$(dirname "$LOG")"
+: >"$LOG"
+
+# Sends tool output to the log, showing its tail only when the step fails.
+quiet() {
+  local status=0
+  "$@" >>"$LOG" 2>&1 || status=$?
+  if (( status != 0 )); then
+    tail -n 100 "$LOG" >&2
+    echo "Failed: $1 (full log: $LOG)" >&2
+  fi
+  return "$status"
+}
 
 if [[ "$MODE" == "release" ]]; then
   RELEASE_SIGN_IDENTITY="${LISTENOOK_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:--}}"
@@ -54,9 +68,10 @@ fi
 for CURRENT_ARCH in "${ARCHES[@]}"; do
   EXPECTED_MACHO="$CURRENT_ARCH"
   if [[ "$CURRENT_ARCH" == "x64" ]]; then EXPECTED_MACHO="x86_64"; fi
-  OUT="$ROOT/dist"
+  OUT="$ROOT/build"
   BASE="Listenook-$VERSION-macos-$CURRENT_ARCH-$MODE"
   if [[ "$MODE" == "debug" ]]; then
+    BASE="Listenook-$CURRENT_ARCH-debug"
     DEBUG_APP="$OUT/$BASE.app"
     DEBUG_EXECUTABLE="$DEBUG_APP/Contents/MacOS/Listenook"
     if bash "$ROOT/scripts/is-macos-app-running.sh" "$DEBUG_EXECUTABLE"; then
@@ -67,8 +82,8 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   echo "Building Listenook $VERSION macOS $CURRENT_ARCH $MODE"
   cd "$ROOT"
   if [[ "$MODE" == "debug" ]]; then
-    "$FLUTTER" build macos --debug --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
-    xcodebuild \
+    quiet "$FLUTTER" build macos --debug --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
+    quiet xcodebuild \
       -workspace macos/Runner.xcworkspace \
       -scheme Runner \
       -configuration Debug \
@@ -82,8 +97,8 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   else
     EXCLUDED="x86_64"
     if [[ "$CURRENT_ARCH" == "x64" ]]; then EXCLUDED="arm64"; fi
-    FLUTTER_XCODE_EXCLUDED_ARCHS="$EXCLUDED" "$FLUTTER" build macos --release --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
-    xcodebuild \
+    quiet env FLUTTER_XCODE_EXCLUDED_ARCHS="$EXCLUDED" "$FLUTTER" build macos --release --config-only ${FLUTTER_VERSION_ARGS[@]+"${FLUTTER_VERSION_ARGS[@]}"}
+    quiet xcodebuild \
       -workspace macos/Runner.xcworkspace \
       -scheme Runner \
       -configuration Release \
@@ -107,7 +122,7 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
 
   if [[ "$CURRENT_ARCH" == "arm64" ]]; then
     mkdir -p "$APP/Contents/Helpers"
-    bash "$ROOT/scripts/build-speech-worker.sh" \
+    quiet bash "$ROOT/scripts/build-speech-worker.sh" \
       "$APP/Contents/Helpers/ListenookSpeechWorker"
     [[ -s "$APP/Contents/Helpers/mlx.metallib" ]] || {
       echo "Missing packaged MLX Metal library." >&2
@@ -136,11 +151,11 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   fi
   ENTITLEMENTS="$ROOT/macos/Runner/DebugProfile.entitlements"
   if [[ "$MODE" == "release" ]]; then ENTITLEMENTS="$ROOT/macos/Runner/Release.entitlements"; fi
-  if ! listenook_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"; then
+  if ! quiet listenook_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"; then
     if [[ "$MODE" == "debug" && "$SIGN_IDENTITY" != "-" ]]; then
       echo "Warning: release-identity signing failed; retrying the debug app ad-hoc." >&2
       SIGN_IDENTITY="-"
-      listenook_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"
+      quiet listenook_sign_app_bundle "$APP" "$SIGN_IDENTITY" "$ENTITLEMENTS" "$MODE"
     else
       exit 1
     fi
@@ -149,11 +164,11 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
   mkdir -p "$OUT"
   if [[ "$MODE" == "debug" ]]; then
     DEBUG_STAGE="$OUT/.$BASE.app.staging"
-    rm -f "$OUT/$BASE.app.zip"
     rm -rf "$DEBUG_STAGE"
     ditto "$APP" "$DEBUG_STAGE"
     rm -rf "$DEBUG_APP"
     mv "$DEBUG_STAGE" "$DEBUG_APP"
+    echo "Built $DEBUG_APP"
   else
     rm -f "$OUT/$BASE.app.zip"
     STAGE="$(mktemp -d)"
@@ -166,30 +181,32 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
 
     if [[ "$SIGN_IDENTITY" != "-" ]]; then
       DMG_SIGN_ARGS=(--force --sign "$SIGN_IDENTITY" --timestamp)
-      codesign "${DMG_SIGN_ARGS[@]}" "$DMG"
-      codesign --verify --strict --verbose=2 "$DMG"
+      quiet codesign "${DMG_SIGN_ARGS[@]}" "$DMG"
+      quiet codesign --verify --strict --verbose=2 "$DMG"
 
+      echo "Notarizing $(basename "$DMG")"
       NOTARY_OUTPUT="$(xcrun notarytool submit "$DMG" \
         --keychain-profile "$NOTARY_PROFILE" \
         --wait \
-        --output-format json)"
-      echo "$NOTARY_OUTPUT"
+        --output-format json 2>>"$LOG")"
+      echo "$NOTARY_OUTPUT" >>"$LOG"
       if ! grep -q '"status"[[:space:]]*:[[:space:]]*"Accepted"' <<<"$NOTARY_OUTPUT"; then
         SUBMISSION_ID="$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
           <<<"$NOTARY_OUTPUT" | head -n 1)"
         if [[ -n "$SUBMISSION_ID" ]]; then
           xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "$NOTARY_PROFILE" >&2 || true
         fi
+        echo "$NOTARY_OUTPUT" >&2
         echo "Apple did not accept the notarization submission for $DMG." >&2
         exit 1
       fi
 
-      xcrun stapler staple "$APP"
-      xcrun stapler staple "$DMG"
-      xcrun stapler validate "$APP"
-      xcrun stapler validate "$DMG"
-      spctl --assess --type execute --verbose=4 "$APP"
-      spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+      quiet xcrun stapler staple "$APP"
+      quiet xcrun stapler staple "$DMG"
+      quiet xcrun stapler validate "$APP"
+      quiet xcrun stapler validate "$DMG"
+      quiet spctl --assess --type execute --verbose=4 "$APP"
+      quiet spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
     else
       echo "Warning: ad hoc-signed release artifacts will not pass Gatekeeper." >&2
     fi
@@ -197,7 +214,7 @@ for CURRENT_ARCH in "${ARCHES[@]}"; do
     APP_ZIP="$OUT/$BASE.zip"
     rm -f "$APP_ZIP"
     ditto -c -k --keepParent "$APP" "$APP_ZIP"
+    echo "Built $DMG"
+    echo "Built $APP_ZIP"
   fi
-
-  echo "Artifacts: $OUT"
 done

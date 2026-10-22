@@ -229,10 +229,11 @@ PATH. Windows signing uses `LISTENOOK_WINDOWS_PFX`, with optional
 `LISTENOOK_WINDOWS_TIMESTAMP_URL`, and `LISTENOOK_SIGNTOOL`.
 `LISTENOOK_FLAC_DIR` can select a pre-provisioned native encoder directory.
 
-Artifacts are written to `dist/`, with platform, architecture, mode, and version
-in their filenames. macOS debug builds produce an app bundle; release builds
-produce a DMG and updater ZIP. Windows debug builds produce a portable folder;
-release builds produce a portable ZIP and Inno Setup installer.
+Artifacts are written to `build/`. Debug builds are named by architecture only:
+macOS produces `Listenook-arm64-debug.app` and Windows a portable
+`Listenook-x64-debug` folder. Release artifacts carry platform, architecture,
+mode, and version in their filenames: macOS produces a DMG and updater ZIP,
+Windows a portable ZIP and Inno Setup installer.
 
 Build scripts do not launch the macOS app. Run a launch check explicitly when
 needed:

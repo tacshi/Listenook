@@ -58,7 +58,7 @@ git pull
 .\scripts\win-release.ps1 1.2.0
 ```
 
-Copy both generated files from `dist\` to `dist/` on the Mac:
+Copy both generated files from `build\` to `build/` on the Mac:
 
 - `Listenook-1.2.0-windows-x64-release-setup.exe`
 - `Listenook-1.2.0-windows-x64-release-setup.exe.build.json`
@@ -94,7 +94,7 @@ Useful publisher options:
 
 - `--skip-windows` publishes only the new macOS entries and preserves the last
   Windows entry in `listenook-latest.json`.
-- `--reuse-artifacts` reuses `dist/release/` after a late upload failure.
+- `--reuse-artifacts` reuses `build/release/` after a late upload failure.
 - `--no-upload` builds the artifacts and manifest without changing GitHub.
 - `--no-tag` publishes without creating the source tag.
 - `--allow-branch` bypasses the `main`/origin check for a deliberate test build.

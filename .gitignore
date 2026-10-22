@@ -41,7 +41,6 @@ migrate_working_dir/
 /build/
 /coverage/
 /.tools/
-/dist/
 *.pfx
 *.p12
 
