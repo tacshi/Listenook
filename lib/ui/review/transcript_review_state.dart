@@ -94,6 +94,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
   StreamSubscription<double>? _rateSubscription;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
   Future<void>? _mediaShutdown;
+  bool _mediaTearingDown = false;
   GlobalKey<VideoState> _videoKey = GlobalKey<VideoState>();
   late final AppController _appController;
   late final ReviewFullscreenController _localFullscreenController;
@@ -789,7 +790,14 @@ class TranscriptReviewState extends State<TranscriptReview> {
   Future<void> _shutdownMedia() => _mediaShutdown ??= _disposeMediaResources();
 
   Future<void> _resumeMedia() async {
-    if (!mounted || _mediaShutdown == null) return;
+    final shutdown = _mediaShutdown;
+    if (!mounted || shutdown == null) return;
+    // Teardown clears the player fields after awaiting native calls, so a
+    // player opened before it finishes would lose its video controller.
+    if (_mediaTearingDown) {
+      await shutdown;
+      if (!mounted || !identical(_mediaShutdown, shutdown)) return;
+    }
     _mediaShutdown = null;
     _videoKey = GlobalKey<VideoState>();
     _openedPath = '';
@@ -797,6 +805,15 @@ class TranscriptReviewState extends State<TranscriptReview> {
   }
 
   Future<void> _disposeMediaResources() async {
+    _mediaTearingDown = true;
+    try {
+      await _releaseMediaResources();
+    } finally {
+      _mediaTearingDown = false;
+    }
+  }
+
+  Future<void> _releaseMediaResources() async {
     _cancelMimicWait();
     _cancelDictationReplay();
     _sourceRequest++;

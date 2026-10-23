@@ -1958,6 +1958,82 @@ void main() {
     debugPrint = originalDebugPrint;
   });
 
+  testWidgets('resuming media during teardown reopens the player', (
+    tester,
+  ) async {
+    _setTestWindow(tester, const Size(1200, 820));
+    final directory = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('meow-resume-'),
+    ))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/resume.mp3');
+    await tester.runAsync(() => source.writeAsBytes(const [0, 1, 2, 3]));
+    debugTranscriptReviewPlayerFactory = () =>
+        Player(platformPlayer: _ReviewFakePlatformPlayer());
+    final loop = _GatedClearSentenceRepeatLoopController();
+    debugTranscriptReviewSentenceRepeatLoopFactory = (_) => loop;
+    debugTranscriptReviewSourceExists = (_) async => true;
+    addTearDown(() {
+      debugTranscriptReviewPlayerFactory = null;
+      debugTranscriptReviewSentenceRepeatLoopFactory = null;
+      debugTranscriptReviewSourceExists = null;
+    });
+    final controller = await _controllerForDocument(
+      TranscriptDocument(
+        tokens: const [],
+        segments: const [
+          TranscriptSegment(id: 'a', startMs: 0, endMs: 1000, text: 'A.'),
+        ],
+        speakers: const [],
+        updatedAt: DateTime.utc(2026, 10, 23),
+      ),
+      metadata: const MediaMetadata(
+        sizeBytes: 1,
+        durationMs: 1000,
+        hasAudio: true,
+        hasVideo: false,
+        formatName: 'mp3',
+      ),
+      sourcePath: source.path,
+    );
+    addTearDown(controller.dispose);
+    final fullscreen = ReviewFullscreenController();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: controller,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [AppStrings.delegate],
+          home: Scaffold(
+            body: TranscriptReview(
+              jobId: 'job',
+              fullscreenController: fullscreen,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('audio-transport')), findsOneWidget);
+
+    // Hiding and showing the window quickly resumes while mpv is still
+    // tearing down the previous player.
+    loop.hold();
+    unawaited(fullscreen.shutdownMedia());
+    unawaited(fullscreen.resumeMedia());
+    await tester.pump();
+    await tester.pump();
+    loop.release();
+    for (var i = 0; i < 5; i++) {
+      await tester.pump();
+    }
+
+    expect(find.byKey(const Key('audio-transport')), findsOneWidget);
+  });
+
   test('wide video viewport derives its height from the available width', () {
     expect(
       videoViewportHeight(
@@ -9791,6 +9867,23 @@ class _GatedSentenceRepeatLoopController
   Future<void> setRange({required int startMs, required int endMs}) async {
     await _gate?.future;
   }
+}
+
+class _GatedClearSentenceRepeatLoopController
+    implements SentenceRepeatLoopController {
+  Completer<void>? _gate;
+
+  void hold() => _gate = Completer<void>();
+
+  void release() => _gate?.complete();
+
+  @override
+  Future<void> clear() async {
+    await _gate?.future;
+  }
+
+  @override
+  Future<void> setRange({required int startMs, required int endMs}) async {}
 }
 
 class _FailingSentenceRepeatLoopController
