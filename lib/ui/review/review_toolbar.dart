@@ -9,6 +9,7 @@ import '../../l10n/strings.dart';
 import '../../state/app_controller.dart';
 import '../app_notice.dart';
 import '../transcript_export_dialog.dart';
+import '../keyboard_shortcuts.dart';
 import '../transcript_review.dart';
 import 'ai_brief_pane.dart';
 import 'listening_widgets.dart';
@@ -61,6 +62,8 @@ class UnifiedReviewToolbar extends StatelessWidget {
     this.structureMode = false,
     this.structureEnabled = false,
     this.onToggleStructure,
+    this.onUndoStructure,
+    this.onRedoStructure,
   });
 
   static const _fullBreakpoint = 900.0;
@@ -94,6 +97,11 @@ class UnifiedReviewToolbar extends StatelessWidget {
   final bool structureMode;
   final bool structureEnabled;
   final VoidCallback? onToggleStructure;
+
+  /// Structure edits can be undone with ⌘Z / Ctrl+Z; these buttons are for
+  /// touch. Null when there is nothing to undo or redo.
+  final VoidCallback? onUndoStructure;
+  final VoidCallback? onRedoStructure;
 
   bool get _translationStarted =>
       job.translationState.status != TranslationStatus.idle ||
@@ -231,6 +239,7 @@ class UnifiedReviewToolbar extends StatelessWidget {
         child: CallbackShortcuts(
           bindings: {
             const SingleActivator(LogicalKeyboardKey.escape): onCloseSearch,
+            commandPeriod: onCloseSearch,
           },
           child: TextField(
             key: const Key('transcript-search-field'),
@@ -296,6 +305,24 @@ class UnifiedReviewToolbar extends StatelessWidget {
             icon: const Icon(Icons.call_split_rounded),
             selectedIcon: const Icon(Icons.call_split_rounded),
           ),
+        if (structureMode) ...[
+          IconButton(
+            key: const Key('undo-transcript-structure'),
+            tooltip: context.strings.t('undo'),
+            onPressed: onUndoStructure,
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.undo_rounded),
+          ),
+          IconButton(
+            key: const Key('redo-transcript-structure'),
+            tooltip: context.strings.t('redo'),
+            onPressed: onRedoStructure,
+            constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.redo_rounded),
+          ),
+        ],
         if (showDirectActions) ...[
           IconButton(
             key: const Key('toggle-speaker-labels'),
@@ -982,6 +1009,7 @@ Future<void> _showTranslationDialog(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 key: const Key('manual-translation-target'),
                 initialValue: target,
                 decoration: InputDecoration(

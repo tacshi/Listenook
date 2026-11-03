@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../core/app_identity.dart';
+import '../core/container_paths.dart';
 import '../core/contracts.dart';
 import 'app_data_migration.dart';
 import 'migrating_secure_value.dart';
@@ -15,12 +16,17 @@ import '../core/models.dart';
 import '../core/podcast_models.dart';
 
 class AppPaths {
-  AppPaths._(this.root);
+  AppPaths._(this.root, {this.pathCodec = const ContainerPathCodec.none()});
 
-  factory AppPaths.forTesting(String rootPath) =>
-      AppPaths._(Directory(rootPath));
+  factory AppPaths.forTesting(
+    String rootPath, {
+    ContainerPathCodec pathCodec = const ContainerPathCodec.none(),
+  }) => AppPaths._(Directory(rootPath), pathCodec: pathCodec);
 
   final Directory root;
+
+  /// Keeps stored paths valid when iOS moves the app container.
+  final ContainerPathCodec pathCodec;
 
   Directory get jobs => Directory(p.join(root.path, 'jobs'));
   Directory get temporary => Directory(p.join(root.path, 'temporary'));
@@ -33,21 +39,33 @@ class AppPaths {
   File get videoPlayback => File(p.join(root.path, 'video_playback.json'));
   Directory get podcasts => Directory(p.join(root.path, 'podcasts'));
 
+  /// iOS: copies of imported media, one folder per import.
+  Directory get media => Directory(p.join(root.path, 'media'));
+
   static Future<AppPaths> create({
     void Function(double)? onMigrationProgress,
   }) async {
     final support = await getApplicationSupportDirectory();
-    await AppDataMigration(
-      destination: support,
-      legacyRoot: AppDataMigration.legacyDirectory(
-        support,
+    // MeowSTT never shipped on iOS, so there is nothing to bring over.
+    if (!Platform.isIOS) {
+      await AppDataMigration(
+        destination: support,
+        legacyRoot: AppDataMigration.legacyDirectory(
+          support,
+          windows: Platform.isWindows,
+        ),
+        isLegacyRunning: AppDataMigration.legacyProcessIsRunning,
         windows: Platform.isWindows,
-      ),
-      isLegacyRunning: AppDataMigration.legacyProcessIsRunning,
-      windows: Platform.isWindows,
-      onProgress: onMigrationProgress,
-    ).run();
-    final paths = AppPaths._(support);
+        onProgress: onMigrationProgress,
+      ).run();
+    }
+    final paths = Platform.isIOS
+        ? AppPaths._(
+            support,
+            // Application Support is <container>/Library/Application Support.
+            pathCodec: ContainerPathCodec(p.dirname(p.dirname(support.path))),
+          )
+        : AppPaths._(support);
     await paths.root.create(recursive: true);
     await paths.jobs.create(recursive: true);
     await paths.temporary.create(recursive: true);
@@ -55,6 +73,12 @@ class AppPaths {
     await paths.podcasts.create(recursive: true);
     return paths;
   }
+
+  Future<String> _read(File file) async =>
+      pathCodec.decode(await file.readAsString());
+
+  Future<void> _write(File file, String contents) =>
+      _atomicFileWriter.write(file, pathCodec.encode(contents));
 }
 
 class SecureCredentialStore
@@ -126,7 +150,7 @@ class JsonSettingsRepository implements SettingsRepository {
   Future<AppSettings> load() async {
     if (!await paths.settings.exists()) return const AppSettings();
     try {
-      final data = jsonDecode(await paths.settings.readAsString());
+      final data = jsonDecode(await paths._read(paths.settings));
       return AppSettings.fromJson((data as Map).cast<String, dynamic>());
     } on Object {
       return const AppSettings();
@@ -135,7 +159,7 @@ class JsonSettingsRepository implements SettingsRepository {
 
   @override
   Future<void> save(AppSettings settings) =>
-      _atomicFileWriter.write(paths.settings, jsonEncode(settings.toJson()));
+      paths._write(paths.settings, jsonEncode(settings.toJson()));
 }
 
 class LocalJobRepository implements JobRepository {
@@ -151,7 +175,7 @@ class LocalJobRepository implements JobRepository {
       final file = File(p.join(entity.path, 'manifest.json'));
       if (!await file.exists()) continue;
       try {
-        final json = jsonDecode(await file.readAsString());
+        final json = jsonDecode(await paths._read(file));
         result.add(
           TranscriptionJob.fromJson((json as Map).cast<String, dynamic>()),
         );
@@ -167,7 +191,7 @@ class LocalJobRepository implements JobRepository {
   @override
   Future<void> save(TranscriptionJob job) {
     final directory = Directory(p.join(paths.jobs.path, _safeId(job.id)));
-    return _atomicFileWriter.write(
+    return paths._write(
       File(p.join(directory.path, 'manifest.json')),
       job.toJsonString(),
     );
@@ -196,7 +220,7 @@ class JsonLibraryCatalogRepository implements LibraryCatalogRepository {
   Future<LibraryCatalog> load() async {
     if (!await paths.libraryCatalog.exists()) return const LibraryCatalog();
     try {
-      final data = jsonDecode(await paths.libraryCatalog.readAsString());
+      final data = jsonDecode(await paths._read(paths.libraryCatalog));
       return LibraryCatalog.fromJson((data as Map).cast<String, dynamic>());
     } on Object {
       return const LibraryCatalog();
@@ -204,10 +228,8 @@ class JsonLibraryCatalogRepository implements LibraryCatalogRepository {
   }
 
   @override
-  Future<void> save(LibraryCatalog catalog) => _atomicFileWriter.write(
-    paths.libraryCatalog,
-    jsonEncode(catalog.toJson()),
-  );
+  Future<void> save(LibraryCatalog catalog) =>
+      paths._write(paths.libraryCatalog, jsonEncode(catalog.toJson()));
 }
 
 class JsonInboxMonitorRepository implements InboxMonitorRepository {
@@ -221,7 +243,7 @@ class JsonInboxMonitorRepository implements InboxMonitorRepository {
       return const InboxMonitorStorage();
     }
     try {
-      final data = jsonDecode(await paths.inboxMonitor.readAsString());
+      final data = jsonDecode(await paths._read(paths.inboxMonitor));
       return InboxMonitorStorage.fromJson(
         (data as Map).cast<String, dynamic>(),
       );
@@ -232,7 +254,7 @@ class JsonInboxMonitorRepository implements InboxMonitorRepository {
 
   @override
   Future<void> save(InboxMonitorStorage storage) =>
-      _atomicFileWriter.write(paths.inboxMonitor, jsonEncode(storage.toJson()));
+      paths._write(paths.inboxMonitor, jsonEncode(storage.toJson()));
 }
 
 class JsonPodcastRepository implements PodcastRepository {
@@ -246,7 +268,7 @@ class JsonPodcastRepository implements PodcastRepository {
       return const PodcastLibraryState();
     }
     try {
-      final data = jsonDecode(await paths.podcastCatalog.readAsString());
+      final data = jsonDecode(await paths._read(paths.podcastCatalog));
       return PodcastLibraryState.fromJson(
         (data as Map).cast<String, dynamic>(),
       );
@@ -257,13 +279,13 @@ class JsonPodcastRepository implements PodcastRepository {
 
   @override
   Future<void> save(PodcastLibraryState state) =>
-      _atomicFileWriter.write(paths.podcastCatalog, jsonEncode(state.toJson()));
+      paths._write(paths.podcastCatalog, jsonEncode(state.toJson()));
 
   @override
   Future<Map<String, PodcastListenProgress>> loadPlaybackProgress() async {
     if (!await paths.podcastPlayback.exists()) return const {};
     try {
-      final data = jsonDecode(await paths.podcastPlayback.readAsString());
+      final data = jsonDecode(await paths._read(paths.podcastPlayback));
       if (data is! Map) return const {};
       final entries = data['entries'];
       if (entries is! List) return const {};
@@ -289,7 +311,7 @@ class JsonPodcastRepository implements PodcastRepository {
       for (final entry in progress.entries)
         {'episode_id': entry.key, ...entry.value.toJson()},
     ];
-    return _atomicFileWriter.write(
+    return paths._write(
       paths.podcastPlayback,
       jsonEncode({'version': 1, 'entries': entries}),
     );
@@ -352,7 +374,7 @@ class JsonVideoPlaybackRepository implements VideoPlaybackRepository {
     while (entries.length > maxEntries) {
       entries.remove(entries.keys.first);
     }
-    await _atomicFileWriter.write(
+    await paths._write(
       paths.videoPlayback,
       jsonEncode({
         'version': 1,
@@ -369,7 +391,7 @@ class JsonVideoPlaybackRepository implements VideoPlaybackRepository {
     if (cached != null) return cached;
     final entries = <String, VideoPlaybackEntry>{};
     try {
-      final data = jsonDecode(await paths.videoPlayback.readAsString());
+      final data = jsonDecode(await paths._read(paths.videoPlayback));
       final items = data is Map ? data['entries'] : null;
       if (items is List) {
         final sorted =

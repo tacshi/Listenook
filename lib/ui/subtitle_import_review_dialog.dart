@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
@@ -105,12 +107,16 @@ class _SubtitleImportReviewDialogState
     );
     final canSubmit =
         widget.review.media.isNotEmpty && !hasDuplicateSelection && !unresolved;
+    // Phones (and landscape phones) give the list what height there is.
+    final screen = MediaQuery.sizeOf(context);
+    final compact = screen.width < 600 || screen.height < 700;
     return AlertDialog(
       key: const Key('subtitle-import-review-dialog'),
+      insetPadding: compact ? const EdgeInsets.all(12) : null,
       title: Text(context.strings.t('subtitle_import_review_title')),
       content: SizedBox(
         width: 760,
-        height: 540,
+        height: compact ? max(160.0, screen.height - 260) : 540,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

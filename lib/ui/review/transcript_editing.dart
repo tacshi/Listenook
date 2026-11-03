@@ -8,6 +8,8 @@ import '../../core/models.dart';
 import '../../core/transcript_structure_editor.dart';
 import '../../l10n/strings.dart';
 import '../transcript_structure_cursor.dart';
+import '../keyboard_shortcuts.dart';
+import '../platform/platform_context.dart';
 import '../transcript_review.dart';
 import 'transcript_segments.dart';
 
@@ -187,6 +189,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
               const SingleActivator(LogicalKeyboardKey.enter, control: true):
                   _save,
               const SingleActivator(LogicalKeyboardKey.escape): widget.onCancel,
+              commandPeriod: widget.onCancel,
             },
             child: TextField(
               key: ValueKey('segment-editor-${widget.segment.id}'),
@@ -249,7 +252,7 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
     if (widget.isEditing) {
       final actionCount = (widget.isRepeating ? 1 : 0) + 2;
       return SizedBox(
-        width: actionCount * 32,
+        width: actionCount * segmentActionExtent(context),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -282,13 +285,20 @@ class _TranscriptSegmentEditorState extends State<TranscriptSegmentEditor> {
         ),
       );
     }
+    // Fingers cannot hover: the sentence being listened to (a tap makes a
+    // sentence current) shows its actions instead.
+    final touchCurrent = context.touchActive && widget.isCurrent;
     final repeatVisible =
-        widget.groupHovered || _hovered || _actionFocused || widget.isRepeating;
-    final editVisible = _hovered || _actionFocused;
+        widget.groupHovered ||
+        _hovered ||
+        _actionFocused ||
+        widget.isRepeating ||
+        touchCurrent;
+    final editVisible = _hovered || _actionFocused || touchCurrent;
     return Focus(
       onFocusChange: (value) => setState(() => _actionFocused = value),
       child: SizedBox(
-        width: 64,
+        width: 2 * segmentActionExtent(context),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -386,7 +396,8 @@ class _TranscriptStructureSplitTextState
   @override
   Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.bodyLarge;
-    return LayoutBuilder(
+    final pending = context.touchActive ? _hoveredTarget : null;
+    final text = LayoutBuilder(
       builder: (context, constraints) => MouseRegion(
         cursor: _hoveredTarget == null
             ? SystemMouseCursors.basic
@@ -412,9 +423,14 @@ class _TranscriptStructureSplitTextState
               constraints.maxWidth,
               style,
             );
-            if (target != null && widget.onSplit != null) {
-              unawaited(widget.onSplit!(target.rightTokenIndex));
+            if (target == null || widget.onSplit == null) return;
+            // A finger cannot preview by hovering: the first tap places the
+            // split, a second tap there (or the button) applies it.
+            if (context.touchActive && target != _hoveredTarget) {
+              setState(() => _hoveredTarget = target);
+              return;
             }
+            unawaited(widget.onSplit!(target.rightTokenIndex));
           },
           child: Stack(
             children: [
@@ -450,6 +466,25 @@ class _TranscriptStructureSplitTextState
           ),
         ),
       ),
+    );
+    if (pending == null || widget.onSplit == null) return text;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        text,
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: FilledButton.tonalIcon(
+            key: ValueKey('structure-split-confirm-${widget.segmentId}'),
+            onPressed: () {
+              setState(() => _hoveredTarget = null);
+              unawaited(widget.onSplit!(pending.rightTokenIndex));
+            },
+            icon: const Icon(Icons.content_cut_rounded, size: 18),
+            label: Text(context.strings.t('transcript_split_here')),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -529,49 +564,60 @@ class _TranscriptMergeBoundaryState extends State<TranscriptMergeBoundary> {
   bool _hovered = false;
 
   @override
-  Widget build(BuildContext context) => MouseRegion(
-    cursor: widget.enabled
-        ? TranscriptStructureCursors.merge
-        : SystemMouseCursors.forbidden,
-    onEnter: (_) => setState(() => _hovered = true),
-    onExit: (_) => setState(() => _hovered = false),
-    child: GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: widget.enabled ? () => unawaited(widget.onMerge()) : null,
-      child: SizedBox(
-        height: 14,
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 100),
-          opacity: _hovered ? 1 : 0,
-          child: Row(
-            children: [
-              Expanded(
-                child: Divider(
-                  color: widget.enabled
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).colorScheme.error,
-                ),
+  Widget build(BuildContext context) {
+    // Without hover the boundary stays visible and finger-sized.
+    final touch = context.touchActive;
+    return MouseRegion(
+      cursor: widget.enabled
+          ? TranscriptStructureCursors.merge
+          : SystemMouseCursors.forbidden,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.enabled ? () => unawaited(widget.onMerge()) : null,
+        child: Semantics(
+          button: true,
+          enabled: widget.enabled,
+          label: context.strings.t('transcript_merge_here'),
+          child: SizedBox(
+            height: touch ? 40 : 14,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 100),
+              opacity: _hovered ? 1 : (touch ? .6 : 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Divider(
+                      color: widget.enabled
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                  const SizedBox(width: 3),
+                  Icon(
+                    widget.enabled
+                        ? Icons.compress_rounded
+                        : Icons.block_rounded,
+                    size: touch ? 20 : 14,
+                    color: widget.enabled
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.error,
+                  ),
+                  const SizedBox(width: 3),
+                  Expanded(
+                    child: Divider(
+                      color: widget.enabled
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 3),
-              Icon(
-                widget.enabled ? Icons.compress_rounded : Icons.block_rounded,
-                size: 14,
-                color: widget.enabled
-                    ? Theme.of(context).colorScheme.primary
-                    : Theme.of(context).colorScheme.error,
-              ),
-              const SizedBox(width: 3),
-              Expanded(
-                child: Divider(
-                  color: widget.enabled
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).colorScheme.error,
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

@@ -9,13 +9,15 @@ import '../core/models.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'app_notice.dart';
+import 'platform/export_destination.dart';
 
 Future<void> exportDownloadedPodcastMedia(
   BuildContext context,
   TranscriptionJob job,
 ) async {
   final extension = p.extension(job.sourcePath).replaceFirst('.', '');
-  final destination = await getSaveLocation(
+  final target = await ExportTarget.file(
+    context,
     suggestedName: p.basename(job.sourcePath),
     acceptedTypeGroups: [
       XTypeGroup(
@@ -24,14 +26,12 @@ Future<void> exportDownloadedPodcastMedia(
       ),
     ],
   );
-  if (destination == null || !context.mounted) return;
-  await completePodcastMediaExport(
-    context,
-    () => context.read<AppController>().exportPodcastMedia(
-      job.id,
-      destination.path,
-    ),
-  );
+  if (target == null || !context.mounted) return;
+  final controller = context.read<AppController>();
+  await completePodcastMediaExport(context, () async {
+    final exported = await controller.exportPodcastMedia(job.id, target.path);
+    return await target.deliver() ? exported : null;
+  });
 }
 
 Future<void> exportDownloadedPodcastMediaBatch(
@@ -40,18 +40,19 @@ Future<void> exportDownloadedPodcastMediaBatch(
 ) async {
   final selected = jobs.toList(growable: false);
   if (selected.isEmpty) return;
-  final directory = await getDirectoryPath(
+  final target = await ExportTarget.folder(
+    context,
     confirmButtonText: context.strings.t('export'),
   );
-  if (directory == null || !context.mounted) return;
+  if (target == null || !context.mounted) return;
   final controller = context.read<AppController>();
   await completePodcastMediaBatchExport(context, () async {
     final exported = await exportPodcastMediaFilesToDirectory(
       selected,
-      directory,
+      target.path,
       (job, destination) => controller.exportPodcastMedia(job.id, destination),
     );
-    return exported.length;
+    return await target.deliver() ? exported.length : null;
   });
 }
 
@@ -95,11 +96,11 @@ Future<String> _availableExportPath(
 @visibleForTesting
 Future<void> completePodcastMediaExport(
   BuildContext context,
-  Future<String> Function() export,
+  // Null when the user dismissed the iOS share sheet.
+  Future<String?> Function() export,
 ) async {
   try {
-    await export();
-    if (!context.mounted) return;
+    if (await export() == null || !context.mounted) return;
     showAppNotice(
       context,
       message: context.strings.t('podcast_media_exported'),
@@ -118,11 +119,12 @@ Future<void> completePodcastMediaExport(
 @visibleForTesting
 Future<void> completePodcastMediaBatchExport(
   BuildContext context,
-  Future<int> Function() export,
+  // Null when the user dismissed the iOS share sheet.
+  Future<int?> Function() export,
 ) async {
   try {
     final count = await export();
-    if (!context.mounted) return;
+    if (count == null || !context.mounted) return;
     showAppNotice(
       context,
       message: context.strings

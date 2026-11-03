@@ -144,4 +144,45 @@ Second line.
     expect(find.byType(VideoPlayerPage), findsNothing);
     expect(find.text('open'), findsOneWidget);
   });
+
+  testWidgets('a player without a window has a close button (iOS)', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(platform: TargetPlatform.iOS),
+          localizationsDelegates: const [AppStrings.delegate],
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => Navigator.of(
+                context,
+              ).push(VideoPlayerPage.route('${directory.path}/talk.mp4')),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      );
+    });
+    await tester.tap(find.text('open'));
+    await tester.runAsync(() async {
+      await tester.pump();
+      for (var attempt = 0; attempt < 50; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        if (platform.operations.contains('play')) break;
+      }
+    });
+    await tester.pumpAndSettle();
+
+    final close = find.byKey(const Key('video-player-close'));
+    expect(close, findsOneWidget);
+    expect(tester.getSize(close).height, greaterThanOrEqualTo(44));
+    await tester.runAsync(() async {
+      await tester.tap(close);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.byType(VideoPlayerPage), findsNothing);
+  });
 }

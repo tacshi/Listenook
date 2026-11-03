@@ -19,6 +19,19 @@ abstract final class CoreMlSpeechRuntimeSupport {
   }
 }
 
+abstract final class LocalSpeechRuntimeSupport {
+  /// iPhone and iPad: iOS 18 on real hardware with about 8 GB of memory.
+  /// 8 GB devices report a little under 8 GiB, hence the 7 GiB floor.
+  static bool isMobileDeviceSupported({
+    required int? physicalMemoryBytes,
+    required int? osMajorVersion,
+    required bool simulator,
+  }) =>
+      !simulator &&
+      (osMajorVersion ?? 0) >= 18 &&
+      (physicalMemoryBytes ?? 0) >= 7 * 1024 * 1024 * 1024;
+}
+
 class LocalModelFile {
   const LocalModelFile({
     required this.path,

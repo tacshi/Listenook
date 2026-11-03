@@ -9,6 +9,8 @@ import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'job_actions.dart';
+import 'layout/size_class.dart';
+import 'platform/platform_context.dart';
 import 'inbox_monitor_setup_dialog.dart';
 import 'subtitle_import_review_dialog.dart';
 import 'transcript_export_dialog.dart';
@@ -80,8 +82,10 @@ class _InboxPageState extends State<InboxPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const _InboxMonitorPanel(),
-              const SizedBox(height: 12),
+              if (context.capabilities.folderMonitoring) ...[
+                const _InboxMonitorPanel(),
+                const SizedBox(height: 12),
+              ],
               if (controller.inboxJobs.isNotEmpty) ...[
                 _InboxActions(
                   onAddFiles: widget.onAddFiles,
@@ -181,63 +185,84 @@ class _InboxMonitorPanel extends StatelessWidget {
         .replaceFirst('{folder}', folder)
         .replaceFirst('{types}', '${config.extensions.length}')
         .replaceFirst('{count}', '$waitingCount');
+    final statusRow = Row(
+      children: [
+        Icon(Icons.circle, size: 11, color: statusColor),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                context.strings.t(statusKey),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              Text(
+                summary,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final actions = <Widget>[
+      IconButton(
+        key: const Key('inbox-monitor-rescan'),
+        tooltip: context.strings.t('inbox_monitor_rescan'),
+        onPressed: config.paused ? null : controller.rescanInboxMonitor,
+        icon: const Icon(Icons.refresh_rounded),
+      ),
+      TextButton.icon(
+        key: const Key('inbox-monitor-pause-resume'),
+        onPressed: () => controller.setInboxMonitorPaused(!config.paused),
+        icon: Icon(
+          config.paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+        ),
+        label: Text(
+          context.strings.t(
+            config.paused ? 'inbox_monitor_resume' : 'inbox_monitor_pause',
+          ),
+        ),
+      ),
+      TextButton(
+        key: const Key('inbox-monitor-change'),
+        onPressed: () => showInboxMonitorSetupDialog(context),
+        child: Text(context.strings.t('inbox_monitor_change')),
+      ),
+      IconButton(
+        key: const Key('inbox-monitor-remove-folder'),
+        tooltip: context.strings.t('inbox_monitor_remove_folder'),
+        onPressed: controller.clearInboxMonitor,
+        icon: const Icon(Icons.folder_off_outlined),
+      ),
+    ];
     return Card(
       key: const Key('inbox-monitor-status-card'),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          children: [
-            Icon(Icons.circle, size: 11, color: statusColor),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    context.strings.t(statusKey),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  Text(
-                    summary,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
-            IconButton(
-              key: const Key('inbox-monitor-rescan'),
-              tooltip: context.strings.t('inbox_monitor_rescan'),
-              onPressed: config.paused ? null : controller.rescanInboxMonitor,
-              icon: const Icon(Icons.refresh_rounded),
-            ),
-            TextButton.icon(
-              key: const Key('inbox-monitor-pause-resume'),
-              onPressed: () => controller.setInboxMonitorPaused(!config.paused),
-              icon: Icon(
-                config.paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-              ),
-              label: Text(
-                context.strings.t(
-                  config.paused
-                      ? 'inbox_monitor_resume'
-                      : 'inbox_monitor_pause',
+        child: LayoutBuilder(
+          builder: (context, constraints) => constraints.maxWidth < 560
+              // Narrow: the controls go under the status.
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    statusRow,
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: actions,
+                    ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: statusRow),
+                    ...actions,
+                  ],
                 ),
-              ),
-            ),
-            TextButton(
-              key: const Key('inbox-monitor-change'),
-              onPressed: () => showInboxMonitorSetupDialog(context),
-              child: Text(context.strings.t('inbox_monitor_change')),
-            ),
-            IconButton(
-              key: const Key('inbox-monitor-remove-folder'),
-              tooltip: context.strings.t('inbox_monitor_remove_folder'),
-              onPressed: controller.clearInboxMonitor,
-              icon: const Icon(Icons.folder_off_outlined),
-            ),
-          ],
         ),
       ),
     );
@@ -258,6 +283,8 @@ class _InboxActions extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
     final showFullLabels = MediaQuery.sizeOf(context).width >= 1180;
+    // Phones keep only Transcribe labelled so the buttons fit one row.
+    final compact = LayoutSize.of(context).isCompact;
     final actions = <Widget>[
       if (controller.inboxJobs.isNotEmpty) ...[
         showFullLabels
@@ -277,18 +304,33 @@ class _InboxActions extends StatelessWidget {
                 tooltip: context.strings.t('new_batch'),
                 icon: const Icon(Icons.note_add_outlined),
               ),
-        OutlinedButton.icon(
-          key: const Key('header-import-folder'),
-          onPressed: onImportFolder,
-          icon: const Icon(Icons.create_new_folder_outlined),
-          label: Text(context.strings.t('import_folder')),
-        ),
-        OutlinedButton.icon(
-          key: const Key('header-add-files'),
-          onPressed: onAddFiles,
-          icon: const Icon(Icons.add_rounded),
-          label: Text(context.strings.t('add_media_subtitles')),
-        ),
+        if (compact) ...[
+          IconButton.outlined(
+            key: const Key('header-import-folder'),
+            onPressed: onImportFolder,
+            tooltip: context.strings.t('import_folder'),
+            icon: const Icon(Icons.create_new_folder_outlined),
+          ),
+          IconButton.outlined(
+            key: const Key('header-add-files'),
+            onPressed: onAddFiles,
+            tooltip: context.strings.t('add_media_subtitles'),
+            icon: const Icon(Icons.add_rounded),
+          ),
+        ] else ...[
+          OutlinedButton.icon(
+            key: const Key('header-import-folder'),
+            onPressed: onImportFolder,
+            icon: const Icon(Icons.create_new_folder_outlined),
+            label: Text(context.strings.t('import_folder')),
+          ),
+          OutlinedButton.icon(
+            key: const Key('header-add-files'),
+            onPressed: onAddFiles,
+            icon: const Icon(Icons.add_rounded),
+            label: Text(context.strings.t('add_media_subtitles')),
+          ),
+        ],
         FilledButton.icon(
           key: const Key('header-transcribe'),
           onPressed: controller.canStartReady ? controller.startReady : null,
@@ -303,7 +345,7 @@ class _InboxActions extends StatelessWidget {
         if (controller.completedCount >= 2)
           _ExportCompletedButton(
             controller: controller,
-            compact: !showFullLabels,
+            compact: !showFullLabels || compact,
           ),
       ],
     ];
@@ -469,7 +511,23 @@ class _InboxBody extends StatelessWidget {
           SizedBox(
             key: const Key('inbox-queue-pane'),
             width: split ? 400 : constraints.maxWidth,
-            child: _QueueList(dragging: dragging),
+            // Too narrow for the options beside the queue (phones, iPad
+            // portrait and Split View): they open in a sheet instead.
+            child: split
+                ? _QueueList(dragging: dragging)
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: _QueueList(dragging: dragging)),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        key: const Key('inbox-batch-options-sheet'),
+                        onPressed: () => _showBatchOptionsSheet(context),
+                        icon: const Icon(Icons.tune_rounded),
+                        label: Text(context.strings.t('details')),
+                      ),
+                    ],
+                  ),
           ),
           if (split) ...[
             const SizedBox(width: 10),
@@ -483,6 +541,24 @@ class _InboxBody extends StatelessWidget {
     },
   );
 }
+
+Future<void> _showBatchOptionsSheet(BuildContext context) =>
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (sheetContext) => ChangeNotifierProvider.value(
+        value: context.read<AppController>(),
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * .8,
+          child: const Padding(
+            padding: EdgeInsets.fromLTRB(8, 0, 8, 8),
+            child: _BatchOptionsPanel(),
+          ),
+        ),
+      ),
+    );
 
 class _BatchOptionsPanel extends StatefulWidget {
   const _BatchOptionsPanel();
@@ -550,6 +626,8 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
           if (hasTranscriptionJobs) ...[
             DropdownButtonFormField<TranscriptionProvider>(
               key: const Key('session-transcription-provider'),
+              // Long provider names shorten instead of overflowing a phone.
+              isExpanded: true,
               initialValue: provider,
               decoration: InputDecoration(
                 labelText: context.strings.t('transcription_provider'),
@@ -655,6 +733,7 @@ class _BatchOptionsPanelState extends State<_BatchOptionsPanel> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
+              isExpanded: true,
               key: const Key('translation-target-language'),
               initialValue:
                   supportedTranslationLanguageCodes.contains(
@@ -1008,9 +1087,10 @@ class _JobTile extends StatelessWidget {
           children: [
             ReorderableDragStartListener(
               index: index,
-              child: const Padding(
-                padding: EdgeInsets.all(6),
-                child: Icon(Icons.drag_indicator, size: 20),
+              child: Padding(
+                // A finger needs the full 44 points to grab the handle.
+                padding: EdgeInsets.all(context.touchActive ? 12 : 6),
+                child: const Icon(Icons.drag_indicator, size: 20),
               ),
             ),
             _StatusIcon(job: job),

@@ -19,10 +19,18 @@ abstract interface class CompactAudioEncoder {
     required String outputPath,
     required int bitRate,
   });
+
+  /// Lossless 16 kHz mono ALAC in an .m4a, where no command-line encoder can
+  /// run (iOS).
+  Future<void> encodeAlac({
+    required String inputPath,
+    required String outputPath,
+  });
 }
 
-class MacosCompactAudioEncoder implements CompactAudioEncoder {
-  const MacosCompactAudioEncoder({MethodChannel? channel})
+/// AVFoundation encoders in the macOS and iOS runners.
+class AppleAudioEncoder implements CompactAudioEncoder {
+  const AppleAudioEncoder({MethodChannel? channel})
     : _channel = channel ?? const MethodChannel(_channelName);
 
   static const _channelName = AppIdentity.encoderChannel;
@@ -38,13 +46,44 @@ class MacosCompactAudioEncoder implements CompactAudioEncoder {
     'outputPath': outputPath,
     'bitRate': bitRate,
   });
+
+  @override
+  Future<void> encodeAlac({
+    required String inputPath,
+    required String outputPath,
+  }) => _channel.invokeMethod<void>('encodeAlac', {
+    'inputPath': inputPath,
+    'outputPath': outputPath,
+  });
+}
+
+/// The operating system, as far as encoding is concerned.
+enum MediaHost {
+  macOS,
+  iOS,
+  windows,
+  other;
+
+  static MediaHost get current => Platform.isMacOS
+      ? macOS
+      : Platform.isIOS
+      ? iOS
+      : Platform.isWindows
+      ? windows
+      : other;
+
+  /// AVFoundation is available: uploads can be compact AAC, and lossless
+  /// output is ALAC in an .m4a rather than FLAC.
+  bool get apple => this == macOS || this == iOS;
 }
 
 class ProcessMediaService implements MediaService {
   ProcessMediaService(
     this.paths, {
-    CompactAudioEncoder compactAudioEncoder = const MacosCompactAudioEncoder(),
-  }) : _compactAudioEncoder = compactAudioEncoder;
+    CompactAudioEncoder compactAudioEncoder = const AppleAudioEncoder(),
+    MediaHost? host,
+  }) : _compactAudioEncoder = compactAudioEncoder,
+       host = host ?? MediaHost.current;
 
   static const supportedAudioExtensions = {'.mp3', '.wav', '.m4a', '.ogg'};
   static const supportedVideoExtensions = {'.mp4', '.mkv', '.avi'};
@@ -54,6 +93,7 @@ class ProcessMediaService implements MediaService {
   };
 
   final AppPaths paths;
+  final MediaHost host;
   final CompactAudioEncoder _compactAudioEncoder;
   String? _encoderPath;
 
@@ -67,7 +107,7 @@ class ProcessMediaService implements MediaService {
     if (metadata.hasVideo || !supportedAudioExtensions.contains(extension)) {
       return false;
     }
-    if (profile == MediaUploadProfile.standard || !Platform.isMacOS) {
+    if (profile == MediaUploadProfile.standard || !host.apple) {
       return true;
     }
     final codec = metadata.audioCodec?.toLowerCase() ?? '';
@@ -206,7 +246,7 @@ class ProcessMediaService implements MediaService {
     final pcmPath = p.join(paths.temporary.path, '$safeKey-extract.wav');
     final output = p.join(
       paths.temporary.path,
-      Platform.isMacOS ? '$safeKey.m4a' : '$safeKey.flac',
+      host.apple ? '$safeKey.m4a' : '$safeKey.flac',
     );
     await deleteTemporary(output);
     try {
@@ -223,7 +263,7 @@ class ProcessMediaService implements MediaService {
         throw const OperationCancelledException();
       }
       onProgress?.call(0.9, null);
-      if (profile == MediaUploadProfile.compactSpeech && Platform.isMacOS) {
+      if (profile == MediaUploadProfile.compactSpeech && host.apple) {
         await _compactAudioEncoder.encodeAac(
           inputPath: pcmPath,
           outputPath: output,
@@ -353,10 +393,12 @@ class ProcessMediaService implements MediaService {
         await output.length() > 0 &&
         (await output.lastModified()).isAfter(await source.lastModified());
     if (await fresh()) return output.path;
-    await (_audioAnalyses[safeKey] ??= _analyzeAudio(
-      sourcePath,
-      safeKey,
-    ).whenComplete(() => _audioAnalyses.remove(safeKey)));
+    // The cleanup must not return the removed future: whenComplete waits
+    // for a returned future, and this one is the whenComplete future itself.
+    await (_audioAnalyses[safeKey] ??= _analyzeAudio(sourcePath, safeKey)
+        .whenComplete(() {
+          _audioAnalyses.remove(safeKey);
+        }));
     if (!await fresh()) {
       throw const MediaException(
         'waveform_failed',
@@ -499,9 +541,16 @@ class ProcessMediaService implements MediaService {
     String output, {
     CancelCheck? shouldCancel,
   }) async {
+    if (host == MediaHost.iOS) {
+      await _compactAudioEncoder.encodeAlac(
+        inputPath: pcmPath,
+        outputPath: output,
+      );
+      return;
+    }
     late final String executable;
     late final List<String> arguments;
-    if (Platform.isWindows) {
+    if (host == MediaHost.windows) {
       executable = await _resolveWindowsEncoder();
       arguments = [
         '--silent',
@@ -510,7 +559,7 @@ class ProcessMediaService implements MediaService {
         '--output-name=$output',
         pcmPath,
       ];
-    } else if (Platform.isMacOS) {
+    } else if (host == MediaHost.macOS) {
       executable = '/usr/bin/afconvert';
       if (!await File(executable).exists()) {
         throw const MediaException(
@@ -647,7 +696,10 @@ class ProcessMediaService implements MediaService {
       final mpvVersion = await native.getProperty('mpv-version');
       String encoderVersion;
       String encoderPath;
-      if (Platform.isWindows) {
+      if (host == MediaHost.iOS) {
+        encoderPath = 'AVFoundation';
+        encoderVersion = 'AVFoundation (ALAC)';
+      } else if (host == MediaHost.windows) {
         encoderPath = await _resolveWindowsEncoder(refresh: true);
         final result = await Process.run(encoderPath, ['--version']);
         if (result.exitCode != 0) {
@@ -660,7 +712,7 @@ class ProcessMediaService implements MediaService {
           );
         }
         encoderVersion = result.stdout.toString().trim().split('\n').first;
-      } else if (Platform.isMacOS) {
+      } else if (host == MediaHost.macOS) {
         encoderPath = '/usr/bin/afconvert';
         if (!await File(encoderPath).exists()) {
           throw const MediaException(

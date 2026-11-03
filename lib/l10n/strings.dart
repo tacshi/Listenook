@@ -285,7 +285,7 @@ class AppStrings {
     'drop_title': 'Drop media with matching subtitles',
     'supported': 'Audio/video + SRT/WebVTT · up to 5 hours each',
     'subtitle_import_review_title': 'Review media and subtitles',
-    'subtitle_import_stays_local': 'Audio stays on this Mac',
+    'subtitle_import_stays_local': 'Audio stays on this device',
     'subtitle_import_no_stt_charge': 'No transcription API charge',
     'subtitle_import_translation_disclosure':
         'Optional LLM translation can still send subtitle text to your configured provider and may incur a charge.',
@@ -496,7 +496,7 @@ class AppStrings {
         'Uses MOSS-Transcribe-Diarize-Pro with speaker labels. Media is converted to compact AAC before upload when needed; Soniox-only options are not sent to MOSS.',
     'moss_pro': 'MOSS Pro',
     'moss_local_description':
-        'Local transcription with speaker labels. Media stays on this Mac.',
+        'Local transcription with speaker labels. Media stays on this device.',
     'qwen3_local_description':
         'Local multilingual transcription with segment timestamps. Install an alignment model for word timing. Speaker labels are unavailable.',
     'local_moss_model': 'Local MOSS model',
@@ -663,7 +663,7 @@ class AppStrings {
         'Could not save the key securely. Check Keychain access and try again.',
     'privacy': 'Privacy',
     'privacy_body':
-        'Cloud transcription uploads media directly to the Soniox or MOSI provider selected for the job. Imported SRT/WebVTT alignment stays on this Mac and never calls a transcription provider. Listenook deletes the supported remote resources it created; MOSI task records follow the provider retention policy. Optional LLM translation and AI Briefs send transcript text—not media—to your configured AI endpoint.',
+        'Cloud transcription uploads media directly to the Soniox or MOSI provider selected for the job. Imported SRT/WebVTT alignment stays on this device and never calls a transcription provider. Listenook deletes the supported remote resources it created; MOSI task records follow the provider retention policy. Optional LLM translation and AI Briefs send transcript text—not media—to your configured AI endpoint.',
     'notices': 'Third-party notices',
     'notices_body':
         'Playback and extraction use bundled libmpv components. Windows distributions also include the compact FLAC encoder. Soniox and MOSI are third-party transcription providers. Podcast search uses Apple’s public iTunes Search API; episode media and publisher transcripts are fetched from the show’s public RSS feed. Provenance and license texts are included with each distribution.',
@@ -747,7 +747,7 @@ class AppStrings {
     'error_moss_transcription_failed': 'MOSS could not transcribe this file.',
     'error_moss_unavailable': 'MOSS Pro transcription is unavailable.',
     'error_local_stt_unsupported':
-        'MOSS Local requires an Apple Silicon Mac running macOS 15 or later.',
+        'Local transcription needs an Apple Silicon Mac with macOS 15 or later, or an iPhone or iPad with 8 GB of memory and iOS 18 or later.',
     'error_local_stt_model_missing':
         'Install the local MOSS model in Settings.',
     'error_local_worker_missing':
@@ -775,7 +775,7 @@ class AppStrings {
     'error_alignment_failed':
         'Precise word timing failed; the speaker-level transcript was kept.',
     'error_alignment_unsupported':
-        'Local alignment is unavailable on this Mac.',
+        'Local alignment is unavailable on this device.',
     'error_alignment_language_unsupported':
         'The selected language is not supported by local forced alignment.',
     'error_alignment_model_missing':
@@ -906,6 +906,19 @@ class AppStrings {
         'Choose a language supported by Soniox translation.',
     'error_unexpected': 'Something went wrong. Try again.',
     'error_unknown': 'Something went wrong. Try again.',
+    'close_player': 'Close player',
+    'job_finished_notification_title': 'Finished in Listenook',
+    'transcript_split_here': 'Split here',
+    'transcript_merge_here': 'Merge with the next subtitle',
+    'redo': 'Redo',
+    'hold_to_repeat_sentence': 'Hold to repeat this sentence',
+    'library_groups_and_tags': 'Groups and tags',
+    'menu_go': 'Go',
+    'menu_settings': 'Settings…',
+    'menu_watch_video': 'Watch a Video…',
+    'menu_toggle_sidebar': 'Show or Hide Sidebar',
+    'error_local_stt_insufficient_memory':
+        'Not enough free memory for local transcription. Close other apps and try again.',
   };
 
   static const _zh = <String, String>{
@@ -1069,7 +1082,7 @@ class AppStrings {
     'drop_title': '拖入媒体及同名字幕',
     'supported': '音视频 + SRT/WebVTT · 单文件最长 5 小时',
     'subtitle_import_review_title': '确认媒体与字幕',
-    'subtitle_import_stays_local': '音频保留在此 Mac',
+    'subtitle_import_stays_local': '音频保留在此设备',
     'subtitle_import_no_stt_charge': '不产生转写 API 费用',
     'subtitle_import_translation_disclosure':
         '可选的 LLM 翻译仍可能把字幕文本发送到你配置的服务商，并产生费用。',
@@ -1492,7 +1505,7 @@ class AppStrings {
     'error_moss_transcription_failed': 'MOSS 无法转写此文件。',
     'error_moss_unavailable': 'MOSS Pro 转写不可用。',
     'error_local_stt_unsupported':
-        'MOSS Local 需要运行 macOS 15 或更高版本的 Apple Silicon Mac。',
+        '本地转写需要运行 macOS 15 或更高版本的 Apple 芯片 Mac，或者内存 8 GB、运行 iOS 18 或更高版本的 iPhone 或 iPad。',
     'error_local_stt_model_missing': '请先在“设置”中安装本地 MOSS 模型。',
     'error_local_worker_missing': '应用中缺少已签名的本地语音工作进程。',
     'error_local_worker_failed': '本地对齐进程意外停止。',
@@ -1506,7 +1519,7 @@ class AppStrings {
     'error_alignment_partial': '部分片段无法生成可靠的词级时间。',
     'error_alignment_segment_too_long': '本地对齐已跳过超过 29 秒的字幕片段。',
     'error_alignment_failed': '精确时间轴生成失败，已保留说话人段落稿。',
-    'error_alignment_unsupported': '此 Mac 无法使用本地对齐。',
+    'error_alignment_unsupported': '此设备无法使用本地对齐。',
     'error_alignment_language_unsupported': '本地强制对齐不支持所选语言。',
     'error_alignment_model_missing': '请安装已选择的 Qwen3 对齐模型以生成词级时间。',
     'error_alignment_model_not_selected': '请在“设置”中选择默认词级时间模型。',
@@ -1591,6 +1604,18 @@ class AppStrings {
     'error_soniox_translation_invalid_language': '请选择 Soniox 翻译支持的语言。',
     'error_unexpected': '出现问题，请重试。',
     'error_unknown': '出现问题，请重试。',
+    'close_player': '关闭播放器',
+    'job_finished_notification_title': '聆页已完成',
+    'transcript_split_here': '在此拆分',
+    'transcript_merge_here': '与下一条字幕合并',
+    'redo': '重做',
+    'hold_to_repeat_sentence': '按住以重复本句',
+    'library_groups_and_tags': '分组和标签',
+    'menu_go': '前往',
+    'menu_settings': '设置…',
+    'menu_watch_video': '观看视频…',
+    'menu_toggle_sidebar': '显示或隐藏边栏',
+    'error_local_stt_insufficient_memory': '可用内存不足，无法本地转写。请关闭其他 App 后重试。',
   };
 
   static const _translationLanguagesEn = <String, String>{

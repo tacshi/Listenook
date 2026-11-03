@@ -209,6 +209,8 @@ class _MossTimingBar extends StatelessWidget {
               Tooltip(
                 message:
                     alignment.warningMessage ?? context.strings.error(warning),
+                // Only a hint: a tap shows it, as nothing else can.
+                triggerMode: TooltipTriggerMode.tap,
                 child: const Icon(Icons.warning_amber_rounded, size: 18),
               ),
             if (!active) ...[

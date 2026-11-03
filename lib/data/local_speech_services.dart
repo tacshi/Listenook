@@ -322,6 +322,7 @@ class ProcessLocalSttService implements LocalSttService {
     required LocalPcmPreparer pcm,
     required LocalSpeechWorker worker,
     required bool platformSupported,
+    this.mossParallelChunks = 2,
     MossTaggedTranscriptParser parser = const MossTaggedTranscriptParser(),
     QwenStructuredTranscriptParser qwenParser =
         const QwenStructuredTranscriptParser(),
@@ -336,6 +337,10 @@ class ProcessLocalSttService implements LocalSttService {
   final LocalPcmPreparer _pcm;
   final LocalSpeechWorker _worker;
   final bool _platformSupported;
+
+  /// MOSS chunks decoded at once, each with its own model copy. iPhones and
+  /// iPads run one to stay inside their memory limit.
+  final int mossParallelChunks;
   final MossTaggedTranscriptParser _parser;
   final QwenStructuredTranscriptParser _qwenParser;
 
@@ -389,7 +394,7 @@ class ProcessLocalSttService implements LocalSttService {
           'audio_path': prepared.path,
           if (request.engine == LocalSttEngine.mossDiarize) ...{
             'chunk_seconds': 30,
-            'parallel_chunks': 2,
+            'parallel_chunks': mossParallelChunks,
             'max_new_tokens_per_chunk': 640,
             'hotwords': request.options.contextTerms,
           } else ...{

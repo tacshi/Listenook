@@ -37,6 +37,12 @@ including after a restart or local history deletion. Listenook never moves,
 renames, changes, or deletes source media. Discovery alone never uploads or
 transcribes a file; the user must still press **Transcribe**.
 
+On iPhone and iPad there is no folder monitoring. Files you import or open in
+Listenook from other apps are copied into the app's private storage, because
+iOS lends other apps' files only briefly. These copies stay on the device and are deleted with the transcript
+that uses them. Large files (models, downloaded episodes, temporary audio) are
+excluded from iCloud backups.
+
 After an Inbox folder is configured, closing the window may leave Listenook
 running in the macOS menu bar or Windows notification area so monitoring and
 active jobs can continue. Optional launch at login is disabled by default.
@@ -46,7 +52,7 @@ denied without disabling monitoring; the tray waiting count remains available.
 
 When you explicitly start cloud transcription, Listenook uploads the selected
 media directly to the Soniox or MOSI service recorded on that job, using the
-matching API key. For MOSS Pro on macOS, video, lossless audio, and high-bitrate
+matching API key. For MOSS Pro on macOS and iOS, video, lossless audio, and high-bitrate
 audio are first converted locally to a temporary 16 kHz mono AAC copy; only the
 derived audio is uploaded, and the temporary copy is deleted after use. Soniox
 jobs create a file and transcription resource; Listenook attempts

@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../core/dictation_comparison.dart';
 import '../l10n/strings.dart';
+import 'platform/platform_context.dart';
 
 class DictationPanel extends StatelessWidget {
   const DictationPanel({
@@ -33,10 +34,7 @@ class DictationPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final strings = context.strings;
-    final theme = Theme.of(context);
-    final shortcutModifier = theme.platform == TargetPlatform.macOS
-        ? '⌘'
-        : 'Ctrl+';
+    final shortcutModifier = context.capabilities.shortcutModifierLabel;
     final matches = result?.matches == true;
     final feedbackLabel = strings.t(
       matches ? 'dictation_matches' : 'dictation_retry',
@@ -120,6 +118,7 @@ class DictationPanel extends StatelessWidget {
                             child: Tooltip(
                               message: feedbackLabel,
                               excludeFromSemantics: true,
+                              triggerMode: TooltipTriggerMode.tap,
                               child: Icon(
                                 matches
                                     ? Icons.check_rounded

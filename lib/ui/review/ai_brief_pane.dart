@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
@@ -10,6 +9,8 @@ import '../../data/transcript_exporter.dart';
 import '../../l10n/strings.dart';
 import '../../state/app_controller.dart';
 import '../app_notice.dart';
+import '../platform/export_destination.dart';
+import '../platform/platform_context.dart';
 
 class AiBriefDialogResult {
   const AiBriefDialogResult(
@@ -120,6 +121,7 @@ Future<AiBriefDialogResult?> showAiBriefGenerationDialog(
                   const SizedBox(height: 16),
                   if (sections.contains(AiBriefSection.languageNotes)) ...[
                     DropdownButtonFormField<String>(
+                      isExpanded: true,
                       key: const Key('ai-brief-learning-language'),
                       initialValue: learningLanguage ?? '',
                       decoration: InputDecoration(
@@ -153,6 +155,7 @@ Future<AiBriefDialogResult?> showAiBriefGenerationDialog(
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<AiLearningLevel>(
+                      isExpanded: true,
                       key: const Key('ai-brief-learning-level'),
                       initialValue: learningLevel,
                       decoration: InputDecoration(
@@ -175,6 +178,7 @@ Future<AiBriefDialogResult?> showAiBriefGenerationDialog(
                     const SizedBox(height: 16),
                   ],
                   DropdownButtonFormField<String>(
+                    isExpanded: true,
                     key: const Key('ai-brief-output-language'),
                     initialValue: outputLanguage,
                     decoration: InputDecoration(
@@ -625,7 +629,9 @@ class _AiBriefSectionCardState extends State<_AiBriefSectionCard> {
   bool _menuOpen = false;
   bool _actionsFocused = false;
 
-  bool get _showActions => _hovered || _menuOpen || _actionsFocused;
+  // Fingers cannot hover, so touch keeps the actions in view.
+  bool get _showActions =>
+      _hovered || _menuOpen || _actionsFocused || context.touchActive;
 
   @override
   Widget build(BuildContext context) => MouseRegion(
@@ -927,7 +933,9 @@ class _AiLanguageNoteTileState extends State<_AiLanguageNoteTile> {
   bool _menuOpen = false;
   bool _menuFocused = false;
 
-  bool get _showMenu => _hovered || _menuOpen || _menuFocused;
+  // Fingers cannot hover, so touch keeps the menu in view.
+  bool get _showMenu =>
+      _hovered || _menuOpen || _menuFocused || context.touchActive;
 
   @override
   Widget build(BuildContext context) => MouseRegion(
@@ -1094,12 +1102,13 @@ Future<void> copyBriefText(BuildContext context, String text) async {
 }
 
 Future<void> exportBrief(BuildContext context, String jobId) async {
-  final directory = await getDirectoryPath(
+  final target = await ExportTarget.folder(
+    context,
     confirmButtonText: context.strings.t('export_brief'),
   );
-  if (directory == null || !context.mounted) return;
-  await context.read<AppController>().exportAiBrief(jobId, directory);
-  if (!context.mounted) return;
+  if (target == null || !context.mounted) return;
+  await context.read<AppController>().exportAiBrief(jobId, target.path);
+  if (!await target.deliver() || !context.mounted) return;
   showAppNotice(
     context,
     message: context.strings.t('brief_exported'),
@@ -1397,6 +1406,7 @@ Future<void> _addInsight(
             mainAxisSize: MainAxisSize.min,
             children: [
               DropdownButtonFormField<AiInsightType>(
+                isExpanded: true,
                 initialValue: type,
                 items: [
                   for (final value in AiInsightType.values)

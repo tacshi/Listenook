@@ -1,7 +1,6 @@
 import '../core/app_identity.dart';
 import 'dart:async';
 
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
@@ -15,17 +14,22 @@ import '../core/windowing/window_caption_button.dart';
 import '../core/windowing/window_drag_area.dart';
 import '../data/desktop_runtime.dart';
 import '../data/desktop_tray.dart';
+import '../data/managed_media_store.dart';
 import '../l10n/strings.dart';
 import '../data/update_service.dart';
 import '../state/app_controller.dart';
+import '../state/now_playing_coordinator.dart';
 import '../state/podcast_controller.dart';
 import '../state/podcast_player.dart';
 import '../state/video_open_requests.dart';
 import 'app_notice.dart';
 import 'inbox_page.dart';
 import 'keyboard_shortcuts.dart';
+import 'layout/size_class.dart';
 import 'library_page.dart';
 import 'podcast_mini_bar.dart';
+import 'platform/file_picking.dart';
+import 'platform/platform_context.dart';
 import 'podcast_page.dart';
 import 'review_fullscreen_controller.dart';
 import 'settings_page.dart';
@@ -71,6 +75,10 @@ class _AppShellState extends State<AppShell>
   UpdateService? _updates;
   VideoOpenRequests? _videoRequests;
   Route<void>? _videoPlayerRoute;
+  PodcastNowPlayingSource? _podcastNowPlaying;
+  bool _inBackground = false;
+  Set<String> _busyJobs = const {};
+  bool _notificationPermissionRequested = false;
 
   @override
   void initState() {
@@ -82,6 +90,14 @@ class _AppShellState extends State<AppShell>
     _tray = Provider.of<DesktopTray?>(context, listen: false);
     _updates = Provider.of<UpdateService?>(context, listen: false);
     _videoRequests = Provider.of<VideoOpenRequests?>(context, listen: false);
+    final nowPlaying = Provider.of<NowPlayingCoordinator?>(
+      context,
+      listen: false,
+    );
+    final podcastPlayer = _podcastController(listen: false)?.playback;
+    if (nowPlaying != null && podcastPlayer != null) {
+      _podcastNowPlaying = PodcastNowPlayingSource(podcastPlayer, nowPlaying);
+    }
     final playerWindows = VideoPlayerWindows.instance;
     if (playerWindows == null) {
       // Without windowing the player is a route over this shell.
@@ -124,6 +140,9 @@ class _AppShellState extends State<AppShell>
   }
 
   Future<void> _syncDisplayName(AppStrings strings) async {
+    if (context.capabilities.nativeKeyCommandMenu) {
+      unawaited(_syncMenuTitles(strings));
+    }
     try {
       _mainWindow?.setMainTitle(strings.appName);
       await _desktopRuntime?.setDisplayName(
@@ -132,6 +151,25 @@ class _AppShellState extends State<AppShell>
       );
     } on MissingPluginException {
       // Native surfaces are unavailable in widget tests.
+    }
+  }
+
+  /// The iPad menu bar follows the language chosen in the app.
+  Future<void> _syncMenuTitles(AppStrings strings) async {
+    try {
+      await _nativeNavigationChannel.invokeMethod<void>('setMenuTitles', {
+        'go': strings.t('menu_go'),
+        'podcast': strings.t('podcast'),
+        'workspace': strings.t('workspace'),
+        'library': strings.t('library'),
+        'inbox': strings.t('inbox'),
+        'settings': strings.t('menu_settings'),
+        'add_files': strings.t('add_media_subtitles'),
+        'watch_video': strings.t('menu_watch_video'),
+        'toggle_sidebar': strings.t('menu_toggle_sidebar'),
+      });
+    } on MissingPluginException {
+      // No native menu in widget tests.
     }
   }
 
@@ -183,12 +221,25 @@ class _AppShellState extends State<AppShell>
     _mainWindow?.mainCloseHandler = null;
     _tray?.listener = null;
     _nativeNavigationChannel.setMethodCallHandler(null);
+    _podcastNowPlaying?.dispose();
     super.dispose();
   }
 
   void _handleVideoRequests() {
-    final path = _videoRequests?.takeLatest();
-    if (path != null && mounted) unawaited(_openVideoPlayer(path));
+    final requests = _videoRequests;
+    if (requests == null || !mounted) return;
+    if (requests.hasImports) unawaited(_importReceivedFiles(requests));
+    final path = requests.takeLatest();
+    if (path != null) unawaited(_openVideoPlayer(path));
+  }
+
+  /// Files opened from other apps or dropped on the app (iOS): kept like
+  /// picked files, then reviewed into the Inbox.
+  Future<void> _importReceivedFiles(VideoOpenRequests requests) async {
+    var paths = requests.takeImports();
+    final store = Provider.of<ManagedMediaStore?>(context, listen: false);
+    if (store != null) paths = await store.adopt(paths);
+    if (paths.isNotEmpty && mounted) await _importSources(paths);
   }
 
   /// Pauses review and podcast playback while a video plays.
@@ -223,15 +274,20 @@ class _AppShellState extends State<AppShell>
   }
 
   Future<void> _watchVideo() async {
-    final file = await openFile(
+    // Only watched, not kept: the picker's temporary copy is enough.
+    final paths = await pickFiles(
+      context,
+      multiple: false,
+      keep: false,
       acceptedTypeGroups: [
-        XTypeGroup(
+        fileTypeGroup(
+          context,
           label: context.strings.t('video_files'),
-          extensions: supportedPlayerVideoExtensions.toList(growable: false),
+          extensions: supportedPlayerVideoExtensions,
         ),
       ],
     );
-    if (file != null) _videoRequests?.addAll([file.path]);
+    _videoRequests?.addAll(paths);
   }
 
   Future<Object?> _handleNativeNavigation(MethodCall call) async {
@@ -255,11 +311,29 @@ class _AppShellState extends State<AppShell>
       await _requestQuit();
       return null;
     }
+    // The iPad menu bar (ios/Runner/KeyCommandMenu.swift).
+    switch (call.method) {
+      case 'showDestination':
+        final destination = AppDestination.values.asNameMap()[call.arguments];
+        if (destination != null) await _setDestination(destination);
+        return null;
+      case 'addFiles':
+        await _addFiles();
+        return null;
+      case 'watchVideo':
+        await _watchVideo();
+        return null;
+      case 'toggleSidebar':
+        _toggleSidebar();
+        return null;
+    }
     throw MissingPluginException('Unknown native navigation: ${call.method}');
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _inBackground =
+        state == AppLifecycleState.paused || state == AppLifecycleState.hidden;
     if (state == AppLifecycleState.resumed &&
         _controller.inboxMonitorConfigured) {
       unawaited(_controller.rescanInboxMonitor());
@@ -286,6 +360,33 @@ class _AppShellState extends State<AppShell>
     }
     _scheduleTraySync();
     _pausePodcastInWorkspace();
+    if (!context.capabilities.desktopShell) _notifyFinishedInBackground();
+  }
+
+  /// iOS: work keeps going for a while after the user leaves the app, so
+  /// say when it is done. Permission is asked when work first starts.
+  void _notifyFinishedInBackground() {
+    final busy = {
+      for (final job in _controller.allJobs)
+        if (job.isBusy) job.id,
+    };
+    if (busy.isNotEmpty && !_notificationPermissionRequested) {
+      _notificationPermissionRequested = true;
+      unawaited(_desktopRuntime?.requestNotificationPermission());
+    }
+    if (_inBackground) {
+      for (final id in _busyJobs.difference(busy)) {
+        final job = _controller.jobById(id);
+        if (job == null || job.status != JobStatus.completed) continue;
+        unawaited(
+          _desktopRuntime?.showJobFinishedNotification(
+            title: context.strings.t('job_finished_notification_title'),
+            body: job.displayName,
+          ),
+        );
+      }
+    }
+    _busyJobs = busy;
   }
 
   void _pausePodcastInWorkspace() {
@@ -679,37 +780,43 @@ class _AppShellState extends State<AppShell>
   }
 
   Future<void> _addFiles() async {
-    final media = XTypeGroup(
-      label: context.strings.t('audio_video_subtitles'),
-      extensions: const [
-        'mp3',
-        'wav',
-        'm4a',
-        'ogg',
-        'mp4',
-        'mkv',
-        'avi',
-        'srt',
-        'vtt',
+    final paths = await pickFiles(
+      context,
+      acceptedTypeGroups: [
+        fileTypeGroup(
+          context,
+          label: context.strings.t('audio_video_subtitles'),
+          extensions: _importExtensions,
+        ),
       ],
     );
-    final files = await openFiles(acceptedTypeGroups: [media]);
-    if (files.isNotEmpty && mounted) {
-      await reviewAndEnqueueSources(context, files.map((file) => file.path));
-      if (!mounted) return;
-      final controller = context.read<AppController>();
-      if (mounted) controller.setDestination(AppDestination.inbox);
-    }
+    if (paths.isNotEmpty && mounted) await _importSources(paths);
   }
 
+  static const _importExtensions = [
+    'mp3',
+    'wav',
+    'm4a',
+    'ogg',
+    'mp4',
+    'mkv',
+    'avi',
+    'srt',
+    'vtt',
+  ];
+
   Future<void> _importFolder() async {
-    final directory = await getDirectoryPath();
-    if (directory != null && mounted) {
-      await reviewAndEnqueueSources(context, [directory]);
-      if (!mounted) return;
-      final controller = context.read<AppController>();
-      if (mounted) controller.setDestination(AppDestination.inbox);
-    }
+    final directory = await pickFolder(
+      context,
+      extensions: [..._importExtensions, 'ass', 'ssa'],
+    );
+    if (directory != null && mounted) await _importSources([directory]);
+  }
+
+  Future<void> _importSources(List<String> paths) async {
+    await reviewAndEnqueueSources(context, paths);
+    if (!mounted) return;
+    context.read<AppController>().setDestination(AppDestination.inbox);
   }
 
   void _toggleSidebar() {
@@ -742,12 +849,8 @@ class _AppShellState extends State<AppShell>
     });
   }
 
-  String _shortcutTooltip(BuildContext context, String label, String key) {
-    final modifier = Theme.of(context).platform == TargetPlatform.macOS
-        ? '⌘'
-        : 'Ctrl+';
-    return '$label ($modifier$key)';
-  }
+  String _shortcutTooltip(BuildContext context, String label, String key) =>
+      '$label (${context.capabilities.shortcutModifierLabel}$key)';
 
   NavigationRailDestination _destination({
     required BuildContext context,
@@ -820,6 +923,208 @@ class _AppShellState extends State<AppShell>
     );
   }
 
+  Map<ShortcutActivator, VoidCallback> _shellShortcuts(
+    AppController controller, {
+    required bool menuHandlesNavigation,
+  }) {
+    void startReady() {
+      if (controller.destination == AppDestination.inbox) {
+        unawaited(controller.startReady());
+      }
+    }
+
+    if (menuHandlesNavigation) {
+      return {
+        const SingleActivator(LogicalKeyboardKey.enter, meta: true): startReady,
+        const SingleActivator(LogicalKeyboardKey.enter, control: true):
+            startReady,
+      };
+    }
+    return {
+      for (final (key, action) in <(LogicalKeyboardKey, VoidCallback)>[
+        (
+          LogicalKeyboardKey.keyI,
+          () => unawaited(_setDestination(AppDestination.inbox)),
+        ),
+        (
+          LogicalKeyboardKey.digit1,
+          () => unawaited(_setDestination(AppDestination.podcast)),
+        ),
+        (
+          LogicalKeyboardKey.digit2,
+          () => unawaited(_setDestination(AppDestination.workspace)),
+        ),
+        (
+          LogicalKeyboardKey.digit3,
+          () => unawaited(_setDestination(AppDestination.library)),
+        ),
+        (
+          LogicalKeyboardKey.comma,
+          () => unawaited(_setDestination(AppDestination.settings)),
+        ),
+        (LogicalKeyboardKey.keyO, () => unawaited(_addFiles())),
+        (LogicalKeyboardKey.keyB, _toggleSidebar),
+        (LogicalKeyboardKey.enter, startReady),
+      ]) ...{
+        SingleActivator(key, meta: true): action,
+        SingleActivator(key, control: true): action,
+      },
+      const SingleActivator(
+        LogicalKeyboardKey.keyO,
+        meta: true,
+        shift: true,
+      ): () =>
+          unawaited(_watchVideo()),
+      const SingleActivator(
+        LogicalKeyboardKey.keyO,
+        control: true,
+        shift: true,
+      ): () =>
+          unawaited(_watchVideo()),
+    };
+  }
+
+  Widget _sidebar(
+    BuildContext context,
+    AppController controller, {
+    required bool extended,
+    required String settingsLabel,
+    required String settingsTooltip,
+  }) {
+    const primaryDestinations = [
+      AppDestination.podcast,
+      AppDestination.workspace,
+      AppDestination.library,
+    ];
+    return Row(
+      key: const Key('app-sidebar'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SafeArea(
+          right: false,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeInOut,
+            width: extended ? _extendedSidebarWidth : _compactSidebarWidth,
+            child: NavigationRail(
+              minWidth: _compactSidebarWidth,
+              minExtendedWidth: _extendedSidebarWidth,
+              selectedIndex: switch (controller.destination) {
+                AppDestination.podcast => 0,
+                AppDestination.workspace => 1,
+                AppDestination.library => 2,
+                AppDestination.inbox || AppDestination.settings => null,
+              },
+              onDestinationSelected: (index) =>
+                  unawaited(_setDestination(primaryDestinations[index])),
+              extended: extended,
+              leading: Padding(
+                padding: const EdgeInsets.only(top: 12, bottom: 14),
+                child: _inboxFab(context, extended: extended),
+              ),
+              trailingAtBottom: true,
+              trailing: Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _NavigationRailAction(
+                  key: const Key('settings-navigation-button'),
+                  extended: extended,
+                  compactWidth: _compactSidebarWidth,
+                  extendedWidth: _extendedSidebarWidth,
+                  selected: controller.destination == AppDestination.settings,
+                  label: settingsLabel,
+                  tooltip: settingsTooltip,
+                  icon: Icons.settings_outlined,
+                  selectedIcon: Icons.settings_rounded,
+                  onPressed: () =>
+                      unawaited(_setDestination(AppDestination.settings)),
+                ),
+              ),
+              destinations: [
+                _destination(
+                  context: context,
+                  labelKey: 'podcast',
+                  shortcutKey: '1',
+                  icon: Icons.podcasts_outlined,
+                  selectedIcon: Icons.podcasts_rounded,
+                ),
+                _destination(
+                  context: context,
+                  labelKey: 'workspace',
+                  shortcutKey: '2',
+                  icon: Icons.space_dashboard_outlined,
+                  selectedIcon: Icons.space_dashboard_rounded,
+                ),
+                _destination(
+                  context: context,
+                  labelKey: 'library',
+                  shortcutKey: '3',
+                  icon: Icons.library_books_outlined,
+                  selectedIcon: Icons.library_books_rounded,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const VerticalDivider(width: 1),
+      ],
+    );
+  }
+
+  /// Phone layout: every destination, Inbox and Settings included, as tabs.
+  Widget _bottomNavigation(BuildContext context, AppController controller) {
+    const destinations = [
+      AppDestination.podcast,
+      AppDestination.workspace,
+      AppDestination.library,
+      AppDestination.inbox,
+      AppDestination.settings,
+    ];
+    final strings = context.strings;
+    final inboxCount = controller.inboxJobs.length;
+    return NavigationBar(
+      key: const Key('app-bottom-navigation'),
+      selectedIndex: destinations.indexOf(controller.destination),
+      labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+      onDestinationSelected: (index) =>
+          unawaited(_setDestination(destinations[index])),
+      destinations: [
+        NavigationDestination(
+          icon: const Icon(Icons.podcasts_outlined),
+          selectedIcon: const Icon(Icons.podcasts_rounded),
+          label: strings.t('podcast'),
+        ),
+        NavigationDestination(
+          icon: const Icon(Icons.space_dashboard_outlined),
+          selectedIcon: const Icon(Icons.space_dashboard_rounded),
+          label: strings.t('workspace'),
+        ),
+        NavigationDestination(
+          icon: const Icon(Icons.library_books_outlined),
+          selectedIcon: const Icon(Icons.library_books_rounded),
+          label: strings.t('library'),
+        ),
+        NavigationDestination(
+          icon: Badge.count(
+            count: inboxCount,
+            isLabelVisible: inboxCount > 0,
+            child: const Icon(Icons.inbox_outlined),
+          ),
+          selectedIcon: Badge.count(
+            count: inboxCount,
+            isLabelVisible: inboxCount > 0,
+            child: const Icon(Icons.inbox_rounded),
+          ),
+          label: strings.t('inbox'),
+        ),
+        NavigationDestination(
+          icon: const Icon(Icons.settings_outlined),
+          selectedIcon: const Icon(Icons.settings_rounded),
+          label: strings.t('settings'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<AppController>();
@@ -835,98 +1140,62 @@ class _AppShellState extends State<AppShell>
         });
       }
     }
+    final capabilities = context.capabilities;
     final hideWindowToolbar =
         _windowFullscreen && Theme.of(context).platform == TargetPlatform.macOS;
-    final sidebarExtended = MediaQuery.sizeOf(context).width >= 1180;
-    const primaryDestinations = [
-      AppDestination.podcast,
-      AppDestination.workspace,
-      AppDestination.library,
-    ];
-    final destinations = [
-      _destination(
-        context: context,
-        labelKey: 'podcast',
-        shortcutKey: '1',
-        icon: Icons.podcasts_outlined,
-        selectedIcon: Icons.podcasts_rounded,
-      ),
-      _destination(
-        context: context,
-        labelKey: 'workspace',
-        shortcutKey: '2',
-        icon: Icons.space_dashboard_outlined,
-        selectedIcon: Icons.space_dashboard_rounded,
-      ),
-      _destination(
-        context: context,
-        labelKey: 'library',
-        shortcutKey: '3',
-        icon: Icons.library_books_outlined,
-        selectedIcon: Icons.library_books_rounded,
-      ),
-    ];
+    final layout = LayoutSize.of(context);
+    // Phones get a tab bar; everything wider keeps the rail.
+    final bottomNavigation = layout.isCompact;
+    final sidebarExtended = layout >= LayoutSize.wide;
+    final showSidebar = !bottomNavigation && _sidebarVisible;
+    final showMiniBar =
+        player?.hasSession == true &&
+        controller.destination != AppDestination.workspace;
     final settingsLabel = context.strings.t('settings');
     final settingsTooltip = _shortcutTooltip(context, settingsLabel, ',');
+    final page = switch (controller.destination) {
+      AppDestination.inbox => InboxPage(
+        key: const ValueKey('inbox'),
+        onAddFiles: _addFiles,
+        onImportFolder: _importFolder,
+        onWatchVideo: _videoRequests == null ? null : _watchVideo,
+      ),
+      AppDestination.podcast =>
+        podcast == null
+            ? const SizedBox.expand(key: ValueKey('podcast-unavailable'))
+            : const PodcastPage(key: ValueKey('podcast')),
+      AppDestination.workspace => WorkspacePage(
+        key: const ValueKey('workspace'),
+        fullscreenController: _fullscreenController,
+      ),
+      AppDestination.library => const LibraryPage(key: ValueKey('library')),
+      AppDestination.settings => SettingsPage(
+        key: const ValueKey('settings'),
+        onRestartUpdate: updates == null
+            ? null
+            : () => unawaited(_restartForUpdate(updates)),
+      ),
+    };
     return PodcastPlaybackShortcuts(
       player: player,
       enabled: controller.destination != AppDestination.workspace,
       child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.keyI, meta: true): () =>
-              _setDestination(AppDestination.inbox),
-          const SingleActivator(LogicalKeyboardKey.keyI, control: true): () =>
-              _setDestination(AppDestination.inbox),
-          const SingleActivator(LogicalKeyboardKey.digit1, meta: true): () =>
-              _setDestination(AppDestination.podcast),
-          const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
-              _setDestination(AppDestination.podcast),
-          const SingleActivator(LogicalKeyboardKey.digit2, meta: true): () =>
-              _setDestination(AppDestination.workspace),
-          const SingleActivator(LogicalKeyboardKey.digit2, control: true): () =>
-              _setDestination(AppDestination.workspace),
-          const SingleActivator(LogicalKeyboardKey.digit3, meta: true): () =>
-              _setDestination(AppDestination.library),
-          const SingleActivator(LogicalKeyboardKey.digit3, control: true): () =>
-              _setDestination(AppDestination.library),
-          const SingleActivator(LogicalKeyboardKey.comma, meta: true): () =>
-              _setDestination(AppDestination.settings),
-          const SingleActivator(LogicalKeyboardKey.comma, control: true): () =>
-              _setDestination(AppDestination.settings),
-          const SingleActivator(
-            LogicalKeyboardKey.keyO,
-            meta: true,
-            shift: true,
-          ): _watchVideo,
-          const SingleActivator(
-            LogicalKeyboardKey.keyO,
-            control: true,
-            shift: true,
-          ): _watchVideo,
-          const SingleActivator(LogicalKeyboardKey.keyO, meta: true): _addFiles,
-          const SingleActivator(LogicalKeyboardKey.keyO, control: true):
-              _addFiles,
-          const SingleActivator(LogicalKeyboardKey.keyB, meta: true):
-              _toggleSidebar,
-          const SingleActivator(LogicalKeyboardKey.keyB, control: true):
-              _toggleSidebar,
-          const SingleActivator(LogicalKeyboardKey.enter, meta: true): () {
-            if (controller.destination == AppDestination.inbox) {
-              unawaited(controller.startReady());
-            }
-          },
-          const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
-            if (controller.destination == AppDestination.inbox) {
-              unawaited(controller.startReady());
-            }
-          },
-        },
+        bindings: _shellShortcuts(
+          controller,
+          // The iPad menu sends the others over the navigation channel.
+          menuHandlesNavigation: capabilities.nativeKeyCommandMenu,
+        ),
         child: Focus(
           autofocus: true,
           child: Scaffold(
+            bottomNavigationBar: bottomNavigation
+                ? _bottomNavigation(context, controller)
+                : null,
             body: Column(
               children: [
-                if (hideWindowToolbar)
+                if (!capabilities.desktopShell)
+                  const SizedBox.shrink()
+                else if (hideWindowToolbar)
                   const SizedBox.shrink(
                     key: Key('app-window-toolbar-fullscreen-hidden'),
                   )
@@ -945,144 +1214,50 @@ class _AppShellState extends State<AppShell>
                 Expanded(
                   child: Row(
                     children: [
-                      ClipRect(
-                        child: AnimatedSize(
-                          duration: const Duration(milliseconds: 180),
-                          curve: Curves.easeInOut,
-                          alignment: Alignment.centerLeft,
-                          child: _sidebarVisible
-                              ? Row(
-                                  key: const Key('app-sidebar'),
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    AnimatedContainer(
-                                      duration: const Duration(
-                                        milliseconds: 180,
-                                      ),
-                                      curve: Curves.easeInOut,
-                                      width: sidebarExtended
-                                          ? _extendedSidebarWidth
-                                          : _compactSidebarWidth,
-                                      child: NavigationRail(
-                                        minWidth: _compactSidebarWidth,
-                                        minExtendedWidth: _extendedSidebarWidth,
-                                        selectedIndex:
-                                            switch (controller.destination) {
-                                              AppDestination.podcast => 0,
-                                              AppDestination.workspace => 1,
-                                              AppDestination.library => 2,
-                                              AppDestination.inbox ||
-                                              AppDestination.settings => null,
-                                            },
-                                        onDestinationSelected: (index) =>
-                                            unawaited(
-                                              _setDestination(
-                                                primaryDestinations[index],
-                                              ),
-                                            ),
-                                        extended: sidebarExtended,
-                                        leading: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Padding(
-                                              padding: const EdgeInsets.only(
-                                                top: 12,
-                                                bottom: 14,
-                                              ),
-                                              child: _inboxFab(
-                                                context,
-                                                extended: sidebarExtended,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        trailingAtBottom: true,
-                                        trailing: Padding(
-                                          padding: const EdgeInsets.only(
-                                            bottom: 12,
-                                          ),
-                                          child: _NavigationRailAction(
-                                            key: const Key(
-                                              'settings-navigation-button',
-                                            ),
-                                            extended: sidebarExtended,
-                                            compactWidth: _compactSidebarWidth,
-                                            extendedWidth:
-                                                _extendedSidebarWidth,
-                                            selected:
-                                                controller.destination ==
-                                                AppDestination.settings,
-                                            label: settingsLabel,
-                                            tooltip: settingsTooltip,
-                                            icon: Icons.settings_outlined,
-                                            selectedIcon:
-                                                Icons.settings_rounded,
-                                            onPressed: () => unawaited(
-                                              _setDestination(
-                                                AppDestination.settings,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        destinations: destinations,
-                                      ),
-                                    ),
-                                    const VerticalDivider(width: 1),
-                                  ],
-                                )
-                              : const SizedBox.shrink(
-                                  key: Key('app-sidebar-hidden'),
-                                ),
+                      if (!bottomNavigation)
+                        ClipRect(
+                          child: AnimatedSize(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeInOut,
+                            alignment: Alignment.centerLeft,
+                            child: _sidebarVisible
+                                ? _sidebar(
+                                    context,
+                                    controller,
+                                    extended: sidebarExtended,
+                                    settingsLabel: settingsLabel,
+                                    settingsTooltip: settingsTooltip,
+                                  )
+                                : const SizedBox.shrink(
+                                    key: Key('app-sidebar-hidden'),
+                                  ),
+                          ),
                         ),
-                      ),
                       Expanded(
-                        child: Column(
-                          children: [
-                            Expanded(
-                              child: AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 220),
-                                child: switch (controller.destination) {
-                                  AppDestination.inbox => InboxPage(
-                                    key: const ValueKey('inbox'),
-                                    onAddFiles: _addFiles,
-                                    onImportFolder: _importFolder,
-                                    onWatchVideo: _videoRequests == null
-                                        ? null
-                                        : _watchVideo,
+                        // The rail already keeps clear of the left inset.
+                        child: MediaQuery.removePadding(
+                          context: context,
+                          removeLeft: showSidebar,
+                          child: Column(
+                            children: [
+                              Expanded(
+                                child: MediaQuery.removePadding(
+                                  context: context,
+                                  removeLeft: showSidebar,
+                                  removeBottom: showMiniBar,
+                                  child: AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 220),
+                                    child: page,
                                   ),
-                                  AppDestination.podcast =>
-                                    podcast == null
-                                        ? const SizedBox.expand(
-                                            key: ValueKey(
-                                              'podcast-unavailable',
-                                            ),
-                                          )
-                                        : const PodcastPage(
-                                            key: ValueKey('podcast'),
-                                          ),
-                                  AppDestination.workspace => WorkspacePage(
-                                    key: const ValueKey('workspace'),
-                                    fullscreenController: _fullscreenController,
-                                  ),
-                                  AppDestination.library => const LibraryPage(
-                                    key: ValueKey('library'),
-                                  ),
-                                  AppDestination.settings => SettingsPage(
-                                    key: const ValueKey('settings'),
-                                    onRestartUpdate: updates == null
-                                        ? null
-                                        : () => unawaited(
-                                            _restartForUpdate(updates),
-                                          ),
-                                  ),
-                                },
+                                ),
                               ),
-                            ),
-                            if (player?.hasSession == true &&
-                                controller.destination !=
-                                    AppDestination.workspace)
-                              const PodcastMiniBar(),
-                          ],
+                              if (showMiniBar)
+                                const SafeArea(
+                                  top: false,
+                                  child: PodcastMiniBar(),
+                                ),
+                            ],
+                          ),
                         ),
                       ),
                     ],

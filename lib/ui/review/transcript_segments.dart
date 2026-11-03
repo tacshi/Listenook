@@ -7,6 +7,8 @@ import '../../core/models.dart';
 import '../../core/transcript_structure_editor.dart';
 import '../../data/transcript_exporter.dart';
 import '../../l10n/strings.dart';
+import '../keyboard_shortcuts.dart';
+import '../platform/platform_context.dart';
 import '../transcript_review.dart';
 import 'media_pane.dart';
 import 'review_toolbar.dart';
@@ -517,6 +519,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
                             ): _save,
                             const SingleActivator(LogicalKeyboardKey.escape):
                                 widget.onCancel,
+                            commandPeriod: widget.onCancel,
                           },
                           child: TextField(
                             key: ValueKey(
@@ -586,7 +589,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
     if (widget.isEditing) {
       final actionCount = (widget.isRepeating ? 1 : 0) + 2;
       return SizedBox(
-        width: actionCount * 32,
+        width: actionCount * segmentActionExtent(context),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -619,9 +622,16 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
         ),
       );
     }
+    // Fingers cannot hover: the sentence being listened to (a tap makes a
+    // sentence current) shows its actions instead.
+    final touchCurrent = context.touchActive && widget.isCurrent;
     final repeatVisible =
-        widget.groupHovered || _hovered || _actionFocused || widget.isRepeating;
-    final lineActionsVisible = _hovered || _actionFocused;
+        widget.groupHovered ||
+        _hovered ||
+        _actionFocused ||
+        widget.isRepeating ||
+        touchCurrent;
+    final lineActionsVisible = _hovered || _actionFocused || touchCurrent;
     final actionCount =
         (widget.showRepeatAction ? 1 : 0) +
         1 +
@@ -629,7 +639,7 @@ class _TranslatedSegmentEditorState extends State<_TranslatedSegmentEditor> {
     return Focus(
       onFocusChange: (value) => setState(() => _actionFocused = value),
       child: SizedBox(
-        width: actionCount * 32,
+        width: actionCount * segmentActionExtent(context),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -730,6 +740,10 @@ class SentenceRepeatButton extends StatelessWidget {
   );
 }
 
+/// Segment action buttons: compact under a pointer, finger-sized on touch.
+double segmentActionExtent(BuildContext context) =>
+    context.touchActive ? 44 : 32;
+
 ButtonStyle compactSegmentActionStyle(
   BuildContext context, {
   bool selected = false,
@@ -741,8 +755,8 @@ ButtonStyle compactSegmentActionStyle(
       ? Theme.of(context).colorScheme.primaryContainer
       : null,
   minimumSize: Size.zero,
-  fixedSize: const Size.square(32),
-  maximumSize: const Size.square(32),
+  fixedSize: Size.square(segmentActionExtent(context)),
+  maximumSize: Size.square(segmentActionExtent(context)),
   padding: EdgeInsets.zero,
   visualDensity: VisualDensity.compact,
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,

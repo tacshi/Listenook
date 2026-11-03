@@ -1,5 +1,5 @@
 import XCTest
-@testable import ListenookSpeechWorker
+@testable import ListenookSpeechCore
 
 final class QwenSpanPlannerTests: XCTestCase {
     func testSpeechBelowTenSecondsStaysPending() {

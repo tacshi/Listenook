@@ -1,12 +1,13 @@
 # Listenook / 聆页
 
-Listenook is a desktop app for listening to podcasts and local audio or video
-with synchronized transcripts. Read bilingual translations, replay sentences,
+Listenook is an app for listening to podcasts and local audio or video with
+synchronized transcripts. Read bilingual translations, replay sentences,
 practice English dictation, and organize recordings in a searchable library.
 
 The interface uses **聆页** in Chinese and **Listenook** in English. It runs on
-macOS and Windows. Cloud transcription and AI features use your own API keys;
-local transcription is available on supported Apple Silicon Macs.
+macOS, Windows, iPhone, and iPad. Cloud transcription and AI features use your
+own API keys; local transcription is available on supported Apple Silicon Macs
+and on iPhones and iPads with 8 GB of memory.
 
 [Downloads](https://github.com/tacshi/Listenook-Release/releases) ·
 [Privacy](PRIVACY.md) · [Release instructions](Release_Steps.md)
@@ -64,14 +65,35 @@ Supported media: MP3, WAV, M4A, OGG, MP4, MKV, and AVI, up to 300 minutes per fi
 System, light, and dark themes and English/Simplified Chinese interfaces are
 available. Keyboard shortcuts are listed in **Settings → Shortcuts**.
 
+## On iPhone and iPad
+
+The iOS app has the same features, adapted to the platform:
+
+- **Importing:** add files and folders with the document picker, open them in
+  Listenook from another app (**Open in**, **Copy to**), or drag them onto the
+  app on iPad. Listenook keeps its own copy of imported media; deleting a
+  transcript deletes the copy.
+- **Exporting:** transcripts, briefs, and episodes go to the share sheet, which
+  includes **Save to Files**.
+- **Playback:** podcasts and recordings keep playing in the background and show
+  lock-screen and Control Center controls.
+- **Touch and keyboard:** controls that appear on hover on a Mac show for the
+  current sentence on touch; with a hardware keyboard the usual shortcuts work
+  (⌘. stands in for Esc), and holding ⌘ lists the app's commands.
+- **Work in the background:** transcription and downloads continue for a while
+  after you leave the app, with a notification when they finish.
+
+Folder monitoring, launch at login, the menu-bar icon, and in-app updates are
+desktop-only.
+
 ## Transcription and AI providers
 
 | Provider | Availability | Notes |
 | --- | --- | --- |
-| Soniox | macOS and Windows; API key required | Speaker labels, word timing, language detection, and optional translation during transcription. |
-| MOSS Pro | macOS and Windows; API key required | Speaker-labelled transcription through MOSI. |
-| MOSS Local | Apple Silicon, macOS 15+ | Local Core ML transcription with speaker labels. |
-| Qwen3 Local (Beta) | Apple Silicon, macOS 15+ | Local multilingual transcription with segment timing, without speaker labels. |
+| Soniox | All platforms; API key required | Speaker labels, word timing, language detection, and optional translation during transcription. |
+| MOSS Pro | All platforms; API key required | Speaker-labelled transcription through MOSI. |
+| MOSS Local | Apple Silicon, macOS 15+; iPhone/iPad with 8 GB, iOS 18+ | Local Core ML transcription with speaker labels. |
+| Qwen3 Local (Beta) | Apple Silicon, macOS 15+; iPhone/iPad with 8 GB, iOS 18+ | Local multilingual transcription with segment timing, without speaker labels. |
 
 On supported Macs, a separately downloaded Qwen3 ForcedAligner can add word
 timing to eligible transcriptions. Local speech models are downloaded and
@@ -94,7 +116,8 @@ Podcast search, feeds, streaming, and downloads contact the relevant public
 services. API keys use operating-system secure storage.
 
 Transcripts, settings, local models, and downloaded podcast episodes are stored
-locally. Imported source media stays in its original location. See
+locally. On desktop, imported source media stays in its original location; on
+iPhone and iPad, Listenook keeps its own copy. See
 [PRIVACY.md](PRIVACY.md) for provider cleanup and retention details.
 
 ## Moving from MeowSTT
@@ -153,6 +176,24 @@ point the app to it:
 scripts/build-speech-worker.sh
 LISTENOOK_SPEECH_WORKER="$PWD/build/native/speech_worker/ListenookSpeechWorker" fvm flutter run -d macos
 ```
+
+For iOS, connect a device (Wi-Fi is fine) and use the scripts; the
+development team is set in `ios/Runner.xcodeproj`. Local speech links
+`native/speech_worker` into the app, so iOS builds also need the Metal
+toolchain (`xcodebuild -downloadComponent MetalToolchain`).
+
+```sh
+scripts/build-ios-debug.sh              # compile only, unsigned
+scripts/run-ios.sh "<device name or UDID>"   # signed profile build, installed and launched
+scripts/test-ios-integration.sh "<device name or UDID>" integration_test/media_pipeline_test.dart
+```
+
+Devices are listed by `xcrun devicectl list devices`. Debug builds start only
+under a debugger on iOS, so `run-ios.sh` installs a profile build. The
+integration test script also runs each test as a profile app and copies its
+results back from the app's Documents folder, because over Wi-Fi the tools
+often cannot reach a debug build. The device must be unlocked, and it is left
+with the last test app installed; run `run-ios.sh` afterwards.
 
 Before `fvm flutter run -d windows`, prepare the native FLAC encoder once:
 
@@ -215,6 +256,10 @@ Debug signing uses `LISTENOOK_MAC_DEBUG_SIGN_IDENTITY`, then
 matches an existing release's Team ID or uses the only available Developer ID.
 It falls back to ad-hoc signing when needed; set
 `LISTENOOK_MAC_DEBUG_SIGN_IDENTITY=-` to request that explicitly.
+
+iOS and iPadOS require iOS 18+. Local speech additionally requires 8 GB of
+memory. `scripts/build-ios-release.sh` builds a signed App Store `.ipa` into
+`build/ios/ipa` (`BUILD_NAME` and `BUILD_NUMBER` override the version).
 
 Windows requires Windows 10 22H2+ and a host matching the target architecture:
 

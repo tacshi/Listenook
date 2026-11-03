@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -10,6 +11,7 @@ import '../../core/models.dart';
 import '../../data/transcript_exporter.dart';
 import '../../l10n/strings.dart';
 import '../keyboard_shortcuts.dart';
+import '../platform/platform_context.dart';
 import '../transcript_review.dart';
 import 'transcript_segments.dart';
 
@@ -172,54 +174,64 @@ class VideoTransport extends StatelessWidget {
     height: height,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      child: Row(
-        children: [
-          IconButton.filledTonal(
-            key: const Key('video-play-pause'),
-            onPressed: onPlayPause,
-            icon: Icon(
-              playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-            ),
-          ),
-          if (sentenceNavigation != null) sentenceNavigation!,
-          const SizedBox(width: 8),
-          Text(
-            formatClock(position.inMilliseconds),
-            key: const Key('video-current-time'),
-          ),
-          Expanded(
-            child: Slider(
-              key: const Key('video-seek'),
-              value: position.inMilliseconds
-                  .clamp(0, duration.inMilliseconds)
-                  .toDouble(),
-              max: duration.inMilliseconds.clamp(1, double.infinity).toDouble(),
-              onChanged: (value) => onSeek(
-                Duration(milliseconds: value.round()),
-                reason: TranscriptSeekReason.videoProgressScrub,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // On a phone the seek bar needs the room the clocks would take.
+          final showClocks = constraints.maxWidth >= 480;
+          return Row(
+            children: [
+              IconButton.filledTonal(
+                key: const Key('video-play-pause'),
+                onPressed: onPlayPause,
+                icon: Icon(
+                  playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                ),
               ),
-            ),
-          ),
-          Text(
-            formatClock(duration.inMilliseconds),
-            key: const Key('video-duration'),
-          ),
-          PlaybackSpeedButton(
-            rate: playbackRate,
-            onChanged: onPlaybackRateChanged,
-          ),
-          if (onSwitchToAudioMode != null)
-            MediaModeButton(
-              destination: ReviewMediaMode.audio,
-              onPressed: onSwitchToAudioMode!,
-            ),
-          IconButton(
-            key: const Key('video-fullscreen'),
-            tooltip: context.strings.t('fullscreen'),
-            onPressed: () => unawaited(onFullscreen()),
-            icon: const Icon(Icons.fullscreen_rounded),
-          ),
-        ],
+              if (sentenceNavigation != null) sentenceNavigation!,
+              const SizedBox(width: 8),
+              if (showClocks)
+                Text(
+                  formatClock(position.inMilliseconds),
+                  key: const Key('video-current-time'),
+                ),
+              Expanded(
+                child: Slider(
+                  key: const Key('video-seek'),
+                  value: position.inMilliseconds
+                      .clamp(0, duration.inMilliseconds)
+                      .toDouble(),
+                  max: duration.inMilliseconds
+                      .clamp(1, double.infinity)
+                      .toDouble(),
+                  onChanged: (value) => onSeek(
+                    Duration(milliseconds: value.round()),
+                    reason: TranscriptSeekReason.videoProgressScrub,
+                  ),
+                ),
+              ),
+              if (showClocks)
+                Text(
+                  formatClock(duration.inMilliseconds),
+                  key: const Key('video-duration'),
+                ),
+              PlaybackSpeedButton(
+                rate: playbackRate,
+                onChanged: onPlaybackRateChanged,
+              ),
+              if (onSwitchToAudioMode != null)
+                MediaModeButton(
+                  destination: ReviewMediaMode.audio,
+                  onPressed: onSwitchToAudioMode!,
+                ),
+              IconButton(
+                key: const Key('video-fullscreen'),
+                tooltip: context.strings.t('fullscreen'),
+                onPressed: () => unawaited(onFullscreen()),
+                icon: const Icon(Icons.fullscreen_rounded),
+              ),
+            ],
+          );
+        },
       ),
     ),
   );
@@ -457,6 +469,8 @@ class _VideoFullscreenKeyboardRegionState
     widget.onExit();
   }
 
+  bool _visibleAtPointerDown = false;
+
   void _restartHideTimer() {
     _hideTimer?.cancel();
     if (!widget.playing || _scrubbing) return;
@@ -506,6 +520,7 @@ class _VideoFullscreenKeyboardRegionState
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.escape): _exit,
+        commandPeriod: _exit,
         const SingleActivator(LogicalKeyboardKey.space): () =>
             _runWithVisibleControls(widget.onPlayPause),
         // Seeking from the keyboard leaves the controls as they are, so the
@@ -538,11 +553,28 @@ class _VideoFullscreenKeyboardRegionState
               onHover: (_) => _showControls(),
               child: Listener(
                 behavior: HitTestBehavior.translucent,
-                onPointerDown: (_) => _showControls(),
+                onPointerDown: (_) {
+                  _visibleAtPointerDown = _controlsVisible;
+                  _showControls();
+                },
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    widget.child,
+                    // A mouse shows the controls by moving; a finger taps the
+                    // picture to show them and taps again to hide them.
+                    GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTapUp: (details) {
+                        if (details.kind != PointerDeviceKind.touch ||
+                            !_visibleAtPointerDown ||
+                            !widget.playing) {
+                          return;
+                        }
+                        _hideTimer?.cancel();
+                        setState(() => _controlsVisible = false);
+                      },
+                      child: widget.child,
+                    ),
                     if (text != null && text.isNotEmpty)
                       IgnorePointer(
                         child: AnimatedPadding(
@@ -724,91 +756,109 @@ class _VideoFullscreenKeyboardRegionState
               ),
             ),
             child: _withTitle(
-              Row(
-                key: const Key('fullscreen-controls-bar'),
-                children: [
-                  IconButton(
-                    key: const Key('fullscreen-play-pause'),
-                    tooltip: context.strings.t(
-                      widget.playing ? 'pause' : 'play',
-                    ),
-                    onPressed: () =>
-                        _runWithVisibleControls(widget.onPlayPause),
-                    color: Colors.white,
-                    iconSize: 30,
-                    icon: Icon(
-                      widget.playing
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                    ),
-                  ),
-                  if (widget.sentenceNavigation != null)
-                    widget.sentenceNavigation!,
-                  if (widget.blindListening)
-                    SentenceRevealButton(
-                      revealed: widget.sentenceRevealed,
-                      onPressed: widget.onReveal,
-                    ),
-                  const SizedBox(width: 4),
-                  Text(
-                    formatClock(positionMs.round()),
-                    key: const Key('fullscreen-position'),
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        activeTrackColor: colors.primaryContainer,
-                        inactiveTrackColor: Colors.white38,
-                        thumbColor: Colors.white,
-                        overlayColor: Colors.white24,
-                        trackHeight: 3,
-                        thumbShape: const RoundSliderThumbShape(
-                          enabledThumbRadius: 6,
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  // A phone held upright has no room for the clocks.
+                  final showClocks = constraints.maxWidth >= 520;
+                  return Row(
+                    key: const Key('fullscreen-controls-bar'),
+                    children: [
+                      IconButton(
+                        key: const Key('fullscreen-play-pause'),
+                        tooltip: context.strings.t(
+                          widget.playing ? 'pause' : 'play',
                         ),
-                        overlayShape: const RoundSliderOverlayShape(
-                          overlayRadius: 14,
+                        onPressed: () =>
+                            _runWithVisibleControls(widget.onPlayPause),
+                        color: Colors.white,
+                        iconSize: 30,
+                        icon: Icon(
+                          widget.playing
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
                         ),
                       ),
-                      child: Slider(
-                        key: const Key('fullscreen-seek'),
-                        value: positionMs,
-                        max: hasDuration ? durationMs.toDouble() : 1,
-                        onChangeStart: hasDuration ? _beginScrubbing : null,
-                        onChanged: hasDuration ? _seekTo : null,
-                        onChangeEnd: hasDuration ? _finishScrubbing : null,
+                      if (widget.sentenceNavigation != null)
+                        widget.sentenceNavigation!,
+                      // Holding R repeats a sentence from the keyboard; a
+                      // finger holds this button instead.
+                      if (context.touchActive)
+                        _RepeatHoldButton(
+                          onStart: widget.onRepeatHoldStart,
+                          onEnd: widget.onRepeatHoldEnd,
+                        ),
+                      if (widget.blindListening)
+                        SentenceRevealButton(
+                          revealed: widget.sentenceRevealed,
+                          onPressed: widget.onReveal,
+                        ),
+                      const SizedBox(width: 4),
+                      if (showClocks) ...[
+                        Text(
+                          formatClock(positionMs.round()),
+                          key: const Key('fullscreen-position'),
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            activeTrackColor: colors.primaryContainer,
+                            inactiveTrackColor: Colors.white38,
+                            thumbColor: Colors.white,
+                            overlayColor: Colors.white24,
+                            trackHeight: 3,
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 6,
+                            ),
+                            overlayShape: const RoundSliderOverlayShape(
+                              overlayRadius: 14,
+                            ),
+                          ),
+                          child: Slider(
+                            key: const Key('fullscreen-seek'),
+                            value: positionMs,
+                            max: hasDuration ? durationMs.toDouble() : 1,
+                            onChangeStart: hasDuration ? _beginScrubbing : null,
+                            onChanged: hasDuration ? _seekTo : null,
+                            onChangeEnd: hasDuration ? _finishScrubbing : null,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    formatClock(hasDuration ? durationMs : 0),
-                    key: const Key('fullscreen-duration'),
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  const SizedBox(width: 4),
-                  ...widget.trailingControls,
-                  if (widget.fullscreen)
-                    IconButton(
-                      key: const Key('fullscreen-exit'),
-                      tooltip: context.strings.t('exit_fullscreen'),
-                      onPressed: () => _runWithVisibleControls(_exit),
-                      color: Colors.white,
-                      iconSize: 30,
-                      icon: const Icon(Icons.fullscreen_exit_rounded),
-                    )
-                  else if (widget.onEnterFullscreen != null)
-                    IconButton(
-                      key: const Key('fullscreen-enter'),
-                      tooltip: context.strings.t('fullscreen'),
-                      onPressed: () =>
-                          _runWithVisibleControls(widget.onEnterFullscreen!),
-                      color: Colors.white,
-                      iconSize: 30,
-                      icon: const Icon(Icons.fullscreen_rounded),
-                    ),
-                ],
+                      if (showClocks) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          formatClock(hasDuration ? durationMs : 0),
+                          key: const Key('fullscreen-duration'),
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ],
+                      const SizedBox(width: 4),
+                      ...widget.trailingControls,
+                      if (widget.fullscreen)
+                        IconButton(
+                          key: const Key('fullscreen-exit'),
+                          tooltip: context.strings.t('exit_fullscreen'),
+                          onPressed: () => _runWithVisibleControls(_exit),
+                          color: Colors.white,
+                          iconSize: 30,
+                          icon: const Icon(Icons.fullscreen_exit_rounded),
+                        )
+                      else if (widget.onEnterFullscreen != null)
+                        IconButton(
+                          key: const Key('fullscreen-enter'),
+                          tooltip: context.strings.t('fullscreen'),
+                          onPressed: () => _runWithVisibleControls(
+                            widget.onEnterFullscreen!,
+                          ),
+                          color: Colors.white,
+                          iconSize: 30,
+                          icon: const Icon(Icons.fullscreen_rounded),
+                        ),
+                    ],
+                  );
+                },
               ),
             ),
           ),
@@ -1187,4 +1237,54 @@ class _WaveformPainter extends CustomPainter {
       oldDelegate.progress != progress ||
       oldDelegate.playedColor != playedColor ||
       oldDelegate.unplayedColor != unplayedColor;
+}
+
+class _RepeatHoldButton extends StatefulWidget {
+  const _RepeatHoldButton({required this.onStart, required this.onEnd});
+
+  final VoidCallback onStart;
+  final VoidCallback onEnd;
+
+  @override
+  State<_RepeatHoldButton> createState() => _RepeatHoldButtonState();
+}
+
+class _RepeatHoldButtonState extends State<_RepeatHoldButton> {
+  bool _holding = false;
+
+  void _end() {
+    if (!_holding) return;
+    setState(() => _holding = false);
+    widget.onEnd();
+  }
+
+  @override
+  void dispose() {
+    if (_holding) widget.onEnd();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: context.strings.t('hold_to_repeat_sentence'),
+    triggerMode: TooltipTriggerMode.tap,
+    child: GestureDetector(
+      key: const Key('fullscreen-repeat-hold'),
+      onLongPressStart: (_) {
+        setState(() => _holding = true);
+        widget.onStart();
+      },
+      onLongPressEnd: (_) => _end(),
+      onLongPressCancel: _end,
+      child: SizedBox.square(
+        dimension: 44,
+        child: Icon(
+          Icons.repeat_one_rounded,
+          color: _holding
+              ? Theme.of(context).colorScheme.primaryContainer
+              : Colors.white,
+        ),
+      ),
+    ),
+  );
 }

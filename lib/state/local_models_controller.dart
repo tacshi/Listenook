@@ -25,6 +25,8 @@ class LocalModelsController extends ChangeNotifier {
 
   bool isDownloading(String id) => _downloadProgress.containsKey(id);
 
+  bool get hasDownloads => _downloadProgress.isNotEmpty;
+
   double? downloadProgress(String id) => _downloadProgress[id];
 
   LocalModelAvailability bundleAvailability(LocalModelInstallBundle bundle) {
