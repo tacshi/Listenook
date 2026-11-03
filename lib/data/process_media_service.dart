@@ -353,10 +353,14 @@ class ProcessMediaService implements MediaService {
         await output.length() > 0 &&
         (await output.lastModified()).isAfter(await source.lastModified());
     if (await fresh()) return output.path;
+    // The cleanup must not return the removed future: whenComplete waits
+    // for a returned future, and this one is the whenComplete future itself.
     await (_audioAnalyses[safeKey] ??= _analyzeAudio(
       sourcePath,
       safeKey,
-    ).whenComplete(() => _audioAnalyses.remove(safeKey)));
+    ).whenComplete(() {
+      _audioAnalyses.remove(safeKey);
+    }));
     if (!await fresh()) {
       throw const MediaException(
         'waveform_failed',
