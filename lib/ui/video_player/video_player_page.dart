@@ -17,6 +17,8 @@ import '../../data/local_repositories.dart';
 import '../../l10n/strings.dart';
 import '../../state/app_controller.dart';
 import '../../theme.dart';
+import '../platform/file_picking.dart';
+import '../platform/immersive_mode.dart';
 import '../transcript_review.dart';
 import 'video_player_controller.dart';
 
@@ -141,6 +143,9 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       window.setFullscreen(value);
     } else {
       setState(() => _routeFullscreen = value);
+      unawaited(
+        value ? ImmersiveMode.enter(context) : ImmersiveMode.exit(context),
+      );
     }
   }
 
@@ -153,19 +158,20 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       onClose();
       return;
     }
+    if (_routeFullscreen) await ImmersiveMode.exit(context);
     await _controller.close();
     // pop(), not maybePop(): PopScope still blocks pops until this rebuilds.
     if (mounted) Navigator.of(context).pop();
   }
 
   Future<void> _chooseSubtitleFile() async {
+    final group = fileTypeGroup(
+      context,
+      label: context.strings.t('subtitle_files'),
+      extensions: const ['srt', 'vtt', 'ass', 'ssa'],
+    );
     final file = await openFile(
-      acceptedTypeGroups: [
-        XTypeGroup(
-          label: context.strings.t('subtitle_files'),
-          extensions: const ['srt', 'vtt', 'ass', 'ssa'],
-        ),
-      ],
+      acceptedTypeGroups: [group],
       initialDirectory: File(widget.path).parent.path,
     );
     if (file != null) await _controller.addSubtitleFile(file.path);
@@ -223,19 +229,20 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       onControlsVisibilityChanged: widget.onControlsVisibilityChanged,
       // The native title bar shows the file name in a player window.
       title: window == null ? controller.title : null,
-      topBar: status == null && window == null
-          ? null
-          : _PlayerStatusBar(
-              status: status,
-              belowTitleBar: window != null && !drawsCaption,
-              caption: drawsCaption && !_fullscreen
-                  ? _PlayerCaption(
-                      window: window,
-                      title: controller.title,
-                      onClose: () => unawaited(_close()),
-                    )
-                  : null,
-            ),
+      // Without a window (iOS, tests) the bar also carries the close button:
+      // there is no title bar, and back gestures are held for cleanup.
+      topBar: _PlayerStatusBar(
+        status: status,
+        belowTitleBar: window != null && !drawsCaption,
+        caption: drawsCaption && !_fullscreen
+            ? _PlayerCaption(
+                window: window,
+                title: controller.title,
+                onClose: () => unawaited(_close()),
+              )
+            : null,
+        onClose: window == null ? () => unawaited(_close()) : null,
+      ),
       subtitle: controller.subtitleText,
       sentenceNavigation: SentenceNavigationControls(
         previousLabel: 'shortcut_previous_subtitle',
@@ -316,6 +323,7 @@ class _PlayerStatusBar extends StatelessWidget {
     required this.status,
     required this.belowTitleBar,
     this.caption,
+    this.onClose,
   });
 
   /// Null when there is nothing to say: the bar then only shades the title
@@ -327,6 +335,9 @@ class _PlayerStatusBar extends StatelessWidget {
 
   /// The window's own title bar, where the player draws it (Windows).
   final Widget? caption;
+
+  /// Closes a player that has no window of its own.
+  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
@@ -342,24 +353,41 @@ class _PlayerStatusBar extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         ?caption,
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            caption != null ? 2 : (belowTitleBar ? 34 : 10),
-            16,
-            18,
-          ),
-          child: status == null
-              ? const SizedBox(width: double.infinity)
-              : Text(
-                  status!,
-                  key: const Key('video-player-status'),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+        SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              onClose == null ? 16 : 4,
+              caption != null ? 2 : (belowTitleBar ? 34 : 10),
+              16,
+              18,
+            ),
+            child: Row(
+              children: [
+                if (onClose != null)
+                  IconButton(
+                    key: const Key('video-player-close'),
+                    tooltip: context.strings.t('close_player'),
+                    onPressed: onClose,
+                    color: Colors.white,
+                    iconSize: 28,
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                Expanded(
+                  child: status == null
+                      ? const SizedBox.shrink()
+                      : Text(
+                          status!,
+                          key: const Key('video-player-status'),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: Colors.white70),
+                        ),
                 ),
+              ],
+            ),
+          ),
         ),
       ],
     ),

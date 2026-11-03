@@ -11,6 +11,8 @@ import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import '../state/podcast_controller.dart';
 import 'job_actions.dart';
+import 'layout/size_class.dart';
+import 'platform/platform_context.dart';
 import 'podcast_media_export.dart';
 import 'podcast_episode_description.dart';
 import 'podcast_now_playing.dart';
@@ -58,10 +60,13 @@ class _PodcastPageState extends State<PodcastPage> {
   Widget build(BuildContext context) {
     final podcast = context.watch<PodcastController>();
     final strings = context.strings;
+    final compact = LayoutSize.of(context).isCompact;
     return SafeArea(
       child: Padding(
         key: const Key('podcast-page-padding'),
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+        padding: compact
+            ? const EdgeInsets.fromLTRB(12, 12, 12, 0)
+            : const EdgeInsets.fromLTRB(20, 16, 20, 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -71,24 +76,38 @@ class _PodcastPageState extends State<PodcastPage> {
                 child: SegmentedButton<PodcastPane>(
                   key: const Key('podcast-root-tabs'),
                   showSelectedIcon: false,
+                  // Phones: labels only, across the full width.
+                  expandedInsets: compact ? EdgeInsets.zero : null,
                   segments: [
                     ButtonSegment(
                       value: PodcastPane.discover,
-                      label: Text(strings.t('podcast_discover')),
-                      icon: const Icon(Icons.search_rounded),
+                      label: Text(
+                        strings.t('podcast_discover'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      icon: compact ? null : const Icon(Icons.search_rounded),
                     ),
                     ButtonSegment(
                       value: PodcastPane.following,
                       label: Text(
                         '${strings.t('podcast_following')} '
                         '(${podcast.followed.length})',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      icon: const Icon(Icons.bookmark_rounded),
+                      icon: compact ? null : const Icon(Icons.bookmark_rounded),
                     ),
                     ButtonSegment(
                       value: PodcastPane.library,
-                      label: Text(strings.t('podcast_library')),
-                      icon: const Icon(Icons.download_done_rounded),
+                      label: Text(
+                        strings.t('podcast_library'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      icon: compact
+                          ? null
+                          : const Icon(Icons.download_done_rounded),
                     ),
                   ],
                   selected: {podcast.pane},
@@ -975,202 +994,213 @@ class _PodcastPageState extends State<PodcastPage> {
                 300.0,
                 460.0,
               );
+              // Phones: no room for the large artwork, and the captions
+              // take the whole width instead of a side panel.
+              final compact = constraints.maxWidth < 600;
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(
-                    child: ListView(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            PodcastArtwork(
-                              url: episode.artworkUrl ?? feed.artworkUrl,
-                              size: 220,
-                            ),
-                            const SizedBox(width: 24),
-                            Expanded(
-                              child: SizedBox(
-                                height: 220,
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    if (date != null)
-                                      Text(
-                                        date,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .labelMedium
-                                            ?.copyWith(
-                                              color: colors.onSurfaceVariant,
-                                            ),
-                                      ),
-                                    if (date != null) const SizedBox(height: 8),
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            episode.title,
-                                            maxLines: 3,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .headlineSmall
-                                                ?.copyWith(
-                                                  fontWeight: FontWeight.w700,
-                                                  height: 1.2,
-                                                ),
-                                          ),
+                  if (!compact || !showCaptions)
+                    Expanded(
+                      child: ListView(
+                        padding: compact
+                            ? const EdgeInsets.fromLTRB(8, 0, 8, 24)
+                            : const EdgeInsets.fromLTRB(24, 0, 24, 32),
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (!compact) ...[
+                                PodcastArtwork(
+                                  url: episode.artworkUrl ?? feed.artworkUrl,
+                                  size: 220,
+                                ),
+                                const SizedBox(width: 24),
+                              ],
+                              Expanded(
+                                child: SizedBox(
+                                  height: 220,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      if (date != null)
+                                        Text(
+                                          date,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelMedium
+                                              ?.copyWith(
+                                                color: colors.onSurfaceVariant,
+                                              ),
                                         ),
-                                        const SizedBox(width: 8),
-                                        EpisodeDownloadButton(
-                                          episodeId: episode.id,
-                                          tooltip: _downloadTooltip(
-                                            context,
-                                            job,
+                                      if (date != null)
+                                        const SizedBox(height: 8),
+                                      Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              episode.title,
+                                              maxLines: 3,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .headlineSmall
+                                                  ?.copyWith(
+                                                    fontWeight: FontWeight.w700,
+                                                    height: 1.2,
+                                                  ),
+                                            ),
                                           ),
-                                          busy:
-                                              job?.status ==
-                                              JobStatus.downloading,
-                                          done:
-                                              app.localMediaPathForEpisode(
-                                                episode.id,
-                                              ) !=
-                                              null,
-                                          failed: _downloadFailed(job),
-                                          onPressed:
-                                              _canDownload(app, job, episode)
-                                              ? () => unawaited(
-                                                  _downloadEpisode(
+                                          const SizedBox(width: 8),
+                                          EpisodeDownloadButton(
+                                            episodeId: episode.id,
+                                            tooltip: _downloadTooltip(
+                                              context,
+                                              job,
+                                            ),
+                                            busy:
+                                                job?.status ==
+                                                JobStatus.downloading,
+                                            done:
+                                                app.localMediaPathForEpisode(
+                                                  episode.id,
+                                                ) !=
+                                                null,
+                                            failed: _downloadFailed(job),
+                                            onPressed:
+                                                _canDownload(app, job, episode)
+                                                ? () => unawaited(
+                                                    _downloadEpisode(
+                                                      app,
+                                                      feed,
+                                                      episode,
+                                                      job,
+                                                    ),
+                                                  )
+                                                : null,
+                                          ),
+                                          if (display.downloaded && job != null)
+                                            IconButton(
+                                              key: ValueKey(
+                                                'episode-detail-export-media-${episode.id}',
+                                              ),
+                                              tooltip: context.strings.t(
+                                                'podcast_export_media',
+                                              ),
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              style: IconButton.styleFrom(
+                                                minimumSize: const Size(36, 36),
+                                                tapTargetSize:
+                                                    MaterialTapTargetSize
+                                                        .shrinkWrap,
+                                              ),
+                                              onPressed: () => unawaited(
+                                                exportDownloadedPodcastMedia(
+                                                  context,
+                                                  job,
+                                                ),
+                                              ),
+                                              icon: const Icon(
+                                                Icons.ios_share_rounded,
+                                                size: 20,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Row(
+                                        children: [
+                                          PodcastArtwork(
+                                            url: feed.artworkUrl,
+                                            size: 28,
+                                            borderRadius: 4,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Flexible(
+                                            child: Text(
+                                              feed.title,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .bodyMedium
+                                                  ?.copyWith(
+                                                    color:
+                                                        colors.onSurfaceVariant,
+                                                  ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const Spacer(),
+                                      Row(
+                                        children: [
+                                          EpisodePlayButton(
+                                            episodeId: episode.id,
+                                            playing: display.playing,
+                                            durationLabel: durationLabel,
+                                            progress: display.progressFraction,
+                                            tooltip: context.strings.t(
+                                              display.playLabelKey,
+                                            ),
+                                            onPressed: () {
+                                              _playEpisode(
+                                                podcast,
+                                                app,
+                                                episode,
+                                                feed,
+                                              );
+                                              if (canShowCaptions) {
+                                                podcast.setCaptionsOpen(true);
+                                              }
+                                            },
+                                          ),
+                                          const SizedBox(width: 8),
+                                          IconButton(
+                                            key: ValueKey(
+                                              'deep-listen-detail-${episode.id}',
+                                            ),
+                                            tooltip: _actionLabel(context, job),
+                                            onPressed: _canUseDeepListen(job)
+                                                ? () => _deepListen(
                                                     app,
                                                     feed,
                                                     episode,
                                                     job,
-                                                  ),
-                                                )
-                                              : null,
-                                        ),
-                                        if (display.downloaded && job != null)
-                                          IconButton(
-                                            key: ValueKey(
-                                              'episode-detail-export-media-${episode.id}',
-                                            ),
-                                            tooltip: context.strings.t(
-                                              'podcast_export_media',
-                                            ),
-                                            visualDensity:
-                                                VisualDensity.compact,
-                                            style: IconButton.styleFrom(
-                                              minimumSize: const Size(36, 36),
-                                              tapTargetSize:
-                                                  MaterialTapTargetSize
-                                                      .shrinkWrap,
-                                            ),
-                                            onPressed: () => unawaited(
-                                              exportDownloadedPodcastMedia(
-                                                context,
-                                                job,
-                                              ),
-                                            ),
-                                            icon: const Icon(
-                                              Icons.ios_share_rounded,
-                                              size: 20,
-                                            ),
+                                                  )
+                                                : null,
+                                            icon: Icon(_actionIcon(job)),
                                           ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Row(
-                                      children: [
-                                        PodcastArtwork(
-                                          url: feed.artworkUrl,
-                                          size: 28,
-                                          borderRadius: 4,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Flexible(
-                                          child: Text(
-                                            feed.title,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .bodyMedium
-                                                ?.copyWith(
-                                                  color:
-                                                      colors.onSurfaceVariant,
-                                                ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const Spacer(),
-                                    Row(
-                                      children: [
-                                        EpisodePlayButton(
-                                          episodeId: episode.id,
-                                          playing: display.playing,
-                                          durationLabel: durationLabel,
-                                          progress: display.progressFraction,
-                                          tooltip: context.strings.t(
-                                            display.playLabelKey,
-                                          ),
-                                          onPressed: () {
-                                            _playEpisode(
-                                              podcast,
-                                              app,
-                                              episode,
-                                              feed,
-                                            );
-                                            if (canShowCaptions) {
-                                              podcast.setCaptionsOpen(true);
-                                            }
-                                          },
-                                        ),
-                                        const SizedBox(width: 8),
-                                        IconButton(
-                                          key: ValueKey(
-                                            'deep-listen-detail-${episode.id}',
-                                          ),
-                                          tooltip: _actionLabel(context, job),
-                                          onPressed: _canUseDeepListen(job)
-                                              ? () => _deepListen(
-                                                  app,
-                                                  feed,
-                                                  episode,
-                                                  job,
-                                                )
-                                              : null,
-                                          icon: Icon(_actionIcon(job)),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
+                            ],
+                          ),
+                          if (episode.description?.trim().isNotEmpty ??
+                              false) ...[
+                            const SizedBox(height: 28),
+                            PodcastEpisodeDescription(
+                              description: episode.description!,
                             ),
                           ],
-                        ),
-                        if (episode.description?.trim().isNotEmpty ??
-                            false) ...[
-                          const SizedBox(height: 28),
-                          PodcastEpisodeDescription(
-                            description: episode.description!,
-                          ),
                         ],
-                      ],
+                      ),
                     ),
-                  ),
                   if (showCaptions) ...[
-                    VerticalDivider(
-                      width: 1,
-                      color: colors.outlineVariant.withValues(alpha: 0.6),
-                    ),
+                    if (!compact)
+                      VerticalDivider(
+                        width: 1,
+                        color: colors.outlineVariant.withValues(alpha: 0.6),
+                      ),
                     SizedBox(
-                      width: panelWidth,
+                      width: compact ? constraints.maxWidth : panelWidth,
                       child: Column(
                         children: [
                           Expanded(
@@ -1596,7 +1626,9 @@ class _EpisodeRowState extends State<_EpisodeRow> {
   var _hovered = false;
   var _focused = false;
 
-  bool get _actionsVisible => widget.showActions || _hovered || _focused;
+  // Fingers cannot hover, so touch keeps the actions in view.
+  bool get _actionsVisible =>
+      widget.showActions || _hovered || _focused || context.touchActive;
 
   @override
   Widget build(BuildContext context) {

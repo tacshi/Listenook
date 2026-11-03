@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../core/models.dart';
 import '../data/transcript_exporter.dart';
 import '../l10n/strings.dart';
+import 'layout/size_class.dart';
 import '../state/app_controller.dart';
 import 'job_actions.dart';
 import 'transcript_export_dialog.dart';
@@ -44,9 +45,29 @@ class _LibraryPageState extends State<LibraryPage> {
         .where((job) => job.document != null)
         .map((job) => job.id)
         .toList(growable: false);
+    Widget organizer({VoidCallback? onChosen}) => _LibraryOrganizerSidebar(
+      controller: controller,
+      scope: _scope,
+      scopeId: _scopeId,
+      onScopeChanged: (scope, id) {
+        _changeView(() {
+          _scope = scope;
+          _scopeId = id;
+        });
+        onChosen?.call();
+      },
+      onAddGroup: () => _showCreateGroupDialog(context, controller),
+      onRenameGroup: (group) =>
+          _showRenameGroupDialog(context, controller, group),
+      onDeleteGroup: (group) => _confirmDeleteGroup(context, controller, group),
+    );
+    // Phones: groups and tags move into a sheet behind a toolbar button.
+    final compact = LayoutSize.of(context).isCompact;
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+        padding: compact
+            ? const EdgeInsets.fromLTRB(12, 12, 12, 8)
+            : const EdgeInsets.fromLTRB(20, 16, 20, 18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -54,32 +75,39 @@ class _LibraryPageState extends State<LibraryPage> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  SizedBox(
-                    width: 210,
-                    child: _LibraryOrganizerSidebar(
-                      controller: controller,
-                      scope: _scope,
-                      scopeId: _scopeId,
-                      onScopeChanged: (scope, id) => _changeView(() {
-                        _scope = scope;
-                        _scopeId = id;
-                      }),
-                      onAddGroup: () =>
-                          _showCreateGroupDialog(context, controller),
-                      onRenameGroup: (group) =>
-                          _showRenameGroupDialog(context, controller, group),
-                      onDeleteGroup: (group) =>
-                          _confirmDeleteGroup(context, controller, group),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const VerticalDivider(width: 1),
-                  const SizedBox(width: 12),
+                  if (!compact) ...[
+                    SizedBox(width: 210, child: organizer()),
+                    const SizedBox(width: 12),
+                    const VerticalDivider(width: 1),
+                    const SizedBox(width: 12),
+                  ],
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _libraryToolbar(context),
+                        _libraryToolbar(
+                          context,
+                          compact: compact,
+                          onShowOrganizer: () => showModalBottomSheet<void>(
+                            context: context,
+                            showDragHandle: true,
+                            isScrollControlled: true,
+                            builder: (sheetContext) => SafeArea(
+                              child: SizedBox(
+                                height:
+                                    MediaQuery.sizeOf(sheetContext).height * .6,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                  ),
+                                  child: organizer(
+                                    onChosen: () => Navigator.pop(sheetContext),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                         if (_selectionMode) ...[
                           const SizedBox(height: 8),
                           _LibrarySelectionBar(
@@ -220,10 +248,23 @@ class _LibraryPageState extends State<LibraryPage> {
     });
   }
 
-  Widget _libraryToolbar(BuildContext context) => Row(
+  Widget _libraryToolbar(
+    BuildContext context, {
+    required bool compact,
+    required VoidCallback onShowOrganizer,
+  }) => Row(
     key: const Key('library-toolbar'),
     crossAxisAlignment: CrossAxisAlignment.center,
     children: [
+      if (compact) ...[
+        IconButton(
+          key: const Key('show-library-organizer'),
+          tooltip: context.strings.t('library_groups_and_tags'),
+          onPressed: onShowOrganizer,
+          icon: const Icon(Icons.folder_open_outlined),
+        ),
+        const SizedBox(width: 4),
+      ],
       Expanded(
         child: TextField(
           key: const Key('library-search'),
@@ -247,45 +288,82 @@ class _LibraryPageState extends State<LibraryPage> {
         ),
       ),
       const SizedBox(width: 12),
-      SizedBox(
-        key: const Key('library-status-filter'),
-        width: 160,
-        height: 48,
-        child: DropdownButton<String>(
-          value: _status,
-          isExpanded: true,
-          focusColor: Colors.transparent,
-          items: [
-            DropdownMenuItem(
-              value: 'all',
-              child: Text(context.strings.t('all_statuses')),
-            ),
-            DropdownMenuItem(
-              value: 'completed',
-              child: Text(context.strings.t('completed')),
-            ),
-            DropdownMenuItem(
-              value: 'attention',
-              child: Text(context.strings.t('failed')),
-            ),
+      if (compact)
+        PopupMenuButton<String>(
+          key: const Key('library-status-filter'),
+          tooltip: context.strings.t('all_statuses'),
+          initialValue: _status,
+          onSelected: (value) => _changeView(() => _status = value),
+          itemBuilder: (context) => [
+            for (final (value, label) in const [
+              ('all', 'all_statuses'),
+              ('completed', 'completed'),
+              ('attention', 'failed'),
+            ])
+              CheckedPopupMenuItem(
+                value: value,
+                checked: _status == value,
+                child: Text(context.strings.t(label)),
+              ),
           ],
-          onChanged: (value) => _changeView(() => _status = value ?? 'all'),
+          icon: Icon(
+            _status == 'all'
+                ? Icons.filter_list_rounded
+                : Icons.filter_list_alt,
+          ),
+        )
+      else
+        SizedBox(
+          key: const Key('library-status-filter'),
+          width: 160,
+          height: 48,
+          child: DropdownButton<String>(
+            value: _status,
+            isExpanded: true,
+            focusColor: Colors.transparent,
+            items: [
+              DropdownMenuItem(
+                value: 'all',
+                child: Text(context.strings.t('all_statuses')),
+              ),
+              DropdownMenuItem(
+                value: 'completed',
+                child: Text(context.strings.t('completed')),
+              ),
+              DropdownMenuItem(
+                value: 'attention',
+                child: Text(context.strings.t('failed')),
+              ),
+            ],
+            onChanged: (value) => _changeView(() => _status = value ?? 'all'),
+          ),
         ),
-      ),
-      const SizedBox(width: 12),
-      OutlinedButton.icon(
-        key: const Key('toggle-library-selection'),
-        onPressed: () => setState(() {
-          _selectionMode = !_selectionMode;
-          _selectedIds.clear();
-        }),
-        icon: Icon(
-          _selectionMode ? Icons.close_rounded : Icons.checklist_rounded,
+      SizedBox(width: compact ? 4 : 12),
+      if (compact)
+        IconButton(
+          key: const Key('toggle-library-selection'),
+          tooltip: context.strings.t(_selectionMode ? 'done' : 'select'),
+          isSelected: _selectionMode,
+          onPressed: _toggleSelectionMode,
+          icon: const Icon(Icons.checklist_rounded),
+          selectedIcon: const Icon(Icons.close_rounded),
+        )
+      else
+        OutlinedButton.icon(
+          key: const Key('toggle-library-selection'),
+          onPressed: _toggleSelectionMode,
+          icon: Icon(
+            _selectionMode ? Icons.close_rounded : Icons.checklist_rounded,
+          ),
+          label: Text(context.strings.t(_selectionMode ? 'done' : 'select')),
         ),
-        label: Text(context.strings.t(_selectionMode ? 'done' : 'select')),
-      ),
     ],
   );
+
+  void _toggleSelectionMode() => setState(() {
+    _selectionMode = !_selectionMode;
+    _selectedIds.clear();
+  });
 
   void _changeView(VoidCallback update) {
     setState(() {
@@ -638,49 +716,64 @@ class _LibrarySelectionBar extends StatelessWidget {
   final VoidCallback? onRemove;
 
   @override
-  Widget build(BuildContext context) => Row(
-    key: const Key('library-selection-bar'),
-    children: [
-      Text(
-        context.strings
-            .t('selected_count')
-            .replaceFirst('{count}', '$selectedCount'),
-      ),
-      const SizedBox(width: 12),
-      TextButton(
-        onPressed: visibleJobs.isEmpty ? null : onSelectAllVisible,
-        child: Text(context.strings.t('select_all_visible')),
-      ),
-      const Spacer(),
-      IconButton(
-        key: const Key('bulk-tag-library-items'),
-        onPressed: onTags,
-        tooltip: context.strings.t('manage_tags'),
-        icon: const Icon(Icons.sell_outlined),
-      ),
-      const SizedBox(width: 8),
-      IconButton(
-        key: const Key('bulk-move-library-items'),
-        onPressed: onMove,
-        tooltip: context.strings.t('move_to_group'),
-        icon: const Icon(Icons.drive_file_move_outline),
-      ),
-      const SizedBox(width: 8),
-      IconButton(
-        key: const Key('bulk-export-library-items'),
-        onPressed: onExport,
-        tooltip: context.strings.t('export'),
-        icon: const Icon(Icons.ios_share_rounded),
-      ),
-      const SizedBox(width: 8),
-      IconButton(
-        key: const Key('bulk-remove-library-items'),
-        onPressed: onRemove,
-        tooltip: context.strings.t('remove_selected'),
-        icon: const Icon(Icons.delete_outline_rounded),
-      ),
-    ],
-  );
+  Widget build(BuildContext context) {
+    final compact = LayoutSize.of(context).isCompact;
+    final gap = SizedBox(width: compact ? 0 : 8);
+    return Row(
+      key: const Key('library-selection-bar'),
+      children: [
+        Flexible(
+          child: Text(
+            context.strings
+                .t('selected_count')
+                .replaceFirst('{count}', '$selectedCount'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        SizedBox(width: compact ? 4 : 12),
+        if (compact)
+          IconButton(
+            tooltip: context.strings.t('select_all_visible'),
+            onPressed: visibleJobs.isEmpty ? null : onSelectAllVisible,
+            icon: const Icon(Icons.select_all_rounded),
+          )
+        else
+          TextButton(
+            onPressed: visibleJobs.isEmpty ? null : onSelectAllVisible,
+            child: Text(context.strings.t('select_all_visible')),
+          ),
+        const Spacer(),
+        IconButton(
+          key: const Key('bulk-tag-library-items'),
+          onPressed: onTags,
+          tooltip: context.strings.t('manage_tags'),
+          icon: const Icon(Icons.sell_outlined),
+        ),
+        gap,
+        IconButton(
+          key: const Key('bulk-move-library-items'),
+          onPressed: onMove,
+          tooltip: context.strings.t('move_to_group'),
+          icon: const Icon(Icons.drive_file_move_outline),
+        ),
+        gap,
+        IconButton(
+          key: const Key('bulk-export-library-items'),
+          onPressed: onExport,
+          tooltip: context.strings.t('export'),
+          icon: const Icon(Icons.ios_share_rounded),
+        ),
+        gap,
+        IconButton(
+          key: const Key('bulk-remove-library-items'),
+          onPressed: onRemove,
+          tooltip: context.strings.t('remove_selected'),
+          icon: const Icon(Icons.delete_outline_rounded),
+        ),
+      ],
+    );
+  }
 }
 
 class _HistoryListItem extends StatelessWidget {
@@ -709,9 +802,14 @@ class _HistoryListItem extends StatelessWidget {
           ..sort(
             (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
           );
+    // Phones: the row opens the transcript and the buttons fold into the
+    // menu, leaving the width to the title.
+    final compact = LayoutSize.of(context).isCompact;
+    final canAddToInbox =
+        job.status == JobStatus.ready || job.status == JobStatus.failed;
     return Padding(
       key: ValueKey('library-history-item-${job.id}'),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 8, vertical: 6),
       child: Row(
         children: [
           if (selectionMode) ...[
@@ -722,77 +820,85 @@ class _HistoryListItem extends StatelessWidget {
             ),
             const SizedBox(width: 4),
           ],
-          CircleAvatar(
-            backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-            child: Icon(
-              job.metadata?.hasVideo ?? false
-                  ? Icons.movie_outlined
-                  : Icons.audio_file_outlined,
+          if (!compact) ...[
+            CircleAvatar(
+              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+              child: Icon(
+                job.metadata?.hasVideo ?? false
+                    ? Icons.movie_outlined
+                    : Icons.audio_file_outlined,
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
+            const SizedBox(width: 10),
+          ],
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      job.displayName,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    if (group != null)
-                      _LibraryOrganizerPill(
-                        icon: Icons.folder_outlined,
-                        label: group.name,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: compact && !selectionMode && job.document != null
+                  ? () => controller.openInWorkspace(job.id)
+                  : null,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        job.displayName,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
-                    for (final tag in tags)
-                      _LibraryOrganizerPill(
-                        key: ValueKey('library-item-tag-${job.id}-${tag.id}'),
-                        icon: Icons.sell_outlined,
-                        label: tag.name,
-                        colorIndex: _libraryTagColorIndex(
-                          controller.libraryTags,
-                          tag.id,
+                      if (group != null)
+                        _LibraryOrganizerPill(
+                          icon: Icons.folder_outlined,
+                          label: group.name,
                         ),
-                      ),
+                      for (final tag in tags)
+                        _LibraryOrganizerPill(
+                          key: ValueKey('library-item-tag-${job.id}-${tag.id}'),
+                          icon: Icons.sell_outlined,
+                          label: tag.name,
+                          colorIndex: _libraryTagColorIndex(
+                            controller.libraryTags,
+                            tag.id,
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (job.displayTitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      job.fileName,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ],
-                ),
-                if (job.displayTitle != null) ...[
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 4),
                   Text(
-                    job.fileName,
+                    '${_formatCreatedAt(context, job.createdAt)} · '
+                    '${formatClock(job.metadata?.durationMs ?? 0)} · '
+                    '${context.strings.t('job_${job.status.name}')}',
+                    key: ValueKey('library-item-summary-${job.id}'),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
-                const SizedBox(height: 4),
-                Text(
-                  '${_formatCreatedAt(context, job.createdAt)} · '
-                  '${formatClock(job.metadata?.durationMs ?? 0)} · '
-                  '${context.strings.t('job_${job.status.name}')}',
-                  key: ValueKey('library-item-summary-${job.id}'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
+              ),
             ),
           ),
-          if (job.status == JobStatus.missingSource)
+          if (job.status == JobStatus.missingSource && !compact)
             TextButton.icon(
               onPressed: () => chooseAndRelink(context, job.id),
               icon: const Icon(Icons.link_rounded),
               label: Text(context.strings.t('relink')),
             ),
-          if (job.status == JobStatus.ready || job.status == JobStatus.failed)
+          if (canAddToInbox && !compact)
             IconButton(
               key: Key('add-to-inbox-${job.status.name}-job-${job.id}'),
               tooltip: context.strings.t('add_to_inbox_tooltip'),
               onPressed: () => controller.addToInbox(job.id),
               icon: const Icon(Icons.input_rounded),
             ),
-          if (job.document != null) ...[
+          if (job.document != null && !compact) ...[
             IconButton(
               key: ValueKey('open-library-job-${job.id}'),
               tooltip: context.strings.t('open'),
@@ -812,6 +918,14 @@ class _HistoryListItem extends StatelessWidget {
             key: ValueKey('library-item-menu-${job.id}'),
             onSelected: (value) async {
               switch (value) {
+                case 'relink':
+                  await chooseAndRelink(context, job.id);
+                case 'inbox':
+                  controller.addToInbox(job.id);
+                case 'open':
+                  controller.openInWorkspace(job.id);
+                case 'export':
+                  await showTranscriptExportDialog(context, jobIds: [job.id]);
                 case 'rename':
                   await _showRenameDialog(context, controller, job);
                 case 'move':
@@ -823,6 +937,28 @@ class _HistoryListItem extends StatelessWidget {
               }
             },
             itemBuilder: (context) => [
+              if (compact) ...[
+                if (job.status == JobStatus.missingSource)
+                  PopupMenuItem(
+                    value: 'relink',
+                    child: Text(context.strings.t('relink')),
+                  ),
+                if (canAddToInbox)
+                  PopupMenuItem(
+                    value: 'inbox',
+                    child: Text(context.strings.t('add_to_inbox_tooltip')),
+                  ),
+                if (job.document != null) ...[
+                  PopupMenuItem(
+                    value: 'open',
+                    child: Text(context.strings.t('open')),
+                  ),
+                  PopupMenuItem(
+                    value: 'export',
+                    child: Text(context.strings.t('export')),
+                  ),
+                ],
+              ],
               PopupMenuItem(
                 value: 'rename',
                 child: Text(context.strings.t('rename')),

@@ -6,6 +6,7 @@ import '../core/models.dart';
 import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'app_notice.dart';
+import 'platform/export_destination.dart';
 
 Future<void> showTranscriptExportDialog(
   BuildContext context, {
@@ -29,6 +30,7 @@ Future<void> showTranscriptExportDialog(
             mainAxisSize: MainAxisSize.min,
             children: [
               DropdownButtonFormField<ExportFormat>(
+                isExpanded: true,
                 initialValue: options.format,
                 decoration: const InputDecoration(
                   prefixIcon: Icon(Icons.description_outlined),
@@ -56,6 +58,7 @@ Future<void> showTranscriptExportDialog(
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<ExportContentMode>(
+                isExpanded: true,
                 key: const Key('export-content-mode'),
                 initialValue: options.contentMode,
                 decoration: InputDecoration(
@@ -154,8 +157,10 @@ Future<void> showTranscriptExportDialog(
     ),
   );
   if (selected == null || !context.mounted) return;
+  final ExportTarget? target;
   if (selected.zip) {
-    final destination = await getSaveLocation(
+    target = await ExportTarget.file(
+      context,
       suggestedName: 'Listenook-transcripts.zip',
       acceptedTypeGroups: [
         XTypeGroup(
@@ -164,18 +169,20 @@ Future<void> showTranscriptExportDialog(
         ),
       ],
     );
-    if (destination == null || !context.mounted) return;
-    await controller.exportJobsZip(jobIds, destination.path, selected.options);
+    if (target == null || !context.mounted) return;
+    await controller.exportJobsZip(jobIds, target.path, selected.options);
   } else {
-    final directory = await getDirectoryPath(
+    target = await ExportTarget.folder(
+      context,
       confirmButtonText: context.strings.t('export'),
     );
-    if (directory == null || !context.mounted) return;
-    await controller.exportJobs(jobIds, directory, selected.options);
+    if (target == null || !context.mounted) return;
+    await controller.exportJobs(jobIds, target.path, selected.options);
   }
   await controller.updateSettings(
     controller.settings.copyWith(exportOptions: selected.options),
   );
+  if (!await target.deliver()) return;
   if (context.mounted) {
     showAppNotice(
       context,

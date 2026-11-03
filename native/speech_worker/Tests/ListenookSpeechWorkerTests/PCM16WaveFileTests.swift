@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import ListenookSpeechWorker
+@testable import ListenookSpeechCore
 
 final class PCM16WaveFileTests: XCTestCase {
     func testReadsOnlyTheRequestedStandardPCMRange() throws {

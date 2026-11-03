@@ -32,15 +32,17 @@ class DesktopRuntime {
     required DesktopNotificationCallback onNotificationSelected,
   }) async {
     _onNotificationSelected = onNotificationSelected;
-    if (!Platform.isMacOS && !Platform.isWindows) return;
+    if (!Platform.isMacOS && !Platform.isWindows && !Platform.isIOS) return;
     try {
+      const darwin = DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      );
       final initialized = await _notifications.initialize(
         settings: InitializationSettings(
-          macOS: DarwinInitializationSettings(
-            requestAlertPermission: false,
-            requestBadgePermission: false,
-            requestSoundPermission: false,
-          ),
+          macOS: darwin,
+          iOS: darwin,
           windows: WindowsInitializationSettings(
             appName: _displayName,
             appUserModelId: AppIdentity.bundleId,
@@ -60,8 +62,16 @@ class DesktopRuntime {
   }
 
   Future<bool> requestNotificationPermission() async {
-    if (!Platform.isMacOS) return true;
+    if (!Platform.isMacOS && !Platform.isIOS) return true;
     try {
+      if (Platform.isIOS) {
+        return await _notifications
+                .resolvePlatformSpecificImplementation<
+                  IOSFlutterLocalNotificationsPlugin
+                >()
+                ?.requestPermissions(alert: true, badge: false, sound: true) ??
+            false;
+      }
       return await _notifications
               .resolvePlatformSpecificImplementation<
                 MacOSFlutterLocalNotificationsPlugin
@@ -91,6 +101,9 @@ class DesktopRuntime {
           macOS: DarwinNotificationDetails(
             threadIdentifier: 'listenook-inbox-discovery',
           ),
+          iOS: DarwinNotificationDetails(
+            threadIdentifier: 'listenook-inbox-discovery',
+          ),
           windows: WindowsNotificationDetails(
             header: WindowsHeader(
               id: 'listenook-inbox-discovery',
@@ -104,6 +117,34 @@ class DesktopRuntime {
       // Desktop plugins are intentionally unavailable in widget tests.
     } on Object catch (error) {
       debugPrint('Unable to show Inbox notification: $error');
+    }
+  }
+
+  /// iOS: a transcript finished while the app was in the background.
+  Future<void> showJobFinishedNotification({
+    required String title,
+    required String body,
+  }) async {
+    if (!_notificationsReady) return;
+    try {
+      await _notifications.show(
+        id: body.hashCode & 0x7fffffff,
+        title: title,
+        body: body,
+        payload: 'library',
+        notificationDetails: const NotificationDetails(
+          iOS: DarwinNotificationDetails(
+            threadIdentifier: 'listenook-job-finished',
+          ),
+          macOS: DarwinNotificationDetails(
+            threadIdentifier: 'listenook-job-finished',
+          ),
+        ),
+      );
+    } on MissingPluginException {
+      // Not present in widget tests.
+    } on Object catch (error) {
+      debugPrint('Unable to show the job notification: $error');
     }
   }
 

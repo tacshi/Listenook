@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'core/platform_capabilities.dart';
+
 class ListenookTheme {
   static const seed = Color(0xFF8855D9);
 
@@ -53,15 +55,20 @@ class ListenookTheme {
     );
   }
 
+  // iOS: null keeps Flutter's CupertinoSystemText, the SF Pro system font.
   static String? get _fontFamily => switch (defaultTargetPlatform) {
     TargetPlatform.windows => 'Segoe UI Variable Text',
-    TargetPlatform.macOS || TargetPlatform.iOS => '.SF Pro Text',
+    TargetPlatform.macOS => '.SF Pro Text',
     _ => null,
   };
 
   static ThemeData _theme(Brightness brightness) {
     final colors = _colors(brightness);
     final dark = brightness == Brightness.dark;
+    // Fingers need the standard density and 44-point targets.
+    final touch = PlatformCapabilities.current.touchByDefault;
+    final density = touch ? VisualDensity.standard : VisualDensity.compact;
+    final minimumButtonSize = touch ? const Size(44, 44) : const Size(40, 40);
     return ThemeData(
       useMaterial3: true,
       brightness: brightness,
@@ -69,7 +76,7 @@ class ListenookTheme {
       scaffoldBackgroundColor: colors.surface,
       fontFamily: _fontFamily,
       fontFamilyFallback: const ['Segoe UI'],
-      visualDensity: VisualDensity.compact,
+      visualDensity: density,
       dividerTheme: DividerThemeData(color: colors.outlineVariant),
       cardTheme: CardThemeData(
         elevation: 0,
@@ -112,9 +119,21 @@ class ListenookTheme {
         unselectedLabelTextStyle: TextStyle(color: colors.onSurfaceVariant),
         useIndicator: true,
       ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: colors.surfaceContainer,
+        indicatorColor: colors.surfaceContainerHighest,
+        surfaceTintColor: Colors.transparent,
+        iconTheme: WidgetStateProperty.resolveWith(
+          (states) => IconThemeData(
+            color: states.contains(WidgetState.selected)
+                ? colors.primary
+                : colors.onSurfaceVariant,
+          ),
+        ),
+      ),
       segmentedButtonTheme: SegmentedButtonThemeData(
         style: ButtonStyle(
-          visualDensity: VisualDensity.compact,
+          visualDensity: density,
           shape: WidgetStatePropertyAll(
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
@@ -140,13 +159,13 @@ class ListenookTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          minimumSize: const Size(40, 40),
+          minimumSize: minimumButtonSize,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          minimumSize: const Size(40, 40),
+          minimumSize: minimumButtonSize,
           side: BorderSide(color: colors.outlineVariant),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),

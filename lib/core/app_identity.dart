@@ -11,6 +11,10 @@ abstract final class AppIdentity {
   static const startupChannel = '$bundleId/launch_at_login';
   static const cursorChannel = '$bundleId/transcript_structure_cursor';
   static const encoderChannel = '$bundleId/audio_encoder';
+  static const filesChannel = '$bundleId/files';
+  static const nowPlayingChannel = '$bundleId/now_playing';
+  static const backgroundActivityChannel = '$bundleId/background_activity';
+  static const speechEngineChannel = '$bundleId/speech_engine';
   static const speechWorker = 'ListenookSpeechWorker';
   static const releaseRepository = 'tacshi/Listenook-Release';
   static const manifestName = 'listenook-latest.json';

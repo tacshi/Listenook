@@ -37,6 +37,35 @@ void main() {
     expect(requests.takeLatest(), isNull);
   });
 
+  test('iOS queues audio, subtitles and folders for the Inbox', () {
+    final audio = File('${directory.path}/talk.m4a')..writeAsStringSync('');
+    final subtitle = File('${directory.path}/talk.srt')..writeAsStringSync('');
+    final folder = Directory('${directory.path}/Course')..createSync();
+    final video = File('${directory.path}/clip.mp4')..writeAsStringSync('');
+    File('${directory.path}/notes.txt').writeAsStringSync('');
+    final requests = VideoOpenRequests(acceptsImports: true);
+
+    requests.addAll([
+      audio.path,
+      subtitle.path,
+      folder.path,
+      video.path,
+      '${directory.path}/notes.txt',
+    ]);
+
+    expect(requests.takeLatest(), video.path);
+    expect(requests.takeImports(), [audio.path, subtitle.path, folder.path]);
+    expect(requests.hasImports, isFalse);
+  });
+
+  test('desktop ignores files that are not videos', () {
+    File('${directory.path}/talk.m4a').writeAsStringSync('');
+    final requests = VideoOpenRequests()
+      ..addAll(['${directory.path}/talk.m4a']);
+    expect(requests.hasImports, isFalse);
+    expect(requests.hasPending, isFalse);
+  });
+
   test('video playback positions survive a reload', () async {
     final paths = AppPaths.forTesting(directory.path);
     final video = '${directory.path}/movie.mkv';

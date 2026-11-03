@@ -16,7 +16,10 @@ void main() {
       UpdateService.defaultManifestUrl,
       'https://raw.githubusercontent.com/tacshi/Listenook-Release/main/listenook-latest.json',
     );
-    final native = File('macos/Runner/AppDelegate.swift').readAsStringSync();
+    final native = [
+      'macos/Runner/AppDelegate.swift',
+      'native/apple/AudioEncoder.swift',
+    ].map((path) => File(path).readAsStringSync()).join('\n');
     final cursor = File(
       'macos/Runner/MainFlutterWindow.swift',
     ).readAsStringSync();

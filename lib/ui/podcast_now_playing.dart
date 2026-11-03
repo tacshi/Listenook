@@ -12,6 +12,7 @@ import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import '../state/podcast_controller.dart';
 import '../state/podcast_player.dart';
+import 'platform/platform_context.dart';
 import 'transcript_review.dart';
 
 class PodcastNowPlaying extends StatelessWidget {
@@ -344,7 +345,9 @@ class PodcastSeekBar extends StatefulWidget {
 
 class _PodcastSeekBarState extends State<PodcastSeekBar> {
   double get _trackHeight => widget.compact ? 4.0 : 6.0;
-  double get _hitHeight => widget.compact ? 22.0 : 36.0;
+  // Fingers need a taller target than the thin track suggests.
+  double get _hitHeight =>
+      context.touchActive ? 44.0 : (widget.compact ? 22.0 : 36.0);
   double get _thumb => widget.compact ? 10.0 : 14.0;
   double get _thumbActive => widget.compact ? 14.0 : 18.0;
 

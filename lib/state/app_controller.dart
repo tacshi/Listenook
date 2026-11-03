@@ -17,6 +17,7 @@ import '../core/transcript_structure_editor.dart';
 import '../data/llm_translation_service.dart';
 import '../data/moss_api_client.dart';
 import '../data/inbox_folder_monitor.dart';
+import '../data/managed_media_store.dart';
 import '../data/podcast/download_location.dart';
 import '../data/podcast/podcast_urls.dart';
 import '../data/podcast/publisher_transcript.dart';
@@ -53,6 +54,7 @@ class AppController extends ChangeNotifier {
     InboxFolderMonitor? inboxFolderMonitor,
     PodcastGateway? podcastGateway,
     String? podcastManagedRoot,
+    ManagedMediaStore? managedMediaStore,
     TranscriptParser parser = const TranscriptParser(),
     PublisherTranscriptParser publisherTranscriptParser =
         const PublisherTranscriptParser(),
@@ -81,6 +83,7 @@ class AppController extends ChangeNotifier {
        _inboxFolderMonitor = inboxFolderMonitor,
        _podcastGateway = podcastGateway,
        _podcastManagedRoot = podcastManagedRoot,
+       _managedMedia = managedMediaStore,
        _parser = parser,
        _publisherTranscriptParser = publisherTranscriptParser,
        _timedSubtitleImportService = timedSubtitleImportService,
@@ -109,6 +112,9 @@ class AppController extends ChangeNotifier {
   final InboxFolderMonitor? _inboxFolderMonitor;
   final PodcastGateway? _podcastGateway;
   final String? _podcastManagedRoot;
+
+  /// iOS: Listenook's copies of imported media, deleted with their last job.
+  final ManagedMediaStore? _managedMedia;
   final TranscriptParser _parser;
   final PublisherTranscriptParser _publisherTranscriptParser;
   final TimedSubtitleImportService _timedSubtitleImportService;
@@ -2778,6 +2784,7 @@ class AppController extends ChangeNotifier {
           clearError: true,
         ),
       );
+      if (job.sourcePath != sourcePath) await _releaseManagedImport(job);
       return null;
     } on MediaException catch (error) {
       return error.code;
@@ -2795,7 +2802,7 @@ class AppController extends ChangeNotifier {
       if (_pathIsInMonitoredFolder(job.sourcePath)) {
         await _recordMonitoredFile(job, MonitoredFileDisposition.dismissed);
       }
-      await _deleteManagedPodcastAudio(job);
+      await _deleteManagedMedia(job);
       _jobs.remove(id);
       _forgetPlaybackPosition(id);
       await _media.deleteGeneratedMedia(id);
@@ -2819,7 +2826,7 @@ class AppController extends ChangeNotifier {
           MonitoredFileDisposition.dismissed,
         );
       }
-      if (discarded != null) await _deleteManagedPodcastAudio(discarded);
+      if (discarded != null) await _deleteManagedMedia(discarded);
       _jobs.remove(id);
       _forgetPlaybackPosition(id);
       await _media.deleteGeneratedMedia(id);
@@ -2844,7 +2851,7 @@ class AppController extends ChangeNotifier {
     _inboxIds.remove(id);
     if (_activeWorkspaceJobId == id) _activeWorkspaceJobId = null;
     _forgetWorkspaceJob(id);
-    await _deleteManagedPodcastAudio(job);
+    await _deleteManagedMedia(job);
     await _media.deleteGeneratedMedia(id);
     await _jobsRepository.delete(id);
     notifyListeners();
@@ -4581,6 +4588,25 @@ class AppController extends ChangeNotifier {
       progress: const JobProgress(stage: 'failed'),
     ),
   );
+
+  /// Deletes the media Listenook keeps on the job's behalf: a downloaded
+  /// episode, or (iOS) the copy of an imported file no other job uses.
+  Future<void> _deleteManagedMedia(TranscriptionJob job) async {
+    await _deleteManagedPodcastAudio(job);
+    await _releaseManagedImport(job);
+  }
+
+  Future<void> _releaseManagedImport(TranscriptionJob job) async {
+    final store = _managedMedia;
+    if (store == null || !store.owns(job.sourcePath)) return;
+    bool inUse(String path) => _jobs.values.any(
+      (other) =>
+          other.id != job.id &&
+          p.equals(p.normalize(other.sourcePath), p.normalize(path)),
+    );
+    if (inUse(job.sourcePath)) return;
+    await store.release(job.sourcePath, inUse: inUse);
+  }
 
   Future<void> _deleteManagedPodcastAudio(TranscriptionJob job) async {
     if (job.sourceOrigin != JobSourceOrigin.podcast) return;

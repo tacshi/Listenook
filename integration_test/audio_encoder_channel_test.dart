@@ -5,12 +5,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:listenook/data/process_media_service.dart';
 
-void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+import 'support/results_file.dart';
 
-  testWidgets('macOS compact audio encoder channel is registered', (
-    tester,
-  ) async {
+void main() {
+  saveResultsWhenDone(IntegrationTestWidgetsFlutterBinding.ensureInitialized());
+
+  testWidgets('the AVFoundation encoder channel is registered', (tester) async {
     final root = await Directory.systemTemp.createTemp(
       'meow-audio-encoder-channel-',
     );
@@ -19,7 +19,7 @@ void main() {
     final output = File('${root.path}/output.m4a');
     await input.writeAsBytes(_pcm16MonoWav());
 
-    await const MacosCompactAudioEncoder().encodeAac(
+    await const AppleAudioEncoder().encodeAac(
       inputPath: input.path,
       outputPath: output.path,
       bitRate: 48000,
@@ -27,7 +27,14 @@ void main() {
 
     expect(await output.exists(), isTrue);
     expect(await output.length(), greaterThan(0));
-  }, skip: !Platform.isMacOS);
+
+    final lossless = File('${root.path}/lossless.m4a');
+    await const AppleAudioEncoder().encodeAlac(
+      inputPath: input.path,
+      outputPath: lossless.path,
+    );
+    expect(await lossless.length(), greaterThan(0));
+  }, skip: !Platform.isMacOS && !Platform.isIOS);
 }
 
 List<int> _pcm16MonoWav() {

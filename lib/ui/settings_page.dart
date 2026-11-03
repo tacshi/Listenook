@@ -17,6 +17,7 @@ import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import 'app_notice.dart';
 import 'inbox_monitor_setup_dialog.dart';
+import 'platform/platform_context.dart';
 
 typedef ExternalUrlLauncher = Future<bool> Function(Uri url);
 
@@ -548,7 +549,8 @@ class _SettingsPageState extends State<SettingsPage> {
   ]);
 
   Widget _shortcutsTab(BuildContext context) {
-    final macOS = Theme.of(context).platform == TargetPlatform.macOS;
+    // iPad keyboards use the Mac's keys.
+    final macOS = context.capabilities.shortcutModifierLabel == '⌘';
     final commandKey = macOS ? '⌘' : 'Ctrl';
     final altKey = macOS ? '⌥' : context.strings.t('shortcut_key_alt');
     final shiftKey = macOS ? '⇧' : context.strings.t('shortcut_key_shift');
@@ -816,80 +818,84 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
       ),
-      Card(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Column(
-            children: [
-              _CompactToggleRow(
-                key: const Key('settings-launch-at-login'),
-                title: context.strings.t('inbox_monitor_launch_at_login'),
-                subtitle: config.showTrayIcon
-                    ? context.strings.t(
-                        macOS
-                            ? 'desktop_menu_bar_launch_hint'
-                            : 'desktop_tray_launch_hint',
-                      )
-                    : null,
-                icon: Icons.login_rounded,
-                value: config.launchAtLogin,
-                onChanged: (enabled) async {
-                  await controller.setInboxMonitorLaunchAtLogin(enabled);
-                  if (!context.mounted) return;
-                  await Provider.of<DesktopRuntime?>(
-                    context,
-                    listen: false,
-                  )?.setLaunchAtLogin(enabled);
-                },
-              ),
-              _CompactToggleRow(
-                key: const Key('settings-show-tray-icon'),
-                title: context.strings.t(
-                  macOS ? 'desktop_menu_bar_icon' : 'desktop_tray_icon',
-                ),
-                subtitle: context.strings.t(
-                  config.showDockIcon
-                      ? 'desktop_icon_hint'
-                      : 'desktop_menu_bar_needs_dock',
-                ),
-                icon: macOS ? Icons.menu_rounded : Icons.move_to_inbox_outlined,
-                value: config.showTrayIcon,
-                // Hiding both icons would leave no way back in.
-                onChanged: config.showDockIcon
-                    ? controller.setDesktopTrayIconVisible
-                    : null,
-              ),
-              if (macOS)
+      if (context.capabilities.desktopShell)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(
+              children: [
                 _CompactToggleRow(
-                  key: const Key('settings-show-dock-icon'),
-                  title: context.strings.t('desktop_dock_icon'),
-                  subtitle: context.strings.t(
-                    config.showTrayIcon
-                        ? 'desktop_dock_icon_hint'
-                        : 'desktop_dock_needs_menu_bar',
+                  key: const Key('settings-launch-at-login'),
+                  title: context.strings.t('inbox_monitor_launch_at_login'),
+                  subtitle: config.showTrayIcon
+                      ? context.strings.t(
+                          macOS
+                              ? 'desktop_menu_bar_launch_hint'
+                              : 'desktop_tray_launch_hint',
+                        )
+                      : null,
+                  icon: Icons.login_rounded,
+                  value: config.launchAtLogin,
+                  onChanged: (enabled) async {
+                    await controller.setInboxMonitorLaunchAtLogin(enabled);
+                    if (!context.mounted) return;
+                    await Provider.of<DesktopRuntime?>(
+                      context,
+                      listen: false,
+                    )?.setLaunchAtLogin(enabled);
+                  },
+                ),
+                _CompactToggleRow(
+                  key: const Key('settings-show-tray-icon'),
+                  title: context.strings.t(
+                    macOS ? 'desktop_menu_bar_icon' : 'desktop_tray_icon',
                   ),
-                  icon: Icons.dock_outlined,
-                  value: config.showDockIcon,
-                  onChanged: config.showTrayIcon
-                      ? (visible) async {
-                          await controller.setDesktopDockIconVisible(visible);
-                          if (!context.mounted) return;
-                          await Provider.of<DesktopRuntime?>(
-                            context,
-                            listen: false,
-                          )?.setDockIconVisible(visible);
-                        }
+                  subtitle: context.strings.t(
+                    config.showDockIcon
+                        ? 'desktop_icon_hint'
+                        : 'desktop_menu_bar_needs_dock',
+                  ),
+                  icon: macOS
+                      ? Icons.menu_rounded
+                      : Icons.move_to_inbox_outlined,
+                  value: config.showTrayIcon,
+                  // Hiding both icons would leave no way back in.
+                  onChanged: config.showDockIcon
+                      ? controller.setDesktopTrayIconVisible
                       : null,
                 ),
-            ],
+                if (macOS)
+                  _CompactToggleRow(
+                    key: const Key('settings-show-dock-icon'),
+                    title: context.strings.t('desktop_dock_icon'),
+                    subtitle: context.strings.t(
+                      config.showTrayIcon
+                          ? 'desktop_dock_icon_hint'
+                          : 'desktop_dock_needs_menu_bar',
+                    ),
+                    icon: Icons.dock_outlined,
+                    value: config.showDockIcon,
+                    onChanged: config.showTrayIcon
+                        ? (visible) async {
+                            await controller.setDesktopDockIconVisible(visible);
+                            if (!context.mounted) return;
+                            await Provider.of<DesktopRuntime?>(
+                              context,
+                              listen: false,
+                            )?.setDockIconVisible(visible);
+                          }
+                        : null,
+                  ),
+              ],
+            ),
           ),
         ),
-      ),
-      _Section(
-        title: context.strings.t('inbox_monitor_settings_title'),
-        icon: Icons.folder_special_outlined,
-        child: _InboxMonitorSettings(controller: controller),
-      ),
+      if (context.capabilities.folderMonitoring)
+        _Section(
+          title: context.strings.t('inbox_monitor_settings_title'),
+          icon: Icons.folder_special_outlined,
+          child: _InboxMonitorSettings(controller: controller),
+        ),
     ]);
   }
 
@@ -2366,7 +2372,8 @@ class _AboutAppSectionState extends State<_AboutAppSection> {
               icon: const Icon(Icons.restart_alt_rounded),
               label: Text(strings.t('restart_to_update')),
             )
-          else
+          // The App Store updates the app on iOS.
+          else if (context.capabilities.desktopShell)
             OutlinedButton.icon(
               key: const Key('about-check-for-updates'),
               onPressed: updates?.supported == true && !busy

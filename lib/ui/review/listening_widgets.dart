@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/rendering.dart';
@@ -6,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../core/models.dart';
 import '../../l10n/strings.dart';
+import '../platform/platform_context.dart';
 import '../transcript_review.dart';
 import 'seek_helpers.dart';
 
@@ -179,30 +179,40 @@ class SentenceNavigationControls extends StatelessWidget {
   /// Whether the arrow shortcut needs Alt (review) or not (video player).
   final bool altModifier;
 
-  String get _modifier => altModifier ? (Platform.isMacOS ? '⌥' : 'Alt+') : '';
+  String _modifier(BuildContext context) => altModifier
+      ? (context.capabilities.shortcutModifierLabel == '⌘' ? '⌥' : 'Alt+')
+      : '';
 
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      IconButton(
-        key: const Key('previous-sentence'),
-        tooltip: '${context.strings.t(previousLabel)} ($_modifier←)',
-        onPressed: onPrevious,
-        constraints: const BoxConstraints.tightFor(width: 32, height: 40),
-        padding: EdgeInsets.zero,
-        icon: const Icon(Icons.skip_previous_rounded),
-      ),
-      IconButton(
-        key: const Key('next-sentence'),
-        tooltip: '${context.strings.t(nextLabel)} ($_modifier→)',
-        onPressed: onNext,
-        constraints: const BoxConstraints.tightFor(width: 32, height: 40),
-        padding: EdgeInsets.zero,
-        icon: const Icon(Icons.skip_next_rounded),
-      ),
-    ],
-  );
+  Widget build(BuildContext context) {
+    // Finger-sized on touch; narrow under a pointer to leave room for the
+    // seek bar.
+    final size = context.touchActive
+        ? const BoxConstraints.tightFor(width: 44, height: 44)
+        : const BoxConstraints.tightFor(width: 32, height: 40);
+    final modifier = _modifier(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          key: const Key('previous-sentence'),
+          tooltip: '${context.strings.t(previousLabel)} ($modifier←)',
+          onPressed: onPrevious,
+          constraints: size,
+          padding: EdgeInsets.zero,
+          icon: const Icon(Icons.skip_previous_rounded),
+        ),
+        IconButton(
+          key: const Key('next-sentence'),
+          tooltip: '${context.strings.t(nextLabel)} ($modifier→)',
+          onPressed: onNext,
+          constraints: size,
+          padding: EdgeInsets.zero,
+          icon: const Icon(Icons.skip_next_rounded),
+        ),
+      ],
+    );
+  }
 }
 
 /// Uses the established overlap resolver, but treats gaps as no active cue.

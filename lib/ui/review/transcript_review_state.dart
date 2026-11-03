@@ -11,18 +11,23 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import '../../core/app_identity.dart';
 import '../../core/dictation_comparison.dart';
 import '../../core/models.dart';
 import '../../core/speech_boundaries.dart';
 import '../../core/windowing/app_window.dart';
 import '../../core/transcript_structure_editor.dart';
+import '../../data/now_playing.dart';
 import '../../data/transcript_exporter.dart';
 import '../../l10n/strings.dart';
 import '../../state/app_controller.dart';
+import '../../state/now_playing_coordinator.dart';
 import '../app_notice.dart';
 import '../dictation_panel.dart';
 import '../job_actions.dart';
 import '../keyboard_shortcuts.dart';
+import '../platform/immersive_mode.dart';
+import '../platform/platform_context.dart';
 import '../review_fullscreen_controller.dart';
 import '../transcript_structure_cursor.dart';
 import '../transcript_review.dart';
@@ -69,6 +74,10 @@ class TranscriptReviewState extends State<TranscriptReview> {
   bool get _playbackActive => _playing || _mimicWaiting;
 
   static const reviewDividerWidth = 9.0;
+
+  /// The resize handle between panes: wide enough for a finger on touch.
+  static double reviewDividerWidthOf(BuildContext context) =>
+      context.touchActive ? 24 : reviewDividerWidth;
   static const _minimumReviewPaneWidth = 280.0;
   static const _minimumCompanionPaneWidth = 420.0;
   static const videoTitleHeaderHeight = 52.0;
@@ -152,6 +161,8 @@ class TranscriptReviewState extends State<TranscriptReview> {
   int _sourceRequest = 0;
   late final VideoControlsBuilder _videoControls;
   final _playbackTick = _ReviewPlaybackTick();
+  NowPlayingCoordinator? _nowPlaying;
+  late final _nowPlayingSource = _ReviewNowPlaying(this);
   final _structureEditor = TranscriptStructureEditor();
   TranscriptDocument? _structureAvailabilityDocument;
   bool _cachedStructureEditingAvailable = false;
@@ -173,6 +184,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
       resume: _resumeMedia,
     );
     HardwareKeyboard.instance.addHandler(_handleReviewShortcut);
+    _nowPlaying = Provider.of<NowPlayingCoordinator?>(context, listen: false);
     WidgetsBinding.instance.addPostFrameCallback((_) => _openSource());
   }
 
@@ -481,6 +493,8 @@ class TranscriptReviewState extends State<TranscriptReview> {
       _playing = value;
       if (resumed) _followPlayback = true;
     });
+    // Starting playback takes over the lock screen from the podcast player.
+    if (value) _nowPlaying?.claim(_nowPlayingSource);
     final repeatedSegment = _repeatingSegment;
     if (resumed &&
         repeatedSegment != null &&
@@ -781,6 +795,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
     _search.dispose();
     _aiBriefScroll.dispose();
     _structureNoticeTimer?.cancel();
+    _nowPlaying?.release(_nowPlayingSource);
     unawaited(_shutdownMedia());
     unawaited(TranscriptStructureCursors.deactivateAll());
     super.dispose();
@@ -957,7 +972,8 @@ class TranscriptReviewState extends State<TranscriptReview> {
               );
               final companionAvailable =
                   constraints.maxWidth >=
-                  (_minimumCompanionPaneWidth * 2 + reviewDividerWidth);
+                  (_minimumCompanionPaneWidth * 2 +
+                      reviewDividerWidthOf(context));
               final companionActive = _showAiBrief && companionAvailable;
               final audioCompanion =
                   companionAvailable && (!hasVideo || audioMode);
@@ -1021,7 +1037,8 @@ class TranscriptReviewState extends State<TranscriptReview> {
               // Structure adds another persistent transcript action. Keep the
               // minimum workspace width stacked so neither pane is cramped.
               final sideBySide = constraints.maxWidth >= 880;
-              final availableWidth = constraints.maxWidth - reviewDividerWidth;
+              final availableWidth =
+                  constraints.maxWidth - reviewDividerWidthOf(context);
               final maximumPaneWidth = availableWidth - _minimumReviewPaneWidth;
               final preferredTranscriptWidth =
                   _transcriptPaneWidth ?? availableWidth * .45;
@@ -1056,7 +1073,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
                   ? 0.0
                   : stackedMediaHeight + 1;
               final videoTranscriptRect = Rect.fromLTWH(
-                sideBySide ? videoWidth + reviewDividerWidth : 0,
+                sideBySide ? videoWidth + reviewDividerWidthOf(context) : 0,
                 videoTranscriptTop,
                 sideBySide ? transcriptWidth : constraints.maxWidth,
                 (constraints.maxHeight - videoTranscriptTop)
@@ -1158,7 +1175,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
                         key: const ValueKey('vertical-divider-slot'),
                         left: videoWidth * (1 - progress),
                         top: 0,
-                        width: reviewDividerWidth,
+                        width: reviewDividerWidthOf(context),
                         height: constraints.maxHeight,
                         child: sideBySide
                             ? IgnorePointer(
@@ -1220,7 +1237,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
     required Widget right,
     bool showRight = true,
   }) {
-    final availableWidth = width - reviewDividerWidth;
+    final availableWidth = width - reviewDividerWidthOf(context);
     final leftWidth = showRight
         ? _resolvedCompanionLeftWidth(availableWidth)
         : width;
@@ -1255,7 +1272,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
     required Widget transcriptPane,
     required Widget aiBriefPane,
   }) {
-    final availableWidth = constraints.maxWidth - reviewDividerWidth;
+    final availableWidth = constraints.maxWidth - reviewDividerWidthOf(context);
     final leftWidth = _resolvedCompanionLeftWidth(availableWidth);
     final aspect = _videoAspectRatio.isFinite && _videoAspectRatio > 0
         ? _videoAspectRatio
@@ -1628,6 +1645,14 @@ class TranscriptReviewState extends State<TranscriptReview> {
           onGenerateAiBrief: () => _showAiBriefDialog(job),
           showFilename: showFilename,
           structureMode: _structureMode,
+          onUndoStructure:
+              _appController.canUndoTranscriptStructureEdit(widget.jobId)
+              ? () => unawaited(_undoStructureEdit())
+              : null,
+          onRedoStructure:
+              _appController.canRedoTranscriptStructureEdit(widget.jobId)
+              ? () => unawaited(_redoStructureEdit())
+              : null,
           structureEnabled: structureEnabled,
           onToggleStructure: _toggleStructureMode,
         ),
@@ -1852,6 +1877,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
     _dictationFocus.unfocus();
     if (mounted) setState(() {});
     _appWindow?.setFullscreen(true);
+    if (mounted) await ImmersiveMode.enter(context);
   }
 
   Future<void> _exitNativeFullscreen() async {
@@ -1860,6 +1886,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
     if (mounted) setState(() {});
     _playbackTick.tick();
     _appWindow?.setFullscreen(false);
+    if (mounted) await ImmersiveMode.exit(context);
   }
 
   void _seekTranscriptSegment(
@@ -2458,9 +2485,7 @@ class TranscriptReviewState extends State<TranscriptReview> {
         _handleListeningShortcut(event)) {
       return true;
     }
-    if (event is KeyDownEvent &&
-        event.logicalKey == LogicalKeyboardKey.escape &&
-        _structureMode) {
+    if (event is KeyDownEvent && isEscapeEvent(event) && _structureMode) {
       _toggleStructureMode();
       return true;
     }
@@ -3048,6 +3073,47 @@ SentenceRepeatLoopController? _mpvSentenceRepeatLoopFor(Player player) {
   final platform = player.platform;
   if (platform is! NativePlayer) return null;
   return MpvSentenceRepeatLoopController(platform.setProperty);
+}
+
+/// The review's player as seen by the lock screen and Control Center.
+class _ReviewNowPlaying implements NowPlayingSource {
+  _ReviewNowPlaying(this._state);
+
+  final TranscriptReviewState _state;
+
+  @override
+  void addListener(VoidCallback listener) =>
+      _state._playbackTick.addListener(listener);
+
+  @override
+  void removeListener(VoidCallback listener) =>
+      _state._playbackTick.removeListener(listener);
+
+  @override
+  NowPlayingItem? get nowPlaying {
+    final state = _state;
+    final job = state._appController.jobById(state.widget.jobId);
+    if (job == null || state._player == null || state._mediaShutdown != null) {
+      return null;
+    }
+    return NowPlayingItem(
+      title: job.displayName,
+      artist: AppIdentity.name,
+      duration: state._duration,
+      position: state._position,
+      playing: state._playing,
+      rate: state._playbackRate,
+    );
+  }
+
+  @override
+  Future<void> play() async => _state._player?.play();
+
+  @override
+  Future<void> pause() async => _state._player?.pause();
+
+  @override
+  Future<void> seekTo(Duration position) => _state._seek(position);
 }
 
 class _ReviewPlaybackTick extends ChangeNotifier {

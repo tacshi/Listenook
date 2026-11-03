@@ -2,16 +2,20 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import 'core/models.dart';
+import 'core/platform_capabilities.dart';
 import 'data/desktop_runtime.dart';
 import 'data/desktop_tray.dart';
+import 'data/managed_media_store.dart';
 import 'data/local_repositories.dart';
 import 'data/update_service.dart';
 import 'l10n/strings.dart';
 import 'state/app_controller.dart';
+import 'state/now_playing_coordinator.dart';
 import 'state/podcast_controller.dart';
 import 'state/video_open_requests.dart';
 import 'theme.dart';
 import 'ui/app_shell.dart';
+import 'ui/platform/platform_context.dart';
 
 class ListenookApp extends StatelessWidget {
   const ListenookApp({
@@ -23,6 +27,9 @@ class ListenookApp extends StatelessWidget {
     this.podcastController,
     this.videoOpenRequests,
     this.videoPlaybackRepository,
+    this.capabilities,
+    this.managedMediaStore,
+    this.nowPlaying,
   });
   final AppController controller;
   final UpdateService updates;
@@ -31,6 +38,15 @@ class ListenookApp extends StatelessWidget {
   final PodcastController? podcastController;
   final VideoOpenRequests? videoOpenRequests;
   final VideoPlaybackRepository? videoPlaybackRepository;
+
+  /// Overrides the theme platform's capabilities (tests).
+  final PlatformCapabilities? capabilities;
+
+  /// iOS: where picked and received files are kept.
+  final ManagedMediaStore? managedMediaStore;
+
+  /// Lock-screen controls for whichever player is playing.
+  final NowPlayingCoordinator? nowPlaying;
 
   @override
   Widget build(BuildContext context) => MultiProvider(
@@ -47,6 +63,12 @@ class ListenookApp extends StatelessWidget {
         Provider<VideoPlaybackRepository>.value(
           value: videoPlaybackRepository!,
         ),
+      if (capabilities != null)
+        Provider<PlatformCapabilities>.value(value: capabilities!),
+      if (managedMediaStore != null)
+        Provider<ManagedMediaStore>.value(value: managedMediaStore!),
+      if (nowPlaying != null)
+        Provider<NowPlayingCoordinator>.value(value: nowPlaying!),
     ],
     child: Consumer<AppController>(
       builder: (context, state, _) => MaterialApp(
@@ -69,6 +91,8 @@ class ListenookApp extends StatelessWidget {
           AppStrings.delegate,
           ...GlobalMaterialLocalizations.delegates,
         ],
+        builder: (context, child) =>
+            InputModality(child: child ?? const SizedBox.shrink()),
         home: const AppShell(),
       ),
     ),

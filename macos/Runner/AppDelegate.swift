@@ -1,4 +1,3 @@
-import AVFoundation
 import Cocoa
 import Darwin
 import FlutterMacOS
@@ -236,7 +235,6 @@ enum DockIconPolicy {
 }
 
 final class ApplicationChannels {
-  private let compactAudioEncoder = CompactAudioEncoder()
   private var launchAtLoginChannel: FlutterMethodChannel?
   private var audioEncoderChannel: FlutterMethodChannel?
 
@@ -323,119 +321,6 @@ final class ApplicationChannels {
     }
     self.launchAtLoginChannel = launchAtLoginChannel
 
-    let audioEncoderChannel = FlutterMethodChannel(
-      name: "app.capyvibe.listenook/audio_encoder",
-      binaryMessenger: messenger
-    )
-    audioEncoderChannel.setMethodCallHandler { [compactAudioEncoder] call, result in
-      guard call.method == "encodeAac",
-            let arguments = call.arguments as? [String: Any],
-            let inputPath = arguments["inputPath"] as? String,
-            let outputPath = arguments["outputPath"] as? String,
-            let bitRate = arguments["bitRate"] as? Int
-      else {
-        result(FlutterMethodNotImplemented)
-        return
-      }
-      compactAudioEncoder.encodeAac(
-        inputURL: URL(fileURLWithPath: inputPath),
-        outputURL: URL(fileURLWithPath: outputPath),
-        bitRate: bitRate
-      ) { error in
-        DispatchQueue.main.async {
-          if let error {
-            result(FlutterError(
-              code: "compact_audio_encoding_failed",
-              message: error.localizedDescription,
-              details: nil
-            ))
-          } else {
-            result(nil)
-          }
-        }
-      }
-    }
-    self.audioEncoderChannel = audioEncoderChannel
-  }
-}
-
-final class CompactAudioEncoder {
-  private let queue = DispatchQueue(label: "app.capyvibe.listenook.audio-encoder")
-
-  func encodeAac(
-    inputURL: URL,
-    outputURL: URL,
-    bitRate: Int,
-    completion: @escaping (Error?) -> Void
-  ) {
-    do {
-      let asset = AVURLAsset(url: inputURL)
-      guard let track = asset.tracks(withMediaType: .audio).first else {
-        throw encodingError("The extracted audio has no audio track.")
-      }
-      let reader = try AVAssetReader(asset: asset)
-      let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
-      guard reader.canAdd(readerOutput) else {
-        throw encodingError("The extracted audio cannot be read.")
-      }
-      reader.add(readerOutput)
-
-      let writer = try AVAssetWriter(outputURL: outputURL, fileType: .m4a)
-      let writerInput = AVAssetWriterInput(
-        mediaType: .audio,
-        outputSettings: [
-          AVFormatIDKey: kAudioFormatMPEG4AAC,
-          AVSampleRateKey: 16_000,
-          AVNumberOfChannelsKey: 1,
-          AVEncoderBitRateKey: bitRate,
-        ]
-      )
-      writerInput.expectsMediaDataInRealTime = false
-      guard writer.canAdd(writerInput) else {
-        throw encodingError("The AAC encoder is unavailable.")
-      }
-      writer.add(writerInput)
-      guard writer.startWriting(), reader.startReading() else {
-        throw writer.error ?? reader.error ?? encodingError("AAC encoding could not start.")
-      }
-      writer.startSession(atSourceTime: .zero)
-      writerInput.requestMediaDataWhenReady(on: queue) {
-        while writerInput.isReadyForMoreMediaData {
-          if let sample = readerOutput.copyNextSampleBuffer() {
-            if !writerInput.append(sample) {
-              reader.cancelReading()
-              writer.cancelWriting()
-              completion(writer.error ?? self.encodingError("AAC encoding failed."))
-              return
-            }
-            continue
-          }
-          if reader.status == .failed {
-            writer.cancelWriting()
-            completion(reader.error ?? self.encodingError("The extracted audio could not be read."))
-            return
-          }
-          writerInput.markAsFinished()
-          writer.finishWriting {
-            completion(
-              writer.status == .completed
-                ? nil
-                : writer.error ?? self.encodingError("AAC encoding failed.")
-            )
-          }
-          return
-        }
-      }
-    } catch {
-      completion(error)
-    }
-  }
-
-  private func encodingError(_ message: String) -> NSError {
-    NSError(
-      domain: "app.capyvibe.listenook.audio-encoder",
-      code: 1,
-      userInfo: [NSLocalizedDescriptionKey: message]
-    )
+    audioEncoderChannel = AudioEncoderChannel.register(with: messenger)
   }
 }

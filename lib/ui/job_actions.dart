@@ -1,4 +1,3 @@
-import 'package:file_selector/file_selector.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
@@ -7,13 +6,24 @@ import '../l10n/strings.dart';
 import '../state/app_controller.dart';
 import '../state/podcast_controller.dart';
 import 'app_notice.dart';
+import 'platform/file_picking.dart';
 
 Future<bool> chooseAndRelink(BuildContext context, String jobId) async {
-  final file = await openFile();
-  if (file == null || !context.mounted) return false;
+  final paths = await pickFiles(
+    context,
+    multiple: false,
+    acceptedTypeGroups: [
+      fileTypeGroup(
+        context,
+        label: context.strings.t('audio_video_subtitles'),
+        extensions: const ['mp3', 'wav', 'm4a', 'ogg', 'mp4', 'mkv', 'avi'],
+      ),
+    ],
+  );
+  if (paths.isEmpty || !context.mounted) return false;
   final errorCode = await context.read<AppController>().relink(
     jobId,
-    file.path,
+    paths.single,
   );
   if (!context.mounted) return errorCode == null;
   if (errorCode != null) {
@@ -59,18 +69,23 @@ Future<bool> chooseAndReplaceSubtitle(
     );
     if (confirmed != true || !context.mounted) return false;
   }
-  final file = await openFile(
+  // Parsed right away, so the picker's temporary copy is enough.
+  final paths = await pickFiles(
+    context,
+    multiple: false,
+    keep: false,
     acceptedTypeGroups: [
-      XTypeGroup(
+      fileTypeGroup(
+        context,
         label: context.strings.t('subtitles'),
         extensions: const ['srt', 'vtt'],
       ),
     ],
   );
-  if (file == null || !context.mounted) return false;
+  if (paths.isEmpty || !context.mounted) return false;
   final errorCode = await context.read<AppController>().replaceImportedSubtitle(
     job.id,
-    file.path,
+    paths.single,
   );
   if (!context.mounted) return errorCode == null;
   if (errorCode != null) {

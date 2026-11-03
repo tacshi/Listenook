@@ -134,7 +134,7 @@ void main() {
             .setMockMethodCallHandler(channel, null),
       );
 
-      await const MacosCompactAudioEncoder(channel: channel).encodeAac(
+      await const AppleAudioEncoder(channel: channel).encodeAac(
         inputPath: '/tmp/input.wav',
         outputPath: '/tmp/output.m4a',
         bitRate: 48000,
@@ -148,6 +148,68 @@ void main() {
       });
     },
   );
+
+  test('iOS encodes uploads with AVFoundation like macOS', () {
+    final ios = ProcessMediaService(
+      AppPaths.forTesting(Directory.systemTemp.path),
+      host: MediaHost.iOS,
+    );
+    final windows = ProcessMediaService(
+      AppPaths.forTesting(Directory.systemTemp.path),
+      host: MediaHost.windows,
+    );
+    const highBitrateAac = MediaMetadata(
+      sizeBytes: 1200000,
+      durationMs: 60000,
+      hasAudio: true,
+      hasVideo: false,
+      formatName: 'm4a',
+      audioCodec: 'aac',
+    );
+    // Compact AAC exists on Apple platforms, so a large file is re-encoded.
+    expect(
+      ios.canUploadDirectly(
+        'large.m4a',
+        highBitrateAac,
+        profile: MediaUploadProfile.compactSpeech,
+      ),
+      isFalse,
+    );
+    expect(
+      windows.canUploadDirectly(
+        'large.m4a',
+        highBitrateAac,
+        profile: MediaUploadProfile.compactSpeech,
+      ),
+      isTrue,
+    );
+    expect(MediaHost.iOS.apple, isTrue);
+    expect(MediaHost.windows.apple, isFalse);
+  });
+
+  test('the lossless encoder sends the ALAC contract to the channel', () async {
+    const channel = MethodChannel('app.listenook.test/audio_encoder_alac');
+    MethodCall? received;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          received = call;
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+
+    await const AppleAudioEncoder(
+      channel: channel,
+    ).encodeAlac(inputPath: '/tmp/input.wav', outputPath: '/tmp/output.m4a');
+
+    expect(received?.method, 'encodeAlac');
+    expect(received?.arguments, {
+      'inputPath': '/tmp/input.wav',
+      'outputPath': '/tmp/output.m4a',
+    });
+  });
 
   test('PCM waveform levels stream loudness per bucket', () async {
     final root = await Directory.systemTemp.createTemp('meow-waveform-');

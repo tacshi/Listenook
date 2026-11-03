@@ -3,7 +3,13 @@ import PackageDescription
 
 let package = Package(
     name: "ListenookSpeechWorker",
-    platforms: [.macOS("15.0")],
+    platforms: [.macOS("15.0"), .iOS("18.0")],
+    products: [
+        // The iOS app links this and runs it in process.
+        .library(name: "ListenookSpeechCore", targets: ["ListenookSpeechCore"]),
+        // The macOS app runs this as a separate process.
+        .executable(name: "ListenookSpeechWorker", targets: ["ListenookSpeechWorker"]),
+    ],
     dependencies: [
         .package(
             url: "https://github.com/soniqo/speech-swift.git",
@@ -11,8 +17,8 @@ let package = Package(
         )
     ],
     targets: [
-        .executableTarget(
-            name: "ListenookSpeechWorker",
+        .target(
+            name: "ListenookSpeechCore",
             dependencies: [
                 .product(name: "MossTranscribe", package: "speech-swift"),
                 .product(name: "Qwen3ASR", package: "speech-swift"),
@@ -24,9 +30,13 @@ let package = Package(
                 .linkedFramework("NaturalLanguage"),
             ]
         ),
+        .executableTarget(
+            name: "ListenookSpeechWorker",
+            dependencies: ["ListenookSpeechCore"]
+        ),
         .testTarget(
             name: "ListenookSpeechWorkerTests",
-            dependencies: ["ListenookSpeechWorker"]
+            dependencies: ["ListenookSpeechCore"]
         ),
     ]
 )

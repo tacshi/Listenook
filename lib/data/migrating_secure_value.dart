@@ -48,11 +48,18 @@ class MigratingSecureValue {
   // The DPAPI container is copied before this object is used. Disable the
   // plugin's destructive automatic migration from the old native backend.
   static const windowsOptions = WindowsOptions(useBackwardCompatibility: false);
+  // Readable in the background after the first unlock, so jobs that resume
+  // while the device is locked can still authenticate.
+  static const iosOptions = IOSOptions(
+    accountName: AppIdentity.bundleId,
+    accessibility: KeychainAccessibility.first_unlock,
+  );
 
   Future<bool> contains() => storage.containsKey(
     key: key,
     mOptions: options,
     wOptions: windowsOptions,
+    iOptions: iosOptions,
   );
 
   Future<String?> read() async {
@@ -60,6 +67,7 @@ class MigratingSecureValue {
       key: key,
       mOptions: options,
       wOptions: windowsOptions,
+      iOptions: iosOptions,
     );
     return value == null || value.trim().isEmpty ? null : value.trim();
   }
@@ -69,6 +77,7 @@ class MigratingSecureValue {
           key: _marker,
           mOptions: options,
           wOptions: windowsOptions,
+          iOptions: iosOptions,
         ) ==
         '1') {
       return;
@@ -82,12 +91,14 @@ class MigratingSecureValue {
         key: oldKey,
         mOptions: legacyOptions,
         wOptions: windowsOptions,
+        iOptions: iosOptions,
       );
       if (isMacOS && (previous == null || previous.trim().isEmpty)) {
         previous = await storage.read(
           key: oldKey,
           mOptions: olderOptions,
           wOptions: windowsOptions,
+          iOptions: iosOptions,
         );
       }
       if (previous != null && previous.trim().isNotEmpty) {
@@ -96,6 +107,7 @@ class MigratingSecureValue {
           value: previous.trim(),
           mOptions: options,
           wOptions: windowsOptions,
+          iOptions: iosOptions,
         );
         if (await read() != previous.trim()) {
           throw StateError('Credential migration verification failed');
@@ -110,6 +122,7 @@ class MigratingSecureValue {
     value: '1',
     mOptions: options,
     wOptions: windowsOptions,
+    iOptions: iosOptions,
   );
 
   Future<void> write(String value) async {
@@ -118,6 +131,7 @@ class MigratingSecureValue {
       value: value.trim(),
       mOptions: options,
       wOptions: windowsOptions,
+      iOptions: iosOptions,
     );
     await _complete();
   }
@@ -128,6 +142,11 @@ class MigratingSecureValue {
     // The Darwin plugin's synchronizable fallback can report an entitlement
     // error for an already absent login-keychain item.
     if (!await contains()) return;
-    await storage.delete(key: key, mOptions: options, wOptions: windowsOptions);
+    await storage.delete(
+      key: key,
+      mOptions: options,
+      wOptions: windowsOptions,
+      iOptions: iosOptions,
+    );
   }
 }

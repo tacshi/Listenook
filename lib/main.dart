@@ -21,6 +21,7 @@ import 'ui/video_player/video_player_windows.dart';
 
 export 'ui/startup_page.dart';
 import 'data/ai_brief_service.dart';
+import 'data/background_activity.dart';
 import 'data/desktop_runtime.dart';
 import 'data/desktop_tray.dart';
 import 'data/inbox_folder_monitor.dart';
@@ -28,9 +29,12 @@ import 'data/llm_translation_service.dart';
 import 'data/local_repositories.dart';
 import 'data/local_model_manager.dart';
 import 'data/local_media_source_resolver.dart';
+import 'data/local_speech_channel.dart';
 import 'data/local_speech_process.dart';
 import 'data/local_speech_services.dart';
+import 'data/managed_media_store.dart';
 import 'data/moss_api_client.dart';
+import 'data/now_playing.dart';
 import 'data/openai_llm_client.dart';
 import 'data/podcast/http_podcast_gateway.dart';
 import 'data/process_media_service.dart';
@@ -38,15 +42,20 @@ import 'data/soniox_api_client.dart';
 import 'data/transcript_exporter.dart';
 import 'data/update_service.dart';
 import 'state/app_controller.dart';
+import 'state/now_playing_coordinator.dart';
 import 'state/podcast_controller.dart';
 import 'state/video_open_requests.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  final videoOpenRequests = VideoOpenRequests()..addAll(arguments);
-  // Files Finder opened the app with are queued natively before Dart starts.
-  if (Platform.isMacOS) await videoOpenRequests.attachNativeInbox();
+  final videoOpenRequests = VideoOpenRequests(acceptsImports: Platform.isIOS)
+    ..addAll(arguments);
+  // Files Finder (or, on iOS, another app) opened the app with are queued
+  // natively before Dart starts.
+  if (Platform.isMacOS || Platform.isIOS) {
+    await videoOpenRequests.attachNativeInbox();
+  }
   if (Platform.isWindows) {
     await WindowsSingleInstance.ensureSingleInstance(
       arguments,
@@ -126,14 +135,31 @@ Future<void> main(List<String> arguments) async {
     final media = ProcessMediaService(paths);
     final localModels = HttpLocalModelManager(modelsDirectory: paths.models);
     final localPcm = ProcessLocalPcmPreparer(media);
-    final localWorker = ProcessLocalSpeechWorker(
-      temporaryDirectory: paths.temporary,
-    );
-    final localSpeechSupported = CoreMlSpeechRuntimeSupport.isSupported(
-      isMacOS: Platform.isMacOS,
-      isArm64: ffi.Abi.current() == ffi.Abi.macosArm64,
-      operatingSystemVersion: Platform.operatingSystemVersion,
-    );
+    // iOS cannot start processes: the engine runs inside the app there.
+    final LocalSpeechWorker localWorker = Platform.isIOS
+        ? ChannelLocalSpeechWorker()
+        : ProcessLocalSpeechWorker(temporaryDirectory: paths.temporary);
+    final localSpeechSupported = Platform.isIOS
+        ? await ChannelLocalSpeechWorker.isDeviceSupported()
+        : CoreMlSpeechRuntimeSupport.isSupported(
+            isMacOS: Platform.isMacOS,
+            isArm64: ffi.Abi.current() == ffi.Abi.macosArm64,
+            operatingSystemVersion: Platform.operatingSystemVersion,
+          );
+    if (Platform.isIOS) {
+      // Gigabytes of models and episodes do not belong in iCloud backups.
+      for (final folder in [paths.models, paths.podcasts, paths.temporary]) {
+        unawaited(ChannelLocalSpeechWorker.excludeFromBackup(folder.path));
+      }
+    }
+    final containerRoot = paths.pathCodec.root;
+    final managedMedia = containerRoot == null
+        ? null
+        : ManagedMediaStore(
+            root: paths.media,
+            containerRoot: containerRoot,
+            temporaryRoots: [Directory.systemTemp.path],
+          );
     final podcastGateway = HttpPodcastGateway();
     final podcastRepository = JsonPodcastRepository(paths);
     final podcastController = PodcastController(
@@ -160,6 +186,7 @@ Future<void> main(List<String> arguments) async {
         pcm: localPcm,
         worker: localWorker,
         platformSupported: localSpeechSupported,
+        mossParallelChunks: Platform.isIOS ? 1 : 2,
       ),
       forcedAlignmentService: ProcessForcedAlignmentService(
         models: localModels,
@@ -168,12 +195,27 @@ Future<void> main(List<String> arguments) async {
         platformSupported: localSpeechSupported,
       ),
       aiBriefService: DefaultAiBriefService(llmClient),
-      inboxMonitorRepository: JsonInboxMonitorRepository(paths),
-      inboxFolderMonitor: LocalInboxFolderMonitor(),
+      // iOS has no folder monitoring: media arrives through the picker,
+      // other apps and drag and drop.
+      inboxMonitorRepository: Platform.isIOS
+          ? null
+          : JsonInboxMonitorRepository(paths),
+      inboxFolderMonitor: Platform.isIOS ? null : LocalInboxFolderMonitor(),
       podcastGateway: podcastGateway,
       podcastManagedRoot: paths.root.path,
+      managedMediaStore: managedMedia,
     );
     await controller.initialize();
+    if (Platform.isIOS) {
+      final background = BackgroundActivity();
+      void syncBackgroundTime() => unawaited(
+        background.setBusy(
+          controller.hasActiveWork || controller.localModels.hasDownloads,
+        ),
+      );
+      controller.addListener(syncBackgroundTime);
+      controller.localModels.addListener(syncBackgroundTime);
+    }
     final desktopRuntime = DesktopRuntime(
       migrationMarker: File(
         '${paths.root.path}/${AppDataMigration.markerName}',
@@ -199,6 +241,9 @@ Future<void> main(List<String> arguments) async {
       unawaited(localModels.removeLegacyGGUFModels());
     });
     final videoPlayback = JsonVideoPlaybackRepository(paths);
+    final nowPlaying = NowPlayingCoordinator(
+      Platform.isIOS ? ChannelNowPlayingBridge() : const NoNowPlayingBridge(),
+    );
     if (!playerServices.isCompleted) {
       playerServices.complete(_PlayerServices(controller, videoPlayback));
     }
@@ -206,10 +251,14 @@ Future<void> main(List<String> arguments) async {
       controller: controller,
       updates: updates,
       desktopRuntime: desktopRuntime,
-      desktopTray: NativeDesktopTray(),
+      desktopTray: Platform.isMacOS || Platform.isWindows
+          ? NativeDesktopTray()
+          : null,
       podcastController: podcastController,
       videoOpenRequests: videoOpenRequests,
       videoPlaybackRepository: videoPlayback,
+      managedMediaStore: managedMedia,
+      nowPlaying: nowPlaying,
     );
   }
 

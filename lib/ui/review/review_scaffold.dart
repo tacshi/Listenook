@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../l10n/strings.dart';
+import '../platform/platform_context.dart';
 import 'transcript_review_state.dart';
 
 class ReviewSplitDivider extends StatelessWidget {
@@ -23,12 +24,22 @@ class ReviewSplitDivider extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         onHorizontalDragUpdate: (details) => onDragUpdate(details.delta.dx),
         child: SizedBox(
-          width: TranscriptReviewState.reviewDividerWidth,
+          width: TranscriptReviewState.reviewDividerWidthOf(context),
           child: Center(
-            child: VerticalDivider(
-              width: 1,
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
+            child: context.touchActive
+                // A grip shows where to drag.
+                ? Container(
+                    width: 5,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.outline,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  )
+                : VerticalDivider(
+                    width: 1,
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
           ),
         ),
       ),

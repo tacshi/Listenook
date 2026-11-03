@@ -18,9 +18,16 @@ void main() {
     final manifest = await File(
       '$root/native/speech_worker/Package.swift',
     ).readAsString();
-    final worker = await File(
-      '$root/native/speech_worker/Sources/ListenookSpeechWorker/WorkerMain.swift',
-    ).readAsString();
+    // The engine is shared with the iOS app; the worker wraps it in a
+    // process.
+    final worker = [
+      await File(
+        '$root/native/speech_worker/Sources/ListenookSpeechWorker/WorkerMain.swift',
+      ).readAsString(),
+      await File(
+        '$root/native/speech_worker/Sources/ListenookSpeechCore/SpeechEngine.swift',
+      ).readAsString(),
+    ].join('\n');
 
     expect(build, contains('13643ab4361da8f33c8002026c9d357ded0b6896'));
     expect(build, contains('swift build'));
@@ -32,6 +39,8 @@ void main() {
     );
     expect(build, contains('CoreML.framework'));
     expect(manifest, contains('.macOS("15.0")'));
+    expect(manifest, contains('.iOS("18.0")'));
+    expect(manifest, contains('ListenookSpeechCore'));
     expect(manifest, contains('MossTranscribe'));
     expect(manifest, contains('Qwen3ASR'));
     expect(manifest, contains('SpeechVAD'));
