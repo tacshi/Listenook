@@ -18,7 +18,7 @@ Recommendation: keep Soniox as the cloud default. If lower cost is important, be
 
 ## What “better” means in this repository
 
-Listenook is batch-first, accepts audio/video/folders, exports token-timed subtitle formats, and permits media up to 300 minutes. Its current Soniox path uploads a file, creates an async `stt-async-v5` job, polls it, retrieves tokens, and deletes both the transcription and remote file. It always enables speaker diarization and language identification and optionally sends language hints, context terms, and translation configuration. [README](../../README.md), [Soniox client](../../lib/data/soniox_api_client.dart), [duration and transcript model](../../lib/core/models.dart)
+Listenook is batch-first, accepts audio/video/folders, exports token-timed subtitle formats, and permits media up to 300 minutes. Its current Soniox path uploads a file, creates an async `stt-async-v6` job, polls it, retrieves tokens, and deletes both the transcription and remote file. It always enables speaker diarization and language identification and optionally sends language hints, context terms, and translation configuration. [README](../../README.md), [Soniox client](../../lib/data/soniox_api_client.dart), [duration and transcript model](../../lib/core/models.dart)
 
 A credible replacement therefore needs more than low word error rate:
 

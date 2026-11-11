@@ -95,7 +95,7 @@ void main() {
     expect(fileId, 'file-1');
     expect(id, 'tx-1');
     expect(progress.last, 1);
-    expect(createBody!['model'], 'stt-async-v5');
+    expect(createBody!['model'], 'stt-async-v6');
     expect(createBody!['enable_speaker_diarization'], isTrue);
     expect(createBody!['enable_language_identification'], isTrue);
     expect((createBody!['context'] as Map)['terms'], ['Listenook']);
