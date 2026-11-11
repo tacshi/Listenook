@@ -96,6 +96,69 @@ write_release_notes "$3" v1.0.0..HEAD
     );
   });
 
+  test('release notes skip list items inside commit bodies', () async {
+    final fixture = await Directory.systemTemp.createTemp(
+      'listenook_release_notes_',
+    );
+    addTearDown(() => fixture.delete(recursive: true));
+    final repository = Directory('${fixture.path}/repository')..createSync();
+    await _git(repository, ['init', '--quiet']);
+    await _git(repository, ['config', 'user.name', 'Listenook Test']);
+    await _git(repository, ['config', 'user.email', 'test@listenook.invalid']);
+    await _git(repository, ['config', 'commit.gpgsign', 'false']);
+    await _git(repository, [
+      'commit',
+      '--quiet',
+      '--allow-empty',
+      '-m',
+      'Previous release',
+    ]);
+    await _git(repository, ['tag', 'v1.0.0']);
+    const squashBody =
+        '* Fix waveform analysis never finishing\n\n'
+        'The cache removed its entry in whenComplete.\n\n'
+        '* Port to iPhone and iPad\n\n'
+        'Add an iOS runner and adapt the app to it.\n\n'
+        '* Shell and layout: a bottom tab bar on phones, with\n'
+        '  correct safe areas and no fake title bar.\n\n'
+        '* Keyboard: hints show the Command key on iPad, and the\n'
+        '  menu bar offers navigation shortcuts.';
+    // The same branch landed through two pull requests.
+    for (final title in ['Port to iPhone and iPad (#46)', 'Ios port (#47)']) {
+      await _git(repository, [
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        title,
+        '-m',
+        squashBody,
+      ]);
+    }
+
+    final notes = File('${fixture.path}/notes.md');
+    final helper = File('${Directory.current.path}/scripts/release-notes.sh');
+    final result = await Process.run('bash', [
+      '-c',
+      r'''
+source "$1"
+cd -- "$2"
+write_release_notes "$3" v1.0.0..HEAD
+''',
+      'release-notes-test',
+      helper.path,
+      repository.path,
+      notes.path,
+    ]);
+
+    expect(result.exitCode, 0, reason: '${result.stderr}');
+    expect(
+      notes.readAsStringSync(),
+      '- Fix waveform analysis never finishing\n'
+      '- Port to iPhone and iPad\n',
+    );
+  });
+
   test('platform packages contain updater artifacts and relaunch support', () {
     final macos = File('scripts/build-macos.sh').readAsStringSync();
     final windows = File('packaging/windows/Listenook.iss').readAsStringSync();
