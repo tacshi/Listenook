@@ -108,7 +108,7 @@ OVERRIDE_NOTES="$ROOT/release-notes/Listenook-$VERSION.md"
 if [[ -f "$OVERRIDE_NOTES" ]]; then
   cp "$OVERRIDE_NOTES" "$NOTES_FILE"
 else
-  PREVIOUS_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+  PREVIOUS_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude "$TAG" 2>/dev/null || true)"
   RANGE="HEAD"
   [[ -z "$PREVIOUS_TAG" ]] || RANGE="$PREVIOUS_TAG..HEAD"
   write_release_notes "$NOTES_FILE" "$RANGE"
