@@ -37,7 +37,7 @@ class SonioxApiClient extends RemoteTranscriptionApi implements SonioxClient {
         defaultBaseUri: Uri.parse('https://api.soniox.com/v1'),
       );
 
-  static const model = 'stt-async-v5';
+  static const model = 'stt-async-v6';
 
   @override
   Future<void> validateKey({String? apiKey}) => get(
