@@ -20,7 +20,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$NshDir = Join-Path $Root "nsh"
 # nsh packages Windows apps for x64 only.
 $Arch = "x64"
 $HostArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
@@ -28,7 +27,7 @@ if (-not (Get-Command nsh -ErrorAction SilentlyContinue)) {
   throw "The nsh CLI is required: https://github.com/longbridge/nsh"
 }
 
-$Manifest = Get-Content -LiteralPath (Join-Path $NshDir "nsh.json") -Raw | ConvertFrom-Json
+$Manifest = Get-Content -LiteralPath (Join-Path $Root "nsh.json") -Raw | ConvertFrom-Json
 $Name = $Manifest.name
 $BuildNumber = $null
 if ($Version) {
@@ -116,7 +115,7 @@ function Invoke-CodeSign([string]$Path) {
   if ($LASTEXITCODE -ne 0) { throw "Code signing failed: $Path" }
 }
 
-Push-Location $NshDir
+Push-Location $Root
 try {
   $Package = Join-Path $Root "build\nsh\windows-$Arch"
   if (Test-Path $Package) { Remove-Item $Package -Recurse -Force }

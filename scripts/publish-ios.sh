@@ -21,5 +21,5 @@ export BUILD_NUMBER="${BUILD_NUMBER:-$(git -C "$ROOT" rev-list --count HEAD)}"
 bash "$ROOT/scripts/build-ios.sh" release
 IPA="$OUT/$APP_NAME-$VERSION-ios-release.ipa"
 echo "Uploading $(basename "$IPA") (build $BUILD_NUMBER) to App Store Connect"
-(cd "$NSH_DIR" && nsh publish ios "$IPA")
+(cd "$ROOT" && nsh publish ios "$IPA")
 echo "Uploaded. It appears in TestFlight once Apple has processed it."

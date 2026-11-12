@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Shared by the build scripts: where the app is, its version, and running
-# `nsh package` quietly. Source it; it defines ROOT, NSH_DIR and helpers.
+# `nsh package` quietly. Source it; it defines ROOT, OUT and helpers.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NSH_DIR="$ROOT/nsh"
 OUT="$ROOT/build"
 
 command -v nsh >/dev/null 2>&1 || {
@@ -13,7 +12,7 @@ command -v nsh >/dev/null 2>&1 || {
 
 # A value of nsh.json, the app's one source of name, id and version.
 nsh_json() {
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$NSH_DIR/nsh.json" "$1"
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$ROOT/nsh.json" "$1"
 }
 
 # The oldest iOS the app runs on. C code among the dependencies is built for
@@ -50,5 +49,5 @@ nsh_package() {
   local args=(--target "$target" --out "$out" --app-version "$VERSION")
   if [[ -n "${BUILD_NUMBER:-}" ]]; then args+=(--build "$BUILD_NUMBER"); fi
   rm -rf "$out"
-  (cd "$NSH_DIR" && quiet nsh package "${args[@]}" "$@")
+  (cd "$ROOT" && quiet nsh package "${args[@]}" "$@")
 }

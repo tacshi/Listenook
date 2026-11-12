@@ -28,5 +28,5 @@ export BUILD_NUMBER="${BUILD_NUMBER:-$(git -C "$ROOT" rev-list --count HEAD)}"
 bash "$ROOT/scripts/build-android.sh" release --aab
 BUNDLE="$OUT/$APP_NAME-$VERSION-android-release.aab"
 echo "Uploading $(basename "$BUNDLE") (version code $BUILD_NUMBER) to Google Play"
-nsh publish android "$BUNDLE" --entry "$NSH_DIR" ${DRAFT[@]+"${DRAFT[@]}"}
+nsh publish android "$BUNDLE" --entry "$ROOT" ${DRAFT[@]+"${DRAFT[@]}"}
 echo "Uploaded to the internal testing track."

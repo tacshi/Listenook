@@ -783,7 +783,7 @@ fn about() -> impl IntoElement {
     .child(section(
         l("Privacy"),
         panel().child(
-            text(l("Listenook has no backend. Cloud transcription sends media directly to the provider you choose when you start a job; translation and AI Briefs send transcript text to your AI endpoint. API keys are kept in the system keychain. Transcripts and settings stay on this computer."))
+            text(l("Listenook has no backend. Cloud transcription sends media directly to the provider you choose when you start a job; translation and AI Briefs send transcript text to your AI endpoint. API keys are kept in the system’s secure storage, or on Android and Linux in a file only Listenook can read. Transcripts and settings stay on this device."))
                 .text_sm()
                 .text_color(|| theme().muted_foreground),
         ),
