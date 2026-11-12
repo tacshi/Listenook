@@ -19,6 +19,7 @@ use super::{
     monitor::{self, MonitorConfig, MonitorFile, Seen},
     persist,
     podcast::PodcastState,
+    sync::SyncState,
 };
 
 /// A top-level place in the app. A recording that is open covers either.
@@ -90,6 +91,8 @@ pub(crate) struct Store {
     running: Stored<HashMap<String, Spawned<()>>>,
     /// Podcasts: the catalog and what is playing.
     pub(crate) podcast: PodcastState,
+    /// Syncing with another device on the local network.
+    pub(crate) sync: SyncState,
 }
 
 #[derive(Clone, Default)]
@@ -187,10 +190,11 @@ impl Store {
             context_terms: signal(String::new()),
             running: stored(HashMap::new()),
             podcast: PodcastState::new(catalog, root_listened),
+            sync: SyncState::new(),
         };
         // For development: `LISTENOOK_START=reader` opens the newest
         // transcript, `podcasts` and `settings` those places, `import` takes in
-        // what is in the app's folder.
+        // what is in the app's folder, `sync` opens the Sync dialog.
         match std::env::var("LISTENOOK_START").as_deref() {
             Ok("reader") => {
                 let newest = store
@@ -208,6 +212,19 @@ impl Store {
                 });
             }
             Ok("settings") => store.settings_open.set(true),
+            // `sync` opens the Sync dialog; `sync:<address>` also starts a
+            // sync with the device there.
+            Ok(start) if start == "sync" || start.starts_with("sync:") => {
+                let address = start.strip_prefix("sync:").map(str::to_owned);
+                spawn(async move {
+                    timer(std::time::Duration::from_millis(500)).await;
+                    let sync = crate::state::store().sync;
+                    sync.show();
+                    if let Some(address) = address {
+                        sync.connect(address);
+                    }
+                });
+            }
             _ => {}
         }
         store.podcast.set_rate(store.saved_rate("podcast_rate"));
@@ -224,6 +241,9 @@ impl Store {
             }
         }
         global::<Handle>().set(Handle(Some(store)));
+        store.configure_sync();
+        // The port is given back when the app's surface goes.
+        cleanup(|| crate::services::sync::configure(None, String::new(), String::new(), false));
         store
     }
 
@@ -906,6 +926,135 @@ impl Store {
         });
     }
 
+    // --- Syncing with another device -----------------------------------------
+
+    /// Whether other devices on the local network can find this one. Not
+    /// before the user has opened Sync once: until then the app neither
+    /// listens nor announces itself.
+    pub(crate) fn sync_visible(&self) -> bool {
+        self.settings.with(|s| s.extra.get("sync_visible").and_then(|v| v.as_bool()).unwrap_or(false))
+    }
+
+    /// Whether the user has ever decided about being visible.
+    pub(crate) fn sync_decided(&self) -> bool {
+        self.settings.with_untracked(|s| s.extra.contains_key("sync_visible"))
+    }
+
+    /// Lets other devices find this one, or not.
+    pub(crate) fn set_sync_visible(&self, visible: bool) {
+        self.update_settings(|s| drop(s.extra.insert("sync_visible".into(), visible.into())));
+        self.configure_sync();
+    }
+
+    /// The name other devices see for this one.
+    pub(crate) fn device_name(&self) -> String {
+        self.settings
+            .with(|s| s.extra.get("sync_device_name").and_then(|v| v.as_str()).map(str::to_owned))
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_DEVICE_NAME.with(|name| name.clone()))
+    }
+
+    /// Names this device for the others.
+    pub(crate) fn set_device_name(&self, name: &str) {
+        let name: String = name.chars().take(64).collect();
+        self.update_settings(|s| drop(s.extra.insert("sync_device_name".into(), name.into())));
+        self.configure_sync();
+    }
+
+    /// Tells the sync service whose Library this is, as the settings have it.
+    fn configure_sync(&self) {
+        let visible = untracked(|| self.sync_visible());
+        let known =
+            self.settings.with_untracked(|s| s.extra.get("sync_device_id").and_then(|v| v.as_str()).map(str::to_owned));
+        let id = match known {
+            Some(id) => id,
+            // Made the first time the device is to be seen.
+            None if visible => {
+                let id = uuid::Uuid::new_v4().to_string();
+                self.update_settings(|s| drop(s.extra.insert("sync_device_id".into(), id.clone().into())));
+                id
+            }
+            None => String::new(),
+        };
+        crate::services::sync::configure(self.data_root(), id, untracked(|| self.device_name()), visible);
+    }
+
+    /// The recordings being worked on now: a sync leaves them alone.
+    pub(crate) fn busy_ids(&self) -> std::collections::HashSet<String> {
+        self.jobs.with_untracked(|jobs| {
+            jobs.iter()
+                .filter(|job| job.is_busy() || job.status == JobStatus::Pending)
+                .map(|job| job.id.clone())
+                .collect()
+        })
+    }
+
+    /// Takes in another device's groups and tags. Returns where its ids
+    /// lead here, for the recordings that follow (`adopt_job`).
+    pub(crate) fn adopt_catalog(&self, theirs: &LibraryCatalog) -> HashMap<String, String> {
+        let mut merged = self.catalog.get_untracked();
+        let map = listenook_core::sync::merge_catalog(&mut merged, theirs);
+        if merged != self.catalog.get_untracked() {
+            self.change_catalog(|catalog| *catalog = merged);
+        }
+        map
+    }
+
+    /// Takes in a recording as another device has it: new here, or newer
+    /// than the one here. Its time of change stays the other device's, so
+    /// the two are equal afterwards. The media stays this device's own
+    /// file when it has one, else the file the sync brought.
+    pub(crate) fn adopt_job(&self, job: Job, map: &HashMap<String, String>) {
+        let Some(root) = self.data_root() else {
+            return;
+        };
+        let existing = self.job_now(&job.id);
+        // Work begun on it since the sync was planned wins.
+        if existing.as_ref().is_some_and(|existing| existing.is_busy()) {
+            return;
+        }
+        let mut job = recovered(job);
+        listenook_core::sync::rehome(&mut job, map);
+        let brought = root.join("media").join(listenook_core::sync::media_file_name(&job.id, &job.file_name()));
+        let kept = existing.as_ref().map(|existing| existing.source_path.clone()).filter(|path| is_file(path));
+        if let Some(path) = kept {
+            job.source_path = path;
+        } else if brought.is_file() {
+            job.source_path = brought.to_string_lossy().into_owned();
+        }
+        found_again(&mut job);
+        self.save(&job);
+        let id = job.id.clone();
+        self.jobs.update(|jobs| match jobs.iter_mut().find(|other| other.id == id) {
+            Some(place) => *place = Rc::new(job),
+            None => {
+                jobs.push(Rc::new(job));
+                jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            }
+        });
+        if existing.is_some() {
+            crate::services::playable::forget(&id);
+        }
+    }
+
+    /// Points a recording that was here without its media at the file a
+    /// sync brought.
+    pub(crate) fn adopt_media(&self, id: &str, path: &std::path::Path) {
+        let mut changed = None;
+        self.jobs.update(|jobs| {
+            if let Some(job) = jobs.iter_mut().find(|job| job.id == id).filter(|job| !is_file(&job.source_path)) {
+                let job = Rc::make_mut(job);
+                job.source_path = path.to_string_lossy().into_owned();
+                found_again(job);
+                changed = Some(job.clone());
+            }
+        });
+        if let Some(job) = changed {
+            self.save(&job);
+            crate::services::playable::forget(id);
+        }
+    }
+
     // --- Background work -----------------------------------------------------
 
     /// Runs `work` for a job until it ends, whatever page the user is on.
@@ -936,6 +1085,30 @@ impl Store {
             }
             None => false,
         }
+    }
+}
+
+thread_local! {
+    /// What the machine calls itself, asked once.
+    static DEFAULT_DEVICE_NAME: String = crate::services::sync::default_name();
+}
+
+fn is_file(path: &str) -> bool {
+    !path.is_empty() && std::path::Path::new(path).is_file()
+}
+
+/// A job whose media is there is no longer marked as missing it.
+fn found_again(job: &mut Job) {
+    if !is_file(&job.source_path) {
+        return;
+    }
+    if job.status == JobStatus::MissingSource {
+        job.status = if job.has_transcript() { JobStatus::Completed } else { JobStatus::Ready };
+        job.progress = JobProgress { stage: "ready".into(), fraction: None, detail: None };
+    }
+    if job.error_code.as_deref() == Some("missing_source") {
+        job.error_code = None;
+        job.error_message = None;
     }
 }
 

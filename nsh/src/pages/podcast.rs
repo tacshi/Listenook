@@ -16,7 +16,7 @@ use crate::{
     state::{error_text, l, store, tr},
     ui::{
         self, Icon, Size, Status, Variant, badge, button, chip, field, hint, icon, icon_button, list_row, modal,
-        modal_actions, search_field, section, spinner, text_field, toggle_icon_button,
+        modal_actions, search_field, section, spinner, text_field_with, toggle_icon_button,
         tokens::{self, motion},
     },
     util::file_url,
@@ -127,10 +127,9 @@ fn add_dialog(page: Page) -> impl IntoElement {
         move || {
             field(
                 l("RSS URL"),
-                text_field(url, l("Paste a public RSS URL"))
-                    .keyboard_type(KeyboardType::Url)
-                    .auto_focus(true)
-                    .on_submit(move |_: &str| add()),
+                text_field_with(url, l("Paste a public RSS URL"), move |input| {
+                    input.keyboard_type(KeyboardType::Url).auto_focus(true).on_submit(move |_: &str| add())
+                }),
             )
             .into_element()
         },

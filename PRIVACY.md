@@ -37,6 +37,17 @@ including after a restart or local history deletion. Listenook never moves,
 renames, changes, or deletes source media. Discovery alone never uploads or
 transcribes a file; the user must still press **Transcribe**.
 
+Syncing the Library between your own devices is optional and stays on your
+local network. Until you open **Sync with another device**, Listenook neither
+listens for nor announces itself to other devices. Once a device is set
+visible there, it answers on TCP and UDP port 47823 with its name, platform
+and a random installation ID, and looks for other copies of Listenook on the
+same network (a multicast announcement and a query of the local /24). A sync
+copies recordings' manifests (transcripts, translations, AI Briefs, groups and
+tags) and media files directly between the two devices, over unencrypted HTTP,
+and only after the person at the receiving device accepts the request. API
+keys and settings are never sent. Turning visibility off closes the port.
+
 On iPhone and iPad there is no folder monitoring. Files you import or open in
 Listenook from other apps are copied into the app's private storage, because
 iOS lends other apps' files only briefly. These copies stay on the device and are deleted with the transcript

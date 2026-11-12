@@ -5,7 +5,7 @@ use nsh_core::prelude::*;
 
 use crate::{
     state::{l, store, tr},
-    ui::{Tone, checkbox, field, hint, modal, modal_actions, select, text_field, toast},
+    ui::{Tone, checkbox, field, hint, modal, modal_actions, select, text_field, text_field_with, toast},
 };
 
 /// A dialog about one job: which job, and whether it is open.
@@ -158,7 +158,9 @@ pub(crate) fn rename_dialog(dialog: JobDialog) -> impl IntoElement {
         move || {
             field(
                 l("Title"),
-                text_field(title, SharedString::default).auto_focus(true).on_submit(move |_: &str| rename()),
+                text_field_with(title, SharedString::default, move |input| {
+                    input.auto_focus(true).on_submit(move |_: &str| rename())
+                }),
             )
             .into_element()
         },
@@ -244,7 +246,10 @@ pub(crate) fn tags_dialog(dialog: JobDialog) -> impl IntoElement {
                     view()
                         .flex_row()
                         .gap_2()
-                        .child(text_field(new_name, l("New tag")).on_submit(move |_: &str| add()).flex_1())
+                        .child(
+                            text_field_with(new_name, l("New tag"), move |input| input.on_submit(move |_: &str| add()))
+                                .flex_1(),
+                        )
                         .child(
                             crate::ui::button(crate::ui::Variant::Default, crate::ui::Size::Md, l("Add"))
                                 .disabled(move || new_name.with(|n| n.trim().is_empty()))

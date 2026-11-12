@@ -19,8 +19,8 @@ use crate::{
         store, tr,
     },
     ui::{
-        Size, Status, Tone, Variant, badge, bound_field, button, card, confirm_destructive, field, hint, key_cap,
-        modal_sized, progress_bar, section, segmented, select, separator, switch, text_field, toast,
+        Size, Status, Tone, Variant, badge, bound_field_with, button, card, confirm_destructive, field, hint, key_cap,
+        modal_sized, progress_bar, section, segmented, select, separator, switch, text_field_with, toast,
     },
 };
 
@@ -267,14 +267,17 @@ fn key_field(
                 .items_center()
                 .gap_2()
                 .child(
-                    text_field(draft, move || {
-                        if saved.get() {
-                            "••••••••••••••••".into()
-                        } else {
-                            tr("Paste your API key")
-                        }
-                    })
-                    .masked(true)
+                    text_field_with(
+                        draft,
+                        move || {
+                            if saved.get() {
+                                "••••••••••••••••".into()
+                            } else {
+                                tr("Paste your API key")
+                            }
+                        },
+                        |input| input.masked(true),
+                    )
                     .flex_1(),
                 )
                 .child(
@@ -649,7 +652,12 @@ fn settings_input(
     set: impl Fn(String) + 'static,
     placeholder: &'static str,
 ) -> impl IntoElement {
-    bound_field(value, set, move || placeholder.into()).auto_capitalize(AutoCapitalize::None).auto_correct(false)
+    bound_field_with(
+        value,
+        set,
+        move || placeholder.into(),
+        |input| input.auto_capitalize(AutoCapitalize::None).auto_correct(false),
+    )
 }
 
 fn shortcuts() -> impl IntoElement {

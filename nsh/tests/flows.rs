@@ -377,3 +377,67 @@ fn two_sentences_are_merged_from_the_editor() {
     let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
     assert!(!saved.contains("\"segment-2\""), "the second sentence is gone from the manifest");
 }
+
+#[test]
+fn another_devices_sync_is_accepted_and_its_recording_arrives() {
+    // The port this device answers on; read when it becomes visible.
+    // SAFETY: only this test reads it, and tests that start an app run one at a time.
+    unsafe { std::env::set_var("LISTENOOK_SYNC_PORT", "47941") };
+    let mut it = start("sync", seed_transcript, Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    // Opening Sync makes the device visible and looks for others.
+    it.app.press("label:Sync with another device…").unwrap();
+    it.app.wait_for("Nearby devices").unwrap();
+
+    // The other device: it asks, and once accepted sends a recording.
+    let other = std::thread::spawn(|| -> Result<serde_json::Value, String> {
+        let base = "http://127.0.0.1:47941/listenook";
+        let hello = json!({
+            "device": {"app": "listenook", "protocol": 1, "id": "other", "name": "Studio Mac", "platform": "macos", "port": 47941},
+            "catalog": {"version": 1, "groups": [], "tags": [{"id": "t9", "name": "shared"}]},
+        });
+        let mut welcome = None;
+        for _ in 0..50 {
+            match ureq::post(&format!("{base}/sync")).timeout(Duration::from_secs(30)).send_string(&hello.to_string()) {
+                Ok(response) => {
+                    welcome = Some(response.into_string().map_err(|error| error.to_string())?);
+                    break;
+                }
+                Err(ureq::Error::Transport(_)) => std::thread::sleep(Duration::from_millis(100)),
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        let welcome: serde_json::Value =
+            serde_json::from_str(&welcome.ok_or("the device never answered")?).map_err(|error| error.to_string())?;
+        let token = welcome["token"].as_str().ok_or("no token")?.to_owned();
+        let job = json!({
+            "manifest_version": 15, "id": "from-other", "source_path": "/elsewhere/talk.m4a",
+            "created_at": "2026-11-12T08:00:00.000Z", "updated_at": "2026-11-12T09:00:00.000Z",
+            "status": "completed", "display_title": "Sent from the studio", "tag_ids": ["t9"],
+            "document": {"segments": [{"id": "segment-1", "start_ms": 0, "end_ms": 900, "text": "Hello."}]},
+        });
+        ureq::put(&format!("{base}/manifest/from-other"))
+            .set("X-Listenook-Token", &token)
+            .send_string(&job.to_string())
+            .map_err(|error| error.to_string())?;
+        ureq::post(&format!("{base}/done"))
+            .set("X-Listenook-Token", &token)
+            .send_string(r#"{"complete":true}"#)
+            .map_err(|error| error.to_string())?;
+        Ok(welcome)
+    });
+
+    it.app.wait_for("Sync request").unwrap();
+    it.app.wait_for("“Studio Mac” wants to sync its Library with this one.").unwrap();
+    it.app.press("role:button[Accept]").unwrap();
+    let welcome = other.join().unwrap().unwrap();
+    assert_eq!(welcome["index"]["entries"][0]["id"], "sample", "the other device is told what is here");
+
+    it.app.wait_for("Sent from the studio").unwrap();
+    let arrived = std::fs::read_to_string(manifest(&it.root, "from-other")).unwrap();
+    assert!(arrived.contains("2026-11-12T09:00:00.000Z"), "its time of change stays the other device's");
+    let catalog = std::fs::read_to_string(it.root.join("library_catalog.json")).unwrap();
+    assert!(catalog.contains("shared"), "its tag came with it");
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("LISTENOOK_SYNC_PORT") };
+}

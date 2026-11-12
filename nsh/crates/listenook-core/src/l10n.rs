@@ -509,6 +509,41 @@ const ZH: &[(&str, &str)] = &[
         "No recordings carry this tag. Add it with Tags… in a recording's menu.",
         "还没有录音带这个标签。在录音的菜单里选“标签…”来添加。",
     ),
+    ("Sync with another device…", "与其他设备同步…"),
+    ("Sync with another device", "与其他设备同步"),
+    (
+        "Both Libraries end up with every recording, transcript, group and tag. Where both have a recording, the one edited last is kept. Nothing is deleted.",
+        "同步后，两边的资料库都会包含全部录音、转写、分组和标签。两边都有的录音保留最后编辑的版本。不会删除任何内容。",
+    ),
+    ("Visible to devices on this network", "允许本网络中的设备发现此设备"),
+    ("This device’s name", "此设备的名称"),
+    ("Nearby devices", "附近的设备"),
+    ("Look again", "重新查找"),
+    ("Looking… Open Sync in Listenook on the other device too.", "正在查找…请在另一台设备的聆页中也打开“同步”。"),
+    ("Or connect by address", "或通过地址连接"),
+    ("IP address, such as 192.168.1.20", "IP 地址，例如 192.168.1.20"),
+    ("Connect", "连接"),
+    ("Sync", "同步"),
+    ("Waiting for", "正在等待"),
+    ("Syncing with", "正在同步："),
+    ("Accept the sync on the other device.", "请在另一台设备上接受同步。"),
+    ("recordings", "条录音"),
+    ("Synced with", "已同步："),
+    ("The sync did not finish", "同步未完成"),
+    ("The sync with", "与"),
+    ("did not finish. Sync again to complete it.", "的同步未完成，再次同步即可补全。"),
+    ("nothing to copy, the Libraries already match.", "无需复制，两边的资料库已一致。"),
+    ("received", "条已接收"),
+    ("sent", "条已发送"),
+    ("Sync request", "同步请求"),
+    ("wants to sync its Library with this one.", "想与此设备同步资料库。"),
+    ("Decline", "拒绝"),
+    ("Accept", "接受"),
+    ("Try again", "重试"),
+    (
+        "No Listenook answered at that address. Open Sync on the other device and check the address.",
+        "该地址没有聆页响应。请在另一台设备上打开“同步”并检查地址。",
+    ),
 ];
 
 /// `text` in `lang`.
@@ -616,6 +651,24 @@ pub fn error_message(lang: Lang, code: &str) -> String {
         "podcast_transcript_missing" | "podcast_transcript_failed" | "podcast_transcript_untimed" => {
             ("The publisher’s captions could not be used.", "无法使用发布方提供的字幕。")
         }
+        "sync_declined" => ("The other device declined the sync.", "另一台设备拒绝了同步。"),
+        "sync_peer_busy" => {
+            ("One of the devices is already syncing. Try again when it is done.", "其中一台设备正在同步，请稍后重试。")
+        }
+        "sync_incompatible" => (
+            "The two devices run different versions of Listenook. Update both, then sync again.",
+            "两台设备的聆页版本不同，请都更新后再同步。",
+        ),
+        "sync_unreachable" => (
+            "Couldn’t reach the other device. Keep Listenook open on it, on the same network, and try again.",
+            "无法连接另一台设备。请让它保持打开聆页并处于同一网络，然后重试。",
+        ),
+        "sync_interrupted" | "sync_failed" => (
+            "The connection was lost. What was copied is kept; sync again to finish.",
+            "连接已中断。已复制的内容会保留，再次同步即可完成。",
+        ),
+        "sync_cancelled_there" => ("The sync was ended on the other device.", "同步已在另一台设备上结束。"),
+        "sync_cancelled" => ("The sync was cancelled.", "同步已取消。"),
         "network_error" | "llm_network_error" | "translation_network_error" => {
             ("Couldn’t connect. Check your connection and try again.", "无法连接，请检查网络后重试。")
         }

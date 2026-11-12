@@ -24,7 +24,7 @@ use crate::{
     },
     ui::{
         self, Icon, Size, Variant, confirm_destructive, field, icon, icon_button, menu, menu_action, menu_danger,
-        modal, modal_actions, slider, text_field, toggle_icon_button,
+        modal, modal_actions, slider, text_field_with, toggle_icon_button,
         tokens::{self, motion},
     },
     util,
@@ -196,6 +196,8 @@ pub(crate) fn shell() -> impl IntoElement {
     // The watched folder is looked at every few seconds; a file is taken
     // on the second look that finds it unchanged.
     set_interval(std::time::Duration::from_secs(5), move || store.scan_watched_folder());
+    // What a sync with another device brings is taken in as it arrives.
+    set_interval(std::time::Duration::from_millis(250), move || store.sync.tick());
     // On a computer the commands are the menu bar's, which carries their
     // shortcuts; elsewhere a hardware keyboard reaches them directly.
     if is_desktop() {
@@ -273,6 +275,8 @@ pub(crate) fn shell() -> impl IntoElement {
         ))
         .child(pages::settings_dialog())
         .child(pages::subtitle_choice_dialog())
+        .child(pages::sync_dialog())
+        .child(pages::sync_request_dialog())
 }
 
 /// What is pushed over a place on a phone or a tablet.
@@ -840,7 +844,9 @@ fn sidebar() -> impl IntoElement {
             move || {
                 field(
                     l("Name"),
-                    text_field(name, SharedString::default).auto_focus(true).on_submit(move |_: &str| commit()),
+                    text_field_with(name, SharedString::default, move |input| {
+                        input.auto_focus(true).on_submit(move |_: &str| commit())
+                    }),
                 )
                 .into_element()
             },

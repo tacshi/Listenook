@@ -12,6 +12,11 @@ the list with the reader, and Back returns. Podcasts is for finding and
 following shows; an episode sent to the Library is a recording like any
 other.
 
+The Library syncs with another device on the same network from its top bar:
+one dialog chooses the device and follows the sync, and the other device
+asks its user before anything is copied. Both Libraries end as their union;
+whether this device can be found is set in that dialog, where it matters.
+
 The reader has one transport and one side panel showing one thing at a time:
 Practice (mimic or dictation), the AI Brief, or the video. A setting is made
 where it is used: how to transcribe in the Library's options, what a
@@ -127,6 +132,18 @@ With reduced motion, presses do not scale, entrances land at once
 | Mimic between passes | The reps badge turns to the accent while it is the user's turn | Same |
 | AI Brief generating | Progress bar, indeterminate for a single request | Static |
 | Evidence chip pressed | Wash; the transcript scrolls to the sentence | Jumps |
+
+### Sync
+
+| Change | Motion | Reduced |
+| --- | --- | --- |
+| The Sync dialog or a sync request opens | As every dialog: fades in whole, the card rising a little | Appears |
+| A device is found | Its row rises in | Appears |
+| Looking for devices | A spinner beside the hint while none is listed | Static glyph |
+| Visible on / off | The switch as in Settings; the name field appears under it without motion | Instant |
+| Waiting for the other device | Progress bar, indeterminate | Static bar |
+| Copying | The bar's fill glides between values, `BASE`; the counts change in place | Static bar |
+| The sync ends | The dialog's content swaps to the result, which rises in; a toast on the device that answered | Appears |
 
 ### Podcast
 
