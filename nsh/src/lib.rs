@@ -37,6 +37,16 @@ pub fn App() -> impl IntoElement {
         .text_color(move || theme().foreground)
         .child(shell::shell())
         // Over the window, not in its layout: a toast must not push the
-        // app up to make room for itself.
-        .child(view().absolute().left(px(0.0)).right(px(0.0)).bottom(px(64.0)).items_center().child(ui::toast_host()))
+        // app up to make room for itself. Only a toast takes touches: the
+        // band it shows in lies over the player's bar on a phone.
+        .child(
+            view()
+                .absolute()
+                .left(px(0.0))
+                .right(px(0.0))
+                .bottom(px(64.0))
+                .items_center()
+                .pointer_events(nsh_core::PointerEvents::BoxNone)
+                .child(ui::toast_host()),
+        )
 }

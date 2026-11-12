@@ -963,6 +963,8 @@ fn mini_player() -> impl IntoElement {
                 .w(px(220.0))
                 .flex_shrink(1.0)
                 .min_w(px(0.0))
+                // With no slider to take the room, the title does.
+                .style_when(platform::compact, |s| s.flex_grow(1.0))
                 .child(
                     text(move || player.playing().map(|p| SharedString::from(p.episode.title)).unwrap_or_default())
                         .text_sm()
@@ -978,19 +980,25 @@ fn mini_player() -> impl IntoElement {
                 ),
         )
         .child(time_text(move || dragging.get().map_or(player.position_ms(), |ms| ms as i64)))
-        .child(
-            slider(
-                "Position",
-                move || dragging.get().unwrap_or(player.position_ms() as f64),
-                move || player.duration_ms() as f64,
-                move |value| dragging.set(Some(value)),
-                move |value| {
-                    player.seek_to(value as i64);
-                    dragging.set(None);
-                },
-            )
-            .flex_1(),
-        )
+        // A window as narrow as a phone has no room for a slider: a dot
+        // parts the two times.
+        .child(when(platform::compact, || view().size(px(3.0)).rounded_full().bg(|| theme().foreground)))
+        .child(when(
+            || !platform::compact(),
+            move || {
+                slider(
+                    "Position",
+                    move || dragging.get().unwrap_or(player.position_ms() as f64),
+                    move || player.duration_ms() as f64,
+                    move |value| dragging.set(Some(value)),
+                    move |value| {
+                        player.seek_to(value as i64);
+                        dragging.set(None);
+                    },
+                )
+                .flex_1()
+            },
+        ))
         .child(time_text(move || player.duration_ms()))
         .child(rate_menu(
             Variant::Ghost,
