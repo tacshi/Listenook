@@ -11,7 +11,7 @@ cd "$ROOT"
 
 # Where installed apps look: nsh.json's "updater".
 RELEASE_REPO="${LISTENOOK_RELEASE_REPO:-$(python3 -c \
-  'import json,sys; print(json.load(open(sys.argv[1]))["updater"]["github"])' "$NSH_DIR/nsh.json")}"
+  'import json,sys; print(json.load(open(sys.argv[1]))["updater"]["github"])' "$ROOT/nsh.json")}"
 STAGE_DIR="$OUT/release"
 VERSION=""
 SKIP_WINDOWS=false
@@ -95,9 +95,9 @@ info "releases: $RELEASE_REPO"
 # The updater compares the version in nsh.json, and the manifest is written
 # from it: it has to be the one being released.
 [[ "$(nsh_json version)" == "$VERSION" ]] ||
-  die "nsh/nsh.json has version $(nsh_json version): set it and nsh/Cargo.toml to $VERSION, commit, and run again"
-grep -q "^version = \"$VERSION\"$" "$NSH_DIR/Cargo.toml" ||
-  die "nsh/Cargo.toml is not at version $VERSION"
+  die "nsh.json has version $(nsh_json version): set it and Cargo.toml to $VERSION, commit, and run again"
+grep -q "^version = \"$VERSION\"$" "$ROOT/Cargo.toml" ||
+  die "Cargo.toml is not at version $VERSION"
 if [[ "$NO_UPLOAD" == false ]]; then
   [[ -z "$(git status --porcelain)" ]] ||
     die "working tree is dirty — commit or stash before releasing"
@@ -128,7 +128,7 @@ UPDATE_KEY="${LISTENOOK_UPDATE_KEY:-}"
 DEFAULT_UPDATE_KEY="$HOME/.config/listenook/update.secret"
 [[ -n "$UPDATE_KEY" || ! -f "$DEFAULT_UPDATE_KEY" ]] || UPDATE_KEY="$DEFAULT_UPDATE_KEY"
 if python3 -c 'import json,sys; sys.exit(0 if "publicKey" in json.load(open(sys.argv[1]))["updater"] else 1)' \
-  "$NSH_DIR/nsh.json"; then
+  "$ROOT/nsh.json"; then
   [[ -f "$UPDATE_KEY" ]] ||
     die "nsh.json has an updater publicKey: put its secret key at $DEFAULT_UPDATE_KEY or set LISTENOOK_UPDATE_KEY"
 fi
@@ -226,7 +226,7 @@ else
 fi
 
 step "writing latest.json"
-MANIFEST_ARGS=(--entry "$NSH_DIR" --notes "$NOTES_FILE" --out "$STAGE_DIR")
+MANIFEST_ARGS=(--entry "$ROOT" --notes "$NOTES_FILE" --out "$STAGE_DIR")
 [[ -z "$UPDATE_KEY" ]] || MANIFEST_ARGS+=(--key "$UPDATE_KEY")
 # Phones cannot replace the app themselves: they are sent to these.
 [[ -z "${LISTENOOK_IOS_LINK:-}" ]] || MANIFEST_ARGS+=(--link "ios=$LISTENOOK_IOS_LINK")

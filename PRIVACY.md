@@ -100,7 +100,10 @@ insights, edits, and transcript evidence references are stored locally and can
 be removed with the history entry.
 
 All transcription and AI-provider API keys are stored by the operating system's secure credential service
-and are never written to settings or job manifests. Local Application Support
+(the Keychain on macOS, iPhone, and iPad; the Credential Manager on Windows).
+Android and Linux have none the app can use: there the keys are kept in a file
+in the app's private folder that only Listenook can read. Keys are never written
+to settings or job manifests. Local Application Support
 data contains source paths, media metadata, queue/recovery state, raw transcript
 tokens, editable original and translated segments, speaker mappings,
 translation progress, AI Brief drafts and generation state, and export defaults.

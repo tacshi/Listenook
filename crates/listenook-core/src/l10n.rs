@@ -316,8 +316,8 @@ const ZH: &[(&str, &str)] = &[
         "语言代码以逗号分隔。留空则自动检测。",
     ),
     (
-        "Listenook has no backend. Cloud transcription sends media directly to the provider you choose when you start a job; translation and AI Briefs send transcript text to your AI endpoint. API keys are kept in the system keychain. Transcripts and settings stay on this computer.",
-        "聆页没有后端服务。云端转写会在你开始任务时把媒体直接发送给你选择的服务商；翻译和 AI 简报会把转写文本发送到你的 AI 端点。API 密钥保存在系统钥匙串中。转写和设置都留在这台电脑上。",
+        "Listenook has no backend. Cloud transcription sends media directly to the provider you choose when you start a job; translation and AI Briefs send transcript text to your AI endpoint. API keys are kept in the system’s secure storage, or on Android and Linux in a file only Listenook can read. Transcripts and settings stay on this device.",
+        "聆页没有后端服务。云端转写会在你开始任务时把媒体直接发送给你选择的服务商；翻译和 AI 简报会把转写文本发送到你的 AI 端点。API 密钥保存在系统的安全存储中；在 Android 和 Linux 上则保存在仅聆页可读取的文件中。转写和设置都留在这台设备上。",
     ),
     ("Listenook is up to date.", "聆页已是最新版本。"),
     ("Merge with next", "与下一句合并"),
