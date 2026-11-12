@@ -90,14 +90,20 @@ step "preflight"
 TAG="v$VERSION"
 BUILD_NUMBER="$(git rev-list --count HEAD)"
 HEAD_COMMIT="$(git rev-parse HEAD)"
+# The updater compares the version in nsh.json, and the manifest is written
+# from it: it has to be the one being released. When it is not, it is set
+# below, in a commit of its own, once the notes are approved.
+NEEDS_BUMP=false
+if [[ "$(nsh_json version)" != "$VERSION" ]] ||
+  ! grep -q "^version = \"$VERSION\"$" "$ROOT/Cargo.toml"; then
+  NEEDS_BUMP=true
+  ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null ||
+    die "$TAG already exists, but nsh.json has version $(nsh_json version); release versions are immutable"
+  # The commit that sets the version is one more.
+  [[ "$NO_UPLOAD" == true ]] || BUILD_NUMBER=$((BUILD_NUMBER + 1))
+fi
 info "version: $VERSION+$BUILD_NUMBER"
 info "releases: $RELEASE_REPO"
-# The updater compares the version in nsh.json, and the manifest is written
-# from it: it has to be the one being released.
-[[ "$(nsh_json version)" == "$VERSION" ]] ||
-  die "nsh.json has version $(nsh_json version): set it and Cargo.toml to $VERSION, commit, and run again"
-grep -q "^version = \"$VERSION\"$" "$ROOT/Cargo.toml" ||
-  die "Cargo.toml is not at version $VERSION"
 if [[ "$NO_UPLOAD" == false ]]; then
   [[ -z "$(git status --porcelain)" ]] ||
     die "working tree is dirty — commit or stash before releasing"
@@ -162,6 +168,42 @@ if [[ "$NO_UPLOAD" == false ]]; then
       *) die "aborted" ;;
     esac
   done
+fi
+
+# The version in nsh.json, Cargo.toml and Cargo.lock, committed and pushed so
+# that the release is cut from a commit origin has. A dry run only edits.
+if [[ "$NEEDS_BUMP" == true ]]; then
+  step "setting the version to $VERSION"
+  python3 - "$ROOT" "$VERSION" <<'PY'
+import re, sys, pathlib
+
+root, version = pathlib.Path(sys.argv[1]), sys.argv[2]
+
+def rewrite(name, pattern, what):
+    path = root / name
+    text, count = re.subn(pattern, lambda m: m.group(1) + version + m.group(2),
+                          path.read_text(), count=1, flags=re.M)
+    if count != 1:
+        sys.exit(f"error: {what} not found in {name}")
+    path.write_text(text)
+
+package = re.search(r'^\[package\]\n(?:.*\n)*?name = "([^"]+)"',
+                    (root / "Cargo.toml").read_text(), re.M).group(1)
+rewrite("nsh.json", r'^(\s*"version"\s*:\s*")[^"]*(")', "the version")
+rewrite("Cargo.toml", r'(^\[package\]\n(?:(?!\[).*\n)*?version = ")[^"]*(")', "the package version")
+rewrite("Cargo.lock", r'(^name = "%s"\nversion = ")[^"]*(")' % re.escape(package), package)
+PY
+  if [[ "$NO_UPLOAD" == true ]]; then
+    info "left uncommitted (dry run)"
+  else
+    git add nsh.json Cargo.toml Cargo.lock
+    git commit --quiet -m "Release $VERSION"
+    git push --quiet origin HEAD ||
+      die "could not push the version commit; push it and run again"
+    HEAD_COMMIT="$(git rev-parse HEAD)"
+    [[ "$(git rev-list --count HEAD)" == "$BUILD_NUMBER" ]] || die "unexpected build number after the version commit"
+    info "committed and pushed: Release $VERSION"
+  fi
 fi
 
 # What each platform contributes: installers people download, and the
