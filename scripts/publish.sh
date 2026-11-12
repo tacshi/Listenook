@@ -123,10 +123,13 @@ if [[ "$NO_UPLOAD" == false ]]; then
 fi
 # A signed manifest, when the app has a key to check it with.
 UPDATE_KEY="${LISTENOOK_UPDATE_KEY:-}"
+# Where the key is kept when nothing says otherwise: outside the repository.
+DEFAULT_UPDATE_KEY="$HOME/.config/listenook/update.secret"
+[[ -n "$UPDATE_KEY" || ! -f "$DEFAULT_UPDATE_KEY" ]] || UPDATE_KEY="$DEFAULT_UPDATE_KEY"
 if python3 -c 'import json,sys; sys.exit(0 if "publicKey" in json.load(open(sys.argv[1]))["updater"] else 1)' \
   "$NSH_DIR/nsh.json"; then
   [[ -f "$UPDATE_KEY" ]] ||
-    die "nsh.json has an updater publicKey: set LISTENOOK_UPDATE_KEY to its secret key file"
+    die "nsh.json has an updater publicKey: put its secret key at $DEFAULT_UPDATE_KEY or set LISTENOOK_UPDATE_KEY"
 fi
 
 mkdir -p "$STAGE_DIR"

@@ -8,7 +8,8 @@
   "rust": ".",
   "root": "App",
   "updater": {
-    "github": "tacshi/Listenook"
+    "github": "tacshi/Listenook",
+    "publicKey": "vShKA+XS7DjUOBruFx309Mkw5vMDu13nKUbAFwn5tbk="
   },
   "icon": {
     "macos": "icon.png",
