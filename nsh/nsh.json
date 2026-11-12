@@ -1,0 +1,53 @@
+{
+  "name": "Listenook",
+  "id": "app.capyvibe.listenook",
+  "version": "2.0.0",
+  "build": 1,
+  "appearance": "system",
+  "theme": "theme.json",
+  "rust": ".",
+  "root": "App",
+  "updater": {
+    "github": "tacshi/Listenook"
+  },
+  "icon": {
+    "macos": "icon.png",
+    "ios": "icon-full.png",
+    "android": "icon-full.png",
+    "windows": "icon-full.png",
+    "linux": "icon-full.png"
+  },
+  "ios": {
+    "infoPlist": {
+      "MinimumOSVersion": "18.0",
+      "UIFileSharingEnabled": true,
+      "LSSupportsOpeningDocumentsInPlace": true,
+      "UIBackgroundModes": [
+        "audio"
+      ],
+      "ITSAppUsesNonExemptEncryption": false
+    }
+  },
+  "singleInstance": true,
+  "fileTypes": [
+    {
+      "name": "Video",
+      "extensions": [
+        "mp4",
+        "m4v",
+        "mov",
+        "mkv",
+        "webm",
+        "avi"
+      ],
+      "mimeTypes": [
+        "video/mp4",
+        "video/x-m4v",
+        "video/quicktime",
+        "video/x-matroska",
+        "video/webm",
+        "video/x-msvideo"
+      ]
+    }
+  ]
+}
