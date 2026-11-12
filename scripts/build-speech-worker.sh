@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
+# Builds the Swift helper that runs MOSS with Core ML, and the MLX Metal
+# library it loads, for Apple silicon Macs.
+#
+#   build-speech-worker.sh [output path]
+#
+# Without a path the helper goes to build/native/speech_worker/. Point a
+# development run at it with LISTENOOK_SPEECH_WORKER.
 set -euo pipefail
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/environment.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGE="$ROOT/native/speech_worker"
 SPEECH_SWIFT_COMMIT="13643ab4361da8f33c8002026c9d357ded0b6896"
-SCRATCH="${LISTENOOK_COREML_BUILD_CACHE:-$ROOT/.dart_tool/listenook-coreml-worker-$SPEECH_SWIFT_COMMIT}"
+SCRATCH="${LISTENOOK_COREML_BUILD_CACHE:-$ROOT/build/cache/speech-worker-$SPEECH_SWIFT_COMMIT}"
 OUTPUT="${1:-$ROOT/build/native/speech_worker/ListenookSpeechWorker}"
 MODULE_CACHE="$SCRATCH/module-cache"
 XDG_CACHE="$SCRATCH/xdg-cache"
@@ -14,11 +20,24 @@ XDG_CACHE="$SCRATCH/xdg-cache"
   echo "ListenookSpeechWorker can only be built on Apple Silicon macOS." >&2
   exit 1
 }
-rg --fixed-strings --quiet "$SPEECH_SWIFT_COMMIT" "$PACKAGE/Package.swift" || {
+grep -qF "$SPEECH_SWIFT_COMMIT" "$PACKAGE/Package.swift" || {
   echo "speech-swift is not pinned to the expected immutable commit." >&2
   exit 1
 }
 mkdir -p "$MODULE_CACHE" "$XDG_CACHE"
+
+# The Metal toolchain is mounted under a name that changes with each mount
+# (a restart, an Xcode update). A build plan kept from before then points
+# at a compiler that is no longer there: it is dropped and made again.
+PLANS="$SCRATCH/out/Intermediates.noindex/XCBuildData"
+if [[ -d "$PLANS" ]]; then
+  while IFS= read -r MOUNT; do
+    if [[ ! -d "$MOUNT" ]]; then
+      rm -rf "$PLANS"
+      break
+    fi
+  done < <(grep -rhoE '/[A-Za-z0-9_./-]*MobileAsset\.MetalToolchain-[A-Za-z0-9.]+' "$PLANS" 2>/dev/null | sort -u)
+fi
 export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE"
 export SWIFTPM_MODULECACHE_OVERRIDE="$MODULE_CACHE"
 export XDG_CACHE_HOME="$XDG_CACHE"
@@ -92,7 +111,7 @@ chmod 755 "$OUTPUT"
   echo "Speech worker is not arm64-only." >&2
   exit 1
 }
-otool -L "$OUTPUT" | rg --quiet 'CoreML.framework' || {
+otool -L "$OUTPUT" | grep -q 'CoreML.framework' || {
   echo "Speech worker is not linked to Core ML." >&2
   exit 1
 }

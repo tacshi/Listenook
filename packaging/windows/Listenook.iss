@@ -59,6 +59,10 @@ ChangesAssociations=yes
 Type: files; Name: "{app}\MeowSTT.exe"
 Type: files; Name: "{autoprograms}\MeowSTT.lnk"
 Type: files; Name: "{autodesktop}\MeowSTT.lnk"
+; What the Flutter build installed and this one does not have.
+Type: filesandordirs; Name: "{app}\data"
+Type: filesandordirs; Name: "{app}\flac"
+Type: files; Name: "{app}\flutter_windows.dll"
 
 [Files]
 Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

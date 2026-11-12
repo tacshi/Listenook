@@ -9,8 +9,8 @@ macOS, Windows, iPhone, and iPad. Cloud transcription and AI features use your
 own API keys; local transcription is available on supported Apple Silicon Macs
 and on iPhones and iPads with 8 GB of memory.
 
-[Downloads](https://github.com/tacshi/Listenook-Release/releases) ·
-[Privacy](PRIVACY.md) · [Release instructions](Release_Steps.md)
+[Downloads](https://github.com/tacshi/Listenook/releases) ·
+[Privacy](PRIVACY.md)
 
 ## Using Listenook
 
@@ -120,184 +120,48 @@ locally. On desktop, imported source media stays in its original location; on
 iPhone and iPad, Listenook keeps its own copy. See
 [PRIVACY.md](PRIVACY.md) for provider cleanup and retention details.
 
-## Moving from MeowSTT
-
-Install Listenook manually for the first upgrade. Quit MeowSTT, including its
-menu-bar or tray process, before opening Listenook. First launch copies the old
-library, settings, completed local models, and downloaded podcasts into the new
-data directory, preserving the old data for recovery. Existing Listenook data
-takes priority.
-
-If copying fails, check disk space and folder access, then retry. API key
-migration can be retried, or you can enter the keys again. Keys you clear in
-Listenook are not restored from the old app. On macOS, disable the old MeowSTT
-login item if prompted.
+## Identity and updates
 
 | Item | Value |
 | --- | --- |
-| Dart package | `listenook` |
-| Main bundle ID | `app.capyvibe.listenook` |
-| Login helper bundle ID | `app.capyvibe.listenook.Launcher` |
+| Bundle ID | `app.capyvibe.listenook` |
 | macOS data directory | `~/Library/Application Support/app.capyvibe.listenook` |
 | Windows data directory | `%APPDATA%\Capyvibe\Listenook` |
 
-Executable and installer filenames use Listenook in every language. The Windows
-installer retains its upgrade identity and may reuse the old installation
-folder. Existing `MEOWSTT_*` environment variables remain compatibility
-fallbacks; `LISTENOOK_*` variables take priority.
-
-Later Listenook releases use `listenook-latest.json` in
-[tacshi/Listenook-Release](https://github.com/tacshi/Listenook-Release). The old
-`latest.json` remains the MeowSTT update feed. See
-[Release_Steps.md](Release_Steps.md) for publishing and feed separation.
+The library, settings and keys are the ones earlier Listenook versions wrote:
+upgrading keeps them. The desktop apps update themselves from this
+repository's [GitHub Releases](https://github.com/tacshi/Listenook/releases).
 
 ## Development
 
-Desktop builds need the Flutter **master** SDK pinned in `.fvmrc`: the main and
-video player windows are created through Flutter's multi-window API
-(`lib/core/windowing/`), which stable does not have. Install
-[FVM](https://fvm.app), then use `fvm flutter …` (or `scripts/flutter.sh …`);
-the build scripts resolve the pinned SDK themselves. A bare `flutter` from PATH
-fails to compile and rewrites `pubspec.lock`. The Apple Silicon speech worker
-also requires Xcode and its Metal toolchain.
+The app is the Rust crate in [`nsh/`](nsh), built on
+[Native Shell](https://github.com/longbridge/nsh). It needs a Rust toolchain
+and the `nsh` CLI; [nsh/README.md](nsh/README.md) describes the code, how to
+run it against a scratch library, and what each platform needs.
 
 ```sh
 git clone git@github.com:tacshi/Listenook.git
-cd Listenook
-fvm install
-fvm flutter pub get
-fvm flutter run -d macos
+cd Listenook/nsh
+cargo run
 ```
 
-For local speech during development on Apple Silicon, build the helper and
-point the app to it:
-
-```sh
-scripts/build-speech-worker.sh
-LISTENOOK_SPEECH_WORKER="$PWD/build/native/speech_worker/ListenookSpeechWorker" fvm flutter run -d macos
-```
-
-For iOS, connect a device (Wi-Fi is fine) and use the scripts; the
-development team is set in `ios/Runner.xcodeproj`. Local speech links
-`native/speech_worker` into the app, so iOS builds also need the Metal
-toolchain (`xcodebuild -downloadComponent MetalToolchain`).
-
-```sh
-scripts/build-ios-debug.sh              # compile only, unsigned
-scripts/run-ios.sh "<device name or UDID>"   # signed profile build, installed and launched
-scripts/test-ios-integration.sh "<device name or UDID>" integration_test/media_pipeline_test.dart
-```
-
-Devices are listed by `xcrun devicectl list devices`. Debug builds start only
-under a debugger on iOS, so `run-ios.sh` installs a profile build. The
-integration test script also runs each test as a profile app and copies its
-results back from the app's Documents folder, because over Wi-Fi the tools
-often cannot reach a debug build. The device must be unlocked, and it is left
-with the last test app installed; run `run-ios.sh` afterwards.
-
-Before `fvm flutter run -d windows`, prepare the native FLAC encoder once:
-
-```powershell
-scripts\fetch-flac.ps1 -Arch x64
-```
-
-Use `arm64` on a native ARM64 Windows host. Packaging scripts prepare the encoder
-automatically. macOS uses its built-in `afconvert` encoder.
-
-Run static analysis and tests relevant to the change. For example, to check
-application identity and startup:
-
-```sh
-fvm flutter analyze
-fvm flutter test test/core/app_identity_test.dart test/ui/bootstrap_test.dart
-```
-
-Native bundle identity, localized-name channel, and isolated Keychain migration
-checks run separately from packaging:
-
-```sh
-fvm flutter test integration_test/secure_credential_store_test.dart -d macos
-```
-
-Cloud smoke tests are opt-in and may consume provider credit when
-`SONIOX_API_KEY` or `MOSS_API_KEY` is set. Normal tests use fake services.
-
-Real Qwen/Silero tests use `LISTENOOK_TEST_QWEN_PCM`,
-`LISTENOOK_TEST_QWEN_MLX_DIRECTORY`, `LISTENOOK_TEST_SILERO_COREML_DIRECTORY`, and
-`LISTENOOK_TEST_SPEECH_WORKER`; optionally set
-`LISTENOOK_TEST_ALIGNMENT_COREML_DIRECTORY`. The long-audio benchmark is
-`dart run scripts/benchmark_local_qwen.dart`, with `--worker`,
-`--model-directory`, `--vad-directory`, and `--audio`. Its two-hour M1 Pro gate
-requires RTF below 0.7, worker RSS below 8 GiB, and valid monotonic timestamps.
-Both local benchmarks accept `--reference` with a human-reviewed transcript
-(text, SRT, or WebVTT) and then also print mixed, word, and character error
-rates. `dart run tool/score_transcripts.dart` scores existing transcripts, one
-pair or two folders of matching file names at a time.
-Qwen remains beta pending comparison with MOSS on the same evaluation corpus.
+`make check` verifies formatting and lints, `make test` runs the tests, and
+`make pr` runs both: the gate before a pull request.
 
 ## Packaging
 
-macOS supports macOS 12+ on Apple Silicon and Intel. Local speech requires
-Apple Silicon and macOS 15+.
+| Platform | Command | Makes |
+| --- | --- | --- |
+| macOS 14+ | `scripts/build-macos.sh debug\|release [--arch arm64\|x64]` | A signed `.app`; a release adds the notarized `.dmg` and the updater's archive |
+| Windows 10+ | `scripts\build-windows.ps1 debug\|release` | The app folder; a release adds the installer and the updater's archive |
+| iOS, iPadOS 18+ | `scripts/build-ios.sh debug\|release`, `scripts/run-ios.sh` | An unsigned build, a signed `.ipa`, or the app on a device |
+| Android 8+ | `scripts/build-android.sh debug\|release [--aab]` | An `.apk` or an App Bundle |
 
-```sh
-scripts/build-mac-debug.sh --arch arm64
-scripts/build-mac-release.sh --arch all
-```
+Artifacts are written to `build/`. Each script lists the signing settings it
+reads at its top. Local speech with MOSS needs an Apple silicon Mac on
+macOS 15+; `scripts/build-speech-worker.sh` builds its helper, which the macOS
+build packages.
 
-For production signing, set `LISTENOOK_MAC_SIGN_IDENTITY` or
-`DEVELOPER_ID_APPLICATION` to the Developer ID Application identity. Notarization
-prefers the `Listenook` profile, with `MeowSTT` as a compatibility fallback when
-no profile is explicitly configured. `LISTENOOK_NOTARY_PROFILE` overrides the
-profile. Signed releases are notarized and stapled before distribution.
-
-Debug signing uses `LISTENOOK_MAC_DEBUG_SIGN_IDENTITY`, then
-`LISTENOOK_MAC_SIGN_IDENTITY`, then `DEVELOPER_ID_APPLICATION`. Otherwise it
-matches an existing release's Team ID or uses the only available Developer ID.
-It falls back to ad-hoc signing when needed; set
-`LISTENOOK_MAC_DEBUG_SIGN_IDENTITY=-` to request that explicitly.
-
-iOS and iPadOS require iOS 18+. Local speech additionally requires 8 GB of
-memory. `scripts/build-ios-release.sh` builds a signed App Store `.ipa` into
-`build/ios/ipa` (`BUILD_NAME` and `BUILD_NUMBER` override the version).
-
-Windows requires Windows 10 22H2+ and a host matching the target architecture:
-
-```powershell
-scripts\build-win-debug.ps1 -Arch x64
-scripts\build-win-release.ps1 1.2.3 -Arch x64
-```
-
-Release builds require Inno Setup 6 or 7; use `LISTENOOK_ISCC` if it is not on
-PATH. Windows signing uses `LISTENOOK_WINDOWS_PFX`, with optional
-`LISTENOOK_WINDOWS_PFX_PASSWORD`, `LISTENOOK_WINDOWS_PUBLISHER`,
-`LISTENOOK_WINDOWS_TIMESTAMP_URL`, and `LISTENOOK_SIGNTOOL`.
-`LISTENOOK_FLAC_DIR` can select a pre-provisioned native encoder directory.
-
-Artifacts are written to `build/`. Debug builds are named by architecture only:
-macOS produces `Listenook-arm64-debug.app` and Windows a portable
-`Listenook-x64-debug` folder. Release artifacts carry platform, architecture,
-mode, and version in their filenames: macOS produces a DMG and updater ZIP,
-Windows a portable ZIP and Inno Setup installer.
-
-Build scripts do not launch the macOS app. Run a launch check explicitly when
-needed:
-
-```sh
-scripts/verify-macos-app.sh build/Listenook-arm64-debug.app
-```
-
-Publishing is a separate step described in [Release_Steps.md](Release_Steps.md).
-
-## Code structure and dependencies
-
-Flutter controllers coordinate credentials, persisted jobs, transcription,
-translation, playback, and exports through injected interfaces. Networking,
-subprocesses, storage, and formatting live outside UI widgets. Persisted job
-transitions support recovery after restart.
-
-Playback uses libmpv from `media_kit_libs_video`; there are no standalone FFmpeg
-or FFprobe executables. Windows packages the native FLAC encoder and its source
-archive. The Apple Silicon speech worker uses pinned speech-swift, Core ML, and
-MLX dependencies. Provenance and licenses are in [packaging/flac](packaging/flac)
-and [assets/third_party](assets/third_party).
+Publishing is a separate step: `scripts/publish.sh <version>`, whose options
+are listed by `scripts/publish.sh --help`.
+Licenses of what the packages carry are in [packaging/notices](packaging/notices).

@@ -1,0 +1,5 @@
+# The speech engine chooses its vector code when it is compiled, and
+# Rust's baseline for x86-64 is SSE2, its slowest path. Every 64-bit
+# Windows PC since about 2015 has AVX2 and FMA.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+avx2,+fma"]

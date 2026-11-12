@@ -1,0 +1,73 @@
+[package]
+name = "nsh-app-listenook"
+# Keep in step with nsh.json "version": the updater compares that one.
+version = "2.0.0"
+edition = "2024"
+publish = false
+
+# `cargo run` shows in the Dock and the task bar under this name.
+[[bin]]
+name = "Listenook"
+path = "src/main.rs"
+
+[workspace]
+members = ["crates/listenook-core"]
+exclude = ["vendor"]
+
+# NSH at the commit of the nightly CLI this app is built with (`nsh --version`).
+[dependencies]
+listenook-core = { path = "crates/listenook-core" }
+nsh-core = { version = "0.5.0" }
+nsh-base = { version = "0.5.0" }
+env_logger = "0.11"
+log = "0.4"
+serde_json = "1"
+serde = "1"
+ureq = "2"
+sha2 = "0.10"
+matrixmultiply = { version = "0.3", features = ["threading"] }
+symphonia = { version = "0.5", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+nsh-updater = { version = "0.5.0" }
+uuid = { version = "1", features = ["v4"] }
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nsh-platform-linux = { version = "0.5.0", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nsh-platform-macos = { version = "0.5.0", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+nsh-platform-windows = { version = "0.5.0", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+
+[dev-dependencies]
+nsh-engine = { version = "0.5.0", default-features = false }
+nsh-testing = { version = "0.5.0", default-features = false }
+
+# The speech engine: Accelerate on Apple's platforms; elsewhere its BLAS
+# call is answered by `services/blas.rs`.
+# `vendor/qwen-asr` is the crate with two changes: it builds for iOS,
+# Android and Windows on Arm (`sdot_s32` in its `src/kernels/neon.rs`), and
+# for Windows at all (its mmap, `pread`, `posix_memalign` and `sched_yield`
+# have Windows paths, the mapping by `memmap2`). A
+# path, not a `[patch]`: `nsh package` builds this crate in a workspace of
+# its own, where a patch written here does not apply.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+qwen-asr = { path = "vendor/qwen-asr" }
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+qwen-asr = { path = "vendor/qwen-asr", default-features = false, features = ["blas"] }
+
+# Speech and audio code is unusable unoptimized.
+[profile.dev.package.qwen-asr]
+opt-level = 3
+
+[profile.dev.package.matrixmultiply]
+opt-level = 3
+
+[profile.dev.package.symphonia-core]
+opt-level = 3
+
+[profile.dev.package.listenook-core]
+opt-level = 2
