@@ -68,22 +68,8 @@ extern "C" {
 #[cfg(all(feature = "vdsp", target_vendor = "apple"))]
 #[link(name = "Accelerate", kind = "framework")]
 extern "C" {
-    fn vDSP_dotpr(
-        a: *const f32,
-        a_stride: i32,
-        b: *const f32,
-        b_stride: i32,
-        result: *mut f32,
-        n: u64,
-    );
-    fn vDSP_vsmul(
-        a: *const f32,
-        a_stride: i32,
-        scalar: *const f32,
-        c: *mut f32,
-        c_stride: i32,
-        n: u64,
-    );
+    fn vDSP_dotpr(a: *const f32, a_stride: i32, b: *const f32, b_stride: i32, result: *mut f32, n: u64);
+    fn vDSP_vsmul(a: *const f32, a_stride: i32, scalar: *const f32, c: *mut f32, c_stride: i32, n: u64);
     fn vDSP_vsma(
         a: *const f32,
         a_stride: i32,
@@ -220,10 +206,7 @@ impl ProfileGuard {
     #[inline]
     pub fn new(counter: &'static (AtomicU64, AtomicU64)) -> Option<Self> {
         if PROFILE_ENABLED.load(Ordering::Relaxed) {
-            Some(ProfileGuard {
-                start: Instant::now(),
-                counter,
-            })
+            Some(ProfileGuard { start: Instant::now(), counter })
         } else {
             None
         }
@@ -269,9 +252,7 @@ pub(crate) use pool::parallel_region;
 pub(crate) use pool::set_thread_override;
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 pub(crate) use pool::{decode_region_threads, parallel_region_n};
-pub use pool::{
-    get_default_threads, get_num_cpus, get_num_threads, set_thread_override_public, set_threads,
-};
+pub use pool::{get_default_threads, get_num_cpus, get_num_threads, set_thread_override_public, set_threads};
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 pub(crate) use pool::{range_for, MAX_THREADS};
 
@@ -336,10 +317,8 @@ pub fn bf16_to_f32_buf_parallel(dst: &mut [f32], src: &[u16]) {
         let start = item * ITEM;
         let end = (start + ITEM).min(n);
         let len = end - start;
-        let dst_local =
-            unsafe { std::slice::from_raw_parts_mut((dst_send as *mut f32).add(start), len) };
-        let src_local =
-            unsafe { std::slice::from_raw_parts((src_send as *const u16).add(start), len) };
+        let dst_local = unsafe { std::slice::from_raw_parts_mut((dst_send as *mut f32).add(start), len) };
+        let src_local = unsafe { std::slice::from_raw_parts((src_send as *const u16).add(start), len) };
         bf16_to_f32_buf(dst_local, src_local);
     });
 }
@@ -375,13 +354,7 @@ fn bf16_matvec_fused(
     }
 }
 
-fn argmax_bf16_range(
-    x: &[f32],
-    w_bf16: *const u16,
-    in_dim: usize,
-    start: usize,
-    end: usize,
-) -> (usize, f32) {
+fn argmax_bf16_range(x: &[f32], w_bf16: *const u16, in_dim: usize, start: usize, end: usize) -> (usize, f32) {
     #[cfg(target_arch = "aarch64")]
     {
         unsafe { neon::argmax_bf16_range(x, w_bf16, in_dim, start, end) }
@@ -412,27 +385,17 @@ pub fn dot_f32(a: &[f32], b: &[f32], n: usize) -> f32 {
         result
     }
 
-    #[cfg(all(
-        target_arch = "aarch64",
-        not(all(feature = "vdsp", target_vendor = "apple"))
-    ))]
+    #[cfg(all(target_arch = "aarch64", not(all(feature = "vdsp", target_vendor = "apple"))))]
     {
         unsafe { neon::dot_f32(a, b, n) }
     }
 
-    #[cfg(all(
-        target_arch = "x86_64",
-        not(all(feature = "vdsp", target_vendor = "apple"))
-    ))]
+    #[cfg(all(target_arch = "x86_64", not(all(feature = "vdsp", target_vendor = "apple"))))]
     {
         unsafe { avx::dot_f32(a, b, n) }
     }
 
-    #[cfg(not(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64",
-        all(feature = "vdsp", target_vendor = "apple")
-    )))]
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64", all(feature = "vdsp", target_vendor = "apple"))))]
     generic::dot_f32(a, b, n)
 }
 
@@ -445,31 +408,21 @@ pub fn vec_scale_inplace(dst: &mut [f32], scale: f32, n: usize) {
         }
     }
 
-    #[cfg(all(
-        target_arch = "aarch64",
-        not(all(feature = "vdsp", target_vendor = "apple"))
-    ))]
+    #[cfg(all(target_arch = "aarch64", not(all(feature = "vdsp", target_vendor = "apple"))))]
     {
         unsafe {
             neon::vec_scale_inplace(dst, scale, n);
         }
     }
 
-    #[cfg(all(
-        target_arch = "x86_64",
-        not(all(feature = "vdsp", target_vendor = "apple"))
-    ))]
+    #[cfg(all(target_arch = "x86_64", not(all(feature = "vdsp", target_vendor = "apple"))))]
     {
         unsafe {
             avx::vec_scale_inplace(dst, scale, n);
         }
     }
 
-    #[cfg(not(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64",
-        all(feature = "vdsp", target_vendor = "apple")
-    )))]
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64", all(feature = "vdsp", target_vendor = "apple"))))]
     generic::vec_scale_inplace(dst, scale, n);
 }
 
@@ -478,44 +431,25 @@ pub fn vec_axpy_inplace(dst: &mut [f32], src: &[f32], alpha: f32, n: usize) {
     #[cfg(all(feature = "vdsp", target_vendor = "apple"))]
     {
         unsafe {
-            vDSP_vsma(
-                src.as_ptr(),
-                1,
-                &alpha,
-                dst.as_ptr(),
-                1,
-                dst.as_mut_ptr(),
-                1,
-                n as u64,
-            );
+            vDSP_vsma(src.as_ptr(), 1, &alpha, dst.as_ptr(), 1, dst.as_mut_ptr(), 1, n as u64);
         }
     }
 
-    #[cfg(all(
-        target_arch = "aarch64",
-        not(all(feature = "vdsp", target_vendor = "apple"))
-    ))]
+    #[cfg(all(target_arch = "aarch64", not(all(feature = "vdsp", target_vendor = "apple"))))]
     {
         unsafe {
             neon::vec_axpy_inplace(dst, src, alpha, n);
         }
     }
 
-    #[cfg(all(
-        target_arch = "x86_64",
-        not(all(feature = "vdsp", target_vendor = "apple"))
-    ))]
+    #[cfg(all(target_arch = "x86_64", not(all(feature = "vdsp", target_vendor = "apple"))))]
     {
         unsafe {
             avx::vec_axpy_inplace(dst, src, alpha, n);
         }
     }
 
-    #[cfg(not(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64",
-        all(feature = "vdsp", target_vendor = "apple")
-    )))]
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64", all(feature = "vdsp", target_vendor = "apple"))))]
     generic::vec_axpy_inplace(dst, src, alpha, n);
 }
 
@@ -644,9 +578,8 @@ fn gemm_nt_fallback(
 ) {
     const MIN_COLS: usize = 128;
     let nt = get_num_threads();
-    let parallel = nt > 1
-        && out_dim >= MIN_COLS
-        && seq_len.saturating_mul(in_dim).saturating_mul(out_dim) >= FALLBACK_MIN_MACS;
+    let parallel =
+        nt > 1 && out_dim >= MIN_COLS && seq_len.saturating_mul(in_dim).saturating_mul(out_dim) >= FALLBACK_MIN_MACS;
     if !parallel {
         // SAFETY: single-threaded full-range pass; slices sized by the wrapper.
         unsafe {
@@ -703,15 +636,7 @@ fn gemm_nt_fallback(
 /// # Safety
 /// `a`/`b`/`c` valid for `m*k`, `k*n`, `m*n` elements; `[start,end)` within `[0,m)`.
 #[cfg(all(not(feature = "blas"), target_arch = "aarch64"))]
-unsafe fn gemm_nn_rows(
-    c: *mut f32,
-    a: *const f32,
-    b: *const f32,
-    k: usize,
-    n: usize,
-    start: usize,
-    end: usize,
-) {
+unsafe fn gemm_nn_rows(c: *mut f32, a: *const f32, b: *const f32, k: usize, n: usize, start: usize, end: usize) {
     for mi in start..end {
         let c_row = std::slice::from_raw_parts_mut(c.add(mi * n), n);
         for v in c_row.iter_mut() {
@@ -730,8 +655,7 @@ unsafe fn gemm_nn_rows(
 #[cfg(all(not(feature = "blas"), target_arch = "aarch64"))]
 fn gemm_nn_fallback(c: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
     let nt = get_num_threads();
-    let parallel =
-        nt > 1 && m >= 2 && n >= 64 && m.saturating_mul(k).saturating_mul(n) >= FALLBACK_MIN_MACS;
+    let parallel = nt > 1 && m >= 2 && n >= 64 && m.saturating_mul(k).saturating_mul(n) >= FALLBACK_MIN_MACS;
     if !parallel {
         // SAFETY: single-threaded full-range pass; slices sized by the wrapper.
         unsafe {
@@ -753,15 +677,7 @@ fn gemm_nn_fallback(c: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: 
         }
         // SAFETY: items write disjoint output rows [start,end) of c.
         unsafe {
-            gemm_nn_rows(
-                c_send as *mut f32,
-                a_send as *const f32,
-                b_send as *const f32,
-                k,
-                n,
-                start,
-                end,
-            );
+            gemm_nn_rows(c_send as *mut f32, a_send as *const f32, b_send as *const f32, k, n, start, end);
         }
     });
 }
@@ -781,19 +697,11 @@ fn gemm_nn_fallback(c: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: 
 /// wired into the Flutter Android build only), and in that case defaults **ON**;
 /// `QWEN_ASR_INT8_PREFILL=0` is a runtime kill switch. Cached after first read,
 /// matching the `QWEN_ASR_VERIFY`/`QWEN_ASR_SIDECAR` knobs.
-#[cfg(all(
-    feature = "int8-prefill",
-    not(feature = "blas"),
-    target_arch = "aarch64"
-))]
+#[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
 pub fn int8_prefill_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("QWEN_ASR_INT8_PREFILL")
-            .map(|v| v != "0")
-            .unwrap_or(true)
-    })
+    *ENABLED.get_or_init(|| std::env::var("QWEN_ASR_INT8_PREFILL").map(|v| v != "0").unwrap_or(true))
 }
 
 /// Quantize each of `seq_len` activation rows (length `dim`) to INT8 with its
@@ -801,18 +709,8 @@ pub fn int8_prefill_enabled() -> bool {
 /// by row, to the single-token `quantize_into` (the same per-row absmax used by
 /// the decode path), so the prefill GEMM's quantized inputs match the reference.
 /// Shared by the INT8 decoder-prefill (stage 1) and encoder (stage 2) paths.
-#[cfg(all(
-    any(feature = "int8-prefill", feature = "int8-encoder"),
-    not(feature = "blas"),
-    target_arch = "aarch64"
-))]
-pub(crate) fn quantize_rows_into(
-    dst: &mut [i8],
-    scales: &mut [f32],
-    x: &[f32],
-    seq_len: usize,
-    dim: usize,
-) {
+#[cfg(all(any(feature = "int8-prefill", feature = "int8-encoder"), not(feature = "blas"), target_arch = "aarch64"))]
+pub(crate) fn quantize_rows_into(dst: &mut [i8], scales: &mut [f32], x: &[f32], seq_len: usize, dim: usize) {
     debug_assert_eq!(dst.len(), seq_len * dim);
     debug_assert_eq!(scales.len(), seq_len);
     debug_assert_eq!(x.len(), seq_len * dim);
@@ -832,11 +730,7 @@ pub(crate) fn quantize_rows_into(
 /// # Safety
 /// `y` sized `seq_len*out_dim`; `x_int8` sized `seq_len*in_dim`; `x_scales`
 /// sized `seq_len`; `w_int8`/`w_scales` cover `out_dim` rows / `in_dim` cols.
-#[cfg(all(
-    feature = "int8-prefill",
-    not(feature = "blas"),
-    target_arch = "aarch64"
-))]
+#[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn int8_prefill_matvec(
     y: &mut [f32],
@@ -850,9 +744,8 @@ pub(crate) unsafe fn int8_prefill_matvec(
 ) {
     const MIN_COLS: usize = 128;
     let nt = get_num_threads();
-    let parallel = nt > 1
-        && out_dim >= MIN_COLS
-        && seq_len.saturating_mul(in_dim).saturating_mul(out_dim) >= FALLBACK_MIN_MACS;
+    let parallel =
+        nt > 1 && out_dim >= MIN_COLS && seq_len.saturating_mul(in_dim).saturating_mul(out_dim) >= FALLBACK_MIN_MACS;
     if !parallel {
         neon::matvec_int8_prefill_rows(
             y.as_mut_ptr(),
@@ -907,11 +800,7 @@ pub(crate) unsafe fn int8_prefill_matvec(
 /// # Safety
 /// `ffn` sized `seq_len*n_rows`; `x_int8` sized `seq_len*in_dim`; `x_scales`
 /// sized `seq_len`; `w_int8`/`w_scales` cover `2*n_rows` rows / `in_dim` cols.
-#[cfg(all(
-    feature = "int8-prefill",
-    not(feature = "blas"),
-    target_arch = "aarch64"
-))]
+#[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn int8_prefill_swiglu(
     ffn: &mut [f32],
@@ -924,9 +813,8 @@ pub(crate) unsafe fn int8_prefill_swiglu(
     seq_len: usize,
 ) {
     let nt = get_num_threads();
-    let parallel = nt > 1
-        && n_rows >= 64
-        && seq_len.saturating_mul(in_dim).saturating_mul(2 * n_rows) >= FALLBACK_MIN_MACS;
+    let parallel =
+        nt > 1 && n_rows >= 64 && seq_len.saturating_mul(in_dim).saturating_mul(2 * n_rows) >= FALLBACK_MIN_MACS;
     if !parallel {
         neon::swiglu_int8_prefill_rows(
             ffn.as_mut_ptr(),
@@ -988,19 +876,11 @@ pub(crate) unsafe fn int8_prefill_swiglu(
 /// `int8-encoder` cargo feature is compiled in (opt-in, wired into the Flutter
 /// Android build only), and defaults **ON**; `QWEN_ASR_INT8_ENCODER=0` is a
 /// runtime kill switch. Cached after first read, matching `QWEN_ASR_INT8_PREFILL`.
-#[cfg(all(
-    feature = "int8-encoder",
-    not(feature = "blas"),
-    target_arch = "aarch64"
-))]
+#[cfg(all(feature = "int8-encoder", not(feature = "blas"), target_arch = "aarch64"))]
 pub fn int8_encoder_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("QWEN_ASR_INT8_ENCODER")
-            .map(|v| v != "0")
-            .unwrap_or(true)
-    })
+    *ENABLED.get_or_init(|| std::env::var("QWEN_ASR_INT8_ENCODER").map(|v| v != "0").unwrap_or(true))
 }
 
 /// Quantize an f32 weight matrix to INT8 per-row with absmax scaling. Mirrors
@@ -1008,24 +888,13 @@ pub fn int8_encoder_enabled() -> bool {
 /// round-clamp) but reads the encoder's already-prepacked f32 weights (which are
 /// the exact bf16→f32 widening), so the INT8 result equals quantizing the
 /// original bf16 directly. Returns `(int8_data, per_row_scales)`.
-#[cfg(all(
-    feature = "int8-encoder",
-    not(feature = "blas"),
-    target_arch = "aarch64"
-))]
-pub fn quantize_f32_weights_to_int8(
-    w: &[f32],
-    out_dim: usize,
-    in_dim: usize,
-) -> (Vec<i8>, Vec<f32>) {
+#[cfg(all(feature = "int8-encoder", not(feature = "blas"), target_arch = "aarch64"))]
+pub fn quantize_f32_weights_to_int8(w: &[f32], out_dim: usize, in_dim: usize) -> (Vec<i8>, Vec<f32>) {
     debug_assert_eq!(w.len(), out_dim * in_dim);
     let mut int8 = vec![0i8; out_dim * in_dim];
     let mut scales = vec![0.0f32; out_dim];
     for r in 0..out_dim {
-        scales[r] = quantize_into(
-            &mut int8[r * in_dim..(r + 1) * in_dim],
-            &w[r * in_dim..(r + 1) * in_dim],
-        );
+        scales[r] = quantize_into(&mut int8[r * in_dim..(r + 1) * in_dim], &w[r * in_dim..(r + 1) * in_dim]);
     }
     (int8, scales)
 }
@@ -1040,11 +909,7 @@ pub fn quantize_f32_weights_to_int8(
 /// `y` sized `seq_len*out_dim`; `x_int8` sized `seq_len*in_dim`; `x_scales`
 /// sized `seq_len`; `w_int8`/`w_scales` cover `out_dim` rows / `in_dim` cols;
 /// `bias` (if `Some`) covers `out_dim`.
-#[cfg(all(
-    feature = "int8-encoder",
-    not(feature = "blas"),
-    target_arch = "aarch64"
-))]
+#[cfg(all(feature = "int8-encoder", not(feature = "blas"), target_arch = "aarch64"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn int8_encoder_matvec(
     y: &mut [f32],
@@ -1061,9 +926,8 @@ pub(crate) unsafe fn int8_encoder_matvec(
     const MIN_COLS: usize = 128;
     let bias_ptr = bias.map_or(std::ptr::null(), |b| b.as_ptr());
     let nt = get_num_threads();
-    let parallel = nt > 1
-        && out_dim >= MIN_COLS
-        && seq_len.saturating_mul(in_dim).saturating_mul(out_dim) >= FALLBACK_MIN_MACS;
+    let parallel =
+        nt > 1 && out_dim >= MIN_COLS && seq_len.saturating_mul(in_dim).saturating_mul(out_dim) >= FALLBACK_MIN_MACS;
     if !parallel {
         neon::matvec_int8_encoder_rows(
             y.as_mut_ptr(),
@@ -1289,9 +1153,7 @@ fn parse_pooled_gemm_flag(raw: Option<&str>, var: &str, default_on: bool) -> boo
 /// the knobs is to run the binary against the opposite policy.
 #[cfg(all(feature = "blas", test))]
 fn pooled_gemm_overridden() -> bool {
-    ["QASR_CONV_POOLED", "QASR_LINEAR_POOLED", "QASR_ATTN_POOLED"]
-        .iter()
-        .any(|v| std::env::var_os(v).is_some())
+    ["QASR_CONV_POOLED", "QASR_LINEAR_POOLED", "QASR_ATTN_POOLED"].iter().any(|v| std::env::var_os(v).is_some())
 }
 
 /// Pool-slicing policy for the encoder's conv stem GEMMs. **Apple only.**
@@ -1460,15 +1322,7 @@ fn sgemm_nt_pooled(
 }
 
 /// y = x @ W^T + b: `x[seq,in]`, `W[out,in]`, `b[out]`, `y[seq,out]`
-pub fn linear(
-    y: &mut [f32],
-    x: &[f32],
-    w: &[f32],
-    b: Option<&[f32]>,
-    seq_len: usize,
-    in_dim: usize,
-    out_dim: usize,
-) {
+pub fn linear(y: &mut [f32], x: &[f32], w: &[f32], b: Option<&[f32]>, seq_len: usize, in_dim: usize, out_dim: usize) {
     let _pg = ProfileGuard::new(&PROF.sgemm);
     #[cfg(feature = "blas")]
     unsafe {
@@ -1524,14 +1378,7 @@ pub fn linear(
     }
 }
 
-pub fn linear_nobias(
-    y: &mut [f32],
-    x: &[f32],
-    w: &[f32],
-    seq_len: usize,
-    in_dim: usize,
-    out_dim: usize,
-) {
+pub fn linear_nobias(y: &mut [f32], x: &[f32], w: &[f32], seq_len: usize, in_dim: usize, out_dim: usize) {
     linear(y, x, w, None, seq_len, in_dim, out_dim);
 }
 
@@ -1646,13 +1493,11 @@ fn bf16_matvec_threaded(
             return;
         }
 
-        let y_local =
-            unsafe { std::slice::from_raw_parts_mut((y_send as *mut f32).add(start), end - start) };
+        let y_local = unsafe { std::slice::from_raw_parts_mut((y_send as *mut f32).add(start), end - start) };
         let x_local = unsafe { std::slice::from_raw_parts(x_send as *const f32, in_dim) };
         let w_local = unsafe { (w_send as *const u16).add(start * in_dim) };
-        let bias_local = bias_send.map(|p| unsafe {
-            std::slice::from_raw_parts((p as *const f32).add(start), end - start)
-        });
+        let bias_local =
+            bias_send.map(|p| unsafe { std::slice::from_raw_parts((p as *const f32).add(start), end - start) });
 
         bf16_matvec_fused(y_local, x_local, w_local, bias_local, in_dim, end - start);
     });
@@ -1660,27 +1505,14 @@ fn bf16_matvec_threaded(
 
 /// Like linear_nobias_bf16 for seq_len=1, but ADDS to the destination: `y[i] += W[i] @ x`.
 /// Achieves fused residual add by passing y as its own "bias".
-pub fn linear_nobias_bf16_addto(
-    y: &mut [f32],
-    x: &[f32],
-    w_bf16: *const u16,
-    in_dim: usize,
-    out_dim: usize,
-) {
+pub fn linear_nobias_bf16_addto(y: &mut [f32], x: &[f32], w_bf16: *const u16, in_dim: usize, out_dim: usize) {
     let _pg = ProfileGuard::new(&PROF.bf16_matvec);
     // SAFETY: bf16_matvec_fused reads bias[i] before writing y[i], so aliasing y as bias is safe.
     let bias = unsafe { std::slice::from_raw_parts(y.as_ptr(), out_dim) };
     bf16_matvec_threaded(y, x, w_bf16, Some(bias), in_dim, out_dim);
 }
 
-pub fn linear_nobias_bf16(
-    y: &mut [f32],
-    x: &[f32],
-    w_bf16: *const u16,
-    seq_len: usize,
-    in_dim: usize,
-    out_dim: usize,
-) {
+pub fn linear_nobias_bf16(y: &mut [f32], x: &[f32], w_bf16: *const u16, seq_len: usize, in_dim: usize, out_dim: usize) {
     let _pg = ProfileGuard::new(&PROF.bf16_matvec);
     if seq_len == 1 {
         bf16_matvec_threaded(y, x, w_bf16, None, in_dim, out_dim);
@@ -1786,8 +1618,7 @@ pub fn linear_nobias_bf16_swiglu(
             bf16_matvec_fused(gate_up_local, x_local, w_local, None, in_dim, 2 * n_rows);
 
             // Apply SwiGLU inline while data is hot in L1
-            let ffn_local =
-                unsafe { std::slice::from_raw_parts_mut((ffn_ptr as *mut f32).add(start), n_rows) };
+            let ffn_local = unsafe { std::slice::from_raw_parts_mut((ffn_ptr as *mut f32).add(start), n_rows) };
             for j in 0..n_rows {
                 let g = gate_up_local[2 * j];
                 let u = gate_up_local[2 * j + 1];
@@ -1867,16 +1698,7 @@ pub(crate) unsafe fn int8_matvec_range(
     let w_local = w_int8.add(start * in_dim);
     let w_scales_local = std::slice::from_raw_parts(w_scales.add(start), n);
     let bias_local = bias_ptr.map(|p| std::slice::from_raw_parts(p.add(start), n));
-    matvec_int8_simd(
-        y_local,
-        x_int8,
-        x_scale,
-        w_local,
-        w_scales_local,
-        bias_local,
-        in_dim,
-        n,
-    );
+    matvec_int8_simd(y_local, x_int8, x_scale, w_local, w_scales_local, bias_local, in_dim, n);
 }
 
 /// Compute the `[start, end)` slice (over the concatenated `q|k|v` output rows,
@@ -1917,16 +1739,7 @@ pub(crate) unsafe fn int8_qkv_range(
         if s < e {
             let y = std::slice::from_raw_parts_mut(q_ptr.add(s), e - s);
             let sc = std::slice::from_raw_parts(wq_scales.add(s), e - s);
-            matvec_int8_simd(
-                y,
-                x_int8,
-                x_scale,
-                wq.add(s * in_dim),
-                sc,
-                None,
-                in_dim,
-                e - s,
-            );
+            matvec_int8_simd(y, x_int8, x_scale, wq.add(s * in_dim), sc, None, in_dim, e - s);
         }
     }
     // K range
@@ -1936,16 +1749,7 @@ pub(crate) unsafe fn int8_qkv_range(
         if s < e {
             let y = std::slice::from_raw_parts_mut(k_ptr.add(s), e - s);
             let sc = std::slice::from_raw_parts(wk_scales.add(s), e - s);
-            matvec_int8_simd(
-                y,
-                x_int8,
-                x_scale,
-                wk.add(s * in_dim),
-                sc,
-                None,
-                in_dim,
-                e - s,
-            );
+            matvec_int8_simd(y, x_int8, x_scale, wk.add(s * in_dim), sc, None, in_dim, e - s);
         }
     }
     // V range
@@ -1955,16 +1759,7 @@ pub(crate) unsafe fn int8_qkv_range(
         if s < e {
             let y = std::slice::from_raw_parts_mut(v_ptr.add(s), e - s);
             let sc = std::slice::from_raw_parts(wv_scales.add(s), e - s);
-            matvec_int8_simd(
-                y,
-                x_int8,
-                x_scale,
-                wv.add(s * in_dim),
-                sc,
-                None,
-                in_dim,
-                e - s,
-            );
+            matvec_int8_simd(y, x_int8, x_scale, wv.add(s * in_dim), sc, None, in_dim, e - s);
         }
     }
 }
@@ -2000,16 +1795,7 @@ pub(crate) unsafe fn int8_swiglu_range(
     // every element, so this only keeps the proven behavior identical.
     let gate_up_local = &mut scratch[..2 * n_rows];
     gate_up_local.fill(0.0);
-    matvec_int8_simd(
-        gate_up_local,
-        x_int8,
-        x_scale,
-        w_local,
-        w_scales_local,
-        None,
-        in_dim,
-        2 * n_rows,
-    );
+    matvec_int8_simd(gate_up_local, x_int8, x_scale, w_local, w_scales_local, None, in_dim, 2 * n_rows);
     let ffn_local = std::slice::from_raw_parts_mut(ffn_ptr.add(start), n_rows);
     for j in 0..n_rows {
         let g = gate_up_local[2 * j];
@@ -2067,11 +1853,7 @@ pub(crate) unsafe fn int8_matvec_range_batched(
     }
     let w_local = w_int8.add(start * in_dim);
     let w_scales_local = std::slice::from_raw_parts(w_scales.add(start), n);
-    let bias_arg = if bias.is_some() {
-        Some(&bias_off[..b])
-    } else {
-        None
-    };
+    let bias_arg = if bias.is_some() { Some(&bias_off[..b]) } else { None };
     #[cfg(target_arch = "aarch64")]
     neon::matvec_int8_batched(
         b,
@@ -2085,17 +1867,7 @@ pub(crate) unsafe fn int8_matvec_range_batched(
         n,
     );
     #[cfg(target_arch = "x86_64")]
-    avx::matvec_int8_batched(
-        b,
-        &y_off[..b],
-        &x_int8[..b],
-        &x_scale[..b],
-        w_local,
-        w_scales_local,
-        bias_arg,
-        in_dim,
-        n,
-    );
+    avx::matvec_int8_batched(b, &y_off[..b], &x_int8[..b], &x_scale[..b], w_local, w_scales_local, bias_arg, in_dim, n);
 }
 
 /// Batched analogue of [`int8_qkv_range`]: the `[start, end)` slice over the
@@ -2181,27 +1953,9 @@ pub(crate) unsafe fn int8_swiglu_range_batched(
     let w_local = w_int8.add(2 * start * in_dim);
     let w_scales_local = std::slice::from_raw_parts(w_scales.add(2 * start), 2 * n_rows);
     #[cfg(target_arch = "aarch64")]
-    neon::swiglu_int8_batched(
-        b,
-        &ffn_off[..b],
-        &x_int8[..b],
-        &x_scale[..b],
-        w_local,
-        w_scales_local,
-        in_dim,
-        n_rows,
-    );
+    neon::swiglu_int8_batched(b, &ffn_off[..b], &x_int8[..b], &x_scale[..b], w_local, w_scales_local, in_dim, n_rows);
     #[cfg(target_arch = "x86_64")]
-    avx::swiglu_int8_batched(
-        b,
-        &ffn_off[..b],
-        &x_int8[..b],
-        &x_scale[..b],
-        w_local,
-        w_scales_local,
-        in_dim,
-        n_rows,
-    );
+    avx::swiglu_int8_batched(b, &ffn_off[..b], &x_int8[..b], &x_scale[..b], w_local, w_scales_local, in_dim, n_rows);
 }
 
 // ========================================================================
@@ -2233,12 +1987,11 @@ fn im2col(
                     for ow in 0..w_out {
                         let iw = ow * stride + kj;
                         let iw = iw as isize - padding as isize;
-                        let val =
-                            if ih >= 0 && (ih as usize) < h_in && iw >= 0 && (iw as usize) < w_in {
-                                input[ic * h_in * w_in + ih as usize * w_in + iw as usize]
-                            } else {
-                                0.0
-                            };
+                        let val = if ih >= 0 && (ih as usize) < h_in && iw >= 0 && (iw as usize) < w_in {
+                            input[ic * h_in * w_in + ih as usize * w_in + iw as usize]
+                        } else {
+                            0.0
+                        };
                         cols[col_row * col_len + oh * w_out + ow] = val;
                     }
                 }
@@ -2276,9 +2029,7 @@ pub fn conv2d_with_cols(
     if cols.len() < need {
         cols.resize(need, 0.0);
     }
-    conv2d_impl(
-        out, input, weight, bias, cols, c_in, c_out, h_in, w_in, kh, kw, stride, padding,
-    );
+    conv2d_impl(out, input, weight, bias, cols, c_in, c_out, h_in, w_in, kh, kw, stride, padding);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2328,27 +2079,22 @@ fn conv2d_impl(
                     let ih = (oh * stride + ki) as isize - padding as isize;
                     for ow in 0..w_out {
                         let iw = (ow * stride + kj) as isize - padding as isize;
-                        let val =
-                            if ih >= 0 && (ih as usize) < h_in && iw >= 0 && (iw as usize) < w_in {
-                                unsafe {
-                                    *(input_ptr as *const f32)
-                                        .add(ic * h_in * w_in + ih as usize * w_in + iw as usize)
-                                }
-                            } else {
-                                0.0
-                            };
+                        let val = if ih >= 0 && (ih as usize) < h_in && iw >= 0 && (iw as usize) < w_in {
+                            unsafe {
+                                *(input_ptr as *const f32).add(ic * h_in * w_in + ih as usize * w_in + iw as usize)
+                            }
+                        } else {
+                            0.0
+                        };
                         unsafe {
-                            *(cols_ptr as *mut f32).add(col_row * spatial_out + oh * w_out + ow) =
-                                val;
+                            *(cols_ptr as *mut f32).add(col_row * spatial_out + oh * w_out + ow) = val;
                         }
                     }
                 }
             }
         });
     } else {
-        im2col(
-            input, cols, c_in, h_in, w_in, kh, kw, stride, padding, h_out, w_out,
-        );
+        im2col(input, cols, c_in, h_in, w_in, kh, kw, stride, padding, h_out, w_out);
     }
 
     // GEMM: weight[c_out, patch_size] @ cols[patch_size, spatial_out] = out[c_out, spatial_out]
@@ -2463,15 +2209,7 @@ fn conv2d_impl(
 // Normalization
 // ========================================================================
 
-pub fn layer_norm(
-    out: &mut [f32],
-    x: &[f32],
-    weight: &[f32],
-    bias: &[f32],
-    seq_len: usize,
-    hidden: usize,
-    eps: f32,
-) {
+pub fn layer_norm(out: &mut [f32], x: &[f32], weight: &[f32], bias: &[f32], seq_len: usize, hidden: usize, eps: f32) {
     let _pg = ProfileGuard::new(&PROF.layer_norm);
     for s in 0..seq_len {
         let x_row = &x[s * hidden..(s + 1) * hidden];
@@ -2515,14 +2253,7 @@ pub fn layer_norm(
     }
 }
 
-pub fn rms_norm(
-    out: &mut [f32],
-    x: &[f32],
-    weight: &[f32],
-    seq_len: usize,
-    hidden: usize,
-    eps: f32,
-) {
+pub fn rms_norm(out: &mut [f32], x: &[f32], weight: &[f32], seq_len: usize, hidden: usize, eps: f32) {
     let _pg = ProfileGuard::new(&PROF.rms_norm);
     for s in 0..seq_len {
         let x_row = &x[s * hidden..(s + 1) * hidden];
@@ -2555,14 +2286,7 @@ pub fn rms_norm(
     }
 }
 
-pub fn rms_norm_per_head(
-    x: &mut [f32],
-    weight: &[f32],
-    seq_len: usize,
-    n_heads: usize,
-    head_dim: usize,
-    eps: f32,
-) {
+pub fn rms_norm_per_head(x: &mut [f32], weight: &[f32], seq_len: usize, n_heads: usize, head_dim: usize, eps: f32) {
     let hidden = n_heads * head_dim;
     for s in 0..seq_len {
         for h in 0..n_heads {
@@ -2616,9 +2340,7 @@ pub fn gelu(x: &mut [f32], n: usize) {
             if start >= end {
                 return;
             }
-            let x_local = unsafe {
-                std::slice::from_raw_parts_mut((x_ptr as *mut f32).add(start), end - start)
-            };
+            let x_local = unsafe { std::slice::from_raw_parts_mut((x_ptr as *mut f32).add(start), end - start) };
             #[cfg(target_arch = "aarch64")]
             unsafe {
                 neon::gelu_inplace(x_local, end - start);
@@ -2680,12 +2402,8 @@ pub fn swiglu_separate_inplace(gate: &mut [f32], up: &[f32], seq_len: usize, int
             if start >= end {
                 return;
             }
-            let g = unsafe {
-                std::slice::from_raw_parts_mut((gate_ptr as *mut f32).add(start), end - start)
-            };
-            let u = unsafe {
-                std::slice::from_raw_parts((up_ptr as *const f32).add(start), end - start)
-            };
+            let g = unsafe { std::slice::from_raw_parts_mut((gate_ptr as *mut f32).add(start), end - start) };
+            let u = unsafe { std::slice::from_raw_parts((up_ptr as *const f32).add(start), end - start) };
             for j in 0..(end - start) {
                 let gv = g[j];
                 g[j] = gv / (1.0 + (-gv).exp()) * u[j];
@@ -2776,8 +2494,7 @@ fn bidirectional_attention_heads(
             for i in ws..we {
                 let q_off = i * hidden + h * head_dim;
                 let q_row = &q[q_off..q_off + head_dim];
-                let o_row =
-                    &mut out[i * hidden + h * head_dim..i * hidden + h * head_dim + head_dim];
+                let o_row = &mut out[i * hidden + h * head_dim..i * hidden + h * head_dim + head_dim];
 
                 let mut max_score = -1e30f32;
                 let mut sum_exp = 0.0f32;
@@ -2842,13 +2559,11 @@ pub fn bidirectional_attention(
         // independent softmax over the same K/V, so per-head results are
         // bit-identical regardless of which core runs which head.
         parallel_for_dynamic(n_heads, |h| {
-            let out_local =
-                unsafe { std::slice::from_raw_parts_mut(out_ptr as *mut f32, seq * hidden) };
+            let out_local = unsafe { std::slice::from_raw_parts_mut(out_ptr as *mut f32, seq * hidden) };
             let q_local = unsafe { std::slice::from_raw_parts(q_ptr as *const f32, seq * hidden) };
             let k_local = unsafe { std::slice::from_raw_parts(k_ptr as *const f32, seq * hidden) };
             let v_local = unsafe { std::slice::from_raw_parts(v_ptr as *const f32, seq * hidden) };
-            let ws_local =
-                unsafe { std::slice::from_raw_parts(ws_ptr as *const i32, n_windows + 1) };
+            let ws_local = unsafe { std::slice::from_raw_parts(ws_ptr as *const i32, n_windows + 1) };
 
             bidirectional_attention_heads(
                 out_local,
@@ -2867,19 +2582,7 @@ pub fn bidirectional_attention(
         return;
     }
 
-    bidirectional_attention_heads(
-        out,
-        q,
-        k,
-        v,
-        n_heads,
-        head_dim,
-        scale,
-        window_starts,
-        n_windows,
-        0,
-        n_heads,
-    );
+    bidirectional_attention_heads(out, q, k, v, n_heads, head_dim, scale, window_starts, n_windows, 0, n_heads);
 }
 
 /// Two-pass causal attention using BLAS sgemm with head-contiguous KV cache.
@@ -3284,10 +2987,8 @@ pub fn causal_attention(
                 None => return,
             };
 
-            let out_local =
-                unsafe { std::slice::from_raw_parts_mut(out_ptr as *mut f32, seq_q * q_hidden) };
-            let q_local =
-                unsafe { std::slice::from_raw_parts(q_ptr as *const f32, seq_q * q_hidden) };
+            let out_local = unsafe { std::slice::from_raw_parts_mut(out_ptr as *mut f32, seq_q * q_hidden) };
+            let q_local = unsafe { std::slice::from_raw_parts(q_ptr as *const f32, seq_q * q_hidden) };
 
             causal_attention_heads(
                 out_local,
@@ -3346,14 +3047,7 @@ pub fn sinusoidal_pe(pe: &mut [f32], n_pos: usize, d_model: usize) {
     }
 }
 
-pub fn apply_rope_neox(
-    x: &mut [f32],
-    cos_vals: &[f32],
-    sin_vals: &[f32],
-    seq: usize,
-    n_heads: usize,
-    head_dim: usize,
-) {
+pub fn apply_rope_neox(x: &mut [f32], cos_vals: &[f32], sin_vals: &[f32], seq: usize, n_heads: usize, head_dim: usize) {
     let _pg = ProfileGuard::new(&PROF.rope);
     let half = head_dim / 2;
     let hidden = n_heads * head_dim;
@@ -3489,11 +3183,7 @@ pub fn quantize_into(dst: &mut [i8], x: &[f32]) -> f32 {
 /// # Safety
 /// `w_bf16` must point to at least `out_dim * in_dim` readable `u16` (BF16)
 /// values that stay valid for the duration of the call.
-pub unsafe fn quantize_bf16_weights_to_int8(
-    w_bf16: *const u16,
-    out_dim: usize,
-    in_dim: usize,
-) -> (Vec<i8>, Vec<f32>) {
+pub unsafe fn quantize_bf16_weights_to_int8(w_bf16: *const u16, out_dim: usize, in_dim: usize) -> (Vec<i8>, Vec<f32>) {
     #[cfg(target_arch = "aarch64")]
     unsafe {
         neon::quantize_bf16_to_int8(w_bf16, out_dim, in_dim)
@@ -3528,28 +3218,14 @@ pub unsafe fn quantize_bf16_weights_to_int8(
 }
 
 /// INT8 threaded argmax: find argmax(x @ W.T) using INT8 quantized weights.
-pub fn argmax_matvec_int8(
-    x: &[f32],
-    w_int8: &[i8],
-    w_scales: &[f32],
-    in_dim: usize,
-    out_dim: usize,
-) -> usize {
+pub fn argmax_matvec_int8(x: &[f32], w_int8: &[i8], w_scales: &[f32], in_dim: usize, out_dim: usize) -> usize {
     with_quantized_int8(x, |x_int8, x_scale| {
         let n_threads = get_num_threads();
         #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
         {
             if n_threads <= 1 {
                 let (best, _) = unsafe {
-                    int8_argmax_range(
-                        x_int8.as_ptr(),
-                        x_scale,
-                        w_int8.as_ptr(),
-                        w_scales,
-                        in_dim,
-                        0,
-                        out_dim,
-                    )
+                    int8_argmax_range(x_int8.as_ptr(), x_scale, w_int8.as_ptr(), w_scales, in_dim, 0, out_dim)
                 };
                 return best;
             }
@@ -3575,8 +3251,7 @@ pub fn argmax_matvec_int8(
                     return;
                 }
 
-                let w_scales_local =
-                    unsafe { std::slice::from_raw_parts(w_scales_ptr as *const f32, out_dim) };
+                let w_scales_local = unsafe { std::slice::from_raw_parts(w_scales_ptr as *const f32, out_dim) };
                 let (best, best_val) = unsafe {
                     int8_argmax_range(
                         x_int8_ptr as *const i8,
@@ -3648,13 +3323,9 @@ unsafe fn argmax_int8_batched_simd(
     end: usize,
 ) {
     #[cfg(target_arch = "aarch64")]
-    neon::argmax_int8_batched(
-        b, best, best_val, x_int8, x_scale, w_int8, w_scales, in_dim, start, end,
-    );
+    neon::argmax_int8_batched(b, best, best_val, x_int8, x_scale, w_int8, w_scales, in_dim, start, end);
     #[cfg(target_arch = "x86_64")]
-    avx::argmax_int8_batched(
-        b, best, best_val, x_int8, x_scale, w_int8, w_scales, in_dim, start, end,
-    );
+    avx::argmax_int8_batched(b, best, best_val, x_int8, x_scale, w_int8, w_scales, in_dim, start, end);
 }
 
 /// Batched INT8 lm_head argmax (R12-E2): stream the (~155 MB) lm_head weights
@@ -3712,17 +3383,14 @@ pub fn argmax_matvec_int8_batched(
             let start = tid * chunk;
             let end = (start + chunk).min(out_dim);
             let base = tid * b;
-            let best =
-                unsafe { std::slice::from_raw_parts_mut((bi_ptr as *mut usize).add(base), b) };
-            let best_val =
-                unsafe { std::slice::from_raw_parts_mut((bv_ptr as *mut f32).add(base), b) };
+            let best = unsafe { std::slice::from_raw_parts_mut((bi_ptr as *mut usize).add(base), b) };
+            let best_val = unsafe { std::slice::from_raw_parts_mut((bv_ptr as *mut f32).add(base), b) };
             if start >= end {
                 return;
             }
             let x_ptrs = unsafe { std::slice::from_raw_parts(x_ptrs_addr as *const *const i8, b) };
             let x_scales = unsafe { std::slice::from_raw_parts(x_scales_addr as *const f32, b) };
-            let w_scales =
-                unsafe { std::slice::from_raw_parts(w_scales_ptr as *const f32, out_dim) };
+            let w_scales = unsafe { std::slice::from_raw_parts(w_scales_ptr as *const f32, out_dim) };
             unsafe {
                 argmax_int8_batched_simd(
                     b,
@@ -3879,10 +3547,7 @@ mod tests {
             Rng(seed)
         }
         fn next_u32(&mut self) -> u32 {
-            self.0 = self
-                .0
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             (self.0 >> 32) as u32
         }
         fn i8(&mut self) -> i8 {
@@ -3895,9 +3560,7 @@ mod tests {
 
     fn gen_w(rng: &mut Rng, rows: usize, in_dim: usize) -> (Vec<i8>, Vec<f32>) {
         let w: Vec<i8> = (0..rows * in_dim).map(|_| rng.i8()).collect();
-        let s: Vec<f32> = (0..rows)
-            .map(|_| 0.001 + rng.f32_pm1().abs() * 0.02)
-            .collect();
+        let s: Vec<f32> = (0..rows).map(|_| 0.001 + rng.f32_pm1().abs() * 0.02).collect();
         (w, s)
     }
 
@@ -3923,23 +3586,18 @@ mod tests {
                     for use_bias in [false, true] {
                         let (w, ws) = gen_w(&mut rng, out_dim, in_dim);
                         let (xi, xs) = gen_inputs(&mut rng, b, in_dim);
-                        let bias: Vec<Vec<f32>> = (0..b)
-                            .map(|_| (0..out_dim).map(|_| rng.f32_pm1()).collect())
-                            .collect();
+                        let bias: Vec<Vec<f32>> =
+                            (0..b).map(|_| (0..out_dim).map(|_| rng.f32_pm1()).collect()).collect();
                         // partial range: middle slice + full
-                        for &(s, e) in
-                            &[(0usize, out_dim), (0, out_dim / 2), (out_dim / 3, out_dim)]
-                        {
+                        for &(s, e) in &[(0usize, out_dim), (0, out_dim / 2), (out_dim / 3, out_dim)] {
                             if s >= e {
                                 continue;
                             }
                             let xi_ptrs: Vec<*const i8> = xi.iter().map(|v| v.as_ptr()).collect();
-                            let bias_ptrs: Vec<*const f32> =
-                                bias.iter().map(|v| v.as_ptr()).collect();
+                            let bias_ptrs: Vec<*const f32> = bias.iter().map(|v| v.as_ptr()).collect();
 
                             // Reference: single-session int8_matvec_range per session.
-                            let mut y_ref: Vec<Vec<f32>> =
-                                (0..b).map(|_| vec![0.0f32; out_dim]).collect();
+                            let mut y_ref: Vec<Vec<f32>> = (0..b).map(|_| vec![0.0f32; out_dim]).collect();
                             for j in 0..b {
                                 unsafe {
                                     int8_matvec_range(
@@ -3948,11 +3606,7 @@ mod tests {
                                         xs[j],
                                         w.as_ptr(),
                                         ws.as_ptr(),
-                                        if use_bias {
-                                            Some(bias[j].as_ptr())
-                                        } else {
-                                            None
-                                        },
+                                        if use_bias { Some(bias[j].as_ptr()) } else { None },
                                         in_dim,
                                         s,
                                         e,
@@ -3960,10 +3614,8 @@ mod tests {
                                 }
                             }
                             // Batched.
-                            let mut y_bat: Vec<Vec<f32>> =
-                                (0..b).map(|_| vec![0.0f32; out_dim]).collect();
-                            let y_ptrs: Vec<*mut f32> =
-                                y_bat.iter_mut().map(|v| v.as_mut_ptr()).collect();
+                            let mut y_bat: Vec<Vec<f32>> = (0..b).map(|_| vec![0.0f32; out_dim]).collect();
+                            let y_ptrs: Vec<*mut f32> = y_bat.iter_mut().map(|v| v.as_mut_ptr()).collect();
                             unsafe {
                                 int8_matvec_range_batched(
                                     b,
@@ -4003,8 +3655,7 @@ mod tests {
                             continue;
                         }
                         let xi_ptrs: Vec<*const i8> = xi.iter().map(|v| v.as_ptr()).collect();
-                        let mut ff_ref: Vec<Vec<f32>> =
-                            (0..b).map(|_| vec![0.0f32; n_rows]).collect();
+                        let mut ff_ref: Vec<Vec<f32>> = (0..b).map(|_| vec![0.0f32; n_rows]).collect();
                         let mut scratch = vec![0.0f32; 2 * n_rows];
                         for j in 0..b {
                             unsafe {
@@ -4021,10 +3672,8 @@ mod tests {
                                 );
                             }
                         }
-                        let mut ff_bat: Vec<Vec<f32>> =
-                            (0..b).map(|_| vec![0.0f32; n_rows]).collect();
-                        let ff_ptrs: Vec<*mut f32> =
-                            ff_bat.iter_mut().map(|v| v.as_mut_ptr()).collect();
+                        let mut ff_bat: Vec<Vec<f32>> = (0..b).map(|_| vec![0.0f32; n_rows]).collect();
+                        let ff_ptrs: Vec<*mut f32> = ff_bat.iter_mut().map(|v| v.as_mut_ptr()).collect();
                         unsafe {
                             int8_swiglu_range_batched(
                                 b,
@@ -4039,8 +3688,10 @@ mod tests {
                             );
                         }
                         for j in 0..b {
-                            assert_eq!(ff_ref[j], ff_bat[j],
-                                "swiglu mismatch in_dim={in_dim} n_rows={n_rows} b={b} range={s}..{e} sess={j}");
+                            assert_eq!(
+                                ff_ref[j], ff_bat[j],
+                                "swiglu mismatch in_dim={in_dim} n_rows={n_rows} b={b} range={s}..{e} sess={j}"
+                            );
                         }
                     }
                 }
@@ -4060,12 +3711,9 @@ mod tests {
                 let (wv, wvs) = gen_w(&mut rng, kv_dim, in_dim);
                 let (xi, xs) = gen_inputs(&mut rng, b, in_dim);
                 let xi_ptrs: Vec<*const i8> = xi.iter().map(|v| v.as_ptr()).collect();
-                for &(s, e) in &[
-                    (0usize, total),
-                    (0, q_dim + 3),
-                    (q_dim, k_end(q_dim, kv_dim) + 2),
-                    (k_end(q_dim, kv_dim), total),
-                ] {
+                for &(s, e) in
+                    &[(0usize, total), (0, q_dim + 3), (q_dim, k_end(q_dim, kv_dim) + 2), (k_end(q_dim, kv_dim), total)]
+                {
                     if s >= e {
                         continue;
                     }
@@ -4161,15 +3809,7 @@ mod tests {
                     let mut ref_best = vec![0usize; b];
                     for j in 0..b {
                         let (best, _) = unsafe {
-                            simd::argmax_int8_range(
-                                xi[j].as_ptr(),
-                                xs[j],
-                                w.as_ptr(),
-                                &ws,
-                                in_dim,
-                                0,
-                                out_dim,
-                            )
+                            simd::argmax_int8_range(xi[j].as_ptr(), xs[j], w.as_ptr(), &ws, in_dim, 0, out_dim)
                         };
                         ref_best[j] = best;
                     }
@@ -4191,10 +3831,7 @@ mod tests {
                             out_dim,
                         );
                     }
-                    assert_eq!(
-                        ref_best, best,
-                        "argmax core mismatch in_dim={in_dim} out_dim={out_dim} b={b}"
-                    );
+                    assert_eq!(ref_best, best, "argmax core mismatch in_dim={in_dim} out_dim={out_dim} b={b}");
                 }
             }
         }
@@ -4211,19 +3848,11 @@ mod tests {
         for &out_dim in &[128usize, 1000, 4096] {
             for &b in &[1usize, 2, 4] {
                 let (w, ws) = gen_w(&mut rng, out_dim, in_dim);
-                let xs_f: Vec<Vec<f32>> = (0..b)
-                    .map(|_| (0..in_dim).map(|_| rng.f32_pm1() * 3.0).collect())
-                    .collect();
-                let refs: Vec<usize> = xs_f
-                    .iter()
-                    .map(|x| argmax_matvec_int8(x, &w, &ws, in_dim, out_dim))
-                    .collect();
+                let xs_f: Vec<Vec<f32>> = (0..b).map(|_| (0..in_dim).map(|_| rng.f32_pm1() * 3.0).collect()).collect();
+                let refs: Vec<usize> = xs_f.iter().map(|x| argmax_matvec_int8(x, &w, &ws, in_dim, out_dim)).collect();
                 let xs_ref: Vec<&[f32]> = xs_f.iter().map(|v| v.as_slice()).collect();
                 let bat = argmax_matvec_int8_batched(&xs_ref, &w, &ws, in_dim, out_dim);
-                assert_eq!(
-                    refs, bat,
-                    "argmax toplevel mismatch out_dim={out_dim} b={b}"
-                );
+                assert_eq!(refs, bat, "argmax toplevel mismatch out_dim={out_dim} b={b}");
             }
         }
         set_threads(saved);
@@ -4294,8 +3923,10 @@ mod tests {
                         if use_bias {
                             want += bias[o];
                         }
-                        assert_eq!(y[o], want,
-                            "matvec vs scalar ref mismatch in_dim={in_dim} out_dim={out_dim} row={o} bias={use_bias}");
+                        assert_eq!(
+                            y[o], want,
+                            "matvec vs scalar ref mismatch in_dim={in_dim} out_dim={out_dim} row={o} bias={use_bias}"
+                        );
                     }
                 }
             }
@@ -4313,9 +3944,8 @@ mod tests {
                 let (w, ws) = gen_w(&mut rng, out_dim, in_dim);
                 let x: Vec<f32> = (0..in_dim).map(|_| rng.f32_pm1() * 3.0).collect();
                 let (xi, xs) = quantize_f32_to_int8(&x);
-                let (best, best_val) = unsafe {
-                    simd::argmax_int8_range(xi.as_ptr(), xs, w.as_ptr(), &ws, in_dim, 0, out_dim)
-                };
+                let (best, best_val) =
+                    unsafe { simd::argmax_int8_range(xi.as_ptr(), xs, w.as_ptr(), &ws, in_dim, 0, out_dim) };
                 let mut want_best = 0usize;
                 let mut want_val = -1e30f32;
                 for o in 0..out_dim {
@@ -4326,14 +3956,8 @@ mod tests {
                         want_best = o;
                     }
                 }
-                assert_eq!(
-                    best, want_best,
-                    "argmax index mismatch in_dim={in_dim} out_dim={out_dim}"
-                );
-                assert_eq!(
-                    best_val, want_val,
-                    "argmax value mismatch in_dim={in_dim} out_dim={out_dim}"
-                );
+                assert_eq!(best, want_best, "argmax index mismatch in_dim={in_dim} out_dim={out_dim}");
+                assert_eq!(best_val, want_val, "argmax value mismatch in_dim={in_dim} out_dim={out_dim}");
             }
         }
     }
@@ -4379,19 +4003,12 @@ mod tests {
             for &out_dim in &[1usize, 3, 16] {
                 // Random bf16 bit patterns from a plausible weight range
                 // (include exact half-way quantization cases via tiny values).
-                let w: Vec<u16> = (0..out_dim * in_dim)
-                    .map(|_| ((rng.f32_pm1() * 0.05).to_bits() >> 16) as u16)
-                    .collect();
+                let w: Vec<u16> =
+                    (0..out_dim * in_dim).map(|_| ((rng.f32_pm1() * 0.05).to_bits() >> 16) as u16).collect();
                 let (q, sc) = unsafe { quantize_bf16_weights_to_int8(w.as_ptr(), out_dim, in_dim) };
                 let (want_q, want_sc) = ref_quantize_bf16(&w, out_dim, in_dim);
-                assert_eq!(
-                    sc, want_sc,
-                    "quantize scales mismatch in_dim={in_dim} out_dim={out_dim}"
-                );
-                assert_eq!(
-                    q, want_q,
-                    "quantize data mismatch in_dim={in_dim} out_dim={out_dim}"
-                );
+                assert_eq!(sc, want_sc, "quantize scales mismatch in_dim={in_dim} out_dim={out_dim}");
+                assert_eq!(q, want_q, "quantize data mismatch in_dim={in_dim} out_dim={out_dim}");
             }
         }
     }
@@ -4408,11 +4025,7 @@ mod tests {
     // single-threaded and pool-parallel dispatch paths.
     // ====================================================================
 
-    #[cfg(all(
-        feature = "int8-prefill",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
     fn prefill_matvec_check(seq_len: usize, in_dim: usize, out_dim: usize, seed: u64) {
         let mut rng = Rng::new(seed);
         let (w, ws) = gen_w(&mut rng, out_dim, in_dim);
@@ -4442,21 +4055,9 @@ mod tests {
         // Prefill GEMM.
         let mut y = vec![0.0f32; seq_len * out_dim];
         unsafe {
-            int8_prefill_matvec(
-                &mut y,
-                &xq,
-                &xs,
-                w.as_ptr(),
-                ws.as_ptr(),
-                in_dim,
-                out_dim,
-                seq_len,
-            );
+            int8_prefill_matvec(&mut y, &xq, &xs, w.as_ptr(), ws.as_ptr(), in_dim, out_dim, seq_len);
         }
-        assert_eq!(
-            y, y_ref,
-            "prefill matvec mismatch seq={seq_len} in={in_dim} out={out_dim}"
-        );
+        assert_eq!(y, y_ref, "prefill matvec mismatch seq={seq_len} in={in_dim} out={out_dim}");
     }
 
     /// The pool-parallel dispatch just calls `matvec_int8_prefill_rows` over a
@@ -4464,11 +4065,7 @@ mod tests {
     /// the same `Y` as the full-range pass (so the dynamic 64-row split is exact).
     /// Runs on the caller thread only — the global pool is a singleton unsafe to
     /// dispatch concurrently from multiple test threads, so tests never invoke it.
-    #[cfg(all(
-        feature = "int8-prefill",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
     fn prefill_matvec_split_check(seq_len: usize, in_dim: usize, out_dim: usize, seed: u64) {
         let mut rng = Rng::new(seed);
         let (w, ws) = gen_w(&mut rng, out_dim, in_dim);
@@ -4510,17 +4107,10 @@ mod tests {
                 start = end;
             }
         }
-        assert_eq!(
-            y_full, y_split,
-            "prefill matvec split seq={seq_len} in={in_dim} out={out_dim}"
-        );
+        assert_eq!(y_full, y_split, "prefill matvec split seq={seq_len} in={in_dim} out={out_dim}");
     }
 
-    #[cfg(all(
-        feature = "int8-prefill",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
     #[test]
     fn int8_prefill_matvec_matches_single() {
         // Serial full-range exactness vs int8_matvec_range, across odd sizes.
@@ -4534,21 +4124,14 @@ mod tests {
             }
         }
         // Row-split equivalence (models the dynamic 64-row pool partition).
-        for &(seq_len, in_dim, out_dim) in &[
-            (64usize, 1024usize, 2048usize),
-            (48, 1024, 1024),
-            (96, 3072, 1024),
-            (5, 64, 200),
-        ] {
+        for &(seq_len, in_dim, out_dim) in
+            &[(64usize, 1024usize, 2048usize), (48, 1024, 1024), (96, 3072, 1024), (5, 64, 200)]
+        {
             prefill_matvec_split_check(seq_len, in_dim, out_dim, 0xD00D_5EED ^ (seq_len as u64));
         }
     }
 
-    #[cfg(all(
-        feature = "int8-prefill",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
     fn prefill_swiglu_check(seq_len: usize, in_dim: usize, n_rows: usize, seed: u64) {
         let mut rng = Rng::new(seed);
         // gate_up: 2*n_rows interleaved gate/up weight rows.
@@ -4577,29 +4160,13 @@ mod tests {
         }
         let mut ff = vec![0.0f32; seq_len * n_rows];
         unsafe {
-            int8_prefill_swiglu(
-                &mut ff,
-                &xq,
-                &xs,
-                w.as_ptr(),
-                ws.as_ptr(),
-                in_dim,
-                n_rows,
-                seq_len,
-            );
+            int8_prefill_swiglu(&mut ff, &xq, &xs, w.as_ptr(), ws.as_ptr(), in_dim, n_rows, seq_len);
         }
-        assert_eq!(
-            ff, ff_ref,
-            "prefill swiglu mismatch seq={seq_len} in={in_dim} n_rows={n_rows}"
-        );
+        assert_eq!(ff, ff_ref, "prefill swiglu mismatch seq={seq_len} in={in_dim} n_rows={n_rows}");
     }
 
     /// Row-split equivalence for the fused swiglu prefill (256-row pool blocks).
-    #[cfg(all(
-        feature = "int8-prefill",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
     fn prefill_swiglu_split_check(seq_len: usize, in_dim: usize, n_rows: usize, seed: u64) {
         let mut rng = Rng::new(seed);
         let (w, ws) = gen_w(&mut rng, 2 * n_rows, in_dim);
@@ -4641,17 +4208,10 @@ mod tests {
                 start = end;
             }
         }
-        assert_eq!(
-            ff_full, ff_split,
-            "prefill swiglu split seq={seq_len} in={in_dim} n_rows={n_rows}"
-        );
+        assert_eq!(ff_full, ff_split, "prefill swiglu split seq={seq_len} in={in_dim} n_rows={n_rows}");
     }
 
-    #[cfg(all(
-        feature = "int8-prefill",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
     #[test]
     fn int8_prefill_swiglu_matches_single() {
         let mut seed = 0x5019_D00D_u64;
@@ -4663,11 +4223,7 @@ mod tests {
                 }
             }
         }
-        for &(seq_len, in_dim, n_rows) in &[
-            (64usize, 1024usize, 3072usize),
-            (48, 1024, 512),
-            (5, 64, 300),
-        ] {
+        for &(seq_len, in_dim, n_rows) in &[(64usize, 1024usize, 3072usize), (48, 1024, 512), (5, 64, 300)] {
             prefill_swiglu_split_check(seq_len, in_dim, n_rows, 0xBEEF_F00D ^ (seq_len as u64));
         }
     }
@@ -4685,20 +4241,12 @@ mod tests {
     // and across both the single-threaded and pool-row-split dispatch paths.
     // ====================================================================
 
-    #[cfg(all(
-        feature = "int8-encoder",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-encoder", not(feature = "blas"), target_arch = "aarch64"))]
     fn gen_bias(rng: &mut Rng, out_dim: usize) -> Vec<f32> {
         (0..out_dim).map(|_| rng.f32_pm1() * 0.5).collect()
     }
 
-    #[cfg(all(
-        feature = "int8-encoder",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-encoder", not(feature = "blas"), target_arch = "aarch64"))]
     fn encoder_matvec_check(
         seq_len: usize,
         in_dim: usize,
@@ -4728,16 +4276,7 @@ mod tests {
         for p in 0..seq_len {
             let mut row = vec![0.0f32; out_dim];
             unsafe {
-                neon::matvec_int8(
-                    &mut row,
-                    xi[p].as_ptr(),
-                    xs[p],
-                    w.as_ptr(),
-                    &ws,
-                    bias_opt,
-                    in_dim,
-                    out_dim,
-                );
+                neon::matvec_int8(&mut row, xi[p].as_ptr(), xs[p], w.as_ptr(), &ws, bias_opt, in_dim, out_dim);
             }
             for o in 0..out_dim {
                 if accumulate {
@@ -4772,18 +4311,8 @@ mod tests {
     /// Pool-parallel dispatch calls `matvec_int8_encoder_rows` over a partition
     /// of the `out_dim` columns; assert any disjoint split writes the same `Y`
     /// as the full-range pass (models the dynamic 64-row pool partition).
-    #[cfg(all(
-        feature = "int8-encoder",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
-    fn encoder_matvec_split_check(
-        seq_len: usize,
-        in_dim: usize,
-        out_dim: usize,
-        accumulate: bool,
-        seed: u64,
-    ) {
+    #[cfg(all(feature = "int8-encoder", not(feature = "blas"), target_arch = "aarch64"))]
+    fn encoder_matvec_split_check(seq_len: usize, in_dim: usize, out_dim: usize, accumulate: bool, seed: u64) {
         let mut rng = Rng::new(seed);
         let (w, ws) = gen_w(&mut rng, out_dim, in_dim);
         let (xi, xs) = gen_inputs(&mut rng, seq_len, in_dim);
@@ -4833,17 +4362,10 @@ mod tests {
                 start = end;
             }
         }
-        assert_eq!(
-            y_full, y_split,
-            "encoder matvec split seq={seq_len} in={in_dim} out={out_dim} acc={accumulate}"
-        );
+        assert_eq!(y_full, y_split, "encoder matvec split seq={seq_len} in={in_dim} out={out_dim} acc={accumulate}");
     }
 
-    #[cfg(all(
-        feature = "int8-encoder",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-encoder", not(feature = "blas"), target_arch = "aarch64"))]
     #[test]
     fn int8_encoder_matvec_matches_single() {
         // Serial full-range exactness vs matvec_int8, across odd sizes, bias
@@ -4855,9 +4377,7 @@ mod tests {
                     for &with_bias in &[false, true] {
                         for &accumulate in &[false, true] {
                             seed = seed.wrapping_add(0x9E37_79B9);
-                            encoder_matvec_check(
-                                seq_len, in_dim, out_dim, with_bias, accumulate, seed,
-                            );
+                            encoder_matvec_check(seq_len, in_dim, out_dim, with_bias, accumulate, seed);
                         }
                     }
                 }
@@ -4875,13 +4395,7 @@ mod tests {
             (5, 64, 200),
         ] {
             for &accumulate in &[false, true] {
-                encoder_matvec_split_check(
-                    seq_len,
-                    in_dim,
-                    out_dim,
-                    accumulate,
-                    0xC0DE_5EED ^ (seq_len as u64),
-                );
+                encoder_matvec_split_check(seq_len, in_dim, out_dim, accumulate, 0xC0DE_5EED ^ (seq_len as u64));
             }
         }
     }

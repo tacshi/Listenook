@@ -171,11 +171,7 @@ pub fn resample(samples: &[f32], from_rate: i32, to_rate: i32) -> Vec<f32> {
             let x = d * cutoff;
 
             // Sinc
-            let s = if x.abs() < 1e-9 {
-                1.0
-            } else {
-                (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x)
-            };
+            let s = if x.abs() < 1e-9 { 1.0 } else { (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x) };
 
             // Kaiser window
             let npos = d / sinc_half as f64;
@@ -206,22 +202,14 @@ pub fn resample(samples: &[f32], from_rate: i32, to_rate: i32) -> Vec<f32> {
     // Fixed-size chunks handed out from a shared stack let P-cores take more.
     const PAR_MIN_OUT: usize = 1 << 15;
     const CHUNK: usize = 4096;
-    let n_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(16);
+    let n_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(16);
     if new_n < PAR_MIN_OUT || n_threads <= 1 {
         for (i, v) in resampled.iter_mut().enumerate() {
             *v = output_at(i);
         }
     } else {
-        let work: std::sync::Mutex<Vec<(usize, &mut [f32])>> = std::sync::Mutex::new(
-            resampled
-                .chunks_mut(CHUNK)
-                .enumerate()
-                .map(|(c, s)| (c * CHUNK, s))
-                .collect(),
-        );
+        let work: std::sync::Mutex<Vec<(usize, &mut [f32])>> =
+            std::sync::Mutex::new(resampled.chunks_mut(CHUNK).enumerate().map(|(c, s)| (c * CHUNK, s)).collect());
         std::thread::scope(|scope| {
             for _ in 0..n_threads {
                 scope.spawn(|| loop {
@@ -351,13 +339,7 @@ pub fn mel_spectrogram(samples: &[f32]) -> Option<(Vec<f32>, usize)> {
     let padded_len = n_samples + 2 * pad_len;
 
     MEL_SCRATCH.with(|cell| {
-        let MelScratch {
-            padded,
-            windowed_all,
-            re,
-            im,
-            power,
-        } = &mut *cell.borrow_mut();
+        let MelScratch { padded, windowed_all, re, im, power } = &mut *cell.borrow_mut();
 
         padded.resize(padded_len, 0.0);
 
@@ -386,8 +368,7 @@ pub fn mel_spectrogram(samples: &[f32]) -> Option<(Vec<f32>, usize)> {
         let window = HANN_WINDOW.get_or_init(|| {
             let mut w = vec![0.0f32; WINDOW_SIZE];
             for (i, w_val) in w.iter_mut().enumerate().take(WINDOW_SIZE) {
-                *w_val = 0.5
-                    * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / WINDOW_SIZE as f32).cos());
+                *w_val = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / WINDOW_SIZE as f32).cos());
             }
             w
         });
@@ -505,9 +486,7 @@ fn compact_silence_with_params(
     // of a full O(n log n) sort).
     let p25 = ((n_win - 1) as f32 * 0.25) as usize;
     let mut sorted = smooth_vals.clone();
-    sorted.select_nth_unstable_by(p25, |a, b| {
-        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted.select_nth_unstable_by(p25, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let noise_floor = sorted[p25];
     let thresh = (noise_floor * 1.8).clamp(base_thresh, max_thresh);
 

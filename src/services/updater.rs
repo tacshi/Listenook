@@ -3,7 +3,7 @@
 //! verified before the app is replaced.
 //!
 //! Only a packaged app updates itself: `nsh package` puts the updater's
-//! configuration beside the executable, and a development run has none.
+//! configuration in the package's assets, and a development run has none.
 //!
 //! On phones and tablets the store updates the app, and nothing here runs.
 
@@ -44,7 +44,14 @@ mod desktop {
     use super::UpdateState;
 
     fn packaged() -> Option<(Config, Vec<u8>)> {
-        let bytes = std::fs::read(std::env::current_exe().ok()?.parent()?.join(CONFIG_ASSET)).ok()?;
+        // Where `nsh package` puts it: the package's `nsh/assets`, which a
+        // Mac's bundle keeps in its resources and the others beside the
+        // executable.
+        let executable = std::env::current_exe().ok()?;
+        let beside = executable.parent()?;
+        let resources =
+            if cfg!(target_os = "macos") { beside.parent()?.join("Resources/nsh") } else { beside.join("nsh") };
+        let bytes = std::fs::read(resources.join("assets").join(CONFIG_ASSET)).ok()?;
         Some((Config::parse(&bytes).ok()?, bytes))
     }
 

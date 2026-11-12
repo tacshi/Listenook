@@ -55,9 +55,7 @@ pub fn group_words_to_cues(words: &[AlignResult], audio_end_ms: u64) -> Vec<Cue>
         cur.push(word.clone());
 
         // Hard break: a silent gap to the next word wider than GAP_BREAK_MS.
-        let gap_break = words
-            .get(idx + 1)
-            .is_some_and(|next| next.start_ms - word.end_ms > GAP_BREAK_MS);
+        let gap_break = words.get(idx + 1).is_some_and(|next| next.start_ms - word.end_ms > GAP_BREAK_MS);
 
         if is_sentence_end(&word.text) || idx + 1 == words.len() || gap_break {
             groups.push(cur);
@@ -76,11 +74,7 @@ pub fn group_words_to_cues(words: &[AlignResult], audio_end_ms: u64) -> Vec<Cue>
 }
 
 pub fn segment_to_cue(seg: &TranscriptSegment) -> Cue {
-    Cue {
-        start_ms: seg.start_ms,
-        end_ms: seg.end_ms,
-        text: seg.text.trim().to_string(),
-    }
+    Cue { start_ms: seg.start_ms, end_ms: seg.end_ms, text: seg.text.trim().to_string() }
 }
 
 pub fn format_srt(cues: &[Cue]) -> String {
@@ -107,9 +101,7 @@ pub fn format_vtt_from_index(cues: &[Cue], start_index: u32, include_header: boo
 }
 
 pub fn cue_count(cues: &[Cue]) -> u32 {
-    cues.iter()
-        .filter(|cue| !cue.text.trim().is_empty())
-        .count() as u32
+    cues.iter().filter(|cue| !cue.text.trim().is_empty()).count() as u32
 }
 
 fn normalize_words(words: &[AlignResult]) -> Vec<Word> {
@@ -121,11 +113,7 @@ fn normalize_words(words: &[AlignResult]) -> Vec<Word> {
             if end_ms == start_ms {
                 end_ms = start_ms + TS_GRID_MS;
             }
-            Word {
-                text: word.text.clone(),
-                start_ms,
-                end_ms,
-            }
+            Word { text: word.text.clone(), start_ms, end_ms }
         })
         .collect()
 }
@@ -147,20 +135,12 @@ fn groups_to_cues(groups: Vec<Vec<Word>>, audio_end_ms: u64) -> Vec<Cue> {
             if end_ms.saturating_sub(start_ms) < MIN_DUR_MS {
                 end_ms = start_ms + MIN_DUR_MS;
             }
-            Cue {
-                start_ms,
-                end_ms,
-                text: join_words(&group),
-            }
+            Cue { start_ms, end_ms, text: join_words(&group) }
         })
         .collect();
 
     for idx in 0..cues.len() {
-        let clamp_to = if idx + 1 < cues.len() {
-            cues[idx + 1].start_ms
-        } else {
-            audio_end_ms
-        };
+        let clamp_to = if idx + 1 < cues.len() { cues[idx + 1].start_ms } else { audio_end_ms };
         cues[idx].end_ms = cues[idx].end_ms.min(clamp_to);
         if cues[idx].end_ms <= cues[idx].start_ms {
             cues[idx].end_ms = cues[idx].start_ms + TS_GRID_MS as u64;
@@ -199,8 +179,7 @@ fn join_words(words: &[Word]) -> String {
 /// the boundary (last char of `left`, first char of `right`) are both
 /// CJK-width chars.
 fn cjk_join(left: &str, right: &str) -> bool {
-    left.chars().next_back().is_some_and(is_cjk_width_char)
-        && right.chars().next().is_some_and(is_cjk_width_char)
+    left.chars().next_back().is_some_and(is_cjk_width_char) && right.chars().next().is_some_and(is_cjk_width_char)
 }
 
 pub fn is_cjk_width_char(ch: char) -> bool {
@@ -215,29 +194,19 @@ pub fn is_cjk_width_char(ch: char) -> bool {
 }
 
 fn text_width(text: &str) -> usize {
-    text.chars()
-        .map(|ch| if is_cjk_width_char(ch) { 2 } else { 1 })
-        .sum()
+    text.chars().map(|ch| if is_cjk_width_char(ch) { 2 } else { 1 }).sum()
 }
 
 fn sentence_tail(text: &str) -> Option<char> {
-    text.trim_end_matches(['"', '\'', '」', '』', '）', ')', ']', '》'])
-        .chars()
-        .next_back()
+    text.trim_end_matches(['"', '\'', '」', '』', '）', ')', ']', '》']).chars().next_back()
 }
 
 fn is_sentence_end(text: &str) -> bool {
-    matches!(
-        sentence_tail(text),
-        Some('.' | '!' | '?' | '…' | '。' | '！' | '？')
-    )
+    matches!(sentence_tail(text), Some('.' | '!' | '?' | '…' | '。' | '！' | '？'))
 }
 
 fn is_clause_end(text: &str) -> bool {
-    matches!(
-        sentence_tail(text),
-        Some(',' | ';' | ':' | '，' | '；' | '：' | '、')
-    )
+    matches!(sentence_tail(text), Some(',' | ';' | ':' | '，' | '；' | '：' | '、'))
 }
 
 fn format_cues(cues: &[Cue], vtt: bool, start_index: u32) -> String {

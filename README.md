@@ -1,13 +1,14 @@
-# Listenook / 聆页
+# Listenook
+
+English · [简体中文](README.zh-CN.md)
 
 Listenook is an app for listening to podcasts and local audio or video with
 synchronized transcripts. Read bilingual translations, replay sentences,
 practice English dictation, and organize recordings in a searchable library.
 
-The interface uses **聆页** in Chinese and **Listenook** in English. It runs on
-macOS, Windows, iPhone, iPad, and Android. Cloud transcription and AI features
-use your own API keys; local transcription runs on the device, on every
-platform.
+It runs on macOS, Windows, iPhone, iPad, and Android. Cloud transcription and
+AI features use your own API keys; local transcription runs on the device, on
+every platform.
 
 [Downloads](https://github.com/tacshi/Listenook/releases) ·
 [Privacy](PRIVACY.md)
