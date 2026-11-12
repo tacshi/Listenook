@@ -12,15 +12,28 @@ use crate::{
 };
 
 /// A local path as the `file:` URL a media element loads.
+/// A Windows path (`C:\Users\…`) becomes `file:///C:/Users/…`.
 pub(crate) fn file_url(path: &str) -> String {
+    let path = path.replace('\\', "/");
     let mut url = String::from("file://");
-    for byte in path.bytes() {
+    if has_drive(&path) {
+        url.push('/');
+    }
+    for (at, byte) in path.bytes().enumerate() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => url.push(byte as char),
+            // A drive's colon stays as it is.
+            b':' if at == 1 && has_drive(&path) => url.push(':'),
             _ => url.push_str(&format!("%{byte:02X}")),
         }
     }
     url
+}
+
+/// Whether `path` starts with a Windows drive (`C:`).
+fn has_drive(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 /// The local path of a `file:` URL, or the text itself when it is a path.
@@ -46,7 +59,12 @@ pub(crate) fn path_of_url(url: &str) -> String {
             }
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    let path = String::from_utf8_lossy(&out).into_owned();
+    // `file:///C:/…` names `C:/…` on Windows.
+    match path.strip_prefix('/') {
+        Some(rest) if has_drive(rest) => rest.to_owned(),
+        _ => path,
+    }
 }
 
 /// Shows a file in the system's file manager.
@@ -396,5 +414,12 @@ mod tests {
         assert_eq!(url, "file:///Users/me/My%20Talks/%E8%81%86%E9%A1%B5%20%231.mp3");
         assert_eq!(path_of_url(&url), path);
         assert_eq!(path_of_url("/plain/path.mp3"), "/plain/path.mp3");
+    }
+
+    #[test]
+    fn windows_paths_make_file_urls_with_their_drive() {
+        let url = file_url(r"C:\Users\me\My Talks\a.mp4");
+        assert_eq!(url, "file:///C:/Users/me/My%20Talks/a.mp4");
+        assert_eq!(path_of_url(&url), "C:/Users/me/My Talks/a.mp4");
     }
 }

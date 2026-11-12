@@ -121,153 +121,162 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
             review.play_from(index);
         }
     };
+    // The sentence's commands, on its buttons and on its menu alike.
+    let toggle_repeat = move || {
+        if let Some(index) = index.get_untracked() {
+            review.toggle_repeat(index);
+        }
+    };
+    let edit_shown = move || {
+        if let Some(index) = index.get_untracked() {
+            review.edit(index, untracked(mode) == ContentMode::Translated && untracked(translated));
+        }
+    };
+    let edit_translation = move || {
+        if let Some(index) = index.get_untracked() {
+            review.edit(index, true);
+        }
+    };
     // The highlight is the row's own fill; the hover wash is a translucent
     // layer over it, so the current sentence stays marked under the pointer.
     // A reading column: lines stay a comfortable length in a wide window.
-    view().items_center().child(
-        view()
-            .w_full()
-            .max_w(px(760.0))
-            .rounded(tokens::radius)
-            .transition_colors()
-            .duration(motion::BASE)
-            .bg(move || if is_current() { tokens::highlight() } else { theme().background })
-            .child(
-                view()
-                    .group()
-                    .flex_row()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .rounded(tokens::radius)
-                    .transition_colors()
-                    .duration(motion::INSTANT)
-                    .hover(|s| s.bg(|| theme().foreground.opacity(0.05)))
-                    .child(
-                        view()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .gap_1()
-                            .child(when(
-                                move || {
-                                    store.setting(|s| s.show_timestamps)
-                                        || (store.setting(|s| s.show_speakers) && speaker_name().is_some())
-                                },
-                                move || {
-                                    view()
-                                        .flex_row()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(when(
-                                            move || store.setting(|s| s.show_timestamps),
-                                            move || {
-                                                text(move || {
-                                                    segment.with(|s| clock(s.as_ref().map_or(0, |s| s.start_ms)))
-                                                })
+    let line = view()
+        .w_full()
+        .max_w(px(760.0))
+        .rounded(tokens::radius)
+        .transition_colors()
+        .duration(motion::BASE)
+        .bg(move || if is_current() { tokens::highlight() } else { theme().background })
+        .child(
+            view()
+                .group()
+                .flex_row()
+                .gap_2()
+                .px_3()
+                .py_2()
+                .rounded(tokens::radius)
+                .transition_colors()
+                .duration(motion::INSTANT)
+                .hover(|s| s.bg(|| theme().foreground.opacity(0.05)))
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap_1()
+                        .child(when(
+                            move || {
+                                store.setting(|s| s.show_timestamps)
+                                    || (store.setting(|s| s.show_speakers) && speaker_name().is_some())
+                            },
+                            move || {
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(when(
+                                        move || store.setting(|s| s.show_timestamps),
+                                        move || {
+                                            text(move || segment.with(|s| clock(s.as_ref().map_or(0, |s| s.start_ms))))
                                                 .text_xs()
                                                 .tabular_nums()
                                                 .text_color(|| theme().muted_foreground)
-                                            },
-                                        ))
-                                        .child(when(
-                                            move || store.setting(|s| s.show_speakers) && speaker_name().is_some(),
-                                            move || {
-                                                nsh_base::button()
-                                                    .accessibility_label(tr("Rename speaker"))
-                                                    .on_press(move || {
-                                                        speaker_dialog.set(segment.with_untracked(|s| {
+                                        },
+                                    ))
+                                    .child(when(
+                                        move || store.setting(|s| s.show_speakers) && speaker_name().is_some(),
+                                        move || {
+                                            nsh_base::button()
+                                                .accessibility_label(tr("Rename speaker"))
+                                                .on_press(move || {
+                                                    speaker_dialog.set(
+                                                        segment.with_untracked(|s| {
                                                             s.as_ref().and_then(|s| s.speaker.clone())
-                                                        }))
-                                                    })
-                                                    .rounded(tokens::radius_sm)
-                                                    .hover(|s| s.opacity(0.7))
-                                                    .focus(tokens::focus_ring)
-                                                    .child(
-                                                        text(move || speaker_name().unwrap_or_default())
-                                                            .text_xs()
-                                                            .font_weight(FontWeight::SEMIBOLD)
-                                                            .text_color(|| theme().primary),
+                                                        }),
                                                     )
-                                            },
-                                        ))
-                                },
-                            ))
-                            .child(when(move || editing(false) || editing(true), move || editor(review)).otherwise(
-                                move || {
-                                    ui::veil(hidden, move || {
-                                        nsh_base::button()
-                                            .on_press(press)
-                                            .items_start()
-                                            .gap_1()
-                                            .rounded(tokens::radius_sm)
-                                            .focus(tokens::focus_ring)
-                                            .child(when(shows_original, move || {
-                                                // With word timing, the current sentence is drawn
-                                                // word by word and the one being said is marked.
-                                                when(
-                                                    move || words.with(Option::is_some),
-                                                    move || {
-                                                        dynamic(move || {
-                                                            let said = said.get();
-                                                            untracked(|| {
-                                                                let spans = words.get_untracked().unwrap_or_default();
-                                                                text("")
-                                                                    .text_lg()
-                                                                    .line_height(nsh_core::LineHeight::Multiple(1.5))
-                                                                    .text_color(tokens::highlight_foreground)
-                                                                    .children(spans.into_iter().enumerate().flat_map(
-                                                                        |(at, (word, ..))| {
-                                                                            // The mark is on the word alone, not on
-                                                                            // the space or the quote before it.
-                                                                            let (lead, word) =
-                                                                                listenook_core::local::lead_and_word(
-                                                                                    &word,
-                                                                                );
-                                                                            let word = text(SharedString::from(
-                                                                                word.to_owned(),
-                                                                            ));
-                                                                            [
-                                                                                // A sentence does not begin with a space.
-                                                                                text(SharedString::from(
-                                                                                    if at == 0 {
-                                                                                        lead.trim_start()
-                                                                                    } else {
-                                                                                        lead
-                                                                                    }
-                                                                                    .to_owned(),
-                                                                                )),
-                                                                                if Some(at) == said {
-                                                                                    word.rounded(tokens::radius_sm).bg(
-                                                                                        || theme().primary.opacity(0.3),
-                                                                                    )
-                                                                                } else {
-                                                                                    word
-                                                                                },
-                                                                            ]
-                                                                        },
-                                                                    ))
-                                                                    .into_element()
-                                                            })
-                                                        })
-                                                    },
+                                                })
+                                                .rounded(tokens::radius_sm)
+                                                .hover(|s| s.opacity(0.7))
+                                                .focus_visible(tokens::focus_ring)
+                                                .child(
+                                                    text(move || speaker_name().unwrap_or_default())
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_color(|| theme().foreground),
                                                 )
-                                                .otherwise(move || {
-                                                    text(move || read(|s| s.text.clone().into()))
-                                                        .text_lg()
-                                                        .line_height(nsh_core::LineHeight::Multiple(1.5))
-                                                        .text_color(move || {
-                                                            if is_current() {
-                                                                tokens::highlight_foreground()
-                                                            } else {
-                                                                theme().foreground
-                                                            }
+                                        },
+                                    ))
+                            },
+                        ))
+                        .child(when(move || editing(false) || editing(true), move || editor(review)).otherwise(
+                            move || {
+                                ui::veil(hidden, move || {
+                                    nsh_base::button()
+                                        .on_press(press)
+                                        .items_start()
+                                        .gap_1()
+                                        .rounded(tokens::radius_sm)
+                                        .focus_visible(tokens::focus_ring)
+                                        .child(when(shows_original, move || {
+                                            // With word timing, the current sentence is drawn
+                                            // word by word and the one being said is marked.
+                                            when(
+                                                move || words.with(Option::is_some),
+                                                move || {
+                                                    dynamic(move || {
+                                                        let said = said.get();
+                                                        untracked(|| {
+                                                            let spans = words.get_untracked().unwrap_or_default();
+                                                            text("")
+                                                                .text_lg()
+                                                                .line_height(nsh_core::LineHeight::Multiple(1.5))
+                                                                .text_color(tokens::highlight_foreground)
+                                                                .children(spans.into_iter().enumerate().flat_map(
+                                                                    |(at, (word, ..))| {
+                                                                        // The mark is on the word alone, not on
+                                                                        // the space or the quote before it.
+                                                                        let (lead, word) =
+                                                                            listenook_core::local::lead_and_word(&word);
+                                                                        let word =
+                                                                            text(SharedString::from(word.to_owned()));
+                                                                        [
+                                                                            // A sentence does not begin with a space.
+                                                                            text(SharedString::from(
+                                                                                if at == 0 {
+                                                                                    lead.trim_start()
+                                                                                } else {
+                                                                                    lead
+                                                                                }
+                                                                                .to_owned(),
+                                                                            )),
+                                                                            if Some(at) == said {
+                                                                                word.rounded(tokens::radius_sm)
+                                                                                    .bg(|| theme().primary.opacity(0.3))
+                                                                            } else {
+                                                                                word
+                                                                            },
+                                                                        ]
+                                                                    },
+                                                                ))
+                                                                .into_element()
                                                         })
-                                                })
-                                            }))
-                                            .child(when(shows_translation, move || {
-                                                text(move || {
-                                                    read(|s| s.translated_text.clone().unwrap_or_default().into())
-                                                })
+                                                    })
+                                                },
+                                            )
+                                            .otherwise(move || {
+                                                text(move || read(|s| s.text.clone().into()))
+                                                    .text_lg()
+                                                    .line_height(nsh_core::LineHeight::Multiple(1.5))
+                                                    .text_color(move || {
+                                                        if is_current() {
+                                                            tokens::highlight_foreground()
+                                                        } else {
+                                                            theme().foreground
+                                                        }
+                                                    })
+                                            })
+                                        }))
+                                        .child(when(shows_translation, move || {
+                                            text(move || read(|s| s.translated_text.clone().unwrap_or_default().into()))
                                                 .line_height(nsh_core::LineHeight::Multiple(1.5))
                                                 .style_with(move |s| {
                                                     if mode() == ContentMode::Translated {
@@ -276,79 +285,87 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                                                         s.text_sm()
                                                     }
                                                 })
-                                                .text_color(
-                                                    move || {
-                                                        if mode() == ContentMode::Translated {
-                                                            theme().foreground
-                                                        } else {
-                                                            theme().muted_foreground
-                                                        }
-                                                    },
-                                                )
-                                            }))
-                                    })
-                                },
-                            )),
-                    )
-                    // The lane of a sentence's own commands: quiet until the row is
-                    // pointed at, and always there for the current sentence. The same
-                    // commands are on the keyboard (R) and in the transport.
-                    .child(
-                        view()
-                            .flex_row()
-                            .gap_1()
-                            .transition_opacity()
-                            .duration(motion::INSTANT)
-                            .opacity(move || if is_current() || is_repeating() { 1.0_f32 } else { 0.0 })
-                            .group_hover(|s| s.opacity(1.0))
-                            .child(
-                                view()
-                                    .rounded(tokens::radius)
-                                    // No taller than its button, in a
-                                    // sentence of several lines too.
-                                    .self_start()
-                                    // Lit while this sentence repeats, as the
-                                    // transport's repeat button is.
-                                    .transition_colors()
-                                    .duration(motion::FAST)
-                                    .bg(move || theme().primary.opacity(if is_repeating() { 0.2 } else { 0.0 }))
-                                    .text_color(
-                                        move || if is_repeating() { theme().primary } else { theme().muted_foreground },
-                                    )
-                                    .child(icon_button(Icon::Repeat, tr("Repeat sentence"), Size::Sm, move || {
-                                        if let Some(index) = index.get_untracked() {
-                                            review.toggle_repeat(index);
-                                        }
-                                    })),
-                            )
-                            .child(view().text_color(|| theme().muted_foreground).child(icon_button(
-                                Icon::Pencil,
-                                tr("Edit"),
+                                                .text_color(move || {
+                                                    if mode() == ContentMode::Translated {
+                                                        theme().foreground
+                                                    } else {
+                                                        theme().muted_foreground
+                                                    }
+                                                })
+                                        }))
+                                })
+                            },
+                        )),
+                )
+                // The lane of a sentence's own commands: quiet until the row is
+                // pointed at, and always there for the current sentence. The same
+                // commands are on the keyboard (R) and in the transport.
+                .child(
+                    view()
+                        .flex_row()
+                        .gap_1()
+                        .transition_opacity()
+                        .duration(motion::INSTANT)
+                        .opacity(move || if is_current() || is_repeating() { 1.0_f32 } else { 0.0 })
+                        .group_hover(|s| s.opacity(1.0))
+                        // Lit while this sentence repeats, as the
+                        // transport's repeat button is; no taller than
+                        // its button in a sentence of several lines.
+                        .child(
+                            ui::toggle_button(
+                                Variant::Ghost,
+                                Icon::Repeat,
+                                tr("Repeat sentence"),
                                 Size::Sm,
-                                move || {
-                                    if let Some(index) = index.get_untracked() {
-                                        review.edit(index, mode() == ContentMode::Translated && translated());
-                                    }
-                                },
-                            )))
-                            .child(when(
-                                move || mode() == ContentMode::Bilingual && translated(),
-                                move || {
-                                    view().text_color(|| theme().muted_foreground).child(icon_button(
-                                        Icon::Languages,
-                                        tr("Edit translation"),
-                                        Size::Sm,
-                                        move || {
-                                            if let Some(index) = index.get_untracked() {
-                                                review.edit(index, true);
-                                            }
-                                        },
-                                    ))
-                                },
-                            )),
-                    ),
+                                is_repeating,
+                                toggle_repeat,
+                            )
+                            .self_start(),
+                        )
+                        .child(icon_button(Icon::Pencil, tr("Edit"), Size::Sm, edit_shown).self_start())
+                        .child(when(
+                            move || mode() == ContentMode::Bilingual && translated(),
+                            move || {
+                                icon_button(Icon::Languages, tr("Edit translation"), Size::Sm, edit_translation)
+                                    .self_start()
+                            },
+                        )),
+                ),
+        );
+    // On a computer the same commands are on the sentence's own menu
+    // (a secondary click, or Shift+F10), so none of them needs the hover.
+    if crate::platform::is_phone() {
+        return view().items_center().child(line).into_element();
+    }
+    // The column is the menu's own width, so its line fills it as before.
+    view()
+        .items_center()
+        .child(
+            view().w_full().max_w(px(760.0)).child(
+                ui::context_menu(line)
+                    .child(ui::menu_action(Icon::Play, l("Play from here"), press))
+                    .child(ui::menu_action(Icon::Repeat, l("Repeat sentence"), toggle_repeat))
+                    .child(ui::menu_divider())
+                    .child(ui::menu_action(Icon::Pencil, l("Edit"), edit_shown))
+                    .child(when(
+                        move || mode() == ContentMode::Bilingual && translated(),
+                        move || ui::menu_action(Icon::Languages, l("Edit translation"), edit_translation),
+                    ))
+                    .child(ui::menu_action(Icon::Copy, l("Copy sentence"), move || {
+                        let shown = segment.with_untracked(|s| {
+                            s.as_ref().map(|s| match (mode(), s.translated_text.clone()) {
+                                (ContentMode::Translated, Some(t)) => t,
+                                (ContentMode::Bilingual, Some(t)) => format!("{}\n{t}", s.text),
+                                _ => s.text.clone(),
+                            })
+                        });
+                        if let Some(shown) = shown {
+                            set_clipboard(shown);
+                        }
+                    })),
             ),
-    )
+        )
+        .into_element()
 }
 
 /// The inline editor of a sentence or its translation.
@@ -374,8 +391,9 @@ fn editor(review: Review) -> impl IntoElement {
             view()
                 .flex_row()
                 .gap_2()
-                .child(button(Variant::Primary, Size::Sm, l("Save")).on_press(move || review.save_edit()))
+                // Cancel, then the commit, as in the app's dialogs.
                 .child(button(Variant::Outline, Size::Sm, l("Cancel")).on_press(move || review.editing.set(None)))
+                .child(button(Variant::Primary, Size::Sm, l("Save")).on_press(move || review.save_edit()))
                 // A sentence's structure is changed where its text is: cut
                 // at the caret, or join with the next one.
                 .child(when(

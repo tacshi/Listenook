@@ -3,7 +3,7 @@
 
 use listenook_core::{LlmProvider, LocaleMode, ThemeMode, local::Model};
 
-use nsh_base::{input, theme};
+use nsh_base::theme;
 use nsh_core::prelude::*;
 
 use crate::{
@@ -19,8 +19,8 @@ use crate::{
         store, tr,
     },
     ui::{
-        Size, Status, Tone, Variant, badge, button, card, confirm_destructive, field, hint, key_cap, modal_sized,
-        progress_bar, section, segmented, select, separator, switch, text_field, toast, tokens,
+        Size, Status, Tone, Variant, badge, bound_field, button, card, confirm_destructive, field, hint, key_cap,
+        modal_sized, progress_bar, section, segmented, select, separator, switch, text_field, toast,
     },
 };
 
@@ -94,7 +94,8 @@ pub(crate) fn settings_dialog() -> impl IntoElement {
                 }))
                 .into_element()
         },
-        move || button(Variant::Primary, Size::Md, l("Done")).on_press(move || open.set(false)).into_element(),
+        // Settings take effect as they are made: Done only closes.
+        move || button(Variant::Default, Size::Md, l("Done")).on_press(move || open.set(false)).into_element(),
     )
 }
 
@@ -277,7 +278,7 @@ fn key_field(
                     .flex_1(),
                 )
                 .child(
-                    button(Variant::Primary, Size::Md, l("Save"))
+                    button(Variant::Default, Size::Md, l("Save"))
                         .disabled(move || draft.with(|d| d.trim().is_empty()))
                         .on_press(save),
                 )
@@ -641,29 +642,14 @@ fn ai() -> impl IntoElement {
     ))
 }
 
-/// A text field whose value is a setting: each edit is saved.
+/// A text field whose value is a setting: each edit is saved. The app's
+/// one field, as every other.
 fn settings_input(
     value: impl Fn() -> String + 'static,
     set: impl Fn(String) + 'static,
     placeholder: &'static str,
 ) -> impl IntoElement {
-    input()
-        .value(value)
-        .on_change(move |text: &str| set(text.to_owned()))
-        .placeholder(placeholder)
-        .placeholder_color(|| color(theme().muted_foreground))
-        .caret_color(|| color(theme().primary))
-        .auto_capitalize(AutoCapitalize::None)
-        .auto_correct(false)
-        .h(px(32.0))
-        .px_3()
-        .text_sm()
-        .text_color(|| theme().foreground)
-        .rounded(tokens::radius)
-        .border_1()
-        .border_color(|| theme().input)
-        .bg(|| theme().card)
-        .focus(|s| s.border_color(|| theme().ring))
+    bound_field(value, set, move || placeholder.into()).auto_capitalize(AutoCapitalize::None).auto_correct(false)
 }
 
 fn shortcuts() -> impl IntoElement {
@@ -719,6 +705,7 @@ fn shortcuts() -> impl IntoElement {
                 ("alt+right", "Next sentence"),
                 ("r", "Repeat the sentence while held"),
                 ("s", "Reveal current sentence"),
+                ("e", "Edit current sentence"),
             ],
         ))
         .child(group(

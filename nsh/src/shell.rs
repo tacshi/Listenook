@@ -261,6 +261,8 @@ pub(crate) fn shell() -> impl IntoElement {
         .child(when(
             move || platform::compact() && store.drawer() && !store.immersive(),
             move || {
+                // Escape puts it away, as a press beside it does.
+                on_key("escape", move |_| store.set_drawer(false));
                 view()
                     .absolute()
                     .inset_0()
@@ -503,8 +505,9 @@ fn application_menu() -> Vec<MenuItem> {
             role(MenuRole::ToggleFullScreen, "Enter or Leave Full Screen"),
         ],
     ));
-    menus
-        .push(MenuItem::submenu(named("Window"), [role(MenuRole::Minimize, "Minimize"), role(MenuRole::Zoom, "Zoom")]));
+    // What a Mac calls zooming a window, Windows and Linux call maximizing it.
+    let zoom = if mac { "Zoom" } else { "Maximize" };
+    menus.push(MenuItem::submenu(named("Window"), [role(MenuRole::Minimize, "Minimize"), role(MenuRole::Zoom, zoom)]));
     menus
 }
 
@@ -536,18 +539,22 @@ enum Named {
 /// buttons beside one: the least a touch target may be.
 const TOUCH_ROW: f32 = 44.0;
 
-/// The small "more" button at the end of a group's or a tag's row.
-fn more(name: &'static str) -> View {
-    let (side, glyph) = if platform::is_phone() { (TOUCH_ROW, 18.0) } else { (24.0, 14.0) };
-    view()
-        .size(px(side))
-        .items_center()
-        .justify_center()
-        .rounded(tokens::radius_sm)
-        .label(tr(name))
-        .text_color(|| theme().muted_foreground)
-        .hover(|s| s.bg(|| theme().foreground.opacity(0.06)))
-        .child(icon(Icon::More, glyph))
+/// The size of the small buttons at the end of the sidebar's rows.
+fn trailing_size() -> Size {
+    if platform::is_phone() { Size::Md } else { Size::Sm }
+}
+
+/// The small "more" menu at the end of a group's or a tag's row: it stays
+/// pressed while its menu is open.
+fn more(name: &'static str) -> ui::Menu {
+    let open = signal(false);
+    ui::menu_with(open, ui::menu_trigger(Icon::More, tr(name), trailing_size(), open))
+}
+
+/// The room a row without a "more" menu keeps at its end, so the counts
+/// of every row stand in one column.
+fn trailing_lane() -> View {
+    view().w(px(trailing_size().height())).flex_shrink_0()
 }
 
 /// A row of the sidebar: a place or a filter of the Library.
@@ -573,10 +580,10 @@ fn row(
         .rounded(tokens::radius)
         .transition_colors()
         .duration(motion::INSTANT)
-        .hover(|s| s.bg(|| theme().foreground.opacity(0.06)))
-        .active(|s| s.bg(|| theme().foreground.opacity(0.1)))
+        .hover(|s| s.bg(tokens::hover_wash))
+        .active(|s| s.bg(|| theme().input))
         .selected_style(|s| s.bg(|| theme().sidebar_accent))
-        .focus(tokens::focus_ring)
+        .focus_visible(tokens::focus_ring)
         .text_color(move || if chosen() { theme().foreground } else { theme().muted_foreground })
         .child(view().w(px(slot)).items_center().child(icon(glyph, glyph_size)))
         .child(if touch { label.text_base() } else { label.text_sm() })
@@ -595,7 +602,6 @@ fn row(
 /// A section's heading in the sidebar, with the button that adds to it.
 fn heading(label: &'static str, add: &'static str, on_add: impl Fn() + 'static) -> impl IntoElement {
     let touch = platform::is_phone();
-    let (side, glyph) = if touch { (TOUCH_ROW, 18.0) } else { (24.0, 14.0) };
     let title = text(l(label));
     view()
         .flex_row()
@@ -608,22 +614,7 @@ fn heading(label: &'static str, add: &'static str, on_add: impl Fn() + 'static) 
                 .flex_1()
                 .role(AccessibilityRole::Header),
         )
-        .child(
-            view().tooltip(ui::tip(tr(add))).child(
-                nsh_base::button()
-                    .accessibility_label(tr(add))
-                    .on_press(on_add)
-                    .size(px(side))
-                    .items_center()
-                    .justify_center()
-                    .rounded(tokens::radius_sm)
-                    .text_color(|| theme().muted_foreground)
-                    .hover(|s| s.bg(|| theme().foreground.opacity(0.06)))
-                    .active(|s| s.bg(|| theme().foreground.opacity(0.1)))
-                    .focus(tokens::focus_ring)
-                    .child(icon(Icon::Plus, glyph)),
-            ),
-        )
+        .child(icon_button(Icon::Plus, tr(add), trailing_size(), on_add))
 }
 
 /// The sidebar's width: wider under a finger.
@@ -701,27 +692,54 @@ fn sidebar() -> impl IntoElement {
                     .px_2()
                     .pb_2()
                     .gap(px(2.0))
-                    .child(row(
-                        Icon::Library,
-                        l("Library"),
-                        move || Some(store.count(&Filter::All)),
-                        move || in_library(Filter::All),
-                        move || store.show(Filter::All),
-                    ))
-                    .child(row(
-                        Icon::Clock,
-                        l("In progress"),
-                        move || Some(store.count(&Filter::InProgress)),
-                        move || in_library(Filter::InProgress),
-                        move || store.show(Filter::InProgress),
-                    ))
-                    .child(row(
-                        Icon::Podcast,
-                        l("Podcasts"),
-                        || None,
-                        move || store.place() == Place::Podcasts,
-                        move || store.go(Place::Podcasts),
-                    ))
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .child(
+                                row(
+                                    Icon::Library,
+                                    l("Library"),
+                                    move || Some(store.count(&Filter::All)),
+                                    move || in_library(Filter::All),
+                                    move || store.show(Filter::All),
+                                )
+                                .flex_1(),
+                            )
+                            .child(trailing_lane()),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .child(
+                                row(
+                                    Icon::Clock,
+                                    l("In progress"),
+                                    move || Some(store.count(&Filter::InProgress)),
+                                    move || in_library(Filter::InProgress),
+                                    move || store.show(Filter::InProgress),
+                                )
+                                .flex_1(),
+                            )
+                            .child(trailing_lane()),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .child(
+                                row(
+                                    Icon::Podcast,
+                                    l("Podcasts"),
+                                    || None,
+                                    move || store.place() == Place::Podcasts,
+                                    move || store.go(Place::Podcasts),
+                                )
+                                .flex_1(),
+                            )
+                            .child(trailing_lane()),
+                    )
                     .child(heading("Groups", "New group", move || ask(Named::NewGroup, String::new())))
                     .child(each(
                         move || store.catalog().groups,
@@ -737,23 +755,17 @@ fn sidebar() -> impl IntoElement {
                                     row(
                                         Icon::Folder,
                                         move || group.with(|g| SharedString::from(g.name.clone())),
-                                        move || None,
+                                        move || Some(store.count(&counted)),
                                         {
                                             let selected = selected.clone();
                                             move || store.place() == Place::Library && store.filter() == selected
                                         },
                                         move || store.show(shown.clone()),
                                     )
-                                    .flex_1()
-                                    .child(
-                                        text(move || SharedString::from(store.count(&counted).to_string()))
-                                            .text_xs()
-                                            .tabular_nums()
-                                            .text_color(|| theme().muted_foreground),
-                                    ),
+                                    .flex_1(),
                                 )
                                 .child(
-                                    menu(more("Group actions"))
+                                    more("Group actions")
                                         .child(menu_action(Icon::Pencil, l("Rename…"), {
                                             let id = deleted.clone();
                                             move || ask(Named::Group(id.clone()), group.get_untracked().name)
@@ -787,20 +799,14 @@ fn sidebar() -> impl IntoElement {
                                     row(
                                         Icon::Tag,
                                         move || tag.with(|t| SharedString::from(t.name.clone())),
-                                        move || None,
+                                        move || Some(store.count(&counted)),
                                         move || store.place() == Place::Library && store.filter() == selected,
                                         move || store.show(shown.clone()),
                                     )
-                                    .flex_1()
-                                    .child(
-                                        text(move || SharedString::from(store.count(&counted).to_string()))
-                                            .text_xs()
-                                            .tabular_nums()
-                                            .text_color(|| theme().muted_foreground),
-                                    ),
+                                    .flex_1(),
                                 )
                                 .child(
-                                    menu(more("Tag actions"))
+                                    more("Tag actions")
                                         .child(menu_action(Icon::Pencil, l("Rename…"), move || {
                                             let tag = tag.get_untracked();
                                             ask(Named::Tag(tag.id), tag.name);
@@ -850,9 +856,9 @@ fn sidebar() -> impl IntoElement {
         ))
         .child(view().p_2().child(row(
             Icon::Settings,
-            l("Settings"),
+            l("Settings…"),
             || None,
-            || false,
+            move || store.settings_open().get(),
             move || store.settings_open().set(true),
         )))
 }
@@ -940,7 +946,7 @@ fn mini_player() -> impl IntoElement {
         .child(
             toggle_icon_button(
                 move || if player.paused() { Icon::Play } else { Icon::Pause },
-                move || if player.paused() { "Play".into() } else { "Pause".into() },
+                move || if player.paused() { tr("Play") } else { tr("Pause") },
                 Variant::Ghost,
                 Size::Md,
             )
@@ -981,6 +987,7 @@ fn mini_player() -> impl IntoElement {
         )
         .child(time_text(move || player.duration_ms()))
         .child(rate_menu(
+            Variant::Ghost,
             move || player.rate(),
             move |rate| {
                 player.set_rate(rate);
@@ -995,16 +1002,19 @@ pub(crate) fn time_text(ms: impl Fn() -> i64 + 'static) -> Text {
     text(move || clock(ms())).text_xs().tabular_nums().text_color(|| theme().muted_foreground)
 }
 
-/// The speed menu of a player.
+/// The speed menu of a player: the speeds, the current one checked.
+/// `variant` is the trigger's: [`Variant::Picture`] over a video.
 pub(crate) fn rate_menu(
+    variant: Variant,
     rate: impl Fn() -> f32 + Copy + 'static,
     set: impl Fn(f32) + Copy + 'static,
 ) -> impl IntoElement {
-    menu(ui::button(Variant::Ghost, Size::Sm, move || rate_label(rate())).accessibility_label(tr("Playback speed")))
-        .children(RATES.iter().map(move |option| {
+    menu(ui::button(variant, Size::Sm, move || rate_label(rate())).accessibility_label(tr("Playback speed"))).children(
+        RATES.iter().map(move |option| {
             let option = *option;
-            menu_action(Icon::Clock, rate_label(option), move || set(option))
-        }))
+            ui::menu_choice(rate_label(option), move || (rate() - option).abs() < 0.001, move || set(option))
+        }),
+    )
 }
 
 /// The band at the top of a page beside the sidebar: it drags the window,

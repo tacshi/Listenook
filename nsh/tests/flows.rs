@@ -95,7 +95,7 @@ fn open_sample(name: &str) -> App {
 fn an_empty_library_invites_media_and_the_language_changes_at_once() {
     let mut it = start("empty", |_| {}, Vec::new());
     it.app.wait_for("Drop audio or video here").unwrap();
-    it.app.press("role:button[Settings]").unwrap();
+    it.app.press("role:button[Settings…]").unwrap();
     it.app.wait_for("Appearance").unwrap();
     it.app.press("简体中文").unwrap();
     it.app.wait_for("资料库").unwrap();
@@ -298,7 +298,7 @@ fn translating_with_the_llm_fills_in_each_sentence() {
     it.app.press("Learning languages").unwrap();
     it.app.wait_for("Welcome back to the show.").unwrap();
     it.app.press("label:More actions").unwrap();
-    it.app.press("Translate with LLM…").unwrap();
+    it.app.press("Translate…").unwrap();
     it.app.press("role:button[Translate]").unwrap();
     it.app.wait_for("第一句").unwrap();
     it.app.wait_for("第五句").unwrap();

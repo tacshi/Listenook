@@ -284,6 +284,8 @@ mod rehomed_tests {
     use super::*;
 
     #[test]
+    // An iOS container's paths, which only Unix joins with `/`.
+    #[cfg_attr(windows, ignore = "iOS container paths")]
     fn media_is_found_again_when_the_container_is_renamed() {
         let root = Path::new("/var/mobile/Containers/Data/Application/NEW/Library/Application Support");
         let there = |path: &Path| path.starts_with("/var/mobile/Containers/Data/Application/NEW");

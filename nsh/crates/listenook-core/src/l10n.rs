@@ -493,6 +493,22 @@ const ZH: &[(&str, &str)] = &[
         "Works while another app is in front. Off unless you turn it on: it takes the keystroke from every app.",
         "其他应用在前台时也有效。默认关闭：开启后它会占用所有应用中的这个按键。",
     ),
+    // The design review's fixes.
+    ("Translate…", "翻译…"),
+    ("Play from here", "从这里播放"),
+    ("Copy sentence", "复制这句"),
+    ("Edit current sentence", "编辑当前句子"),
+    ("Maximize", "最大化"),
+    ("More actions", "更多操作"),
+    ("Nothing is waiting or being transcribed.", "没有等待或正在转写的录音。"),
+    (
+        "No recordings in this group. Add one with Group… in its menu.",
+        "这个分组里还没有录音。在录音的菜单里选“分组…”来添加。",
+    ),
+    (
+        "No recordings carry this tag. Add it with Tags… in a recording's menu.",
+        "还没有录音带这个标签。在录音的菜单里选“标签…”来添加。",
+    ),
 ];
 
 /// `text` in `lang`.

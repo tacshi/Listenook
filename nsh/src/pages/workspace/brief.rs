@@ -122,7 +122,7 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                         toast(Tone::Success, tr("AI Brief copied"));
                                     }
                                 }))
-                                .child(button(Variant::Ghost, Size::Sm, l("Export")).on_press(move || {
+                                .child(button(Variant::Ghost, Size::Sm, l("Export…")).on_press(move || {
                                     if let (Some(job), Some(brief)) = (store.job_now(&review.id()), brief.get_untracked()) {
                                         let name = format!("{} - brief.md", safe_file_name(&job.title(), "transcript"));
                                         save_text(name, export::export_brief(&job, &brief));
@@ -170,8 +170,8 @@ fn evidence(review: Review, ids: &[String]) -> impl IntoElement {
             .flex_row()
             .items_center()
             .gap_1()
-            .px_1p5()
-            .py(px(1.0))
+            .h(px(24.0))
+            .px_2()
             .rounded(tokens::radius_sm)
             .bg(|| theme().muted)
             .text_color(|| theme().muted_foreground)
@@ -179,8 +179,8 @@ fn evidence(review: Review, ids: &[String]) -> impl IntoElement {
             .duration(motion::INSTANT)
             .hover(|s| s.bg(|| theme().accent))
             .active(|s| s.bg(|| theme().input))
-            .focus(tokens::focus_ring)
-            .child(icon(Icon::Play, 9.0))
+            .focus_visible(tokens::focus_ring)
+            .child(icon(Icon::Play, 12.0))
             .child(text(clock(start_ms)).text_xs().tabular_nums())
     }))
 }

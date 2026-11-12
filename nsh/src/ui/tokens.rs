@@ -29,6 +29,17 @@ pub fn warning() -> AdaptiveColor {
     role("warning", theme().destructive)
 }
 
+/// The edge of a field, a select or a checkbox: strong enough to find the
+/// control by (3:1 against the page), unlike the hairlines of regions.
+pub fn control_border() -> AdaptiveColor {
+    role("control-border", theme().input)
+}
+
+/// A row or a control under the pointer, before it is pressed.
+pub fn hover_wash() -> AdaptiveColor {
+    role("hover", theme().muted)
+}
+
 /// The fill of the sentence being played.
 pub fn highlight() -> AdaptiveColor {
     role("highlight", theme().accent)

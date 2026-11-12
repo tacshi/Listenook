@@ -1,6 +1,7 @@
 //! Safetensors mmap reader with multi-shard support.
 
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -58,8 +59,16 @@ impl TensorMeta {
 }
 
 pub struct SafetensorsFile {
+    #[cfg(unix)]
     fd: RawFd,
+    /// Windows: the file (encoder weights are read from it, as with
+    /// `pread` on Unix) and its mapping, unmapped when dropped.
+    #[cfg(not(unix))]
+    file: std::fs::File,
+    #[cfg(not(unix))]
+    _map: memmap2::Mmap,
     data: *mut u8,
+    #[cfg_attr(not(unix), allow(dead_code))]
     file_size: usize,
     header_size: usize,
     pub tensors: Vec<TensorMeta>,
@@ -70,6 +79,38 @@ unsafe impl Send for SafetensorsFile {}
 unsafe impl Sync for SafetensorsFile {}
 
 impl SafetensorsFile {
+    /// Windows: the file mapped with `memmap2`, then read as on Unix.
+    #[cfg(not(unix))]
+    pub fn open(path: &str) -> Option<Self> {
+        let file = std::fs::File::open(path).ok()?;
+        let file_size = file.metadata().ok()?.len() as usize;
+        if file_size < 8 {
+            return None;
+        }
+        // SAFETY: read-only; model files are not changed while loaded.
+        let map = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+        let data = map.as_ptr() as *mut u8;
+        let header_size = u64::from_le_bytes(map[..8].try_into().ok()?) as usize;
+        if header_size > file_size - 8 {
+            return None;
+        }
+        let header_json = std::str::from_utf8(&map[8..8 + header_size]).ok()?;
+        let tensors = parse_header(header_json)?;
+        let tensor_map = tensors.iter().enumerate().map(|(i, t)| (t.name.clone(), i)).collect();
+        let skip = build_prefault_skip(&tensors, 8 + header_size, file_size);
+        prefault_with_skip(data as *const u8, file_size, &skip);
+        Some(SafetensorsFile {
+            file,
+            _map: map,
+            data,
+            file_size,
+            header_size,
+            tensors,
+            tensor_map,
+        })
+    }
+
+    #[cfg(unix)]
     pub fn open(path: &str) -> Option<Self> {
         use libc::*;
         use std::ffi::CString;
@@ -191,6 +232,17 @@ impl SafetensorsFile {
         let base = 8 + self.header_size + tensor.data_offset + byte_off;
         let mut done = 0usize;
         while done < dst.len() {
+            // Windows' positioned read: like `pread`, it leaves no shared
+            // offset behind for the other loader threads.
+            #[cfg(not(unix))]
+            let r = {
+                use std::os::windows::fs::FileExt;
+                match self.file.seek_read(&mut dst[done..], (base + done) as u64) {
+                    Ok(n) => n as isize,
+                    Err(_) => -1,
+                }
+            };
+            #[cfg(unix)]
             let r = unsafe {
                 libc::pread(
                     self.fd,
@@ -252,6 +304,12 @@ impl SafetensorsFile {
     }
 }
 
+#[cfg(not(unix))]
+fn page_size() -> usize {
+    4096
+}
+
+#[cfg(unix)]
 fn page_size() -> usize {
     let ps = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if ps > 0 {
@@ -297,7 +355,12 @@ fn prefault_with_skip(data: *const u8, file_size: usize, skip: &[bool]) {
         return;
     }
 
-    // WILLNEED on contiguous non-skipped runs only.
+    // WILLNEED on contiguous non-skipped runs only (Unix; Windows has no
+    // such hint for a mapped file, and the prefault below does the work).
+    #[cfg(unix)]
+    willneed(data, file_size, skip, ps);
+    #[cfg(unix)]
+    fn willneed(data: *const u8, file_size: usize, skip: &[bool], ps: usize) {
     let base_addr = data as usize;
     let mut run_start: Option<usize> = None;
     for (page, &skip_page) in skip.iter().enumerate() {
@@ -324,6 +387,7 @@ fn prefault_with_skip(data: *const u8, file_size: usize, skip: &[bool]) {
                 libc::MADV_WILLNEED,
             );
         }
+    }
     }
 
     let n_threads = std::thread::available_parallelism()
@@ -357,6 +421,7 @@ fn prefault_with_skip(data: *const u8, file_size: usize, skip: &[bool]) {
     std::hint::black_box(checksum.load(Ordering::Relaxed));
 }
 
+#[cfg(unix)]
 impl Drop for SafetensorsFile {
     fn drop(&mut self) {
         if !self.data.is_null() {

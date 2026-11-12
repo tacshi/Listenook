@@ -133,10 +133,12 @@ pub fn list_row(selected: impl Fn() -> bool + 'static) -> nsh_base::ButtonElemen
         .rounded(tokens::radius)
         .transition_colors()
         .duration(motion::INSTANT)
-        .hover(|s| s.bg(|| theme().muted))
-        .active(|s| s.bg(|| theme().accent))
+        .hover(|s| s.bg(tokens::hover_wash))
+        .active(|s| s.bg(|| theme().input))
         .selected_style(|s| s.bg(|| theme().accent))
-        .focus(tokens::focus_ring)
+        // A row that cannot be opened does not answer the pointer.
+        .disabled_style(|s| s.bg(|| theme().background.opacity(0.0)))
+        .focus_visible(tokens::focus_ring)
 }
 
 /// A key as it is printed on the keyboard.
@@ -151,9 +153,20 @@ pub fn key_cap(keystroke: &'static str) -> View {
         .child(
             text(key_label(keystroke))
                 .text_xs()
-                .font_family(|| theme().font_mono.clone().unwrap_or_else(|| "Menlo".into()))
+                .font_family(|| theme().font_mono.clone().unwrap_or_else(|| mono_font().into()))
                 .text_color(|| theme().muted_foreground),
         )
+}
+
+/// The platform's own monospaced face, for when the theme names none.
+fn mono_font() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Consolas"
+    } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+        "Menlo"
+    } else {
+        "monospace"
+    }
 }
 
 /// Content the user chose not to see yet (blind listening): while `hidden`
@@ -193,9 +206,9 @@ pub fn chip(
         .border_color(move || if selected() { theme().primary } else { theme().border })
         .transition_colors()
         .duration(motion::INSTANT)
-        .hover(|s| s.bg(|| theme().muted))
+        .hover(|s| s.bg(tokens::hover_wash))
         .active(|s| s.bg(|| theme().accent))
-        .focus(tokens::focus_ring)
+        .focus_visible(tokens::focus_ring)
         .child(
             text(label)
                 .text_sm()

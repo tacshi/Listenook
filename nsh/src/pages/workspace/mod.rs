@@ -17,8 +17,8 @@ use crate::{
     shell::{rate_menu, time_text, top_bar},
     state::{error_text, l, store, tr},
     ui::{
-        self, Icon, Size, Tone, Variant, button, checkbox, empty_state, field, hint, icon, icon_button, menu,
-        menu_action, menu_divider, menu_toggle, modal, modal_actions, progress_bar, select, toast, toggle_icon_button,
+        self, Icon, Size, Tone, Variant, button, checkbox, empty_state, field, hint, icon_button, menu, menu_action,
+        menu_divider, menu_toggle, modal, modal_actions, progress_bar, select, toast, toggle_icon_button,
         tokens::{self, motion},
     },
     util::file_url,
@@ -163,6 +163,15 @@ fn opened(id: &str) -> impl IntoElement {
         review.revealed.update(|revealed| *revealed = if revealed.is_some() { None } else { current });
     });
     on_key("mod+f", move |_| review.searching.set(true));
+    // E edits the current sentence (its translation when only that shows),
+    // as its Edit button and its menu do.
+    on_key("e", move |_| {
+        if let Some(index) = untracked(|| review.target_or_first()) {
+            let translation = review.mode.get_untracked() == ContentMode::Translated
+                && review.segment(index).is_some_and(|segment| segment.has_translation());
+            review.edit(index, translation);
+        }
+    });
     on_key("escape", move |_| {
         if review.fullscreen.get_untracked() {
             set_fullscreen(review, false);
@@ -470,38 +479,31 @@ fn has_translation(review: Review) -> bool {
 /// A toolbar toggle for a side panel: lit while its panel shows.
 fn side_toggle(review: Review, side: Side, glyph: Icon, name: &'static str) -> impl IntoElement {
     let on = move || review.side.get() == side;
-    view()
-        .rounded(tokens::radius)
-        .window_drag(false)
-        .transition_colors()
-        .duration(motion::FAST)
-        .bg(move || if on() { theme().accent } else { theme().background })
-        .text_color(move || if on() { theme().primary } else { theme().foreground })
-        .child(icon_button(glyph, tr(name), Size::Sm, move || {
-            let closing = untracked(on);
-            // The Video button says whether the picture is wanted; closing
-            // Practice or the AI Brief leaves it as it was before them.
-            if side == Side::Video {
-                review.video_wanted.set(!closing);
-            }
-            let next = match (closing, side) {
-                (false, _) => side,
-                (true, Side::Video) => Side::None,
-                (true, _) if review.has_video && review.video_wanted.get_untracked() => Side::Video,
-                (true, _) => Side::None,
-            };
-            // No sliding into place here: the transcript's lines wrap anew
-            // at its new width, and rows animated to it keep wrong heights.
-            match next {
-                Side::Practice => practice::start(review, Practice::Mimic),
-                _ => {
-                    if review.side.get_untracked() == Side::Practice {
-                        practice::stop(review);
-                    }
-                    review.side.set(next);
+    view().window_drag(false).child(ui::toggle_button(Variant::Ghost, glyph, tr(name), Size::Sm, on, move || {
+        let closing = untracked(on);
+        // The Video button says whether the picture is wanted; closing
+        // Practice or the AI Brief leaves it as it was before them.
+        if side == Side::Video {
+            review.video_wanted.set(!closing);
+        }
+        let next = match (closing, side) {
+            (false, _) => side,
+            (true, Side::Video) => Side::None,
+            (true, _) if review.has_video && review.video_wanted.get_untracked() => Side::Video,
+            (true, _) => Side::None,
+        };
+        // No sliding into place here: the transcript's lines wrap anew
+        // at its new width, and rows animated to it keep wrong heights.
+        match next {
+            Side::Practice => practice::start(review, Practice::Mimic),
+            _ => {
+                if review.side.get_untracked() == Side::Practice {
+                    practice::stop(review);
                 }
+                review.side.set(next);
             }
-        }))
+        }
+    }))
 }
 
 fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signal<bool>) -> AnyElement {
@@ -602,18 +604,9 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
                 }))
             },
         ))
-        .child(
-            view().window_drag(false).child(
-                menu(
-                    view()
-                        .size(px(40.0))
-                        .items_center()
-                        .justify_center()
-                        .rounded(tokens::radius)
-                        .label("More actions")
-                        .hover(|s| s.bg(|| theme().accent))
-                        .child(icon(Icon::More, 18.0)),
-                )
+        .child(view().window_drag(false).child({
+            let open = signal(false);
+            ui::menu_with(open, ui::menu_trigger(Icon::More, tr("More actions"), Size::Sm, open))
                 // Not while an answer is typed from hearing: that is blind
                 // listening already, and the switch would change nothing.
                 .child(when(
@@ -640,7 +633,7 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
                     move || store.update_settings(|s| s.show_timestamps = !s.show_timestamps),
                 ))
                 .child(menu_divider())
-                .child(menu_action(Icon::Languages, l("Translate with LLM…"), move || translate.set(true)))
+                .child(menu_action(Icon::Languages, l("Translate…"), move || translate.set(true)))
                 .child(menu_action(Icon::Copy, l("Copy transcript"), move || {
                     if let Some(job) = store.job_now(&review.id()) {
                         let settings = store.settings();
@@ -656,9 +649,8 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
                     }
                 }))
                 .child(menu_action(Icon::Export, l("Export…"), move || export.show(&review.id())))
-                .child(menu_action(Icon::Pencil, l("Rename…"), move || rename.show(&review.id()))),
-            ),
-        );
+                .child(menu_action(Icon::Pencil, l("Rename…"), move || rename.show(&review.id())))
+        }));
     if !touch {
         return bar.into_element();
     }
@@ -676,8 +668,8 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(10.0))
-                .p(px(10.0))
+                .gap_2()
+                .p_2()
                 .child(ui::bar_button(Icon::Back, tr("Back"), move || store.close_reader()))
                 .child(when(
                     || !crate::platform::compact(),
@@ -685,7 +677,7 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
                 ))
                 .child(when(tight, || view().flex_1()).otherwise(move || {
                     text(title)
-                        .text_size(px(17.0))
+                        .text_lg()
                         .font_weight(FontWeight::SEMIBOLD)
                         .number_of_lines(1)
                         .text_center()
@@ -777,8 +769,11 @@ fn translation_strip(review: Review) -> impl IntoElement {
 fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let dragging = signal(None::<f64>);
     let active = move || !review.paused.get() || review.waiting.get();
-    let position = move || {
-        ui::slider(
+    // Over the picture in full screen the controls are light in either
+    // theme, as a video's are; in the page they are the theme's.
+    let variant = move |picture: bool| if picture { Variant::Picture } else { Variant::Ghost };
+    let position = move |picture: bool| {
+        (if picture { ui::slider_on_picture } else { ui::slider })(
             "Position",
             move || dragging.get().unwrap_or(review.position_ms.get() as f64),
             move || review.duration_ms.get() as f64,
@@ -791,40 +786,51 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
         .flex_1()
     };
     // The parts, laid out one way in a wide page and another in a narrow one.
-    let skip = move |size: Size| {
+    let skip = move |size: Size, picture: bool| {
         view()
             .flex_row()
             .items_center()
             .gap_3()
-            .child(icon_button(Icon::SkipBack, tr("Previous sentence"), size, move || review.step(-1)))
+            .child(ui::icon_button_as(variant(picture), Icon::SkipBack, tr("Previous sentence"), size, move || {
+                review.step(-1)
+            }))
             .child(
                 toggle_icon_button(
                     move || if active() { Icon::Pause } else { Icon::Play },
-                    move || if active() { "Pause".into() } else { "Play".into() },
-                    Variant::Ghost,
+                    move || if active() { tr("Pause") } else { tr("Play") },
+                    variant(picture),
                     size,
                 )
                 .on_press(move || review.toggle_play()),
             )
-            .child(icon_button(Icon::SkipForward, tr("Next sentence"), size, move || review.step(1)))
+            .child(ui::icon_button_as(variant(picture), Icon::SkipForward, tr("Next sentence"), size, move || {
+                review.step(1)
+            }))
     };
-    let at = move || time_text(move || dragging.get().map_or(review.position_ms.get(), |ms| ms as i64));
-    let length = move || time_text(move || review.duration_ms.get());
-    let repeat = move || {
-        view()
-            .rounded(tokens::radius)
-            .transition_colors()
-            .duration(motion::FAST)
-            .bg(move || if review.repeating.get().is_some() { theme().accent } else { theme().accent.opacity(0.0) })
-            .text_color(move || if review.repeating.get().is_some() { theme().primary } else { theme().foreground })
-            .child(icon_button(Icon::Repeat, tr("Repeat sentence"), Size::Sm, move || {
+    let on_picture = |time: Text, picture: bool| {
+        if picture { time.text_color(|| theme().foreground.dark.opacity(0.8)) } else { time }
+    };
+    let at = move |picture: bool| {
+        on_picture(time_text(move || dragging.get().map_or(review.position_ms.get(), |ms| ms as i64)), picture)
+    };
+    let length = move |picture: bool| on_picture(time_text(move || review.duration_ms.get()), picture);
+    let repeat = move |picture: bool| {
+        ui::toggle_button(
+            variant(picture),
+            Icon::Repeat,
+            tr("Repeat sentence"),
+            Size::Sm,
+            move || review.repeating.get().is_some(),
+            move || {
                 if let Some(index) = review.target_or_first() {
                     review.toggle_repeat(index);
                 }
-            }))
+            },
+        )
     };
-    let rate = move || {
+    let rate = move |picture: bool| {
         rate_menu(
+            variant(picture),
             move || review.rate.get(),
             move |rate| {
                 review.rate.set(rate);
@@ -832,57 +838,72 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             },
         )
     };
-    let screen = move || {
+    let screen = move |picture: bool| {
         when(
             move || review.has_video,
             move || {
-                when(
-                    move || review.fullscreen.get(),
-                    move || {
-                        icon_button(Icon::Minimize, tr("Exit full screen"), Size::Sm, move || {
-                            set_fullscreen(review, false)
-                        })
-                    },
-                )
-                .otherwise(move || {
+                if picture {
+                    ui::icon_button_as(Variant::Picture, Icon::Minimize, tr("Exit full screen"), Size::Sm, move || {
+                        set_fullscreen(review, false)
+                    })
+                } else {
                     icon_button(Icon::Maximize, tr("Full screen"), Size::Sm, move || set_fullscreen(review, true))
-                })
+                }
             },
         )
     };
     // A wide page: one row, the position between the times.
-    let wide = move || {
+    let wide = move |picture: bool| {
         view()
             .h(px(48.0))
             .flex_row()
             .items_center()
             .gap_3()
-            .child(skip(Size::Sm))
-            .child(at())
-            .child(position())
-            .child(length())
-            .child(repeat())
-            .child(rate())
-            .child(screen())
+            .child(skip(Size::Sm, picture))
+            .child(at(picture))
+            .child(position(picture))
+            .child(length(picture))
+            .child(repeat(picture))
+            .child(rate(picture))
+            .child(screen(picture))
     };
     // A narrow one, held in a hand: the position between the times on a
     // row of its own, and under it playing in the middle, where a thumb
     // is, with the speed at one side and the rest at the other.
-    let narrow = move || {
+    let narrow = move |picture: bool| {
         view()
-            .child(view().flex_row().items_center().gap_3().pt_3().child(at()).child(position()).child(length()))
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap_3()
+                    .pt_3()
+                    .child(at(picture))
+                    .child(position(picture))
+                    .child(length(picture)),
+            )
             .child(
                 view()
                     .h(px(56.0))
                     .flex_row()
                     .items_center()
-                    .child(view().flex_1().flex_row().items_center().child(rate()))
-                    .child(skip(Size::Md))
+                    .child(view().flex_1().flex_row().items_center().child(rate(picture)))
+                    .child(skip(Size::Md, picture))
                     .child(
-                        view().flex_1().flex_row().items_center().justify_end().gap_1().child(repeat()).child(screen()),
+                        view()
+                            .flex_1()
+                            .flex_row()
+                            .items_center()
+                            .justify_end()
+                            .gap_1()
+                            .child(repeat(picture))
+                            .child(screen(picture)),
                     ),
             )
     };
+    // Laid out again only when the page changes width class or the
+    // picture takes the screen, not on every resize.
+    let layout = computed(move || (crate::shell::page_narrow(), review.fullscreen.get()));
     view()
         .flex_shrink_0()
         .px(px(ui::PAGE_INSET))
@@ -901,13 +922,17 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                     .bottom(px(16.0))
                     .rounded(tokens::radius_lg)
                     .border_1()
+                    .border_color(|| theme().foreground.dark.opacity(0.16))
                     .shadow_xl()
                     .opacity(if hud.get() { 1.0 } else { 0.0 })
             } else {
                 s.border_t_1()
             }
         })
-        .child(when(crate::shell::page_narrow, narrow).otherwise(wide))
+        .child(dynamic(move || {
+            let (tight, picture) = layout.get();
+            untracked(|| if tight { narrow(picture).into_element() } else { wide(picture).into_element() })
+        }))
 }
 
 /// The R key being held: what was looping before it, and when the key
@@ -1043,7 +1068,7 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
 
 /// A line of the full-screen subtitle: light on its dark plate.
 fn subtitle_text(line: Text) -> Text {
-    line.text_2xl().font_weight(FontWeight::SEMIBOLD).text_center().text_color(|| theme().foreground)
+    line.text_2xl().font_weight(FontWeight::SEMIBOLD).text_center().text_color(|| theme().foreground.dark)
 }
 
 /// Translate the transcript with the AI provider.
@@ -1058,7 +1083,7 @@ fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
     let configured = move || store.setting(|s| s.llm_provider_settings.validate().is_none());
     modal(
         open,
-        l("Translate with LLM"),
+        l("Translate"),
         420.0,
         move || {
             view()

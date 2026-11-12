@@ -19,8 +19,8 @@ use crate::{
     shell::top_bar,
     state::{Filter, error_text, l, secrets, store, tr},
     ui::{
-        self, Icon, Size, Status, Variant, button, confirm_destructive, empty_state, field, hint, icon, icon_of,
-        icon_text_button, menu, menu_action, menu_danger, menu_divider, popover, progress_bar, search_field, select,
+        self, Icon, Size, Status, Variant, button, confirm_destructive, empty_state, field, hint, icon_of,
+        icon_text_button, menu_action, menu_danger, menu_divider, popover, progress_bar, search_field, select,
         separator, switch, text_area, text_field,
         tokens::{self, motion},
     },
@@ -84,18 +84,19 @@ pub(crate) fn library() -> impl IntoElement {
                                 })
                                 .on_press(transcribe::start_ready),
                             )
-                            .child(popover(
-                                view()
-                                    .size(px(32.0))
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(tokens::radius)
-                                    .label(tr("Transcription options"))
-                                    .tooltip(ui::tip(tr("Transcription options")))
-                                    .hover(|s| s.bg(|| theme().accent))
-                                    .child(icon(Icon::Tune, 18.0)),
-                                || options().into_element(),
-                            ))
+                            .child({
+                                let open = signal(false);
+                                popover(
+                                    ui::menu_trigger(Icon::Tune, tr("Transcription options"), Size::Sm, open),
+                                    || options().into_element(),
+                                )
+                                .open(move || Some(open.get()))
+                                .on_open_change(move |event: &nsh_base::PopoverEvent| {
+                                    if let nsh_base::PopoverEvent::OpenChange(next, _) = event {
+                                        open.set(*next);
+                                    }
+                                })
+                            })
                     },
                 ))
                 // What the Library can take in and give out, an icon each.
@@ -108,9 +109,9 @@ pub(crate) fn library() -> impl IntoElement {
                         // The system's header has the first where it draws one.
                         .child(when(
                             || !crate::shell::system_header(),
-                            || ui::icon_button(Icon::Plus, tr("Add media"), Size::Md, util::pick_media),
+                            || ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, util::pick_media),
                         ))
-                        .child(ui::icon_button(Icon::Export, tr("Export shown as ZIP"), Size::Md, move || {
+                        .child(ui::icon_button(Icon::Export, tr("Export shown as ZIP…"), Size::Sm, move || {
                             super::dialogs::export_zip(shown.get_untracked())
                         })),
                 ),
@@ -131,7 +132,7 @@ pub(crate) fn library() -> impl IntoElement {
                                 "A subtitle file with the same name becomes its transcript. Up to 5 hours each."
                             })
                         },
-                        icon_text_button(Variant::Primary, Size::Md, Icon::Plus, l("Add media"))
+                        icon_text_button(Variant::Primary, Size::Md, Icon::Plus, l("Add media…"))
                             .on_press(util::pick_media),
                     )
                 },
@@ -142,12 +143,17 @@ pub(crate) fn library() -> impl IntoElement {
                     .estimated_item_size(px(64.0))
                     .content_padding(px(ui::PAGE_INSET - 12.0))
                     .empty(
+                        // Why the list is empty, and what fills it.
                         text(move || {
-                            if store.filter() == Filter::All {
-                                tr("No recordings match your search.")
-                            } else {
-                                tr("Nothing here.")
+                            if query.with(|q| !q.trim().is_empty()) {
+                                return tr("No recordings match your search.");
                             }
+                            tr(match store.filter() {
+                                Filter::All => "No recordings match your search.",
+                                Filter::InProgress => "Nothing is waiting or being transcribed.",
+                                Filter::Group(_) => "No recordings in this group. Add one with Group… in its menu.",
+                                Filter::Tag(_) => "No recordings carry this tag. Add it with Tags… in a recording's menu.",
+                            })
                         })
                         .text_sm()
                         .p(px(ui::PAGE_INSET))
@@ -235,19 +241,17 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         }
         store.catalog().tags.into_iter().filter(|tag| carried.contains(&tag.id)).map(|tag| tag.name).collect::<Vec<_>>()
     });
+    let more_open = signal(false);
     view()
         .flex_row()
         .items_center()
         .gap_1()
         .child(
+            // Only a recording with a transcript opens; the others offer
+            // their next step at the end of the row.
             ui::list_row(|| false)
-                .on_press(move || {
-                    if job.with_untracked(|job| job.as_deref().is_some_and(Job::has_transcript)) {
-                        store.open_transcript(&id());
-                    } else {
-                        ui::toast(ui::Tone::Info, tr("There is no transcript to open yet."));
-                    }
-                })
+                .disabled(move || !read(Job::has_transcript))
+                .on_press(move || store.open_transcript(&id()))
                 .flex_1()
                 .min_w(px(0.0))
                 .child(
@@ -374,19 +378,7 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
             },
         ))
         .child(
-            menu(
-                view()
-                    .size(px(32.0))
-                    .items_center()
-                    .justify_center()
-                    .rounded(tokens::radius)
-                    .label("More actions")
-                    .text_color(|| theme().muted_foreground)
-                    .transition_colors()
-                    .duration(motion::INSTANT)
-                    .hover(|s| s.bg(|| theme().accent))
-                    .child(icon(Icon::More, 16.0)),
-            )
+            ui::menu_with(more_open, ui::menu_trigger(Icon::More, tr("More actions"), Size::Sm, more_open))
             .child(menu_action(Icon::Pencil, l("Rename…"), move || dialogs.rename.show(&id())))
             .child(menu_action(Icon::Folder, l("Group…"), move || dialogs.group.show(&id())))
             .child(menu_action(Icon::Tag, l("Tags…"), move || dialogs.tags.show(&id())))

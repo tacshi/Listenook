@@ -205,7 +205,11 @@ fn model_identity(model_dir: &str) -> (u64, u64) {
 /// `WeightBuf::Mapped` handed out borrows from `base`.
 pub struct SidecarMmap {
     base: *mut u8,
+    #[cfg_attr(not(unix), allow(dead_code))]
     size: usize,
+    /// Windows: the mapping itself, unmapped when dropped.
+    #[cfg(not(unix))]
+    _map: memmap2::Mmap,
     offsets: Vec<u64>,
     lens: Vec<u64>,
 }
@@ -215,6 +219,7 @@ pub struct SidecarMmap {
 unsafe impl Send for SidecarMmap {}
 unsafe impl Sync for SidecarMmap {}
 
+#[cfg(unix)]
 impl Drop for SidecarMmap {
     fn drop(&mut self) {
         unsafe {
@@ -233,6 +238,37 @@ impl SidecarMmap {
         cfg: &QwenConfig,
         layout: &SidecarLayout,
     ) -> Option<SidecarMmap> {
+        Self::map(path, layout).and_then(|mapped| {
+            if validate_header(mapped.base, mapped.size, model_dir, cfg, layout) {
+                Some(mapped)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Windows: maps the file with `memmap2`; the header is validated by
+    /// [`Self::open_valid`] as on Unix.
+    #[cfg(not(unix))]
+    fn map(path: &str, layout: &SidecarLayout) -> Option<SidecarMmap> {
+        let file = std::fs::File::open(path).ok()?;
+        let size = file.metadata().ok()?.len() as usize;
+        if (size as u64) < layout.total_size {
+            return None;
+        }
+        // SAFETY: read-only; the sidecar is the app's own cache file.
+        let map = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+        Some(SidecarMmap {
+            base: map.as_ptr() as *mut u8,
+            size,
+            _map: map,
+            offsets: layout.offsets.clone(),
+            lens: layout.lens.clone(),
+        })
+    }
+
+    #[cfg(unix)]
+    fn map(path: &str, layout: &SidecarLayout) -> Option<SidecarMmap> {
         use libc::*;
         use std::ffi::CString;
 
@@ -258,12 +294,7 @@ impl SidecarMmap {
         }
         let base = base as *mut u8;
 
-        let ok = validate_header(base, size, model_dir, cfg, layout);
-        if !ok {
-            unsafe { munmap(base as *mut _, size) };
-            return None;
-        }
-
+        // Unmapped by `Drop` should the header not match.
         Some(SidecarMmap {
             base,
             size,
@@ -362,6 +393,7 @@ pub fn write_sidecar(
     bufs: &[&[u8]],
 ) -> bool {
     use std::io::Write;
+    #[cfg(unix)]
     use std::os::unix::fs::FileExt;
 
     if bufs.len() != layout.lens.len() {
@@ -443,4 +475,26 @@ pub fn enabled() -> bool {
     std::env::var("QWEN_ASR_SIDECAR")
         .map(|v| v != "0")
         .unwrap_or(true)
+}
+
+/// Windows' positioned write, in the shape of Unix's `write_all_at`.
+#[cfg(windows)]
+trait FileExt {
+    fn write_all_at(&self, buf: &[u8], offset: u64) -> std::io::Result<()>;
+}
+
+#[cfg(windows)]
+impl FileExt for std::fs::File {
+    fn write_all_at(&self, mut buf: &[u8], mut offset: u64) -> std::io::Result<()> {
+        use std::os::windows::fs::FileExt as _;
+        while !buf.is_empty() {
+            let n = self.seek_write(buf, offset)?;
+            if n == 0 {
+                return Err(std::io::ErrorKind::WriteZero.into());
+            }
+            buf = &buf[n..];
+            offset += n as u64;
+        }
+        Ok(())
+    }
 }

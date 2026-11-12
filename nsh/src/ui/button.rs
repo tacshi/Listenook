@@ -21,6 +21,8 @@ pub enum Variant {
     Outline,
     /// A quiet toolbar or inline action.
     Ghost,
+    /// A quiet action over a picture (a video): light in either theme.
+    Picture,
 }
 
 /// A control's size: height, padding, text and icon together.
@@ -31,17 +33,24 @@ pub enum Size {
 }
 
 impl Size {
-    fn height(self) -> f32 {
-        match self {
-            Size::Sm => 32.0,
-            Size::Md => 40.0,
+    /// The control's height: a pointer's sizes on a computer, a finger's
+    /// on a phone or a tablet. Fields and selects of a size share it.
+    pub(crate) fn height(self) -> f32 {
+        match (self, crate::platform::is_phone()) {
+            (Size::Sm, false) => 28.0,
+            (Size::Md, false) => 32.0,
+            (Size::Sm, true) => 32.0,
+            (Size::Md, true) => 40.0,
         }
     }
 
-    fn icon(self) -> f32 {
-        match self {
-            Size::Sm => 18.0,
-            Size::Md => 20.0,
+    /// The icon in the control: a step smaller than its text line.
+    pub(crate) fn icon(self) -> f32 {
+        match (self, crate::platform::is_phone()) {
+            (Size::Sm, false) => 14.0,
+            (Size::Md, false) => 16.0,
+            (Size::Sm, true) => 18.0,
+            (Size::Md, true) => 20.0,
         }
     }
 }
@@ -58,7 +67,7 @@ fn dressed(element: ButtonElement, variant: Variant, size: Size, square: bool) -
         .transition_all()
         .duration(motion::INSTANT)
         .ease_out()
-        .focus(tokens::focus_ring)
+        .focus_visible(tokens::focus_ring)
         .disabled_style(|s| s.opacity(0.45));
     let element = if square {
         element.w(px(size.height()))
@@ -89,6 +98,10 @@ fn dressed(element: ButtonElement, variant: Variant, size: Size, square: bool) -
             .text_color(|| theme().foreground)
             .hover(|s| s.bg(|| theme().accent))
             .active(move |s| s.bg(|| theme().input).scale(scale)),
+        Variant::Picture => element
+            .text_color(|| theme().foreground.dark)
+            .hover(|s| s.bg(|| theme().foreground.dark.opacity(0.14)))
+            .active(move |s| s.bg(|| theme().foreground.dark.opacity(0.24)).scale(scale)),
     }
 }
 
@@ -118,9 +131,20 @@ pub fn icon_text_button(
 /// A square button showing only an icon. `name` is what screen readers say
 /// and what the tooltip shows.
 pub fn icon_button(glyph: Icon, name: impl Into<SharedString>, size: Size, on_press: impl Fn() + 'static) -> View {
+    icon_button_as(Variant::Ghost, glyph, name, size, on_press)
+}
+
+/// An [`icon_button`] of another variant: [`Variant::Picture`] over a video.
+pub fn icon_button_as(
+    variant: Variant,
+    glyph: Icon,
+    name: impl Into<SharedString>,
+    size: Size,
+    on_press: impl Fn() + 'static,
+) -> View {
     let name: SharedString = name.into();
     view().flex_shrink_0().tooltip(tip(name.clone())).child(
-        dressed(nsh_base::button(), Variant::Ghost, size, true)
+        dressed(nsh_base::button(), variant, size, true)
             .accessibility_label(name)
             .on_press(on_press)
             .child(icon(glyph, size.icon())),
@@ -153,8 +177,55 @@ pub fn bar_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn(
         .transition_all()
         .duration(motion::INSTANT)
         .active(|s| s.scale(tokens::press_scale(true)).opacity(0.7))
-        .focus(tokens::focus_ring)
+        .focus_visible(tokens::focus_ring)
         .child(icon(glyph, 24.0))
+}
+
+/// An icon button that turns something on and off (a side panel, repeat):
+/// tinted in the accent while on, and announced as selected.
+pub fn toggle_button(
+    variant: Variant,
+    glyph: Icon,
+    name: impl Into<SharedString>,
+    size: Size,
+    on: impl Fn() -> bool + Copy + 'static,
+    on_press: impl Fn() + 'static,
+) -> View {
+    let name: SharedString = name.into();
+    let lit = move || if variant == Variant::Picture { theme().primary.dark } else { color(theme().primary) };
+    view().flex_shrink_0().tooltip(tip(name.clone())).child(
+        dressed(nsh_base::button(), variant, size, true)
+            .selected(on)
+            .selected_style(move |s| s.bg(move || lit().opacity(0.16)).text_color(lit))
+            .accessibility_label(name)
+            .on_press(on_press)
+            .child(icon(glyph, size.icon())),
+    )
+}
+
+/// What opens a menu from a toolbar or a row: a square icon button that
+/// stays pressed while its menu is open. `open` is the menu's state.
+pub fn menu_trigger(glyph: Icon, name: impl Into<SharedString>, size: Size, open: Signal<bool>) -> View {
+    let scale = tokens::press_scale(true);
+    let side = size.height();
+    let name: SharedString = name.into();
+    view()
+        .size(px(side))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(tokens::radius)
+        .label(name.clone())
+        .tooltip(tip(name))
+        .text_color(|| theme().foreground)
+        .transition_all()
+        .duration(motion::INSTANT)
+        .ease_out()
+        .bg(move || if open.get() { theme().accent } else { theme().accent.opacity(0.0) })
+        .hover(|s| s.bg(|| theme().accent))
+        .active(move |s| s.bg(|| theme().input).scale(scale))
+        .focus_visible(tokens::focus_ring)
+        .child(icon(glyph, size.icon()))
 }
 
 /// An icon button whose glyph and name follow state (play / pause).

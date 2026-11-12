@@ -799,10 +799,14 @@ impl Store {
         }
     }
 
-    /// Whether the app stays in the menu bar while a folder is watched
-    /// (kept where the Flutter app kept it; on unless turned off).
+    /// Whether the app stays in the menu bar (the tray) when its window is
+    /// closed, kept where the Flutter app kept it. On by default on a Mac,
+    /// where closing a window does not quit an app; off elsewhere, where
+    /// the close button is expected to quit it.
     pub(crate) fn tray_enabled(&self) -> bool {
-        self.monitor.with(|file| file.config.extra.get("show_tray_icon").and_then(|v| v.as_bool()).unwrap_or(true))
+        self.monitor.with(|file| {
+            file.config.extra.get("show_tray_icon").and_then(|v| v.as_bool()).unwrap_or(cfg!(target_os = "macos"))
+        })
     }
 
     /// Keeps the app in the menu bar, or not. Not while the Dock icon is

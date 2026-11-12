@@ -47,8 +47,10 @@ nsh-testing = { version = "0.5.0", default-features = false }
 
 # The speech engine: Accelerate on Apple's platforms; elsewhere its BLAS
 # call is answered by `services/blas.rs`.
-# `vendor/qwen-asr` is the crate with one change, so that it builds for iOS,
-# Android and Windows on Arm (`sdot_s32` in its `src/kernels/neon.rs`). A
+# `vendor/qwen-asr` is the crate with two changes: it builds for iOS,
+# Android and Windows on Arm (`sdot_s32` in its `src/kernels/neon.rs`), and
+# for Windows at all (its mmap, `pread`, `posix_memalign` and `sched_yield`
+# have Windows paths, the mapping by `memmap2`). A
 # path, not a `[patch]`: `nsh package` builds this crate in a workspace of
 # its own, where a patch written here does not apply.
 [target.'cfg(target_vendor = "apple")'.dependencies]

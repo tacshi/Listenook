@@ -4,10 +4,12 @@ use nsh_base::{SelectEntry, SelectItem, SliderValue, input, theme};
 use nsh_core::prelude::*;
 
 use super::{
+    button::Size,
     icons::{Icon, icon},
     tokens::{self, motion},
 };
 
+/// The one look of a field: the same edge, fill and height as a select.
 fn field_look(field: Input) -> Input {
     field
         .placeholder_color(|| color(theme().muted_foreground))
@@ -17,11 +19,27 @@ fn field_look(field: Input) -> Input {
         .text_color(|| theme().foreground)
         .rounded(tokens::radius)
         .border_1()
-        .border_color(|| theme().muted)
-        .bg(|| theme().muted)
+        .border_color(tokens::control_border)
+        .bg(|| theme().card)
         .transition_colors()
         .duration(motion::INSTANT)
         .focus(|s| s.border_color(|| theme().ring))
+}
+
+/// A single-line text field for a value kept elsewhere: `value` reads it,
+/// `set` writes what is typed.
+pub fn bound_field(
+    value: impl Fn() -> String + 'static,
+    set: impl Fn(String) + 'static,
+    placeholder: impl Fn() -> SharedString + 'static,
+) -> Input {
+    field_look(
+        input()
+            .value(value)
+            .on_change(move |text: &str| set(text.to_owned()))
+            .placeholder(move || placeholder().to_string()),
+    )
+    .h(px(Size::Md.height()))
 }
 
 /// A single-line text field bound to `value`.
@@ -32,7 +50,7 @@ pub fn text_field(value: Signal<String>, placeholder: impl Fn() -> SharedString 
             .on_change(move |text: &str| value.set(text.to_owned()))
             .placeholder(move || placeholder().to_string()),
     )
-    .h(px(40.0))
+    .h(px(Size::Md.height()))
 }
 
 /// A multi-line text field bound to `value`.
@@ -64,15 +82,15 @@ fn search_field_with(value: Signal<String>, placeholder: impl Fn() -> SharedStri
         .flex_row()
         .items_center()
         .gap_2()
-        .h(px(32.0))
+        .h(px(Size::Md.height()))
         .px_3()
         .rounded(tokens::radius)
         .border_1()
-        .border_color(|| theme().muted)
-        .bg(|| theme().muted)
+        .border_color(tokens::control_border)
+        .bg(|| theme().card)
         .text_color(|| theme().muted_foreground)
         .focus_within(|s| s.border_color(|| theme().ring))
-        .child(icon(Icon::Search, 18.0))
+        .child(icon(Icon::Search, Size::Md.icon()))
         .child(
             input()
                 .value(move || value.get())
@@ -130,7 +148,7 @@ pub fn switch(
                 .duration(motion::FAST)
                 .checked(|s| s.translate_x(px(16.0)))
         })
-        .focus(tokens::focus_ring)
+        .focus_visible(tokens::focus_ring)
         .disabled_style(|s| s.opacity(0.45))
         // The label takes the room left and wraps: a long setting's name
         // must not push the switch out of a narrow panel.
@@ -155,12 +173,12 @@ pub fn checkbox(
                 .justify_center()
                 .rounded(tokens::radius_sm)
                 .border_1()
-                .border_color(|| theme().input)
+                .border_color(tokens::control_border)
                 .text_color(|| theme().primary_foreground)
                 .checked(|s| s.bg(|| theme().primary).border_color(|| theme().primary))
         })
         .indicator(when(checked, || icon(Icon::Check, 12.0)))
-        .focus(tokens::focus_ring)
+        .focus_visible(tokens::focus_ring)
         .child(text(label).text_sm().text_color(|| theme().foreground))
 }
 
@@ -204,7 +222,7 @@ pub fn select(
         })
         .trigger(
             view()
-                .h(px(40.0))
+                .h(px(Size::Md.height()))
                 .flex_row()
                 .items_center()
                 .justify_between()
@@ -212,12 +230,15 @@ pub fn select(
                 .px_3()
                 .rounded(tokens::radius)
                 .border_1()
-                .border_color(|| theme().muted)
-                .bg(|| theme().muted)
+                .border_color(tokens::control_border)
+                .bg(|| theme().card)
                 .text_color(|| theme().muted_foreground)
-                .hover(|s| s.bg(|| theme().accent))
+                .transition_colors()
+                .duration(motion::INSTANT)
+                .hover(|s| s.bg(|| theme().muted))
+                .focus_visible(tokens::focus_ring)
                 .child(text(shown).text_sm().number_of_lines(1).text_color(|| theme().foreground))
-                .child(icon(Icon::ChevronDown, 16.0)),
+                .child(icon(Icon::ChevronDown, Size::Md.icon())),
         )
 }
 
@@ -248,7 +269,7 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 .items_center()
                 .justify_center()
                 .rounded(tokens::radius_sm)
-                .focus(tokens::focus_ring)
+                .focus_visible(tokens::focus_ring)
                 .child(
                     text(crate::state::l(label))
                         .text_sm()
@@ -308,6 +329,8 @@ fn slider_in(
         .accessibility_label(name.into())
         .h(px(20.0))
         .justify_center()
+        .rounded_full()
+        .focus_visible(tokens::focus_ring)
         .track_style(move |s| s.h(px(4.0)).rounded_full().bg(track))
         // The rail the thumb is centered on: as tall as the track, or the
         // thumb is centered on the track's top edge instead of its middle.

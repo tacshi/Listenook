@@ -151,7 +151,7 @@ mod tests {
             std::fs::write(root.join(name), b"x").unwrap();
         }
         let found = scan(&root).unwrap();
-        let mut names: Vec<&str> = found.keys().map(|path| path.rsplit('/').next().unwrap()).collect();
+        let mut names: Vec<&str> = found.keys().map(|path| path.rsplit(['/', '\\']).next().unwrap()).collect();
         names.sort();
         assert_eq!(names, ["a.mp3", "b.mp4"]);
         assert!(scan(&root.join("missing")).is_none());

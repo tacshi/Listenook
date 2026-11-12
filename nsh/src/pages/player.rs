@@ -13,7 +13,7 @@ use listenook_core::{
 use nsh_base::theme;
 use nsh_core::{
     desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes, WindowMode},
-    element::desktop::{current_window, open_window},
+    element::desktop::{current_window, open_window, title_bar},
     prelude::*,
 };
 
@@ -25,7 +25,7 @@ use crate::{
         store, tr,
     },
     ui::{
-        self, Icon, Tone, menu, menu_action, menu_toggle, toast,
+        self, Icon, Tone, menu, menu_toggle, toast,
         tokens::{self},
     },
     util::file_url,
@@ -389,7 +389,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .child(when(
             move || current.get().is_some(),
             move || {
-                view().max_w(px(960.0)).px_4().py_2().rounded(tokens::radius).bg(|| rgb(0x000000).opacity(0.7)).child(
+                view().max_w(px(960.0)).px_4().py_2().rounded(tokens::radius).bg(|| tokens::stage().opacity(0.7)).child(
                     text(move || {
                         let index = current.get();
                         cues.with(|cues| {
@@ -403,7 +403,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                     .text_2xl()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_center()
-                    .text_color(|| rgb(0xffffff)),
+                    .text_color(ink),
                 )
             },
         ));
@@ -419,6 +419,8 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             .tooltip(ui::tip(tr("Subtitles")))
             .text_color(move || if chosen.get().is_some() { lit() } else { ink() })
             .hover(|s| s.bg(|| ink().opacity(0.14)))
+            .active(|s| s.bg(|| ink().opacity(0.24)))
+            .focus_visible(tokens::focus_ring)
             .child(ui::icon(Icon::Captions, 18.0)),
     )
     .child(menu_toggle(l("Subtitles off"), move || chosen.get().is_none(), move || chosen.set(None)))
@@ -494,10 +496,14 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             )
             .children(RATES.iter().map(move |option| {
                 let option = *option;
-                menu_action(Icon::Clock, rate_label(option), move || {
-                    rate.set(option);
-                    store.save_rate("playback_rate", option);
-                })
+                ui::menu_choice(
+                    rate_label(option),
+                    move || (rate.get() - option).abs() < 0.001,
+                    move || {
+                        rate.set(option);
+                        store.save_rate("playback_rate", option);
+                    },
+                )
             })),
         )
         .child(
@@ -568,7 +574,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                     .style_with(shown)
                     // The window's controls are at this end; in the page, the way back.
                     .child(
-                        view().w(px(84.0)).items_start().ps_3().child(
+                        view().style_with(|s| s.w(px(title_bar().right.0.max(84.0)))).items_start().ps_3().child(
                             when(
                                 move || !own_window,
                                 move || {
@@ -612,7 +618,9 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                             .flex_1()
                             .text_color(ink),
                     )
-                    .child(view().w(px(84.0)))
+                    // Clear of the window's own buttons where the system
+                    // draws them at this end (Windows), as wide as they are.
+                    .child(view().style_with(|s| s.w(px(title_bar().right.0.max(84.0)))))
             },
         ))
         .child(
@@ -669,7 +677,7 @@ fn stage_button(
             .text_color(move || if on() { lit() } else { ink() })
             .hover(|s| s.bg(|| ink().opacity(0.14)))
             .active(|s| s.bg(|| ink().opacity(0.24)))
-            .focus(tokens::focus_ring)
+            .focus_visible(tokens::focus_ring)
             .child(ui::icon_of(glyph, 18.0)),
     )
 }
@@ -686,6 +694,6 @@ fn window_button(name: &'static str, color: fn() -> AdaptiveColor, on_press: imp
             .bg(color)
             .hover(|s| s.opacity(0.8))
             .active(|s| s.opacity(0.6))
-            .focus(tokens::focus_ring),
+            .focus_visible(tokens::focus_ring),
     )
 }

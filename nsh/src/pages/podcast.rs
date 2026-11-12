@@ -348,9 +348,9 @@ fn show_card(page: Page, show: impl Fn() -> ShowSummary + Copy + 'static) -> imp
         .rounded(tokens::radius_lg)
         .transition_colors()
         .duration(motion::INSTANT)
-        .hover(|s| s.bg(|| theme().muted))
+        .hover(|s| s.bg(tokens::hover_wash))
         .active(|s| s.bg(|| theme().accent))
-        .focus(tokens::focus_ring)
+        .focus_visible(tokens::focus_ring)
         .child(
             view()
                 .aspect_square()
@@ -550,7 +550,7 @@ fn episode_row(page: Page, episodes: Memo<Vec<Episode>>, at: Position) -> impl I
         .transition_colors()
         .duration(motion::INSTANT)
         .bg(move || if player.is_current(&id()) { tokens::highlight() } else { theme().background })
-        .hover(|s| s.bg(|| theme().muted))
+        .hover(|s| s.bg(tokens::hover_wash))
         .child(
             toggle_icon_button(
                 move || if playing() { Icon::Pause } else { Icon::Play },

@@ -65,8 +65,13 @@ impl IntoElement for Menu {
 /// A menu opening from `trigger`. Its children are [`menu_action`]s and
 /// [`menu_divider`]s.
 pub fn menu(trigger: impl IntoElement) -> Menu {
+    menu_with(signal(false), trigger)
+}
+
+/// A [`menu`] whose state is `open`, so its trigger can stay pressed while
+/// it shows (see [`super::menu_trigger`]).
+pub fn menu_with(open: Signal<bool>, trigger: impl IntoElement) -> Menu {
     if anchored() {
-        let open = signal(false);
         // A command chosen in it closes it.
         let chosen = CHOSEN.with(|chosen| *chosen);
         let first = std::cell::Cell::new(true);
@@ -94,6 +99,12 @@ pub fn menu(trigger: impl IntoElement) -> Menu {
     }
     Menu::Native(
         nsh_base::menu()
+            .open(move || Some(open.get()))
+            .on_open_change(move |event: &nsh_base::MenuEvent| {
+                if let nsh_base::MenuEvent::OpenChange(next, _) = event {
+                    open.set(*next);
+                }
+            })
             .offset(px(4.0))
             .margin(px(8.0))
             .popup_style(tokens::menu_surface)
@@ -102,6 +113,20 @@ pub fn menu(trigger: impl IntoElement) -> Menu {
             .backdrop_style(|s| s.bg(tokens::scrim))
             .trigger(trigger),
     )
+}
+
+/// The menu of what is under the pointer: a secondary click on `target`
+/// opens it there (Shift+F10 or the Menu key from the keyboard). Its
+/// children are [`menu_action`]s and [`menu_divider`]s; it is for a
+/// computer, where they are NSH's menu items.
+pub fn context_menu(target: impl IntoElement) -> nsh_base::ContextMenuElement {
+    nsh_base::context_menu()
+        .offset(px(4.0))
+        .margin(px(8.0))
+        .popup_style(tokens::popup_surface)
+        .popup_starting_class(tokens::POPUP_STARTING)
+        .popup_ending_class(tokens::POPUP_ENDING)
+        .trigger(target)
 }
 
 /// A panel of controls opening from `trigger`, without leaving the page.
@@ -152,7 +177,7 @@ fn menu_row(
             .text_color(ink)
             .hover(|s| s.bg(|| theme().accent))
             .active(|s| s.bg(|| theme().input))
-            .focus(tokens::focus_ring)
+            .focus_visible(tokens::focus_ring)
             .child(mark)
             .child(label)
             .into_element();

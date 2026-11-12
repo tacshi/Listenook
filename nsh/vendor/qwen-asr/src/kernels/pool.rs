@@ -328,10 +328,8 @@ impl Backoff {
             self.spins += 1;
             core::hint::spin_loop();
         } else {
-            // SAFETY: no arguments, no memory effects, always succeeds.
-            unsafe {
-                libc::sched_yield();
-            }
+            // `sched_yield` on Unix, `SwitchToThread` on Windows.
+            std::thread::yield_now();
             #[cfg(test)]
             {
                 self.yield_calls += 1;

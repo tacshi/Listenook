@@ -25,8 +25,8 @@ holds from 760pt wide; the reader's side panel is 400pt.
 
 ## Visual language
 
-Warm paper and ink with one moss-green accent. Flat surfaces separated by
-hairlines; shadows only on what floats (menus, dialogs, toasts).
+Neutral paper and ink with one violet accent (`primary`). Flat surfaces
+separated by hairlines; shadows only on what floats (menus, dialogs, toasts).
 
 | Token | Role |
 | --- | --- |
@@ -34,7 +34,9 @@ hairlines; shadows only on what floats (menus, dialogs, toasts).
 | `card`, `popover`, `sidebar` | Their surfaces |
 | `muted`, `muted-foreground` | Supporting regions and text |
 | `primary` (+ `-hover`, `-active`) | The default commit, the play button, selection emphasis |
-| `accent` | Hover and selected washes |
+| `hover` | The wash under the pointer, weaker than a selection |
+| `accent` | Selected rows and open triggers |
+| `control-border` | The edge of fields, selects and checkboxes (3:1 against the page) |
 | `destructive` | Destructive actions and errors |
 | `success`, `warning` | A finished job, a job that needs attention |
 | `highlight`, `highlight-foreground` | The sentence being played |
@@ -47,14 +49,19 @@ Colors live in `theme.json` and are read through `nsh_base::theme()` and
   parts (badges, checkboxes, inset rows), `radius-lg` 12 for cards and
   dialogs. Full circles only for status dots, switch thumbs and artwork-less
   avatars.
-- **Type:** the platform UI font. `text-lg` page titles, `text-base`
+- **Type:** the platform UI font. `text-lg` page titles, `text-lg`
   transcript text, `text-sm` interface text, `text-xs` metadata. Two weights:
   regular and medium/semibold. Times use tabular figures.
 - **Spacing:** Tailwind's 4pt scale. 24pt page inset shared by every region
   of a page (`ui::PAGE_INSET`); 4 / 8 / 12 / 16 / 24 for parts of a control,
   related controls, one group, groups in a section, sections.
-- **Density:** medium. Buttons 32pt (26pt small), rows 32–60pt.
-- **Icons:** Lucide outlines, 1.75 stroke, 14–16pt in controls.
+- **Density:** medium. On a computer controls are 32pt (28pt small) and
+  fields and selects share those heights; on a phone or tablet 40pt (32pt
+  small). Rows 32–60pt.
+- **Icons:** Lucide outlines, 1.75 stroke, 16pt in controls (14pt small;
+  18–20pt under a finger).
+- **Focus:** the keyboard's ring (`focus_visible`) on every control, outside
+  its edge; a field's own edge turns `ring` on any focus.
 
 ## The `ui` layer
 
@@ -62,10 +69,12 @@ Colors live in `theme.json` and are read through `nsh_base::theme()` and
 
 | Component | Variants and states |
 | --- | --- |
-| `button`, `icon_text_button`, `icon_button`, `toggle_icon_button` | Primary, Default, Outline, Ghost × Sm, Md; hover, pressed (scale 0.97 / 0.94), focus ring, disabled |
-| `text_field`, `text_area`, `search_field`, `field`, `hint` | Focus edge, placeholder |
+| `button`, `icon_text_button`, `icon_button`, `icon_button_as`, `toggle_icon_button` | Primary, Default, Outline, Ghost, Picture (over a video) × Sm, Md; hover, pressed (scale 0.97 / 0.94), focus ring, disabled |
+| `toggle_button` | An icon button that is on or off (a side panel, repeat): tinted and announced as selected while on |
+| `menu_trigger` | The square button a menu or popover opens from; pressed while it is open |
+| `text_field`, `bound_field`, `text_area`, `search_field`, `field`, `hint` | One look: `control-border` edge on `card`, focus edge, placeholder |
 | `switch`, `checkbox`, `select`, `segmented`, `slider`, `progress_bar` | Checked, disabled, indeterminate |
-| `menu`, `menu_action`, `menu_danger`, `menu_toggle`, `menu_divider` | One popup surface (`tokens::popup_surface`) |
+| `menu`, `menu_with`, `context_menu`, `menu_action`, `menu_choice`, `menu_danger`, `menu_toggle`, `menu_divider` | One popup surface (`tokens::popup_surface`) |
 | `modal`, `modal_actions`, `confirm_destructive` | Centered dialog; the system's alert for confirmations |
 | `toast`, `toast_host` | Info, Success, Error |
 | `page_header`, `card`, `section`, `separator`, `list_row`, `badge`, `empty_state`, `spinner`, `key_cap` | |
@@ -99,7 +108,7 @@ With reduced motion, presses do not scale, entrances land at once
 | A job is added | Its card rises in | Appears |
 | A job's status changes | The status dot's color cross-fades, `BASE`; the glyph swaps | Instant |
 | Work runs | The progress bar's fill glides between values, `BASE`; indeterminate while the length is unknown | Static bar |
-| Row menu opens | Grows from 0.95 and fades, 200ms; leaves in 150ms | Instant |
+| Row menu opens | Grows from 0.95 and fades, 200ms; leaves in 150ms; its button stays pressed while it is open | Instant |
 | Empty Library | The empty state fades in | Appears |
 
 ### Reader
@@ -107,7 +116,9 @@ With reduced motion, presses do not scale, entrances land at once
 | Change | Motion | Reduced |
 | --- | --- | --- |
 | The played sentence changes | The highlight fill cross-fades between rows, `BASE`; the list scrolls it to a third of the way down | Jumps |
-| Hover on a sentence | Wash `INSTANT`; its commands fade in, `INSTANT` | Instant |
+| Hover on a sentence | Wash `INSTANT`; its commands fade in, `INSTANT` (they are also on its context menu and on E / R) | Instant |
+| Sentence menu opens (secondary click) | As a row menu | Instant |
+| Full screen | The transport turns light on the picture; it fades out while playing and back on pointer movement, `BASE` | Instant |
 | Repeat on / off | The repeat button's tint cross-fades, `FAST` | Instant |
 | A side panel opens or changes | Its toolbar toggle's fill cross-fades, `FAST`; the panel takes its width at once | Instant |
 | Position | No motion: the slider follows playback 10 times a second and the thumb 1:1 while dragged | — |

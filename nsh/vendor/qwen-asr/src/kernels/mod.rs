@@ -19,6 +19,11 @@ pub fn superpage_vec<T: Copy>(n: usize) -> Vec<T> {
     if size < SUPERPAGE_SIZE {
         return vec![unsafe { std::mem::zeroed() }; n];
     }
+    superpage_alloc(n, size)
+}
+
+#[cfg(unix)]
+fn superpage_alloc<T: Copy>(n: usize, size: usize) -> Vec<T> {
     let mut ptr = std::ptr::null_mut();
     let rc = unsafe { libc::posix_memalign(&mut ptr, SUPERPAGE_SIZE, size) };
     if rc != 0 || ptr.is_null() {
@@ -28,6 +33,13 @@ pub fn superpage_vec<T: Copy>(n: usize) -> Vec<T> {
         std::ptr::write_bytes(ptr, 0, size);
         Vec::from_raw_parts(ptr as *mut T, n, n)
     }
+}
+
+/// Windows: memory from an aligned allocation cannot be handed to a `Vec`
+/// (the global allocator frees with `HeapFree`), so a plain one is used.
+#[cfg(not(unix))]
+fn superpage_alloc<T: Copy>(n: usize, _size: usize) -> Vec<T> {
+    vec![unsafe { std::mem::zeroed() }; n]
 }
 
 // BLAS extern bindings

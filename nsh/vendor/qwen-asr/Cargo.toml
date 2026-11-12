@@ -50,11 +50,9 @@ vdsp = []
 
 [lib]
 name = "qwen_asr"
-crate-type = [
-    "cdylib",
-    "staticlib",
-    "rlib",
-]
+# Only the Rust library: the app links it, and supplies its BLAS call
+# (`cblas_sgemm`) itself. A DLL of it alone cannot link on Windows.
+crate-type = ["rlib"]
 path = "src/lib.rs"
 
 
@@ -77,3 +75,6 @@ path = "src/lib.rs"
 
 [dependencies.libc]
 version = "0.2"
+
+[target.'cfg(windows)'.dependencies.memmap2]
+version = "0.9"

@@ -4,8 +4,11 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-/// What the system asks of the app.
+/// What the system asks of the app. Only Apple's platforms hear the
+/// system's media controls so far; elsewhere only `Toggle` is sent (by the
+/// global play/pause shortcut).
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
 pub(crate) enum Command {
     Play,
     Pause,
