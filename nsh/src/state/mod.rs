@@ -5,6 +5,7 @@ pub(crate) mod persist;
 pub(crate) mod podcast;
 pub(crate) mod secrets;
 mod store;
+pub(crate) mod sync;
 
 use listenook_core::l10n;
 use nsh_core::prelude::*;

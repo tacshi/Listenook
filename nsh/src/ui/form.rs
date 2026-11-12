@@ -11,12 +11,8 @@ use super::{
 
 /// The one look of a field: the same edge, fill and height as a select.
 fn field_look(field: Input) -> Input {
-    field
-        .placeholder_color(|| color(theme().muted_foreground))
-        .caret_color(|| color(theme().primary))
+    field_text(field)
         .px_3()
-        .text_sm()
-        .text_color(|| theme().foreground)
         .rounded(tokens::radius)
         .border_1()
         .border_color(tokens::control_border)
@@ -26,31 +22,82 @@ fn field_look(field: Input) -> Input {
         .focus(|s| s.border_color(|| theme().ring))
 }
 
+/// The text of a field, without its edge.
+fn field_text(field: Input) -> Input {
+    field
+        .placeholder_color(|| color(theme().muted_foreground))
+        .caret_color(|| color(theme().primary))
+        .text_sm()
+        .text_color(|| theme().foreground)
+}
+
+/// A single-line field around `input`. On iOS the edge and the padding
+/// are a view's and the field inside has none: on an iPad (iOS 27) a
+/// field's own padding did not move its text, which sat on the left
+/// edge. Elsewhere they are the field's own, so a click
+/// in the padding edits.
+fn line_field(input: Input) -> View {
+    if cfg!(target_os = "ios") {
+        view()
+            .flex_row()
+            .items_center()
+            .h(px(Size::Md.height()))
+            .px_3()
+            .rounded(tokens::radius)
+            .border_1()
+            .border_color(tokens::control_border)
+            .bg(|| theme().card)
+            .focus_within(|s| s.border_color(|| theme().ring))
+            .child(field_text(input).flex_1().h_full())
+    } else {
+        view().child(field_look(input).h(px(Size::Md.height())))
+    }
+}
+
 /// A single-line text field for a value kept elsewhere: `value` reads it,
 /// `set` writes what is typed.
 pub fn bound_field(
     value: impl Fn() -> String + 'static,
     set: impl Fn(String) + 'static,
     placeholder: impl Fn() -> SharedString + 'static,
-) -> Input {
-    field_look(
+) -> View {
+    bound_field_with(value, set, placeholder, |input| input)
+}
+
+/// A [`bound_field`] whose input `more` sets up further (its keyboard,
+/// what Return does).
+pub fn bound_field_with(
+    value: impl Fn() -> String + 'static,
+    set: impl Fn(String) + 'static,
+    placeholder: impl Fn() -> SharedString + 'static,
+    more: impl FnOnce(Input) -> Input,
+) -> View {
+    line_field(more(
         input()
             .value(value)
             .on_change(move |text: &str| set(text.to_owned()))
             .placeholder(move || placeholder().to_string()),
-    )
-    .h(px(Size::Md.height()))
+    ))
 }
 
 /// A single-line text field bound to `value`.
-pub fn text_field(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> Input {
-    field_look(
+pub fn text_field(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> View {
+    text_field_with(value, placeholder, |input| input)
+}
+
+/// A [`text_field`] whose input `more` sets up further (its keyboard,
+/// focus, what Return does).
+pub fn text_field_with(
+    value: Signal<String>,
+    placeholder: impl Fn() -> SharedString + 'static,
+    more: impl FnOnce(Input) -> Input,
+) -> View {
+    line_field(more(
         input()
             .value(move || value.get())
             .on_change(move |text: &str| value.set(text.to_owned()))
             .placeholder(move || placeholder().to_string()),
-    )
-    .h(px(Size::Md.height()))
+    ))
 }
 
 /// A multi-line text field bound to `value`.

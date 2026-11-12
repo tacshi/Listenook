@@ -79,6 +79,14 @@ pub(crate) fn load_jobs(root: &Path) -> Vec<Job> {
     jobs
 }
 
+/// One job's manifest, when it is there and readable.
+pub(crate) fn load_job(root: &Path, id: &str) -> Option<Job> {
+    if !Job::is_valid_id(id) {
+        return None;
+    }
+    read_json::<Job>(&root.join("jobs").join(id).join("manifest.json")).filter(|job| job.id == id)
+}
+
 /// Writes a job's manifest.
 pub(crate) fn save_job(root: &Path, job: &Job) -> io::Result<()> {
     if !Job::is_valid_id(&job.id) {

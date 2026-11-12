@@ -12,6 +12,7 @@ pub(crate) mod notify;
 pub(crate) mod playable;
 pub(crate) mod podcasts;
 pub(crate) mod remote;
+pub(crate) mod sync;
 pub(crate) mod transcribe;
 pub(crate) mod updater;
 

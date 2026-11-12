@@ -22,6 +22,7 @@
     "infoPlist": {
       "MinimumOSVersion": "18.0",
       "UIFileSharingEnabled": true,
+      "NSLocalNetworkUsageDescription": "Listenook finds your other devices on this network to sync your Library with them.",
       "LSSupportsOpeningDocumentsInPlace": true,
       "UIBackgroundModes": [
         "audio"

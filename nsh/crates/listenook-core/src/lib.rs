@@ -15,6 +15,7 @@ pub mod parser;
 pub mod podcast;
 pub mod structure;
 pub mod subtitles;
+pub mod sync;
 pub mod translate;
 
 pub use models::*;

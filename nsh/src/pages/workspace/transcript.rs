@@ -12,7 +12,7 @@ use crate::{
     services::llm,
     state::{l, tr},
     ui::{
-        self, Icon, Size, Variant, button, field, icon_button, modal, modal_actions, text_area, text_field,
+        self, Icon, Size, Variant, button, field, icon_button, modal, modal_actions, text_area, text_field_with,
         tokens::{self, motion},
     },
 };
@@ -474,7 +474,9 @@ fn speaker_dialog(review: Review, speaker: Signal<Option<String>>) -> impl IntoE
         move || {
             field(
                 l("Name"),
-                text_field(name, SharedString::default).auto_focus(true).on_submit(move |_: &str| rename()),
+                text_field_with(name, SharedString::default, move |input| {
+                    input.auto_focus(true).on_submit(move |_: &str| rename())
+                }),
             )
             .into_element()
         },

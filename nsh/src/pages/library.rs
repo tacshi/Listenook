@@ -111,6 +111,9 @@ pub(crate) fn library() -> impl IntoElement {
                             || !crate::shell::system_header(),
                             || ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, util::pick_media),
                         ))
+                        .child(ui::icon_button(Icon::Devices, tr("Sync with another device…"), Size::Sm, move || {
+                            store.sync.show()
+                        }))
                         .child(ui::icon_button(Icon::Export, tr("Export shown as ZIP…"), Size::Sm, move || {
                             super::dialogs::export_zip(shown.get_untracked())
                         })),
