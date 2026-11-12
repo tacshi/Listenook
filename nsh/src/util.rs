@@ -306,22 +306,48 @@ pub(crate) fn import_picked(paths: Vec<String>) {
     }
 }
 
+/// Takes in the media another app handed over, from its share sheet or
+/// "Open in": on a phone or a tablet, where a recording is kept with the
+/// app's own. Returns how many were taken.
+pub(crate) fn import_opened(paths: Vec<String>) -> usize {
+    take_in_with(paths.into_iter().map(std::path::PathBuf::from).collect(), |from, to| {
+        let Some(source) = from.to_str() else {
+            return false;
+        };
+        let copied = crate::services::copy_opened(source, to);
+        // What the system copied into the app's inbox for this is the
+        // app's to clear; a file opened where it lies stays its owner's.
+        if copied && source.contains("/Inbox/") {
+            let _ = std::fs::remove_file(from);
+        }
+        copied
+    })
+}
+
 /// Moves media files into the app's own storage and adds them to the
 /// Library under their own names. Returns how many were taken.
 fn take_in(found: Vec<std::path::PathBuf>) -> usize {
+    take_in_with(found, |from, to| {
+        std::fs::rename(from, to).is_ok() || (std::fs::copy(from, to).is_ok() && std::fs::remove_file(from).is_ok())
+    })
+}
+
+/// Brings media files into the app's own storage as `bring` does it, and
+/// adds them to the Library under their own names.
+fn take_in_with(found: Vec<std::path::PathBuf>, bring: impl Fn(&std::path::Path, &std::path::Path) -> bool) -> usize {
     let store = store();
     let Some(root) = store.data_root() else {
         return 0;
     };
     let media = root.join("media");
     let mut taken: Vec<(String, String)> = Vec::new();
-    for path in found.into_iter().filter(|path| path.is_file() && path.to_str().is_some_and(subtitles::is_media)) {
+    // Not `is_file`: a file opened where it lies cannot be looked at
+    // before the system gives leave, which `bring` asks for.
+    for path in found.into_iter().filter(|path| path.to_str().is_some_and(subtitles::is_media)) {
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("media").to_lowercase();
         let title = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Recording").to_owned();
         let kept = media.join(format!("{}.{extension}", uuid::Uuid::new_v4()));
-        let moved = std::fs::create_dir_all(&media).is_ok()
-            && (std::fs::rename(&path, &kept).is_ok()
-                || (std::fs::copy(&path, &kept).is_ok() && std::fs::remove_file(&path).is_ok()));
+        let moved = std::fs::create_dir_all(&media).is_ok() && bring(&path, &kept);
         if moved && let Some(kept) = kept.to_str() {
             taken.push((kept.to_owned(), title));
         }

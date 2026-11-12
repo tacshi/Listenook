@@ -287,6 +287,25 @@ extern "C" fn documents_picked(_: Id, _: Sel, _picker: Id, urls: Id) {
     }
 }
 
+/// Copies a file another app handed over. One opened where it lies (from
+/// the Files app) is outside the app's own storage: the system lets it be
+/// read only between these two calls.
+#[cfg(target_os = "ios")]
+pub(super) fn copy_opened(from: &str, to: &std::path::Path) -> bool {
+    // SAFETY: NSURL's documented class and instance methods, on a URL
+    // made here and kept alive by the autorelease pool of the caller.
+    unsafe {
+        let asks: unsafe extern "C" fn(Id, Sel) -> bool = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let url = send_id(class(c"NSURL"), c"fileURLWithPath:", string(from));
+        let scoped = !url.is_null() && asks(url, sel(c"startAccessingSecurityScopedResource"));
+        let copied = std::fs::copy(from, to).is_ok();
+        if scoped {
+            send(url, c"stopAccessingSecurityScopedResource");
+        }
+        copied
+    }
+}
+
 /// Shows the system's document picker (the Files app's browser) for any
 /// number of files. The system copies what is picked, however large,
 /// without the app reading it into memory; [`take_picked`] gives the copies.

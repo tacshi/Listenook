@@ -110,7 +110,7 @@ pub(crate) fn shell() -> impl IntoElement {
     // Files the system opens the app with (Open With, a double click, a
     // drop on its icon): a video plays, other media goes to the Library.
     let launched = std::time::Instant::now();
-    let open_paths = move |paths: Vec<String>| match paths.iter().find(|path| pages::is_video(path)) {
+    let open_media = move |paths: Vec<String>| match paths.iter().find(|path| pages::is_video(path)) {
         Some(video) => {
             store.open_video(video);
             // Launched to play it: the player is all that shows.
@@ -132,6 +132,21 @@ pub(crate) fn shell() -> impl IntoElement {
             util::add_media(paths);
             show_window();
         }
+    };
+    let open_paths = move |paths: Vec<String>| {
+        // On a phone or a tablet what another app hands over (its share
+        // sheet, "Open in") goes into the Library, kept with the app's own.
+        if platform::is_phone() && paths.iter().any(|path| listenook_core::subtitles::is_media(path)) {
+            let taken = util::import_opened(paths);
+            if taken > 0 {
+                store.go(Place::Library);
+                ui::toast(ui::Tone::Success, tr("Added to your library"));
+            } else {
+                ui::toast(ui::Tone::Error, tr("That file could not be added."));
+            }
+            return;
+        }
+        open_media(paths)
     };
     // Opened with a video on the command line (Windows' "Open with").
     if let Some(video) =

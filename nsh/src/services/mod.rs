@@ -64,6 +64,16 @@ pub(crate) fn pick_documents() -> bool {
     false
 }
 
+/// Copies a file another app handed the app to open: on an iPhone or iPad
+/// it may lie outside the app's storage, readable only with the system's
+/// leave.
+pub(crate) fn copy_opened(from: &str, to: &std::path::Path) -> bool {
+    #[cfg(target_os = "ios")]
+    return apple::copy_opened(from, to);
+    #[cfg(not(target_os = "ios"))]
+    std::fs::copy(from, to).is_ok()
+}
+
 /// The files picked there since the last call.
 pub(crate) fn take_picked() -> Vec<String> {
     #[cfg(target_os = "ios")]

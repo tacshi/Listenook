@@ -47,6 +47,27 @@
         "video/x-matroska",
         "video/webm",
         "video/x-msvideo"
+      ],
+      "contentTypes": [
+        "public.movie"
+      ]
+    },
+    {
+      "name": "Audio",
+      "extensions": [
+        "mp3",
+        "wav",
+        "m4a",
+        "ogg"
+      ],
+      "mimeTypes": [
+        "audio/mpeg",
+        "audio/wav",
+        "audio/mp4",
+        "audio/ogg"
+      ],
+      "contentTypes": [
+        "public.audio"
       ]
     }
   ]

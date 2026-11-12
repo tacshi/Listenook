@@ -131,6 +131,8 @@ const ZH: &[(&str, &str)] = &[
     ("Search podcasts", "搜索播客"),
     ("Paste a public RSS URL", "粘贴公开的 RSS 地址"),
     ("Add by URL", "通过链接添加"),
+    ("Added to your library", "已添加到资料库"),
+    ("That file could not be added.", "无法添加该文件。"),
     ("RSS URL", "RSS 地址"),
     ("English worth studying", "值得精听的英语节目"),
     ("No podcasts matched that search.", "没有找到匹配的播客。"),
