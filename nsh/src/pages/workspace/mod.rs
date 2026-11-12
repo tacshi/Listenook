@@ -790,48 +790,50 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
         )
         .flex_1()
     };
-    let controls = view()
-        .h(px(48.0))
-        .flex_row()
-        .items_center()
-        .gap_3()
-        .child(icon_button(Icon::SkipBack, tr("Previous sentence"), Size::Sm, move || review.step(-1)))
-        .child(
-            toggle_icon_button(
-                move || if active() { Icon::Pause } else { Icon::Play },
-                move || if active() { "Pause".into() } else { "Play".into() },
-                Variant::Ghost,
-                Size::Sm,
+    // The parts, laid out one way in a wide page and another in a narrow one.
+    let skip = move |size: Size| {
+        view()
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .child(icon_button(Icon::SkipBack, tr("Previous sentence"), size, move || review.step(-1)))
+            .child(
+                toggle_icon_button(
+                    move || if active() { Icon::Pause } else { Icon::Play },
+                    move || if active() { "Pause".into() } else { "Play".into() },
+                    Variant::Ghost,
+                    size,
+                )
+                .on_press(move || review.toggle_play()),
             )
-            .on_press(move || review.toggle_play()),
-        )
-        .child(icon_button(Icon::SkipForward, tr("Next sentence"), Size::Sm, move || review.step(1)))
-        .child(time_text(move || dragging.get().map_or(review.position_ms.get(), |ms| ms as i64)))
-        // In a wide window the position is between the times; in a narrow
-        // one it has a row of its own above.
-        .child(when(move || !crate::shell::page_narrow(), position).otherwise(|| view().flex_1()))
-        .child(time_text(move || review.duration_ms.get()))
-        .child(
-            view()
-                .rounded(tokens::radius)
-                .transition_colors()
-                .duration(motion::FAST)
-                .bg(move || if review.repeating.get().is_some() { theme().accent } else { theme().accent.opacity(0.0) })
-                .text_color(move || if review.repeating.get().is_some() { theme().primary } else { theme().foreground })
-                .child(icon_button(Icon::Repeat, tr("Repeat sentence"), Size::Sm, move || {
-                    if let Some(index) = review.target_or_first() {
-                        review.toggle_repeat(index);
-                    }
-                })),
-        )
-        .child(rate_menu(
+            .child(icon_button(Icon::SkipForward, tr("Next sentence"), size, move || review.step(1)))
+    };
+    let at = move || time_text(move || dragging.get().map_or(review.position_ms.get(), |ms| ms as i64));
+    let length = move || time_text(move || review.duration_ms.get());
+    let repeat = move || {
+        view()
+            .rounded(tokens::radius)
+            .transition_colors()
+            .duration(motion::FAST)
+            .bg(move || if review.repeating.get().is_some() { theme().accent } else { theme().accent.opacity(0.0) })
+            .text_color(move || if review.repeating.get().is_some() { theme().primary } else { theme().foreground })
+            .child(icon_button(Icon::Repeat, tr("Repeat sentence"), Size::Sm, move || {
+                if let Some(index) = review.target_or_first() {
+                    review.toggle_repeat(index);
+                }
+            }))
+    };
+    let rate = move || {
+        rate_menu(
             move || review.rate.get(),
             move |rate| {
                 review.rate.set(rate);
                 store().save_rate("playback_rate", rate);
             },
-        ))
-        .child(when(
+        )
+    };
+    let screen = move || {
+        when(
             move || review.has_video,
             move || {
                 when(
@@ -846,7 +848,41 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                     icon_button(Icon::Maximize, tr("Full screen"), Size::Sm, move || set_fullscreen(review, true))
                 })
             },
-        ));
+        )
+    };
+    // A wide page: one row, the position between the times.
+    let wide = move || {
+        view()
+            .h(px(48.0))
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .child(skip(Size::Sm))
+            .child(at())
+            .child(position())
+            .child(length())
+            .child(repeat())
+            .child(rate())
+            .child(screen())
+    };
+    // A narrow one, held in a hand: the position between the times on a
+    // row of its own, and under it playing in the middle, where a thumb
+    // is, with the speed at one side and the rest at the other.
+    let narrow = move || {
+        view()
+            .child(view().flex_row().items_center().gap_3().pt_3().child(at()).child(position()).child(length()))
+            .child(
+                view()
+                    .h(px(56.0))
+                    .flex_row()
+                    .items_center()
+                    .child(view().flex_1().flex_row().items_center().child(rate()))
+                    .child(skip(Size::Md))
+                    .child(
+                        view().flex_1().flex_row().items_center().justify_end().gap_1().child(repeat()).child(screen()),
+                    ),
+            )
+    };
     view()
         .flex_shrink_0()
         .px(px(ui::PAGE_INSET))
@@ -871,8 +907,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                 s.border_t_1()
             }
         })
-        .child(when(crate::shell::page_narrow, move || view().flex_row().pt_3().child(position())))
-        .child(controls)
+        .child(when(crate::shell::page_narrow, narrow).otherwise(wide))
 }
 
 /// The R key being held: what was looping before it, and when the key
