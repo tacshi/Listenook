@@ -76,6 +76,7 @@ pub(crate) struct Store {
     players: Signal<usize>,
     video_only: Signal<bool>,
     settings_open: Signal<bool>,
+    update_check: Signal<bool>,
     immersive: Signal<bool>,
     sidebar_hidden: Signal<bool>,
     /// Whether the app's window has the keyboard: what finishes while it
@@ -177,6 +178,7 @@ impl Store {
             place: signal(Place::default()),
             filter: signal(Filter::default()),
             settings_open: signal(false),
+            update_check: signal(false),
             immersive: signal(false),
             sidebar_hidden: signal(false),
             focused: signal(true),
@@ -424,6 +426,18 @@ impl Store {
     /// Whether the Settings dialog is open, as the signal a dialog follows.
     pub(crate) fn settings_open(&self) -> Signal<bool> {
         self.settings_open
+    }
+
+    /// Whether a check for updates was asked for from a menu: Settings'
+    /// About page takes it and checks.
+    pub(crate) fn update_check(&self) -> Signal<bool> {
+        self.update_check
+    }
+
+    /// Opens Settings at About and checks for updates there.
+    pub(crate) fn check_for_updates(&self) {
+        self.update_check.set(true);
+        self.settings_open.set(true);
     }
 
     // --- Settings ------------------------------------------------------------

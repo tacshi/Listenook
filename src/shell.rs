@@ -95,6 +95,10 @@ pub(crate) fn shell() -> impl IntoElement {
                 show_window();
                 store.settings_open().set(true);
             }));
+            items.push(MenuItem::new(tr("Check for updates…").to_string()).on_select(move || {
+                show_window();
+                store.check_for_updates();
+            }));
             items.push(MenuItem::separator());
             items.push(MenuItem::new(tr("Quit Listenook").to_string()).on_select(nsh_core::element::desktop::quit));
             set_tray(
@@ -458,6 +462,7 @@ fn application_menu() -> Vec<MenuItem> {
     let role = |role: MenuRole, label: &'static str| MenuItem::role(role).label(named(label));
     let settings =
         MenuItem::new(named("Settings…")).shortcut("mod+,").on_select(move || store.settings_open().set(true));
+    let updates = MenuItem::new(named("Check for updates…")).on_select(move || store.check_for_updates());
     let mut menus = Vec::new();
     // A Mac's first menu is the app's own; elsewhere its items are in File.
     let mac = os() == Os::MacOs;
@@ -466,6 +471,7 @@ fn application_menu() -> Vec<MenuItem> {
             "Listenook",
             [
                 role(MenuRole::About, "About Listenook"),
+                updates.clone(),
                 MenuItem::separator(),
                 settings.clone(),
                 MenuItem::separator(),
@@ -484,7 +490,13 @@ fn application_menu() -> Vec<MenuItem> {
         role(MenuRole::Close, "Close Window"),
     ];
     if !mac {
-        file.extend([MenuItem::separator(), settings, MenuItem::separator(), role(MenuRole::Quit, "Quit Listenook")]);
+        file.extend([
+            MenuItem::separator(),
+            settings,
+            updates,
+            MenuItem::separator(),
+            role(MenuRole::Quit, "Quit Listenook"),
+        ]);
     }
     menus.push(MenuItem::submenu(named("File"), file));
     menus.push(MenuItem::submenu(
@@ -862,7 +874,7 @@ fn sidebar() -> impl IntoElement {
         ))
         .child(view().p_2().child(row(
             Icon::Settings,
-            l("Settings…"),
+            l("Settings"),
             || None,
             move || store.settings_open().get(),
             move || store.settings_open().set(true),

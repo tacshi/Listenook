@@ -56,6 +56,12 @@ pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) fn settings_dialog() -> impl IntoElement {
     let open = store().settings_open();
     let tab = signal(Tab::General);
+    // A check asked for from a menu shows where its answer is.
+    effect(move || {
+        if store().update_check().get() {
+            tab.set(Tab::About);
+        }
+    });
     modal_sized(
         open,
         l("Settings"),
@@ -729,6 +735,13 @@ fn shortcuts() -> impl IntoElement {
 fn about() -> impl IntoElement {
     let store = store();
     let state = signal(UpdateState::default());
+    // A check asked for from a menu, before this page showed or while it does.
+    effect(move || {
+        if store.update_check().get() {
+            store.update_check().set(false);
+            updater::check(state);
+        }
+    });
     let status = move || -> SharedString {
         match state.get() {
             UpdateState::Idle => SharedString::default(),

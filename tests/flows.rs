@@ -95,7 +95,7 @@ fn open_sample(name: &str) -> App {
 fn an_empty_library_invites_media_and_the_language_changes_at_once() {
     let mut it = start("empty", |_| {}, Vec::new());
     it.app.wait_for("Drop audio or video here").unwrap();
-    it.app.press("role:button[Settings…]").unwrap();
+    it.app.press("role:button[Settings]").unwrap();
     it.app.wait_for("Appearance").unwrap();
     it.app.press("简体中文").unwrap();
     it.app.wait_for("资料库").unwrap();

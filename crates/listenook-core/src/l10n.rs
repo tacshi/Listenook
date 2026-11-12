@@ -155,6 +155,7 @@ const ZH: &[(&str, &str)] = &[
     ("Base URL", "Base URL"),
     ("Model", "模型"),
     ("Check for updates", "检查更新"),
+    ("Check for updates…", "检查更新…"),
     ("Restart to update", "重启以更新"),
     ("Pending", "等待中"),
     ("Inspecting", "检查中"),
