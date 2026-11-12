@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Builds and publishes a Listenook release from macOS: the macOS app is
-# built here, the Windows and Intel Mac artifacts are brought from their
-# machines, and everything goes to a GitHub Release of this repository with
-# the manifest (`latest.json`) the in-app updater reads.
+# Builds and publishes a Listenook release from macOS: the macOS apps (both
+# processors) and the Android .apk are built here, the Windows artifacts
+# are brought from their machine, and everything goes to a GitHub Release
+# of this repository with the manifest (`latest.json`) the in-app updater
+# reads.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -14,8 +15,8 @@ RELEASE_REPO="${LISTENOOK_RELEASE_REPO:-$(python3 -c \
 STAGE_DIR="$OUT/release"
 VERSION=""
 SKIP_WINDOWS=false
-WITH_INTEL=false
-WITH_ANDROID=false
+WITH_INTEL=true
+WITH_ANDROID=true
 NO_UPLOAD=false
 ALLOW_BRANCH=false
 REUSE=false
@@ -62,8 +63,8 @@ usage() {
     'usage: ./scripts/publish.sh VERSION [options]' \
     '' \
     '  --skip-windows     publish without a Windows build' \
-    '  --with-intel       also build and include the Intel Mac package' \
-    '  --with-android     build and include the Android .apk' \
+    '  --skip-intel       publish without the other Mac processor'"'"'s package' \
+    '  --skip-android     publish without the Android .apk' \
     '  --no-upload        build and write latest.json without publishing' \
     '  --reuse-artifacts  reuse the matching files already in build/release' \
     '  --allow-branch     bypass the main/origin publication check'
@@ -72,8 +73,8 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-windows) SKIP_WINDOWS=true; shift ;;
-    --with-intel) WITH_INTEL=true; shift ;;
-    --with-android) WITH_ANDROID=true; shift ;;
+    --skip-intel) WITH_INTEL=false; shift ;;
+    --skip-android) WITH_ANDROID=false; shift ;;
     --no-upload) NO_UPLOAD=true; shift ;;
     --allow-branch) ALLOW_BRANCH=true; shift ;;
     --reuse-artifacts) REUSE=true; shift ;;
