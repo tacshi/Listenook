@@ -187,5 +187,7 @@ macOS 15+; `scripts/build-speech-worker.sh` builds its helper, which the macOS
 build packages.
 
 Publishing is a separate step: `scripts/publish.sh <version>`, whose options
-are listed by `scripts/publish.sh --help`.
+are listed by `scripts/publish.sh --help`. Build Windows first, with
+`scripts\build-windows.ps1 release -Version <version>`, and copy the
+installer, its `.build.json` and the updater's `.zip` into `build/`.
 Licenses of what the packages carry are in [packaging/notices](packaging/notices).

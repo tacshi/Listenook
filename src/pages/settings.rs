@@ -49,7 +49,12 @@ impl Tab {
 }
 
 /// The app's version, as `nsh.json` has it.
-pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version shown in About: the one a release is built as
+/// (`LISTENOOK_VERSION`, which the build scripts set), else the crate's.
+pub(crate) const VERSION: &str = match option_env!("LISTENOOK_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 /// The Settings dialog: defaults and accounts. What is decided per
 /// recording (how to transcribe, what to show) is decided where it is used.

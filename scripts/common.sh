@@ -47,6 +47,8 @@ nsh_package() {
   local target="$1" out="$2"
   shift 2
   local args=(--target "$target" --out "$out" --app-version "$VERSION")
+  # What About shows, whatever version Cargo.toml has when this is built.
+  export LISTENOOK_VERSION="$VERSION"
   if [[ -n "${BUILD_NUMBER:-}" ]]; then args+=(--build "$BUILD_NUMBER"); fi
   rm -rf "$out"
   (cd "$ROOT" && quiet nsh package "${args[@]}" "$@")

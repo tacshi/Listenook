@@ -108,4 +108,4 @@ cargo run
 
 产物写入 `build/`。每个脚本在开头列出它读取的签名设置。用 MOSS 做本地语音识别需要 Apple 芯片的 Mac 和 macOS 15 及以上；`scripts/build-speech-worker.sh` 构建它的辅助程序，macOS 构建会把它一并打包。
 
-发布是单独的一步：`scripts/publish.sh <版本号>`，可用选项见 `scripts/publish.sh --help`。安装包所附带内容的许可证在 [packaging/notices](packaging/notices) 里。
+发布是单独的一步：`scripts/publish.sh <版本号>`，可用选项见 `scripts/publish.sh --help`。先在 Windows 上用 `scripts\build-windows.ps1 release -Version <版本号>` 构建，再把安装程序、它的 `.build.json` 和更新器用的 `.zip` 拷进 `build/`。安装包所附带内容的许可证在 [packaging/notices](packaging/notices) 里。

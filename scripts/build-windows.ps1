@@ -14,7 +14,9 @@ param(
 #   build-windows.ps1 release -Version 1.2.3   the same for a published release:
 #                                              built from a clean main that
 #                                              matches origin, with a record of
-#                                              the commit for scripts/publish.sh
+#                                              the commit for scripts/publish.sh.
+#                                              Build it before or after
+#                                              publish.sh sets the version.
 #
 # A release needs Inno Setup 6 or 7.
 
@@ -45,7 +47,11 @@ if ($Version) {
       throw "Local main must exactly match origin/main."
     }
   }
-  $BuildNumber = (git -C $Root rev-list --count HEAD).Trim()
+  $BuildNumber = [int](git -C $Root rev-list --count HEAD).Trim()
+  # scripts/publish.sh sets the version in a commit of its own. Built before
+  # that commit exists, this takes the number that commit will have, so that
+  # every platform of the release has the same one.
+  if ($Manifest.version -ne $Version) { $BuildNumber += 1 }
 } else {
   $Version = $Manifest.version
 }
@@ -120,6 +126,8 @@ try {
   $Package = Join-Path $Root "build\nsh\windows-$Arch"
   if (Test-Path $Package) { Remove-Item $Package -Recurse -Force }
   $PackageArgs = @("package", "--target", "windows", "--out", $Package, "--app-version", $Version)
+  # What About shows, whatever version Cargo.toml has when this is built.
+  $env:LISTENOOK_VERSION = $Version
   if ($BuildNumber) { $PackageArgs += @("--build", $BuildNumber) }
   & nsh @PackageArgs
   if ($LASTEXITCODE -ne 0) { throw "nsh package failed." }

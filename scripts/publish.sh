@@ -104,6 +104,48 @@ if [[ "$(nsh_json version)" != "$VERSION" ]] ||
 fi
 info "version: $VERSION+$BUILD_NUMBER"
 info "releases: $RELEASE_REPO"
+
+# An artifact built on another machine has to come from this release's
+# source: the commit that sets the version, or the one just before it,
+# which differs in nothing but the version files. The app takes its version
+# and build number from the build scripts, not from those files.
+read_json() { sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$2" | head -1 | tr -d ' '; }
+SOURCE_COMMITS=("$HEAD_COMMIT")
+# The number the release has once the version is committed, which a dry run
+# does not do.
+RELEASE_BUILD="$(git rev-list --count HEAD)"
+[[ "$NEEDS_BUMP" == false ]] || RELEASE_BUILD=$((RELEASE_BUILD + 1))
+if [[ "$NEEDS_BUMP" == false ]] &&
+  [[ "$(git diff --name-only HEAD^ HEAD 2>/dev/null | sort | tr '\n' ' ')" == "Cargo.lock Cargo.toml nsh.json " ]]; then
+  SOURCE_COMMITS+=("$(git rev-parse HEAD^)")
+fi
+check_provenance() {
+  local sidecar="$1" label="$2" architecture="$3" version build commit known=false
+  [[ -f "$sidecar" ]] || die "$label provenance sidecar not found: $sidecar"
+  version="$(read_json version "$sidecar")"
+  build="$(read_json build "$sidecar")"
+  commit="$(read_json commit "$sidecar")"
+  [[ "$version" == "$VERSION" ]] || die "$label artifact is version $version, not $VERSION"
+  for candidate in "${SOURCE_COMMITS[@]}"; do
+    [[ "$commit" != "$candidate" ]] || known=true
+  done
+  [[ "$known" == true && "$build" == "$RELEASE_BUILD" ]] ||
+    die "$label artifact was built from another commit (${commit:0:7}, build $build): this release is build $RELEASE_BUILD, from ${HEAD_COMMIT:0:7}.
+Pull on that machine, build it again with -Version $VERSION, and copy it into build/."
+  [[ "$(read_json architecture "$sidecar")" == "$architecture" ]] || die "$label architecture must be $architecture"
+  [[ "$(read_json dirty "$sidecar")" != "true" && "$(read_json dirty "$sidecar")" != "True" ]] ||
+    die "$label artifact was built from a dirty checkout"
+}
+# Checked here, before the notes are asked for and the version is committed.
+WIN_EXE="$APP_NAME-$VERSION-windows-x64-release-setup.exe"
+WIN_UPDATE="$APP_NAME-$VERSION-windows-x86_64.zip"
+if [[ "$SKIP_WINDOWS" == false ]]; then
+  [[ -f "$OUT/$WIN_EXE" ]] || die "Windows installer not found: $OUT/$WIN_EXE
+Build it on Windows with: .\\scripts\\build-windows.ps1 release -Version $VERSION"
+  [[ -f "$OUT/$WIN_UPDATE" ]] || die "Windows updater archive not found: $OUT/$WIN_UPDATE"
+  check_provenance "$OUT/$WIN_EXE.build.json" Windows x64
+  info "windows: built from $(read_json commit "$OUT/$WIN_EXE.build.json" | cut -c1-7)"
+fi
 if [[ "$NO_UPLOAD" == false ]]; then
   [[ -z "$(git status --porcelain)" ]] ||
     die "working tree is dirty — commit or stash before releasing"
@@ -213,26 +255,7 @@ MAC_UPDATE="$APP_NAME-$VERSION-macos-$([[ "$HOST_ARCH" == arm64 ]] && echo aarch
 INSTALLERS=("$MAC_DMG")
 UPDATES=("$MAC_UPDATE")
 
-# An artifact built on another machine has to come from this very commit.
-read_json() { sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$2" | head -1 | tr -d ' '; }
-check_provenance() {
-  local sidecar="$1" label="$2" architecture="$3"
-  [[ -f "$sidecar" ]] || die "$label provenance sidecar not found: $sidecar"
-  [[ "$(read_json version "$sidecar")" == "$VERSION" ]] || die "$label version mismatch"
-  [[ "$(read_json build "$sidecar")" == "$BUILD_NUMBER" ]] || die "$label build-number mismatch"
-  [[ "$(read_json commit "$sidecar")" == "$HEAD_COMMIT" ]] || die "$label commit mismatch"
-  [[ "$(read_json architecture "$sidecar")" == "$architecture" ]] || die "$label architecture must be $architecture"
-  [[ "$(read_json dirty "$sidecar")" != "true" && "$(read_json dirty "$sidecar")" != "True" ]] ||
-    die "$label artifact was built from a dirty checkout"
-}
-
 if [[ "$SKIP_WINDOWS" == false ]]; then
-  WIN_EXE="$APP_NAME-$VERSION-windows-x64-release-setup.exe"
-  WIN_UPDATE="$APP_NAME-$VERSION-windows-x86_64.zip"
-  [[ -f "$OUT/$WIN_EXE" ]] || die "Windows installer not found: $OUT/$WIN_EXE
-Build it on Windows with: .\\scripts\\build-windows.ps1 release -Version $VERSION"
-  [[ -f "$OUT/$WIN_UPDATE" ]] || die "Windows updater archive not found: $OUT/$WIN_UPDATE"
-  check_provenance "$OUT/$WIN_EXE.build.json" Windows x64
   INSTALLERS+=("$WIN_EXE")
   UPDATES+=("$WIN_UPDATE")
 fi
