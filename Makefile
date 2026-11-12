@@ -1,52 +1,47 @@
-# Formatting and checks to run before opening a pull request.
+# Formatting and checks to run before opening a pull request, and the
+# builds of each platform. The app is the NSH crate in nsh/.
 #
 #   make format   rewrite files so `make check` passes
-#   make check    verify formatting, generated files and static analysis
-#   make test     run the unit and widget tests
+#   make check    verify formatting and lints
+#   make test     run the unit tests and the headless flows
 #   make pr       check + test: the full gate before a pull request
 #
-# Uses the Flutter SDK pinned in .fvmrc (see scripts/flutter-sdk.sh).
+#   make mac      build/Listenook-<arch>-debug.app
+#   make ios      an unsigned iOS build, to check that it compiles
+#   make android  a debug-signed .apk
+#   (Windows: scripts\build-windows.ps1 debug on a Windows machine)
+#
+# Releases: scripts/publish.sh --help.
 
-FLUTTER := scripts/flutter.sh
-DART := .fvm/flutter_sdk/bin/dart
+CARGO := cargo
+NSH := nsh
 
-DART_DIRS := lib test integration_test scripts tool
-
-# Plugin registrants Flutter rewrites on `pub get`; they are committed, so
-# they must match what the pinned SDK generates.
-GENERATED := \
-	macos/Flutter/GeneratedPluginRegistrant.swift \
-	windows/flutter/generated_plugin_registrant.cc \
-	windows/flutter/generated_plugin_registrant.h \
-	windows/flutter/generated_plugins.cmake
-
-.PHONY: help format check check-format check-generated analyze test pr
+.PHONY: help format check check-format lint test pr mac ios android
 
 help:
-	@sed -n '3,6p' Makefile | sed 's/^# *//'
+	@sed -n '4,14p' Makefile | sed 's/^# *//'
 
-# `pub get` goes first: it installs the SDK if needed and regenerates the
-# plugin registrants.
 format:
-	$(FLUTTER) pub get
-	$(DART) format $(DART_DIRS)
+	cd $(NSH) && $(CARGO) fmt
 
-check: check-generated check-format analyze
+check: check-format lint
 
 check-format:
-	$(DART) format --output=none --set-exit-if-changed $(DART_DIRS)
+	cd $(NSH) && $(CARGO) fmt --check
 
-check-generated:
-	$(FLUTTER) pub get
-	@git diff --exit-code --stat -- $(GENERATED) || { \
-		echo "error: generated plugin files are stale; run 'make format' and commit them" >&2; \
-		exit 1; \
-	}
-
-analyze:
-	$(FLUTTER) analyze
+lint:
+	cd $(NSH) && $(CARGO) clippy --workspace --all-targets -- -D warnings
 
 test:
-	$(FLUTTER) test
+	cd $(NSH) && $(CARGO) test --workspace
 
 pr: check test
+
+mac:
+	scripts/build-macos.sh debug
+
+ios:
+	scripts/build-ios.sh debug
+
+android:
+	scripts/build-android.sh debug
