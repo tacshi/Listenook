@@ -135,7 +135,11 @@ impl SidecarLayout {
             offsets.push(cursor);
             cursor = align_up(cursor + len, BUF_ALIGN);
         }
-        SidecarLayout { offsets, lens, total_size: cursor }
+        SidecarLayout {
+            offsets,
+            lens,
+            total_size: cursor,
+        }
     }
 
     /// Global buffer index for layer `i`, sub-buffer `j` (0..12).
@@ -228,7 +232,12 @@ impl SidecarMmap {
     /// mmap and validate an existing sidecar. Returns `None` (caller rebuilds)
     /// on any mismatch: missing file, bad magic/version, changed model, or
     /// changed config dims.
-    pub fn open_valid(path: &str, model_dir: &str, cfg: &QwenConfig, layout: &SidecarLayout) -> Option<SidecarMmap> {
+    pub fn open_valid(
+        path: &str,
+        model_dir: &str,
+        cfg: &QwenConfig,
+        layout: &SidecarLayout,
+    ) -> Option<SidecarMmap> {
         Self::map(path, layout).and_then(|mapped| {
             if validate_header(mapped.base, mapped.size, model_dir, cfg, layout) {
                 Some(mapped)
@@ -286,19 +295,30 @@ impl SidecarMmap {
         let base = base as *mut u8;
 
         // Unmapped by `Drop` should the header not match.
-        Some(SidecarMmap { base, size, offsets: layout.offsets.clone(), lens: layout.lens.clone() })
+        Some(SidecarMmap {
+            base,
+            size,
+            offsets: layout.offsets.clone(),
+            lens: layout.lens.clone(),
+        })
     }
 
     #[inline]
     pub fn i8_buf(&self, idx: usize) -> WeightBuf<i8> {
         let ptr = unsafe { self.base.add(self.offsets[idx] as usize) } as *const i8;
-        WeightBuf::Mapped { ptr, len: self.lens[idx] as usize }
+        WeightBuf::Mapped {
+            ptr,
+            len: self.lens[idx] as usize,
+        }
     }
 
     #[inline]
     pub fn f32_buf(&self, idx: usize) -> WeightBuf<f32> {
         let ptr = unsafe { self.base.add(self.offsets[idx] as usize) } as *const f32;
-        WeightBuf::Mapped { ptr, len: (self.lens[idx] / 4) as usize }
+        WeightBuf::Mapped {
+            ptr,
+            len: (self.lens[idx] / 4) as usize,
+        }
     }
 }
 
@@ -313,7 +333,13 @@ fn read_u64(base: *const u8, off: usize) -> u64 {
     u64::from_le_bytes(b)
 }
 
-fn validate_header(base: *const u8, size: usize, model_dir: &str, cfg: &QwenConfig, layout: &SidecarLayout) -> bool {
+fn validate_header(
+    base: *const u8,
+    size: usize,
+    model_dir: &str,
+    cfg: &QwenConfig,
+    layout: &SidecarLayout,
+) -> bool {
     if size < HEADER_FIXED as usize {
         return false;
     }
@@ -359,7 +385,13 @@ fn validate_header(base: *const u8, size: usize, model_dir: &str, cfg: &QwenConf
 /// write never leaves a file that would pass validation. `bufs[k]` must be the
 /// raw bytes of buffer `k` with `bufs[k].len() == layout.lens[k]`. Best-effort:
 /// returns `false` on any I/O error (caller keeps its owned Vecs regardless).
-pub fn write_sidecar(path: &str, model_dir: &str, cfg: &QwenConfig, layout: &SidecarLayout, bufs: &[&[u8]]) -> bool {
+pub fn write_sidecar(
+    path: &str,
+    model_dir: &str,
+    cfg: &QwenConfig,
+    layout: &SidecarLayout,
+    bufs: &[&[u8]],
+) -> bool {
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::FileExt;
@@ -440,7 +472,9 @@ pub fn sidecar_path(model_dir: &str) -> String {
 
 /// Whether the sidecar is enabled. Disabled via `QWEN_ASR_SIDECAR=0`.
 pub fn enabled() -> bool {
-    std::env::var("QWEN_ASR_SIDECAR").map(|v| v != "0").unwrap_or(true)
+    std::env::var("QWEN_ASR_SIDECAR")
+        .map(|v| v != "0")
+        .unwrap_or(true)
 }
 
 /// Windows' positioned write, in the shape of Unix's `write_all_at`.

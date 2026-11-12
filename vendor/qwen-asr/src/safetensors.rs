@@ -99,7 +99,15 @@ impl SafetensorsFile {
         let tensor_map = tensors.iter().enumerate().map(|(i, t)| (t.name.clone(), i)).collect();
         let skip = build_prefault_skip(&tensors, 8 + header_size, file_size);
         prefault_with_skip(data as *const u8, file_size, &skip);
-        Some(SafetensorsFile { file, _map: map, data, file_size, header_size, tensors, tensor_map })
+        Some(SafetensorsFile {
+            file,
+            _map: map,
+            data,
+            file_size,
+            header_size,
+            tensors,
+            tensor_map,
+        })
     }
 
     #[cfg(unix)]
@@ -129,7 +137,16 @@ impl SafetensorsFile {
             return None;
         }
 
-        let data = unsafe { mmap(std::ptr::null_mut(), file_size, PROT_READ, MAP_PRIVATE, fd, 0) };
+        let data = unsafe {
+            mmap(
+                std::ptr::null_mut(),
+                file_size,
+                PROT_READ,
+                MAP_PRIVATE,
+                fd,
+                0,
+            )
+        };
         // The fd is retained (closed in Drop) so encoder weights can be read
         // out of the file via `pread` without ever faulting their pages through
         // the mapping — that keeps the ~0.7 GB of encoder BF16 nonresident.
@@ -196,7 +213,14 @@ impl SafetensorsFile {
         let skip = build_prefault_skip(&tensors, data_base, file_size);
         prefault_with_skip(data as *const u8, file_size, &skip);
 
-        Some(SafetensorsFile { fd: raw_fd, data, file_size, header_size, tensors, tensor_map })
+        Some(SafetensorsFile {
+            fd: raw_fd,
+            data,
+            file_size,
+            header_size,
+            tensors,
+            tensor_map,
+        })
     }
 
     /// Read `dst.len()` bytes of `tensor`'s data starting `byte_off` bytes into
@@ -337,32 +361,39 @@ fn prefault_with_skip(data: *const u8, file_size: usize, skip: &[bool]) {
     willneed(data, file_size, skip, ps);
     #[cfg(unix)]
     fn willneed(data: *const u8, file_size: usize, skip: &[bool], ps: usize) {
-        let base_addr = data as usize;
-        let mut run_start: Option<usize> = None;
-        for (page, &skip_page) in skip.iter().enumerate() {
-            match (run_start, !skip_page) {
-                (None, true) => run_start = Some(page),
-                (Some(s), false) => {
-                    let off = s * ps;
-                    let end = (page * ps).min(file_size);
-                    unsafe {
-                        libc::madvise((base_addr + off) as *mut _, end - off, libc::MADV_WILLNEED);
-                    }
-                    run_start = None;
+    let base_addr = data as usize;
+    let mut run_start: Option<usize> = None;
+    for (page, &skip_page) in skip.iter().enumerate() {
+        match (run_start, !skip_page) {
+            (None, true) => run_start = Some(page),
+            (Some(s), false) => {
+                let off = s * ps;
+                let end = (page * ps).min(file_size);
+                unsafe {
+                    libc::madvise((base_addr + off) as *mut _, end - off, libc::MADV_WILLNEED);
                 }
-                _ => {}
+                run_start = None;
             }
-        }
-        // Close a run that extends to the end of the file.
-        if let Some(s) = run_start {
-            let off = s * ps;
-            unsafe {
-                libc::madvise((base_addr + off) as *mut _, file_size - off, libc::MADV_WILLNEED);
-            }
+            _ => {}
         }
     }
+    // Close a run that extends to the end of the file.
+    if let Some(s) = run_start {
+        let off = s * ps;
+        unsafe {
+            libc::madvise(
+                (base_addr + off) as *mut _,
+                file_size - off,
+                libc::MADV_WILLNEED,
+            );
+        }
+    }
+    }
 
-    let n_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(n_pages);
+    let n_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(n_pages);
     let checksum = AtomicUsize::new(0);
     let base = data as usize;
 
@@ -432,7 +463,10 @@ impl MultiSafetensors {
         }
 
         if shard_names.is_empty() {
-            eprintln!("multi_safetensors_open: no safetensors files in {}", model_dir);
+            eprintln!(
+                "multi_safetensors_open: no safetensors files in {}",
+                model_dir
+            );
             return None;
         }
 
@@ -711,7 +745,13 @@ fn parse_tensor_entry(bytes: &[u8], pos: &mut usize, name: &str) -> Option<Tenso
         }
     }
 
-    Some(TensorMeta { name: name.to_string(), dtype, shape, data_offset, data_size })
+    Some(TensorMeta {
+        name: name.to_string(),
+        dtype,
+        shape,
+        data_offset,
+        data_size,
+    })
 }
 
 fn skip_json_value(bytes: &[u8], pos: &mut usize) {
@@ -783,7 +823,11 @@ fn skip_json_value(bytes: &[u8], pos: &mut usize) {
         }
         _ => {
             // Number, bool, null
-            while *pos < bytes.len() && bytes[*pos] != b',' && bytes[*pos] != b'}' && bytes[*pos] != b']' {
+            while *pos < bytes.len()
+                && bytes[*pos] != b','
+                && bytes[*pos] != b'}'
+                && bytes[*pos] != b']'
+            {
                 *pos += 1;
             }
         }

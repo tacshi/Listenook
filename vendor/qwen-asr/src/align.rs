@@ -44,7 +44,10 @@ fn split_words(text: &str, language: &str) -> Vec<String> {
 
     if is_cjk {
         // Character-level split (each Unicode character is a "word")
-        text.chars().filter(|c| !c.is_whitespace()).map(|c| c.to_string()).collect()
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .map(|c| c.to_string())
+            .collect()
     } else {
         // Space-delimited split
         text.split_whitespace().map(|s| s.to_string()).collect()
@@ -54,7 +57,11 @@ fn split_words(text: &str, language: &str) -> Vec<String> {
 /// Build the input token sequence for forced alignment.
 /// Interleaves <timestamp><timestamp> between words and appends at end.
 /// Returns (word_list, token_ids) where token_ids includes audio markers + text + timestamps.
-fn encode_timestamp(text: &str, language: &str, tokenizer: &QwenTokenizer) -> Option<(Vec<String>, Vec<i32>)> {
+fn encode_timestamp(
+    text: &str,
+    language: &str,
+    tokenizer: &QwenTokenizer,
+) -> Option<(Vec<String>, Vec<i32>)> {
     let words = split_words(text, language);
     if words.is_empty() {
         return None;
@@ -159,8 +166,16 @@ fn fix_timestamps(timestamps: &mut [f32]) {
         let block_len = block_end - block_start;
 
         // Get boundary values
-        let left_val = if block_start > 0 { timestamps[block_start - 1] } else { 0.0 };
-        let right_val = if block_end < n { timestamps[block_end] } else { left_val + block_len as f32 * 80.0 };
+        let left_val = if block_start > 0 {
+            timestamps[block_start - 1]
+        } else {
+            0.0
+        };
+        let right_val = if block_end < n {
+            timestamps[block_end]
+        } else {
+            left_val + block_len as f32 * 80.0
+        };
 
         if block_len <= 2 {
             // Small block: fill with nearest normal value
@@ -192,7 +207,12 @@ fn fix_timestamps(timestamps: &mut [f32]) {
 /// The returned vector has one [`AlignResult`] per word/character with
 /// monotonically non-decreasing timestamps (anomalies are corrected via
 /// LIS + interpolation).
-pub fn forced_align(ctx: &mut QwenCtx, samples: &[f32], text: &str, language: &str) -> Option<Vec<AlignResult>> {
+pub fn forced_align(
+    ctx: &mut QwenCtx,
+    samples: &[f32],
+    text: &str,
+    language: &str,
+) -> Option<Vec<AlignResult>> {
     let cfg = &ctx.config.clone();
     let dim = cfg.dec_hidden;
     let seg_time = cfg.timestamp_segment_time;
@@ -215,7 +235,11 @@ pub fn forced_align(ctx: &mut QwenCtx, samples: &[f32], text: &str, language: &s
     let (words, text_tokens) = encode_timestamp(text, language, &tokenizer)?;
 
     if kernels::verbose() >= 2 {
-        eprintln!("  Align: {} words, {} text tokens", words.len(), text_tokens.len());
+        eprintln!(
+            "  Align: {} words, {} text tokens",
+            words.len(),
+            text_tokens.len()
+        );
     }
 
     // Step 2: Mel spectrogram + encoder
@@ -224,7 +248,10 @@ pub fn forced_align(ctx: &mut QwenCtx, samples: &[f32], text: &str, language: &s
     let mel_ms = elapsed_ms(t0);
 
     let t0 = get_time_ms();
-    let (enc_output, enc_seq_len) = ctx.model.encoder.forward(cfg, &mel, mel_frames, Some(&mut ctx.enc_bufs))?;
+    let (enc_output, enc_seq_len) =
+        ctx.model
+            .encoder
+            .forward(cfg, &mel, mel_frames, Some(&mut ctx.enc_bufs))?;
     let enc_ms = elapsed_ms(t0);
 
     if kernels::verbose() >= 2 {
@@ -247,13 +274,23 @@ pub fn forced_align(ctx: &mut QwenCtx, samples: &[f32], text: &str, language: &s
     let mut off = 0;
     for &tok in PREFIX_HEAD {
         unsafe {
-            tok_embed_bf16_to_f32(&mut input_embeds[off * dim..(off + 1) * dim], tok_emb, tok, dim);
+            tok_embed_bf16_to_f32(
+                &mut input_embeds[off * dim..(off + 1) * dim],
+                tok_emb,
+                tok,
+                dim,
+            );
         }
         off += 1;
     }
     for &tok in PREFIX_TAIL {
         unsafe {
-            tok_embed_bf16_to_f32(&mut input_embeds[off * dim..(off + 1) * dim], tok_emb, tok, dim);
+            tok_embed_bf16_to_f32(
+                &mut input_embeds[off * dim..(off + 1) * dim],
+                tok_emb,
+                tok,
+                dim,
+            );
         }
         off += 1;
     }
@@ -281,7 +318,12 @@ pub fn forced_align(ctx: &mut QwenCtx, samples: &[f32], text: &str, language: &s
     let text_off = suffix_off + suffix_len;
     for (i, &tok) in text_tokens.iter().enumerate() {
         unsafe {
-            tok_embed_bf16_to_f32(&mut input_embeds[(text_off + i) * dim..(text_off + i + 1) * dim], tok_emb, tok, dim);
+            tok_embed_bf16_to_f32(
+                &mut input_embeds[(text_off + i) * dim..(text_off + i + 1) * dim],
+                tok_emb,
+                tok,
+                dim,
+            );
         }
     }
 
@@ -334,7 +376,11 @@ pub fn forced_align(ctx: &mut QwenCtx, samples: &[f32], text: &str, language: &s
     for (i, word) in words.iter().enumerate() {
         let start_ms = raw_timestamps.get(i * 2).copied().unwrap_or(0.0);
         let end_ms = raw_timestamps.get(i * 2 + 1).copied().unwrap_or(start_ms);
-        results.push(AlignResult { text: word.clone(), start_ms, end_ms });
+        results.push(AlignResult {
+            text: word.clone(),
+            start_ms,
+            end_ms,
+        });
     }
 
     ctx.perf_total_ms += elapsed_ms(seg_t0);

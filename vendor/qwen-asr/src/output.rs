@@ -35,7 +35,13 @@ impl TranscriptionResult {
         push_json_number_field(&mut out, 4, "duration", &secs(self.duration_ms), false);
         out.push_str("  },\n");
         push_json_string_field(&mut out, 2, "text", &self.text, true);
-        push_json_number_field(&mut out, 2, "word_count", &count_words(&self.text).to_string(), true);
+        push_json_number_field(
+            &mut out,
+            2,
+            "word_count",
+            &count_words(&self.text).to_string(),
+            true,
+        );
         out.push_str("  \"segments\": [\n");
         for (idx, segment) in self.segments.iter().enumerate() {
             out.push_str("    {\n");
@@ -58,7 +64,13 @@ impl TranscriptionResult {
                 out.push('\n');
             }
             out.push_str("      ],\n");
-            push_json_number_field(&mut out, 6, "word_count", &count_words(&segment.text).to_string(), false);
+            push_json_number_field(
+                &mut out,
+                6,
+                "word_count",
+                &count_words(&segment.text).to_string(),
+                false,
+            );
             out.push_str("    }");
             if idx + 1 < self.segments.len() {
                 out.push(',');
@@ -188,7 +200,11 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1234,
                 text: "hello 世界".to_string(),
-                words: vec![WordTimestamp { word: "hello".to_string(), start_ms: 120, end_ms: 450 }],
+                words: vec![WordTimestamp {
+                    word: "hello".to_string(),
+                    start_ms: 120,
+                    end_ms: 450,
+                }],
             }],
             vtt: "WEBVTT\n\n1\n00:00:00.120 --> 00:00:00.450\nhello\n\n".to_string(),
         };

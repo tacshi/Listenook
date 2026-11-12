@@ -9,7 +9,8 @@ fn init_gpt2_mapping() -> ([i32; 256], [i32; 512]) {
 
     let mut n = 0i32;
     for b in 0..256i32 {
-        let is_normal = (33..=126).contains(&b) || (161..=172).contains(&b) || (174..=255).contains(&b);
+        let is_normal =
+            (33..=126).contains(&b) || (161..=172).contains(&b) || (174..=255).contains(&b);
 
         if is_normal {
             byte_to_unicode[b as usize] = b;
@@ -35,7 +36,11 @@ fn utf8_encode_cp(cp: u32) -> Vec<u8> {
     } else if cp < 0x800 {
         vec![(0xC0 | (cp >> 6)) as u8, (0x80 | (cp & 0x3F)) as u8]
     } else {
-        vec![(0xE0 | (cp >> 12)) as u8, (0x80 | ((cp >> 6) & 0x3F)) as u8, (0x80 | (cp & 0x3F)) as u8]
+        vec![
+            (0xE0 | (cp >> 12)) as u8,
+            (0x80 | ((cp >> 6) & 0x3F)) as u8,
+            (0x80 | (cp & 0x3F)) as u8,
+        ]
     }
 }
 
@@ -180,7 +185,14 @@ impl QwenTokenizer {
         // Load merges.txt
         let merge_map = load_merges(vocab_json_path);
 
-        Some(QwenTokenizer { vocab_size, id_to_text, id_to_bytes, vocab_map, merge_map, byte_to_unicode })
+        Some(QwenTokenizer {
+            vocab_size,
+            id_to_text,
+            id_to_bytes,
+            vocab_map,
+            merge_map,
+            byte_to_unicode,
+        })
     }
 
     pub fn decode(&self, token_id: i32) -> &str {
@@ -451,8 +463,14 @@ mod tests {
         let decoded_b = decode_gpt2_token_bytes(&token_b, &utb);
 
         // Each part alone is NOT valid UTF-8
-        assert!(String::from_utf8(decoded_a.clone()).is_err(), "Part 1 alone should NOT be valid UTF-8");
-        assert!(String::from_utf8(decoded_b.clone()).is_err(), "Part 2 alone should NOT be valid UTF-8");
+        assert!(
+            String::from_utf8(decoded_a.clone()).is_err(),
+            "Part 1 alone should NOT be valid UTF-8"
+        );
+        assert!(
+            String::from_utf8(decoded_b.clone()).is_err(),
+            "Part 2 alone should NOT be valid UTF-8"
+        );
 
         // But concatenated they form valid UTF-8 for "地"
         let mut combined = decoded_a;
@@ -576,7 +594,12 @@ mod tests {
         // Every byte value 0..255 must survive a round-trip
         for b in 0u8..=255 {
             let cp = btu[b as usize];
-            assert!((0..512).contains(&cp), "byte {:#04x} mapped to out-of-range codepoint {}", b, cp);
+            assert!(
+                (0..512).contains(&cp),
+                "byte {:#04x} mapped to out-of-range codepoint {}",
+                b,
+                cp
+            );
 
             let recovered = utb[cp as usize];
             assert_eq!(
@@ -594,7 +617,12 @@ mod tests {
         // All 256 codepoints must be distinct
         let mut seen = std::collections::HashSet::new();
         for (b, &cp) in btu.iter().enumerate() {
-            assert!(seen.insert(cp), "byte {} and another byte both map to codepoint {}", b, cp);
+            assert!(
+                seen.insert(cp),
+                "byte {} and another byte both map to codepoint {}",
+                b,
+                cp
+            );
         }
         assert_eq!(seen.len(), 256);
     }

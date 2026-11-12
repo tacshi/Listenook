@@ -64,16 +64,31 @@ impl QwenModel {
 
         // Detect model variant from tensor shapes
         let info = crate::config::DetectInfo {
-            has_enc_layer_18: ms.has_tensor("thinker.audio_tower.layers.18.self_attn.q_proj.weight"),
-            lm_head_shape: ms.find("thinker.lm_head.weight").map(|(_, t)| t.shape.as_slice()),
-            embed_tokens_shape: ms.find("thinker.model.embed_tokens.weight").map(|(_, t)| t.shape.as_slice()),
-            gate_proj_shape: ms.find("thinker.model.layers.0.mlp.gate_proj.weight").map(|(_, t)| t.shape.as_slice()),
+            has_enc_layer_18: ms
+                .has_tensor("thinker.audio_tower.layers.18.self_attn.q_proj.weight"),
+            lm_head_shape: ms
+                .find("thinker.lm_head.weight")
+                .map(|(_, t)| t.shape.as_slice()),
+            embed_tokens_shape: ms
+                .find("thinker.model.embed_tokens.weight")
+                .map(|(_, t)| t.shape.as_slice()),
+            gate_proj_shape: ms
+                .find("thinker.model.layers.0.mlp.gate_proj.weight")
+                .map(|(_, t)| t.shape.as_slice()),
         };
         let cfg = QwenConfig::detect(&info);
 
         if kernels::verbose() >= 1 {
-            let variant = if cfg.dec_hidden >= 2048 { "1.7B" } else { "0.6B" };
-            let model_type = if cfg.is_aligner() { "ForcedAligner" } else { "ASR" };
+            let variant = if cfg.dec_hidden >= 2048 {
+                "1.7B"
+            } else {
+                "0.6B"
+            };
+            let model_type = if cfg.is_aligner() {
+                "ForcedAligner"
+            } else {
+                "ASR"
+            };
             eprintln!("Detected: Qwen3-{}-{}", model_type, variant);
             if cfg.is_aligner() {
                 eprintln!(
@@ -107,7 +122,10 @@ impl QwenModel {
         let tokenizer = tok_handle.join().ok().flatten();
 
         if kernels::verbose() >= 1 {
-            eprintln!("Model loaded in {:.0} ms", load_t0.elapsed().as_secs_f64() * 1000.0);
+            eprintln!(
+                "Model loaded in {:.0} ms",
+                load_t0.elapsed().as_secs_f64() * 1000.0
+            );
         }
 
         // R13-Android diagnostic (always logged): report which INT8 paths are
@@ -135,9 +153,17 @@ impl QwenModel {
     /// switch. Both `0` on desktop/BLAS/non-aarch64 by construction. Surfaced on
     /// device through `perf_stats()` since Rust stderr is not logged there.
     pub fn int8_status(&self) -> String {
-        #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
+        #[cfg(all(
+            feature = "int8-prefill",
+            not(feature = "blas"),
+            target_arch = "aarch64"
+        ))]
         let prefill = kernels::int8_prefill_enabled() as u8;
-        #[cfg(not(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64")))]
+        #[cfg(not(all(
+            feature = "int8-prefill",
+            not(feature = "blas"),
+            target_arch = "aarch64"
+        )))]
         let prefill = 0u8;
         let encoder = self.encoder.int8_encoder_active() as u8;
         format!("prefill={} encoder={}", prefill, encoder)

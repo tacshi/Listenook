@@ -107,13 +107,25 @@ impl QwenConfig {
         // Determine decoder hidden size from embed_tokens shape [vocab_size, hidden_dim]
         let dec_hidden = info
             .embed_tokens_shape
-            .and_then(|s| if s.len() == 2 { Some(s[1] as usize) } else { None })
+            .and_then(|s| {
+                if s.len() == 2 {
+                    Some(s[1] as usize)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(if info.has_enc_layer_18 { 2048 } else { 1024 });
 
         // Determine decoder intermediate from gate_proj shape [intermediate, hidden]
         let dec_intermediate = info
             .gate_proj_shape
-            .and_then(|s| if s.len() == 2 { Some(s[0] as usize) } else { None })
+            .and_then(|s| {
+                if s.len() == 2 {
+                    Some(s[0] as usize)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(if dec_hidden >= 2048 { 6144 } else { 3072 });
 
         // Encoder architecture: 24 layers = "large" encoder, 18 layers = "small" encoder
@@ -206,7 +218,9 @@ pub fn normalize_language(language: &str) -> Option<String> {
     }
     let mut chars = trimmed.chars();
     let first = chars.next()?.to_uppercase().to_string();
-    let rest: String = chars.map(|c| c.to_lowercase().next().unwrap_or(c)).collect();
+    let rest: String = chars
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect();
     let normalized = format!("{}{}", first, rest);
 
     if SUPPORTED_LANGUAGES.contains(&normalized.as_str()) {
@@ -218,7 +232,10 @@ pub fn normalize_language(language: &str) -> Option<String> {
 
 pub fn language_to_iso639(name: &str) -> Option<&'static str> {
     let normalized = normalize_language(name)?;
-    LANGUAGE_TABLE.iter().find(|(lang, _)| *lang == normalized).map(|(_, code)| *code)
+    LANGUAGE_TABLE
+        .iter()
+        .find(|(lang, _)| *lang == normalized)
+        .map(|(_, code)| *code)
 }
 
 #[cfg(test)]

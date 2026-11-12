@@ -73,8 +73,11 @@ pub unsafe extern "C" fn Java_com_qwenasr_QAsrEngine_nativeTranscribePcm(
         return std::ptr::null_mut();
     }
 
-    let result =
-        crate::c_api::qwen_asr_transcribe_pcm(handle as *mut crate::c_api::QwenAsrEngine, samples_ptr, n_samples);
+    let result = crate::c_api::qwen_asr_transcribe_pcm(
+        handle as *mut crate::c_api::QwenAsrEngine,
+        samples_ptr,
+        n_samples,
+    );
 
     jfloat_array_release(env, samples, samples_ptr);
 
@@ -124,7 +127,11 @@ pub unsafe extern "C" fn Java_com_qwenasr_QAsrEngine_nativeTranscribeWav(
 
 /// Free engine.
 #[no_mangle]
-pub unsafe extern "C" fn Java_com_qwenasr_QAsrEngine_nativeFree(_env: JNIEnv, _obj: JObject, handle: JLong) {
+pub unsafe extern "C" fn Java_com_qwenasr_QAsrEngine_nativeFree(
+    _env: JNIEnv,
+    _obj: JObject,
+    handle: JLong,
+) {
     if handle != 0 {
         crate::c_api::qwen_asr_free(handle as *mut crate::c_api::QwenAsrEngine);
     }

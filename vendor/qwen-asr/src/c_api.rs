@@ -32,7 +32,11 @@ pub unsafe extern "C" fn qwen_asr_load_model(
 
     kernels::set_verbose(verbosity);
 
-    let threads = if n_threads <= 0 { kernels::get_num_cpus() } else { n_threads as usize };
+    let threads = if n_threads <= 0 {
+        kernels::get_num_cpus()
+    } else {
+        n_threads as usize
+    };
     kernels::set_threads(threads);
 
     match QwenCtx::load(dir) {
@@ -43,7 +47,10 @@ pub unsafe extern "C" fn qwen_asr_load_model(
 
 /// Transcribe a WAV file. Returns a heap-allocated C string (caller must free with qwen_asr_free_string).
 #[no_mangle]
-pub unsafe extern "C" fn qwen_asr_transcribe_file(engine: *mut QwenAsrEngine, wav_path: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn qwen_asr_transcribe_file(
+    engine: *mut QwenAsrEngine,
+    wav_path: *const c_char,
+) -> *mut c_char {
     if engine.is_null() || wav_path.is_null() {
         return std::ptr::null_mut();
     }
@@ -123,7 +130,10 @@ pub unsafe extern "C" fn qwen_asr_set_segment_sec(engine: *mut QwenAsrEngine, se
 
 /// Set language (e.g. "English", "Chinese"). Empty string = auto-detect.
 #[no_mangle]
-pub unsafe extern "C" fn qwen_asr_set_language(engine: *mut QwenAsrEngine, language: *const c_char) -> i32 {
+pub unsafe extern "C" fn qwen_asr_set_language(
+    engine: *mut QwenAsrEngine,
+    language: *const c_char,
+) -> i32 {
     if engine.is_null() || language.is_null() {
         return -1;
     }
@@ -190,7 +200,10 @@ pub struct QwenAsrStreamState {
 /// Create a new streaming state. Returns null on failure.
 #[no_mangle]
 pub unsafe extern "C" fn qwen_asr_stream_new() -> *mut QwenAsrStreamState {
-    Box::into_raw(Box::new(QwenAsrStreamState { state: transcribe::StreamState::new(), audio_buf: Vec::new() }))
+    Box::into_raw(Box::new(QwenAsrStreamState {
+        state: transcribe::StreamState::new(),
+        audio_buf: Vec::new(),
+    }))
 }
 
 /// Free a streaming state.
@@ -252,7 +265,9 @@ pub unsafe extern "C" fn qwen_asr_stream_push(
 /// Get the full accumulated transcription result so far.
 /// Returns a heap-allocated C string. Caller must free with `qwen_asr_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn qwen_asr_stream_get_result(stream: *mut QwenAsrStreamState) -> *mut c_char {
+pub unsafe extern "C" fn qwen_asr_stream_get_result(
+    stream: *mut QwenAsrStreamState,
+) -> *mut c_char {
     if stream.is_null() {
         return std::ptr::null_mut();
     }
@@ -285,7 +300,10 @@ pub unsafe extern "C" fn qwen_asr_stream_set_rollback(engine: *mut QwenAsrEngine
 
 /// Configure unfixed chunks count before emitting (default 2).
 #[no_mangle]
-pub unsafe extern "C" fn qwen_asr_stream_set_unfixed_chunks(engine: *mut QwenAsrEngine, chunks: i32) {
+pub unsafe extern "C" fn qwen_asr_stream_set_unfixed_chunks(
+    engine: *mut QwenAsrEngine,
+    chunks: i32,
+) {
     if !engine.is_null() && chunks >= 0 {
         (*engine).ctx.stream_unfixed_chunks = chunks;
     }
@@ -293,7 +311,10 @@ pub unsafe extern "C" fn qwen_asr_stream_set_unfixed_chunks(engine: *mut QwenAsr
 
 /// Configure max new tokens per chunk (default 32).
 #[no_mangle]
-pub unsafe extern "C" fn qwen_asr_stream_set_max_new_tokens(engine: *mut QwenAsrEngine, tokens: i32) {
+pub unsafe extern "C" fn qwen_asr_stream_set_max_new_tokens(
+    engine: *mut QwenAsrEngine,
+    tokens: i32,
+) {
     if !engine.is_null() && tokens > 0 {
         (*engine).ctx.stream_max_new_tokens = tokens;
     }
