@@ -2359,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-app-listenook"
-version = "2.0.4"
+version = "2.0.5"
 dependencies = [
  "env_logger",
  "keyring",
