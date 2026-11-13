@@ -112,6 +112,13 @@ if [[ "$WITH_HELPER" == true ]]; then
   mkdir -p "$APP/Contents/Helpers" "$APP/Contents/Resources/third_party"
   quiet bash "$ROOT/scripts/build-speech-worker.sh" "$HELPER"
   cp "$ROOT/packaging/notices/"* "$APP/Contents/Resources/third_party/"
+  # MLX looks for its Metal library beside the worker. Signed there, a file
+  # that is not a program keeps its signature in extended attributes, which
+  # the in-app updater does not unpack: the updated app then fails its
+  # signature check. Among the resources the bundle's own signature covers
+  # it, and a link beside the worker leads to it.
+  mv "$APP/Contents/Helpers/mlx.metallib" "$APP/Contents/Resources/mlx.metallib"
+  ln -s ../Resources/mlx.metallib "$APP/Contents/Helpers/mlx.metallib"
 fi
 
 # Files that were downloaded carry marks that fail notarization.
@@ -183,7 +190,18 @@ fi
 # the name `nsh update-manifest` reads the platform from.
 UPDATE_ARCHIVE="$OUT/$APP_NAME-$VERSION-macos-$UPDATER_ARCH.tar.gz"
 rm -f "$UPDATE_ARCHIVE"
-tar -czf "$UPDATE_ARCHIVE" -C "$PACKAGE" "$APP_NAME.app"
+# The updater unpacks the files alone, so the archive holds no more, and the
+# app must pass the updater's check unpacked that way.
+COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$UPDATE_ARCHIVE" -C "$PACKAGE" "$APP_NAME.app"
+UNPACKED="$(mktemp -d)"
+tar --no-xattrs --no-mac-metadata -xzf "$UPDATE_ARCHIVE" -C "$UNPACKED"
+if ! quiet codesign --verify --deep --strict "$UNPACKED/$APP_NAME.app"; then
+  rm -rf "$UNPACKED"
+  echo "The app in $UPDATE_ARCHIVE loses its signature when unpacked without extended attributes:" >&2
+  echo "the in-app updater would refuse it. Some signed file outside Contents/MacOS is not a program." >&2
+  exit 1
+fi
+rm -rf "$UNPACKED"
 if [[ "$PROVENANCE" == true ]]; then
   DIRTY=false
   [[ -z "$(git -C "$ROOT" status --porcelain)" ]] || DIRTY=true
