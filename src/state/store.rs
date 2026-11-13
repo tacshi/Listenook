@@ -1030,6 +1030,8 @@ impl Store {
         }
         let mut job = recovered(job);
         listenook_core::sync::rehome(&mut job, map);
+        // What the other device calls it, when it has no title of its own.
+        let name = job.file_name();
         let brought = root.join("media").join(listenook_core::sync::media_file_name(&job.id, &job.file_name()));
         let kept = existing.as_ref().map(|existing| existing.source_path.clone()).filter(|path| is_file(path));
         if let Some(path) = kept {
@@ -1037,6 +1039,7 @@ impl Store {
         } else if brought.is_file() {
             job.source_path = brought.to_string_lossy().into_owned();
         }
+        listenook_core::sync::keep_title(&mut job, &name);
         found_again(&mut job);
         self.save(&job);
         let id = job.id.clone();
@@ -1059,7 +1062,9 @@ impl Store {
         self.jobs.update(|jobs| {
             if let Some(job) = jobs.iter_mut().find(|job| job.id == id).filter(|job| !is_file(&job.source_path)) {
                 let job = Rc::make_mut(job);
+                let name = job.file_name();
                 job.source_path = path.to_string_lossy().into_owned();
+                listenook_core::sync::keep_title(job, &name);
                 found_again(job);
                 changed = Some(job.clone());
             }
@@ -1067,6 +1072,24 @@ impl Store {
         if let Some(job) = changed {
             self.save(&job);
             crate::services::playable::forget(id);
+        }
+    }
+
+    /// Gives a recording an earlier sync left named after the file it
+    /// brought the name of its file on the other device.
+    pub(crate) fn adopt_name(&self, id: &str, name: &str) {
+        let mut changed = None;
+        self.jobs.update(|jobs| {
+            if let Some(job) = jobs.iter_mut().find(|job| job.id == id) {
+                let mut named = (**job).clone();
+                if listenook_core::sync::keep_title(&mut named, name) {
+                    *job = Rc::new(named.clone());
+                    changed = Some(named);
+                }
+            }
+        });
+        if let Some(job) = changed {
+            self.save(&job);
         }
     }
 

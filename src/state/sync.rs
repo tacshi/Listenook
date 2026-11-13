@@ -222,6 +222,7 @@ impl SyncState {
                 Incoming::Catalog(catalog) => drop(self.map.replace(store.adopt_catalog(&catalog))),
                 Incoming::Job(job) => self.map.with(|map| store.adopt_job(*job, map)),
                 Incoming::Media { id, path } => store.adopt_media(&id, &path),
+                Incoming::Name { id, name } => store.adopt_name(&id, &name),
             }
         }
         for event in events {
