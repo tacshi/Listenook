@@ -245,7 +245,8 @@ impl Store {
         global::<Handle>().set(Handle(Some(store)));
         store.configure_sync();
         // The port is given back when the app's surface goes.
-        cleanup(|| crate::services::sync::configure(None, String::new(), String::new(), false));
+        let root = store.data_root();
+        cleanup(move || crate::services::sync::release(&root));
         store
     }
 
