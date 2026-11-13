@@ -1,7 +1,7 @@
 [package]
 name = "nsh-app-listenook"
 # Keep in step with nsh.json "version": the updater compares that one.
-version = "2.0.2"
+version = "2.0.3"
 edition = "2024"
 publish = false
 
