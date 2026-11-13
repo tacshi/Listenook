@@ -4,6 +4,7 @@
 
 pub mod audio;
 pub mod brief;
+pub mod caption;
 pub mod container;
 pub mod dictation;
 pub mod export;

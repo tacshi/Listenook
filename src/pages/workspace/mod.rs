@@ -6,7 +6,7 @@ mod practice;
 mod review;
 mod transcript;
 
-use listenook_core::{ContentMode, ExportOptions, Segment, TRANSLATION_LANGUAGES, TranslationStatus, export};
+use listenook_core::{ContentMode, ExportOptions, Segment, TRANSLATION_LANGUAGES, TranslationStatus, caption, export};
 use nsh_base::theme;
 use nsh_core::{desktop::WindowMode, element::desktop::current_window, prelude::*};
 use review::{Practice, Review, Side};
@@ -981,13 +981,22 @@ fn set_fullscreen(review: Review, on: bool) {
     }
 }
 
-/// The sentence being said, over the bottom of the picture, with the word
-/// being said marked as the transcript marks it.
+/// The sentence being said, over the bottom of the picture, a line at a time
+/// when it is long, with the word being said marked as the transcript marks it.
 fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let index = move || review.target();
     let current = move || index().and_then(|index| review.segment(index));
     let hidden = move || review.blind() && current().is_none_or(|segment| review.revealed.get() != Some(segment.id));
-    let words = computed(move || index().and_then(|index| review.words(index)));
+    // A long sentence shows a line at a time: the one being said.
+    let words = computed(move || {
+        index().and_then(|index| review.words(index)).map(|words| {
+            caption::tidy(&words)
+                .into_iter()
+                .map(|(text, start, end)| (SharedString::from(text), start, end))
+                .collect::<Vec<_>>()
+        })
+    });
+    let lines = computed(move || words.with(|words| words.as_deref().map(caption::lines).unwrap_or_default()));
     let said = computed(move || {
         let position = review.position_ms.get();
         words.with(|words| {
@@ -995,6 +1004,7 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
             words.as_ref()?.partition_point(|(_, start, _)| *start <= position).checked_sub(1)
         })
     });
+    let line = computed(move || lines.with(|lines| lines.get(caption::line_of(lines, said.get())).cloned()));
     let translated = move || current().is_some_and(|segment| segment.has_translation());
     let shows_original = move || review.mode.get() != ContentMode::Translated || !translated();
     let shows_translation = move || review.mode.get() != ContentMode::Original && translated();
@@ -1031,26 +1041,33 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
                             move || {
                                 dynamic(move || {
                                     let said = said.get();
+                                    let line = line.get().unwrap_or_default();
                                     untracked(|| {
                                         let spans = words.get_untracked().unwrap_or_default();
+                                        let first = line.start;
                                         subtitle_text(text(""))
-                                            .children(spans.into_iter().enumerate().flat_map(|(at, (word, ..))| {
-                                                // The mark is on the word alone, not on the
-                                                // space or the quote before it.
-                                                let (lead, word) = listenook_core::local::lead_and_word(&word);
-                                                let word = text(SharedString::from(word.to_owned()));
-                                                [
-                                                    text(SharedString::from(
-                                                        if at == 0 { lead.trim_start() } else { lead }.to_owned(),
-                                                    )),
-                                                    if Some(at) == said {
-                                                        word.rounded(tokens::radius_sm)
-                                                            .bg(|| theme().primary.opacity(0.45))
-                                                    } else {
-                                                        word
+                                            .children(
+                                                spans.into_iter().enumerate().skip(first).take(line.len()).flat_map(
+                                                    |(at, (word, ..))| {
+                                                        // The mark is on the word alone, not on the
+                                                        // space or the quote before it.
+                                                        let (lead, word) = listenook_core::local::lead_and_word(&word);
+                                                        let word = text(SharedString::from(word.to_owned()));
+                                                        [
+                                                            text(SharedString::from(
+                                                                if at == first { lead.trim_start() } else { lead }
+                                                                    .to_owned(),
+                                                            )),
+                                                            if Some(at) == said {
+                                                                word.rounded(tokens::radius_sm)
+                                                                    .bg(|| theme().primary.opacity(0.45))
+                                                            } else {
+                                                                word
+                                                            },
+                                                        ]
                                                     },
-                                                ]
-                                            }))
+                                                ),
+                                            )
                                             .into_element()
                                     })
                                 })
