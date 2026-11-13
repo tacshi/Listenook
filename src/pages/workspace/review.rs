@@ -135,11 +135,7 @@ impl Review {
         let searching = signal(false);
         let current = computed(move || {
             let position = position_ms.get();
-            job.with(|job| {
-                let segments = &job.as_ref()?.document.as_ref()?.segments;
-                let after = segments.partition_point(|segment| segment.start_ms <= position);
-                after.checked_sub(1)
-            })
+            job.with(|job| job.as_ref()?.document.as_ref()?.segment_at(position))
         });
         let shown = computed(move || {
             let needle = if searching.get() { query.with(|q| q.trim().to_lowercase()) } else { String::new() };
@@ -221,6 +217,14 @@ impl Review {
 
     fn segment_now(&self, index: usize) -> Option<Segment> {
         self.job.with_untracked(|job| job.as_ref()?.document.as_ref()?.segments.get(index).cloned())
+    }
+
+    /// Where playing sentence `index` begins: a little before its marked
+    /// start, so its first word is not cut off.
+    fn play_start(&self, index: usize) -> i64 {
+        self.job.with_untracked(|job| {
+            job.as_ref().and_then(|job| job.document.as_ref()?.play_start(index)).unwrap_or_default()
+        })
     }
 
     fn index_of(&self, segment_id: &str) -> Option<usize> {
@@ -329,7 +333,7 @@ impl Review {
             }
             self.revealed.set(None);
         });
-        self.seek(segment.start_ms);
+        self.seek(self.play_start(index));
         self.paused.set(false);
     }
 
@@ -355,7 +359,7 @@ impl Review {
             self.reps.set(0);
             self.stop_at.set(None);
         });
-        self.seek(segment.start_ms);
+        self.seek(self.play_start(index));
         self.paused.set(false);
     }
 
@@ -390,7 +394,7 @@ impl Review {
         };
         self.cancel_wait();
         self.stop_at.set(Some(segment.end_ms));
-        self.seek(segment.start_ms);
+        self.seek(self.play_start(index));
         self.paused.set(false);
     }
 
@@ -428,7 +432,7 @@ impl Review {
             return;
         }
         if self.practice.get_untracked() != Practice::Mimic {
-            self.seek(segment.start_ms);
+            self.seek(self.play_start(index));
             return;
         }
         // Mimic: count the pass, leave the user time to say it, then play
@@ -451,7 +455,7 @@ impl Review {
             review.waiting.set(false);
             review.wait.replace(None);
             if reps < goal {
-                review.seek(segment.start_ms);
+                review.seek(review.play_start(index));
                 review.paused.set(false);
             } else if index + 1 < review.count() {
                 review.play_from(index + 1);

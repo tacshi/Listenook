@@ -315,7 +315,30 @@ impl Document {
     pub fn touch(&mut self) {
         self.updated_at = now_iso();
     }
+
+    /// Where playing sentence `index` begins: a little before its marked
+    /// start, since transcribers often mark a sentence after its first
+    /// sound and a short first word ("A", "I") would be lost, but not
+    /// before the sentence before it has ended.
+    pub fn play_start(&self, index: usize) -> Option<i64> {
+        let segment = self.segments.get(index)?;
+        let before = index.checked_sub(1).map_or(0, |before| self.segments[before].end_ms);
+        Some((segment.start_ms - LEAD_IN_MS).max(before).max(0).min(segment.start_ms))
+    }
+
+    /// The sentence playing at `position_ms`: the last one whose
+    /// [`Self::play_start`] it has reached.
+    pub fn segment_at(&self, position_ms: i64) -> Option<usize> {
+        let after = self.segments.partition_point(|segment| segment.start_ms <= position_ms);
+        if self.play_start(after).is_some_and(|start| start <= position_ms) {
+            return Some(after);
+        }
+        after.checked_sub(1)
+    }
 }
+
+/// How far before a sentence's marked start [`Document::play_start`] goes.
+pub const LEAD_IN_MS: i64 = 250;
 
 // --- Job --------------------------------------------------------------------
 
@@ -900,6 +923,31 @@ mod tests {
         let written = serde_json::to_value(&job).unwrap();
         assert_eq!(written["tag_ids"][0], "x");
         assert_eq!(written["forced_alignment"]["status"], "completed");
+    }
+
+    #[test]
+    fn a_sentence_plays_from_a_little_before_its_marked_start() {
+        let segment = |start_ms, end_ms| Segment { start_ms, end_ms, ..Default::default() };
+        let document = Document {
+            segments: vec![segment(210, 5070), segment(5200, 9000), segment(9900, 12000), segment(11900, 13000)],
+            ..Default::default()
+        };
+        // The first: from the recording's start; "A" sounds before 210 ms.
+        assert_eq!(document.play_start(0), Some(0));
+        // Not back into the sentence before.
+        assert_eq!(document.play_start(1), Some(5070));
+        assert_eq!(document.play_start(2), Some(9650));
+        // Sentences that overlap: from the marked start.
+        assert_eq!(document.play_start(3), Some(11900));
+        assert_eq!(document.play_start(4), None);
+        // The lead-in belongs to the sentence it leads into.
+        assert_eq!(document.segment_at(0), Some(0));
+        assert_eq!(document.segment_at(5069), Some(0));
+        assert_eq!(document.segment_at(5070), Some(1));
+        assert_eq!(document.segment_at(9649), Some(1));
+        assert_eq!(document.segment_at(9650), Some(2));
+        assert_eq!(document.segment_at(11950), Some(3));
+        assert_eq!(Document::default().segment_at(100), None);
     }
 
     #[test]
