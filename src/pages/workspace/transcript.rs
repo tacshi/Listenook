@@ -209,74 +209,84 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                         ))
                         .child(when(move || editing(false) || editing(true), move || editor(review)).otherwise(
                             move || {
-                                ui::veil(hidden, move || {
-                                    nsh_base::button()
-                                        .on_press(press)
-                                        .items_start()
-                                        .gap_1()
-                                        .rounded(tokens::radius_sm)
-                                        .focus_visible(tokens::focus_ring)
-                                        .child(when(shows_original, move || {
-                                            // With word timing, the current sentence is drawn
-                                            // word by word and the one being said is marked.
-                                            when(
-                                                move || words.with(Option::is_some),
-                                                move || {
-                                                    dynamic(move || {
-                                                        let said = said.get();
-                                                        untracked(|| {
-                                                            let spans = words.get_untracked().unwrap_or_default();
-                                                            text("")
-                                                                .text_lg()
-                                                                .line_height(nsh_core::LineHeight::Multiple(1.5))
-                                                                .text_color(tokens::highlight_foreground)
-                                                                .children(spans.into_iter().enumerate().flat_map(
-                                                                    |(at, (word, ..))| {
-                                                                        // The mark is on the word alone, not on
-                                                                        // the space or the quote before it.
-                                                                        let (lead, word) =
-                                                                            listenook_core::local::lead_and_word(&word);
-                                                                        let word =
-                                                                            text(SharedString::from(word.to_owned()));
-                                                                        [
-                                                                            // A sentence does not begin with a space.
-                                                                            text(SharedString::from(
-                                                                                if at == 0 {
-                                                                                    lead.trim_start()
+                                // The button is outside the veil: a hidden sentence
+                                // plays from a press as a shown one does, and what is
+                                // under the veil is transparent, which takes no touch.
+                                nsh_base::button()
+                                    .on_press(press)
+                                    .rounded(tokens::radius_sm)
+                                    .focus_visible(tokens::focus_ring)
+                                    .child(ui::veil(hidden, move || {
+                                        view()
+                                            .items_start()
+                                            .gap_1()
+                                            .child(when(shows_original, move || {
+                                                // With word timing, the current sentence is drawn
+                                                // word by word and the one being said is marked.
+                                                when(
+                                                    move || words.with(Option::is_some),
+                                                    move || {
+                                                        dynamic(move || {
+                                                            let said = said.get();
+                                                            untracked(|| {
+                                                                let spans = words.get_untracked().unwrap_or_default();
+                                                                text("")
+                                                                    .text_lg()
+                                                                    .line_height(nsh_core::LineHeight::Multiple(1.5))
+                                                                    .text_color(tokens::highlight_foreground)
+                                                                    .children(spans.into_iter().enumerate().flat_map(
+                                                                        |(at, (word, ..))| {
+                                                                            // The mark is on the word alone, not on
+                                                                            // the space or the quote before it.
+                                                                            let (lead, word) =
+                                                                                listenook_core::local::lead_and_word(
+                                                                                    &word,
+                                                                                );
+                                                                            let word = text(SharedString::from(
+                                                                                word.to_owned(),
+                                                                            ));
+                                                                            [
+                                                                                // A sentence does not begin with a space.
+                                                                                text(SharedString::from(
+                                                                                    if at == 0 {
+                                                                                        lead.trim_start()
+                                                                                    } else {
+                                                                                        lead
+                                                                                    }
+                                                                                    .to_owned(),
+                                                                                )),
+                                                                                if Some(at) == said {
+                                                                                    word.rounded(tokens::radius_sm).bg(
+                                                                                        || theme().primary.opacity(0.3),
+                                                                                    )
                                                                                 } else {
-                                                                                    lead
-                                                                                }
-                                                                                .to_owned(),
-                                                                            )),
-                                                                            if Some(at) == said {
-                                                                                word.rounded(tokens::radius_sm)
-                                                                                    .bg(|| theme().primary.opacity(0.3))
-                                                                            } else {
-                                                                                word
-                                                                            },
-                                                                        ]
-                                                                    },
-                                                                ))
-                                                                .into_element()
+                                                                                    word
+                                                                                },
+                                                                            ]
+                                                                        },
+                                                                    ))
+                                                                    .into_element()
+                                                            })
                                                         })
-                                                    })
-                                                },
-                                            )
-                                            .otherwise(move || {
-                                                text(move || read(|s| s.text.clone().into()))
-                                                    .text_lg()
-                                                    .line_height(nsh_core::LineHeight::Multiple(1.5))
-                                                    .text_color(move || {
-                                                        if is_current() {
-                                                            tokens::highlight_foreground()
-                                                        } else {
-                                                            theme().foreground
-                                                        }
-                                                    })
-                                            })
-                                        }))
-                                        .child(when(shows_translation, move || {
-                                            text(move || read(|s| s.translated_text.clone().unwrap_or_default().into()))
+                                                    },
+                                                )
+                                                .otherwise(move || {
+                                                    text(move || read(|s| s.text.clone().into()))
+                                                        .text_lg()
+                                                        .line_height(nsh_core::LineHeight::Multiple(1.5))
+                                                        .text_color(move || {
+                                                            if is_current() {
+                                                                tokens::highlight_foreground()
+                                                            } else {
+                                                                theme().foreground
+                                                            }
+                                                        })
+                                                })
+                                            }))
+                                            .child(when(shows_translation, move || {
+                                                text(move || {
+                                                    read(|s| s.translated_text.clone().unwrap_or_default().into())
+                                                })
                                                 .line_height(nsh_core::LineHeight::Multiple(1.5))
                                                 .style_with(move |s| {
                                                     if mode() == ContentMode::Translated {
@@ -285,15 +295,17 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                                                         s.text_sm()
                                                     }
                                                 })
-                                                .text_color(move || {
-                                                    if mode() == ContentMode::Translated {
-                                                        theme().foreground
-                                                    } else {
-                                                        theme().muted_foreground
-                                                    }
-                                                })
-                                        }))
-                                })
+                                                .text_color(
+                                                    move || {
+                                                        if mode() == ContentMode::Translated {
+                                                            theme().foreground
+                                                        } else {
+                                                            theme().muted_foreground
+                                                        }
+                                                    },
+                                                )
+                                            }))
+                                    }))
                             },
                         )),
                 )
