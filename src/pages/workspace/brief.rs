@@ -42,7 +42,7 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
         move || review.job.with(|job| job.as_ref().map(|job| job.ai_generation_state.clone()).unwrap_or_default());
     let generating = move || state().status == AiGenerationStatus::Generating;
     let brief = computed(move || review.job.with(|job| job.as_ref().and_then(|job| job.ai_brief.clone())));
-    let configured = move || store.setting(|s| s.llm_provider_settings.validate().is_none());
+    let configured = computed(move || store.setting(|s| s.llm_provider_settings.validate().is_none()));
     let error = move || {
         Some(state())
             .filter(|s| s.status == AiGenerationStatus::Failed)
@@ -82,22 +82,29 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                     l("No AI Brief yet"),
                     move || {
                         error().unwrap_or_else(|| {
-                            if configured() {
+                            if configured.get() {
                                 tr("Create an evidence-backed overview, chapters, decisions, actions, and open questions.")
                             } else {
                                 tr("Configure the AI provider in Settings before creating a brief.")
                             }
                         })
                     },
-                    if configured() {
-                        icon_text_button(Variant::Primary, Size::Md, Icon::Sparkles, l("Create AI Brief"))
-                            .on_press(move || dialog.set(true))
-                            .into_element()
-                    } else {
-                        button(Variant::Default, Size::Md, l("Open Settings"))
-                            .on_press(move || store.settings_open().set(true))
-                            .into_element()
-                    },
+                    // Follows the settings: saving a key there turns this
+                    // into the Create button without leaving the pane.
+                    dynamic(move || {
+                        let configured = configured.get();
+                        untracked(|| {
+                            if configured {
+                                icon_text_button(Variant::Primary, Size::Md, Icon::Sparkles, l("Create AI Brief"))
+                                    .on_press(move || dialog.set(true))
+                                    .into_element()
+                            } else {
+                                button(Variant::Default, Size::Md, l("Open Settings"))
+                                    .on_press(move || store.settings_open().set(true))
+                                    .into_element()
+                            }
+                        })
+                    }),
                 )
                 .into_element();
             }
