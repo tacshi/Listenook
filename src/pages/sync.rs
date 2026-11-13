@@ -34,7 +34,7 @@ fn step_of(phase: &Phase) -> Step {
     match phase {
         Phase::Choosing => Step::Choosing,
         Phase::Asking(_) => Step::Asking,
-        Phase::Running(_) => Step::Running,
+        Phase::Running(_) | Phase::Serving(_) => Step::Running,
         Phase::Done(..) => Step::Done,
         Phase::Failed(_) => Step::Failed,
     }
@@ -228,6 +228,7 @@ fn running() -> impl IntoElement {
     let sync = store().sync;
     let name = move || match sync.phase() {
         Phase::Asking(peer) | Phase::Running(peer) => peer.device.name,
+        Phase::Serving(name) => name,
         _ => String::new(),
     };
     let asking = move || matches!(sync.phase(), Phase::Asking(_));
@@ -262,6 +263,14 @@ fn running() -> impl IntoElement {
                 return tr("Accept the sync on the other device.");
             }
             let copied = sync.copied();
+            if copied.waiting {
+                return tr("Connection lost. Reconnecting…");
+            }
+            // The other device drives the sync it asked for, and an older
+            // Listenook does not say how much there is: what went, then.
+            if copied.items_total == 0 && copied.bytes_total == 0 {
+                return SharedString::from(bytes(copied.bytes as i64));
+            }
             let mut line = format!("{} / {} {}", copied.items, copied.items_total, tr("recordings"));
             if copied.bytes_total > 0 {
                 line.push_str(&format!(" · {} / {}", bytes(copied.bytes as i64), bytes(copied.bytes_total as i64)));
@@ -292,9 +301,7 @@ fn ended() -> impl IntoElement {
                 .gap_1()
                 .child(
                     text(move || match sync.phase() {
-                        Phase::Done(peer, _) => {
-                            SharedString::from(format!("{} {}", tr("Synced with"), peer.device.name))
-                        }
+                        Phase::Done(name, _) => SharedString::from(format!("{} {name}", tr("Synced with"))),
                         Phase::Failed(_) => tr("The sync did not finish"),
                         _ => SharedString::default(),
                     })

@@ -13,7 +13,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket},
     path::{Path, PathBuf},
     sync::{
@@ -40,6 +40,20 @@ const GROUP: Ipv4Addr = Ipv4Addr::new(239, 77, 76, 78);
 const ANSWER_WITHIN: Duration = Duration::from_secs(60);
 /// A sync that has been quiet this long is over.
 const QUIET: Duration = Duration::from_secs(120);
+/// So is one whose device asks for nothing this long between two calls:
+/// it makes the next as soon as one ends.
+const IDLE: Duration = Duration::from_secs(30);
+/// After a call that broke off, the device that drives the sync says it
+/// is over at once; one that says nothing this long is gone.
+const BROKEN: Duration = Duration::from_secs(8);
+/// A sync whose connection was lost is tried again this often, for this
+/// long without getting through.
+const RETRY_EVERY: Duration = Duration::from_secs(3);
+const RETRY_FOR: Duration = Duration::from_secs(300);
+/// The device whose sync was lost is let back in without asking for this long.
+const RESUME_WITHIN: Duration = Duration::from_secs(600);
+/// How long a datagram may wait to be sent.
+const ANNOUNCE_WITHIN: Duration = Duration::from_millis(500);
 /// A device not heard from for this long is no longer listed.
 const PEER_KEPT: Duration = Duration::from_secs(45);
 const MANIFEST_LIMIT: u64 = 256 * 1024 * 1024;
@@ -69,8 +83,21 @@ pub(crate) enum Event {
     Asked { serial: u64, device: Device },
     /// The request was withdrawn, or waited too long.
     Withdrawn { serial: u64 },
-    /// The sync this device accepted ended.
-    Served { name: String, received: u32, sent: u32, complete: bool },
+    /// The sync this device accepted ended: `complete`, or else `lost`
+    /// when the other device was no longer heard from (it said so itself
+    /// otherwise).
+    Served { name: String, received: u32, sent: u32, complete: bool, lost: bool },
+}
+
+/// The sync this device is answering, as the page shows it. The totals
+/// are the other device's, and zero when it does not tell them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct Serving {
+    pub(crate) name: String,
+    pub(crate) items: u64,
+    pub(crate) items_total: u64,
+    pub(crate) bytes: u64,
+    pub(crate) bytes_total: u64,
 }
 
 /// What a sync copied, as the device that started it counts.
@@ -92,6 +119,8 @@ pub(crate) struct Progress {
     pub(crate) bytes_total: AtomicU64,
     /// Set to end the sync early.
     pub(crate) stop: AtomicBool,
+    /// The connection was lost, and is being looked for again.
+    pub(crate) waiting: AtomicBool,
 }
 
 struct Request {
@@ -102,12 +131,41 @@ struct Request {
     answer: Option<Option<HashSet<String>>>,
 }
 
+/// The device whose sync was lost: it may take it up again.
+struct Resumable {
+    device: String,
+    busy: HashSet<String>,
+    at: Instant,
+}
+
 struct Session {
     token: String,
+    /// The id of the device that drives it.
+    device: String,
+    /// The recordings left out, as when it was accepted.
+    busy: HashSet<String>,
     name: String,
     last: Instant,
     received: u32,
     sent: u32,
+    /// The calls being answered now.
+    calls: u32,
+    /// When a call last broke off.
+    broken: Option<Instant>,
+    items: u64,
+    items_total: u64,
+    bytes: u64,
+    bytes_total: u64,
+}
+
+impl Session {
+    /// Whether the device that drives it is gone.
+    fn is_over(&self) -> bool {
+        let quiet = self.last.elapsed();
+        quiet > QUIET
+            || (self.calls == 0 && quiet > IDLE)
+            || (self.calls == 0 && self.broken.is_some_and(|at| at.elapsed() > BROKEN))
+    }
 }
 
 #[derive(Default)]
@@ -120,6 +178,9 @@ struct State {
     peers: HashMap<String, (Peer, Instant)>,
     request: Option<Request>,
     session: Option<Session>,
+    resumable: Option<Resumable>,
+    /// The token of the sync this device's user ended.
+    stopped: Option<String>,
     /// This device is itself syncing with another.
     starting: bool,
     serial: u64,
@@ -208,6 +269,14 @@ pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible
     }
 }
 
+/// The app whose Library is at `root` is gone: its port is given back,
+/// unless another has the service by now (the next of a test's apps).
+pub(crate) fn release(root: &Option<PathBuf>) {
+    if state().root == *root {
+        configure(None, String::new(), String::new(), false);
+    }
+}
+
 /// The devices heard from lately, by name.
 pub(crate) fn peers() -> Vec<Peer> {
     let mut state = state();
@@ -222,10 +291,39 @@ pub(crate) fn peers() -> Vec<Peer> {
 /// What syncs brought since the last call, and what happened meanwhile.
 pub(crate) fn take() -> (Vec<Incoming>, Vec<Event>) {
     let mut state = state();
-    if state.session.as_ref().is_some_and(|session| session.last.elapsed() > QUIET) {
-        end_session(&mut state, false);
+    if state.session.as_ref().is_some_and(Session::is_over) {
+        end_session(&mut state, false, true);
     }
     (std::mem::take(&mut state.incoming), std::mem::take(&mut state.events))
+}
+
+/// The sync this device is answering, if any.
+pub(crate) fn serving() -> Option<Serving> {
+    let state = state();
+    // Accepted a moment ago, it is one already.
+    let accepted = || {
+        let request = state.request.as_ref().filter(|request| matches!(request.answer, Some(Some(_))))?;
+        Some(Serving { name: request.device.name.clone(), ..Serving::default() })
+    };
+    state
+        .session
+        .as_ref()
+        .map(|session| Serving {
+            name: session.name.clone(),
+            items: session.items,
+            items_total: session.items_total,
+            bytes: session.bytes,
+            bytes_total: session.bytes_total,
+        })
+        .or_else(accepted)
+}
+
+/// Ends the sync this device is answering: the other device is refused
+/// from here on, and tells its user.
+pub(crate) fn stop_serving() {
+    let mut state = state();
+    state.stopped = state.session.take().map(|session| session.token);
+    state.resumable = None;
 }
 
 /// Answers the request `serial`: `busy` (the recordings being worked on
@@ -236,13 +334,16 @@ pub(crate) fn answer(serial: u64, busy: Option<HashSet<String>>) {
     }
 }
 
-fn end_session(state: &mut State, complete: bool) {
+fn end_session(state: &mut State, complete: bool, lost: bool) {
     if let Some(session) = state.session.take() {
+        // Lost, the device may come back for the rest.
+        state.resumable = lost.then(|| Resumable { device: session.device, busy: session.busy, at: Instant::now() });
         state.events.push(Event::Served {
             name: session.name,
             received: session.received,
             sent: session.sent,
             complete,
+            lost,
         });
     }
 }
@@ -274,6 +375,9 @@ fn listen(turn: u64) {
     // what is sent straight to it.
     let _ = socket.join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED);
     let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
+    // A send waits while the network's queue is full, which a sync's
+    // media keeps it: it gives up instead (the clone shares the limit).
+    let _ = socket.set_write_timeout(Some(ANNOUNCE_WITHIN));
     if let Ok(announcer) = socket.try_clone() {
         state().announcer = Some(announcer);
     }
@@ -305,10 +409,15 @@ fn listen(turn: u64) {
 }
 
 /// Tells the network this device is here; `asking`, also asks who else is.
+/// The send may wait on the network: never called on the engine thread,
+/// and the state is let go before it (every sync thread needs it).
 fn announce(asking: bool) {
-    let state = state();
-    if let Some(socket) = &state.announcer
-        && let Ok(message) = serde_json::to_vec(&Announcement { device: state.me.clone(), asking })
+    let (socket, me) = {
+        let state = state();
+        (state.announcer.as_ref().and_then(|socket| socket.try_clone().ok()), state.me.clone())
+    };
+    if let Some(socket) = socket
+        && let Ok(message) = serde_json::to_vec(&Announcement { device: me, asking })
     {
         let _ = socket.send_to(&message, (GROUP, PORT));
     }
@@ -345,7 +454,13 @@ fn ask(address: SocketAddr) -> Option<Device> {
 /// network that drops it). What answers shows in [`peers`].
 pub(crate) fn search() {
     static SEARCHING: AtomicBool = AtomicBool::new(false);
-    announce(true);
+    static ANNOUNCING: AtomicBool = AtomicBool::new(false);
+    if !ANNOUNCING.swap(true, Ordering::SeqCst) {
+        thread::spawn(|| {
+            announce(true);
+            ANNOUNCING.store(false, Ordering::SeqCst);
+        });
+    }
     if SEARCHING.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -453,6 +568,10 @@ struct Call {
     path: String,
     length: u64,
     token: String,
+    /// How far the device that drives the sync says it is.
+    progress: Option<(u64, u64, u64)>,
+    /// Where in the media file the call takes up.
+    offset: u64,
     body: BufReader<TcpStream>,
 }
 
@@ -461,6 +580,7 @@ fn read_call(stream: TcpStream) -> io::Result<Call> {
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     let mut body = BufReader::new(stream);
     let (mut method, mut path, mut length, mut token) = (String::new(), String::new(), 0, String::new());
+    let (mut progress, mut offset) = (None, 0);
     let mut head = (&mut body).take(16 * 1024);
     let mut line = String::new();
     loop {
@@ -482,11 +602,20 @@ fn read_call(stream: TcpStream) -> io::Result<Call> {
             match name.to_ascii_lowercase().as_str() {
                 "content-length" => length = value.trim().parse().map_err(io::Error::other)?,
                 "x-listenook-token" => token = value.trim().to_owned(),
+                "x-listenook-offset" => offset = value.trim().parse().unwrap_or(0),
+                "x-listenook-progress" => {
+                    let mut numbers = value.split_whitespace().map(|number| number.parse::<u64>().ok());
+                    if let (Some(Some(items)), Some(Some(items_total)), Some(Some(bytes_total))) =
+                        (numbers.next(), numbers.next(), numbers.next())
+                    {
+                        progress = Some((items, items_total, bytes_total));
+                    }
+                }
                 _ => {}
             }
         }
     }
-    Ok(Call { method, path, length, token, body })
+    Ok(Call { method, path, length, token, progress, offset, body })
 }
 
 fn reply(stream: &mut TcpStream, status: u16, body: &[u8]) -> io::Result<()> {
@@ -495,6 +624,7 @@ fn reply(stream: &mut TcpStream, status: u16, body: &[u8]) -> io::Result<()> {
         403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
+        410 => "Gone",
         426 => "Upgrade Required",
         _ => "Bad Request",
     };
@@ -529,6 +659,15 @@ fn in_session(token: &str, count: impl FnOnce(&mut Session)) -> bool {
 struct Hello {
     device: Device,
     catalog: LibraryCatalog,
+    /// Takes up the sync this device lost, which was accepted already.
+    resume: bool,
+}
+
+/// How much of a media file that was being sent is here.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct Part {
+    size: u64,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -558,24 +697,45 @@ fn read_body(call: &mut Call, limit: u64) -> io::Result<Vec<u8>> {
 fn handle(stream: TcpStream) -> io::Result<()> {
     let mut out = stream.try_clone()?;
     let mut call = read_call(stream)?;
+    let token = call.token.clone();
+    let progress = call.progress;
+    let counted = in_session(&token, |session| {
+        session.calls += 1;
+        if let Some((items, items_total, bytes_total)) = progress {
+            (session.items, session.items_total, session.bytes_total) = (items, items_total, bytes_total);
+        }
+    });
+    let result = route(&mut out, &mut call);
+    if counted {
+        in_session(&token, |session| {
+            session.calls = session.calls.saturating_sub(1);
+            if result.is_err() {
+                session.broken = Some(Instant::now());
+            }
+        });
+    }
+    result
+}
+
+fn route(out: &mut TcpStream, call: &mut Call) -> io::Result<()> {
     let (root, me) = {
         let state = state();
         (state.root.clone(), state.me.clone())
     };
     let Some(root) = root else {
-        return reply(&mut out, 404, b"{}");
+        return reply(out, 404, b"{}");
     };
     let path = call.path.clone();
     let parts: Vec<&str> = path.trim_start_matches("/listenook/").split('/').collect();
     if !path.starts_with("/listenook/") {
-        return reply(&mut out, 404, b"{}");
+        return reply(out, 404, b"{}");
     }
     let method = call.method.clone();
     match (method.as_str(), parts.as_slice()) {
-        ("GET", ["info"]) => reply_json(&mut out, &me),
+        ("GET", ["info"]) => reply_json(out, &me),
         ("POST", ["sync"]) => {
-            let hello: Hello = serde_json::from_slice(&read_body(&mut call, 4 * 1024 * 1024)?)?;
-            welcome(&mut out, &root, me, hello)
+            let hello: Hello = serde_json::from_slice(&read_body(call, 4 * 1024 * 1024)?)?;
+            welcome(out, &root, me, hello)
         }
         ("POST", ["cancel", id]) => {
             let mut state = state();
@@ -583,26 +743,30 @@ fn handle(stream: TcpStream) -> io::Result<()> {
                 state.events.push(Event::Withdrawn { serial: request.serial });
             }
             drop(state);
-            reply(&mut out, 200, b"{}")
+            reply(out, 200, b"{}")
         }
-        _ if !in_session(&call.token, |_| {}) => reply(&mut out, 403, b"{}"),
+        // Ended by this device's user, or no longer known (lost, and over).
+        _ if !in_session(&call.token, |_| {}) => {
+            let ended = !call.token.is_empty() && state().stopped.as_deref() == Some(call.token.as_str());
+            reply(out, if ended { 403 } else { 410 }, b"{}")
+        }
         ("POST", ["done"]) => {
-            let done: Done = serde_json::from_slice(&read_body(&mut call, 64 * 1024)?).unwrap_or_default();
-            end_session(&mut state(), done.complete);
-            reply(&mut out, 200, b"{}")
+            let done: Done = serde_json::from_slice(&read_body(call, 64 * 1024)?).unwrap_or_default();
+            end_session(&mut state(), done.complete, false);
+            reply(out, 200, b"{}")
         }
-        (_, [_, id, ..]) if !Job::is_valid_id(id) => reply(&mut out, 400, b"{}"),
+        (_, [_, id, ..]) if !Job::is_valid_id(id) => reply(out, 400, b"{}"),
         ("GET", ["manifest", id]) => match fs::read(manifest_path(&root, id)) {
             Ok(bytes) => {
                 in_session(&call.token, |session| session.sent += 1);
-                reply(&mut out, 200, &bytes)
+                reply(out, 200, &bytes)
             }
-            Err(_) => reply(&mut out, 404, b"{}"),
+            Err(_) => reply(out, 404, b"{}"),
         },
         ("PUT", ["manifest", id]) => {
-            let job: Job = serde_json::from_slice(&read_body(&mut call, MANIFEST_LIMIT)?)?;
+            let job: Job = serde_json::from_slice(&read_body(call, MANIFEST_LIMIT)?)?;
             if job.id != *id {
-                return reply(&mut out, 400, b"{}");
+                return reply(out, 400, b"{}");
             }
             let mut state = state();
             state.incoming.push(Incoming::Job(Box::new(job)));
@@ -610,31 +774,45 @@ fn handle(stream: TcpStream) -> io::Result<()> {
                 session.received += 1;
             }
             drop(state);
-            reply(&mut out, 200, b"{}")
+            reply(out, 200, b"{}")
         }
         ("GET", ["media", id]) => {
             let source = persist::load_job(&root, id).map(|job| media_of(&root, &job));
             let Some(mut file) = source.and_then(|path| fs::File::open(path).ok()) else {
-                return reply(&mut out, 404, b"{}");
+                return reply(out, 404, b"{}");
             };
             let length = file.metadata()?.len();
+            // The rest of a file the other device has the start of.
+            let offset = if call.offset < length { call.offset } else { 0 };
+            file.seek(SeekFrom::Start(offset))?;
+            let resumed = if offset > 0 { format!("X-Listenook-Offset: {offset}\r\n") } else { String::new() };
             write!(
                 out,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n{resumed}Connection: close\r\n\r\n",
+                length - offset
             )?;
             let token = call.token.clone();
-            copy(&mut file, &mut out, length, |_| in_session(&token, |_| {}))?;
+            in_session(&token, |session| session.bytes += offset);
+            copy(&mut file, out, length - offset, |count| in_session(&token, |session| session.bytes += count))?;
             out.flush()
+        }
+        ("GET", ["part", id, extension]) => {
+            let path = root.join("media").join(media_file_name(id, &format!("x.{extension}")));
+            let size = fs::metadata(path.with_extension("part")).map(|file| file.len()).unwrap_or(0);
+            reply_json(out, &Part { size })
         }
         ("PUT", ["media", id, extension]) => {
             let path = root.join("media").join(media_file_name(id, &format!("x.{extension}")));
             let token = call.token.clone();
-            let length = call.length;
-            receive(&mut call.body, &path, length, |_| in_session(&token, |_| {}))?;
+            let (length, offset) = (call.length, call.offset);
+            in_session(&token, |session| session.bytes += offset);
+            receive(&mut call.body, &path, length, offset, |count| {
+                in_session(&token, |session| session.bytes += count)
+            })?;
             state().incoming.push(Incoming::Media { id: (*id).to_owned(), path });
-            reply(&mut out, 200, b"{}")
+            reply(out, 200, b"{}")
         }
-        _ => reply(&mut out, 404, b"{}"),
+        _ => reply(out, 404, b"{}"),
     }
 }
 
@@ -646,15 +824,75 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello) -> io::Re
     if hello.device.protocol != PROTOCOL {
         return reply(out, 426, b"{}");
     }
+    let token = uuid::Uuid::new_v4().to_string();
+    let resumed = {
+        let mut state = state();
+        if state.session.as_ref().is_some_and(Session::is_over) {
+            end_session(&mut state, false, true);
+        }
+        let id = &hello.device.id;
+        let free = hello.resume && !state.starting && state.request.is_none();
+        if free && state.session.as_ref().is_some_and(|session| session.device == *id) {
+            // The connection was lost before this device noticed: the
+            // same sync goes on.
+            let old = state.session.take().expect("checked above");
+            open_session(&mut state, &hello, &token, old.busy.clone(), (old.received, old.sent));
+            Some(old.busy)
+        } else if free
+            && state.session.is_none()
+            && state.resumable.as_ref().is_some_and(|lost| lost.device == *id && lost.at.elapsed() < RESUME_WITHIN)
+        {
+            let lost = state.resumable.take().expect("checked above");
+            open_session(&mut state, &hello, &token, lost.busy.clone(), (0, 0));
+            Some(lost.busy)
+        } else {
+            None
+        }
+    };
+    let busy = match resumed {
+        Some(busy) => busy,
+        None => match ask_user(&hello, &token) {
+            Ok(busy) => busy,
+            Err(status) => return reply(out, status, b"{}"),
+        },
+    };
+    let index = index_of(root, &busy);
+    in_session(&token, |_| {});
+    let sent = reply_json(out, &Welcome { token: token.clone(), device: me, index });
+    if sent.is_err() {
+        // The device that asked is gone already.
+        in_session(&token, |session| session.broken = Some(Instant::now()));
+    }
+    sent
+}
+
+fn open_session(state: &mut State, hello: &Hello, token: &str, busy: HashSet<String>, (received, sent): (u32, u32)) {
+    state.incoming.push(Incoming::Catalog(hello.catalog.clone()));
+    state.resumable = None;
+    state.session = Some(Session {
+        token: token.to_owned(),
+        device: hello.device.id.clone(),
+        busy,
+        name: hello.device.name.clone(),
+        last: Instant::now(),
+        received,
+        sent,
+        calls: 0,
+        broken: None,
+        items: 0,
+        items_total: 0,
+        bytes: 0,
+        bytes_total: 0,
+    });
+}
+
+/// Asks this device's user: the recordings to leave out once accepted,
+/// else the status to answer with.
+fn ask_user(hello: &Hello, token: &str) -> Result<HashSet<String>, u16> {
     let serial = {
         let mut state = state();
-        let quiet = state.session.as_ref().is_some_and(|session| session.last.elapsed() > QUIET);
-        if quiet {
-            end_session(&mut state, false);
-        }
         if state.starting || state.session.is_some() || state.request.is_some() {
-            drop(state);
-            return reply(out, 409, b"{}");
+            return Err(409);
         }
         state.serial += 1;
         let serial = state.serial;
@@ -663,41 +901,26 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello) -> io::Re
         serial
     };
     let asked = Instant::now();
-    let busy = loop {
+    loop {
         thread::sleep(Duration::from_millis(100));
         let mut state = state();
         let Some(request) = state.request.as_mut().filter(|request| request.serial == serial) else {
             // Withdrawn by the device that asked.
-            drop(state);
-            return reply(out, 403, b"{}");
+            return Err(403);
         };
         if let Some(answer) = request.answer.take() {
             state.request = None;
-            break answer;
+            let busy = answer.ok_or(403_u16)?;
+            // The sync is on from the answer, with no moment in between.
+            open_session(&mut state, hello, token, busy.clone(), (0, 0));
+            return Ok(busy);
         }
         if asked.elapsed() > ANSWER_WITHIN {
             state.request = None;
             state.events.push(Event::Withdrawn { serial });
-            break None;
+            return Err(403);
         }
-    };
-    let Some(busy) = busy else {
-        return reply(out, 403, b"{}");
-    };
-    let index = index_of(root, &busy);
-    let token = uuid::Uuid::new_v4().to_string();
-    {
-        let mut state = state();
-        state.incoming.push(Incoming::Catalog(hello.catalog));
-        state.session = Some(Session {
-            token: token.clone(),
-            name: hello.device.name.clone(),
-            last: Instant::now(),
-            received: 0,
-            sent: 0,
-        });
     }
-    reply_json(out, &Welcome { token, device: me, index })
 }
 
 fn manifest_path(root: &Path, id: &str) -> PathBuf {
@@ -744,23 +967,33 @@ fn copy(from: &mut impl Read, to: &mut impl Write, length: u64, mut alive: impl 
     Ok(())
 }
 
-/// Writes `length` bytes to `path`, through a `.part` file beside it.
-fn receive(from: &mut impl Read, path: &Path, length: u64, alive: impl FnMut(u64) -> bool) -> io::Result<()> {
+/// Writes `length` bytes to `path`, through a `.part` file beside it,
+/// after the `offset` bytes that file has from the time before. What came
+/// of a transfer that broke off stays in it, to be taken up again.
+fn receive(
+    from: &mut impl Read,
+    path: &Path,
+    length: u64,
+    offset: u64,
+    alive: impl FnMut(u64) -> bool,
+) -> io::Result<()> {
     if let Some(folder) = path.parent() {
         fs::create_dir_all(folder)?;
     }
     let part = path.with_extension("part");
-    let written = fs::File::create(&part).and_then(|mut file| {
-        copy(from, &mut file, length, alive)?;
-        file.flush()
-    });
-    match written {
-        Ok(()) => fs::rename(&part, path),
-        Err(error) => {
-            let _ = fs::remove_file(&part);
-            Err(error)
+    let mut file = if offset > 0 {
+        let file = fs::OpenOptions::new().append(true).open(&part)?;
+        if file.metadata()?.len() != offset {
+            return Err(io::Error::other("what is here of the file is not what the rest follows"));
         }
-    }
+        file
+    } else {
+        fs::File::create(&part)?
+    };
+    copy(from, &mut file, length, alive)?;
+    file.flush()?;
+    drop(file);
+    fs::rename(&part, path)
 }
 
 // --- Syncing with another device ---------------------------------------------
@@ -801,22 +1034,75 @@ pub(crate) fn sync_with(
         (state.root.clone(), state.me.clone())
     };
     let result = match root {
-        Some(root) => exchange(address, &root, me, &busy, progress),
+        Some(root) => persist_with(address, &root, &me, &busy, progress),
         None => Err("sync_failed"),
     };
+    progress.waiting.store(false, Ordering::Relaxed);
     state().starting = false;
     result
 }
 
+/// [`exchange`], taken up again when the connection is lost after the
+/// other device accepted: it lets this one back in without asking, and
+/// what was copied, whole or in part, is not copied again.
+fn persist_with(
+    address: SocketAddr,
+    root: &Path,
+    me: &Device,
+    busy: &HashSet<String>,
+    progress: &Progress,
+) -> Result<Summary, &'static str> {
+    let mut summary = Summary::default();
+    let mut lost: Option<Instant> = None;
+    loop {
+        let again = lost.is_some();
+        let code = match exchange(address, root, me.clone(), busy, progress, again, &mut summary) {
+            Ok(()) => return Ok(summary),
+            Err(code) => code,
+        };
+        let stopped = || progress.stop.load(Ordering::Relaxed);
+        // The other device may not have noticed yet, and still be in the sync.
+        let worth = recoverable(code) || (again && code == "sync_peer_busy");
+        if stopped() || !worth || !progress.accepted.load(Ordering::Relaxed) {
+            return Err(code);
+        }
+        // An attempt that got through has all the time again.
+        if !progress.waiting.load(Ordering::Relaxed) {
+            lost = None;
+        }
+        if lost.get_or_insert_with(Instant::now).elapsed() > RETRY_FOR {
+            return Err(code);
+        }
+        progress.waiting.store(true, Ordering::Relaxed);
+        log::debug!("sync: {code}, trying again");
+        let wait = Instant::now();
+        while wait.elapsed() < RETRY_EVERY {
+            if stopped() {
+                return Err("sync_cancelled");
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+/// Whether a sync that ended so may go on once the network is back.
+fn recoverable(code: &str) -> bool {
+    matches!(code, "sync_interrupted" | "sync_unreachable")
+}
+
+/// One go at the sync: `resume` takes up one that was lost. What it
+/// copies is added to `summary`.
 fn exchange(
     address: SocketAddr,
     root: &Path,
     me: Device,
     busy: &HashSet<String>,
     progress: &Progress,
-) -> Result<Summary, &'static str> {
+    resume: bool,
+    summary: &mut Summary,
+) -> Result<(), &'static str> {
     let base = format!("http://{address}/listenook");
-    let hello = Hello { device: me, catalog: persist::load_library_catalog(root) };
+    let hello = Hello { device: me, catalog: persist::load_library_catalog(root), resume };
     let welcome: Welcome = agent(ANSWER_WITHIN + Duration::from_secs(10))
         .post(&format!("{base}/sync"))
         .send_bytes(&serde_json::to_vec(&hello).map_err(|_| "sync_failed")?)
@@ -826,7 +1112,11 @@ fn exchange(
         return Err("sync_cancelled");
     }
     progress.accepted.store(true, Ordering::Relaxed);
-    let http = agent(Duration::from_secs(60));
+    progress.waiting.store(false, Ordering::Relaxed);
+    // What is left to copy, when taken up again.
+    progress.items.store(0, Ordering::Relaxed);
+    progress.bytes.store(0, Ordering::Relaxed);
+    let http = agent(Duration::from_secs(30));
     let token = welcome.token.as_str();
     let local = index_of(root, busy);
     let plan = plan(&local.entries, &welcome.index.entries);
@@ -834,6 +1124,19 @@ fn exchange(
     progress.bytes_total.store(plan.media_bytes(), Ordering::Relaxed);
     state().incoming.push(Incoming::Catalog(welcome.index.catalog.clone()));
 
+    // Each call says whose sync it is and how far, for the other device
+    // to show.
+    let call = |request: ureq::Request| {
+        request.set("X-Listenook-Token", token).set(
+            "X-Listenook-Progress",
+            &format!(
+                "{} {} {}",
+                progress.items.load(Ordering::Relaxed),
+                progress.items_total.load(Ordering::Relaxed),
+                progress.bytes_total.load(Ordering::Relaxed)
+            ),
+        )
+    };
     let moved = |count: u64| {
         progress.bytes.fetch_add(count, Ordering::Relaxed);
         !progress.stop.load(Ordering::Relaxed)
@@ -841,6 +1144,8 @@ fn exchange(
     let failed = |error: ureq::Error| match error {
         // The other device ended the sync.
         ureq::Error::Status(403, _) => "sync_cancelled_there",
+        // It gave the sync up for lost.
+        ureq::Error::Status(410, _) => "sync_interrupted",
         other => code_of(other),
     };
     let stopped = |_: io::Error| {
@@ -850,15 +1155,29 @@ fn exchange(
         let id = &transfer.id;
         let path = root.join("media").join(media_file_name(id, &transfer.media_name));
         if transfer.media {
-            let response =
-                http.get(&format!("{base}/media/{id}")).set("X-Listenook-Token", token).call().map_err(failed)?;
+            // What came of it the time before is not asked for again.
+            let part = path.with_extension("part");
+            let have = fs::metadata(&part).map(|file| file.len()).unwrap_or(0);
+            let have = if have < transfer.media_size { have } else { 0 };
+            let mut request = call(http.get(&format!("{base}/media/{id}")));
+            if have > 0 {
+                request = request.set("X-Listenook-Offset", &have.to_string());
+            }
+            let response = request.call().map_err(failed)?;
             let length: u64 =
                 response.header("Content-Length").and_then(|length| length.parse().ok()).ok_or("sync_failed")?;
-            receive(&mut response.into_reader(), &path, length, moved).map_err(stopped)?;
+            // An older Listenook sends the whole file, and does not say from where.
+            let from: u64 = response.header("X-Listenook-Offset").and_then(|from| from.parse().ok()).unwrap_or(0);
+            if from > 0 && (from != have || from + length != transfer.media_size) {
+                // Not the rest of the file this is the start of: from the top, next time.
+                let _ = fs::remove_file(&part);
+                return Err("sync_interrupted");
+            }
+            progress.bytes.fetch_add(from, Ordering::Relaxed);
+            receive(&mut response.into_reader(), &path, length, from, moved).map_err(stopped)?;
         }
         if transfer.manifest {
-            let response =
-                http.get(&format!("{base}/manifest/{id}")).set("X-Listenook-Token", token).call().map_err(failed)?;
+            let response = call(http.get(&format!("{base}/manifest/{id}"))).call().map_err(failed)?;
             let job: Job = serde_json::from_reader(response.into_reader().take(MANIFEST_LIMIT))
                 .ok()
                 .filter(|job: &Job| &job.id == id)
@@ -873,28 +1192,35 @@ fn exchange(
         let id = &transfer.id;
         if transfer.media {
             let source = persist::load_job(root, id).map(|job| media_of(root, &job)).ok_or("sync_failed")?;
-            let file = fs::File::open(&source).map_err(|_| "sync_failed")?;
+            let mut file = fs::File::open(&source).map_err(|_| "sync_failed")?;
             let length = file.metadata().map_err(|_| "sync_failed")?.len();
+            let extension = media_extension(&transfer.media_name);
+            // What the other device has of it from the time before (an
+            // older Listenook keeps nothing, and knows no such question).
+            let have = call(http.get(&format!("{base}/part/{id}/{extension}")))
+                .call()
+                .ok()
+                .and_then(|response| serde_json::from_reader::<_, Part>(response.into_reader().take(1024)).ok())
+                .map_or(0, |part| part.size);
+            let have = if have < length { have } else { 0 };
+            file.seek(SeekFrom::Start(have)).map_err(|_| "sync_failed")?;
+            progress.bytes.fetch_add(have, Ordering::Relaxed);
             let mut counted = Counted { inner: file, moved: &moved };
-            http.put(&format!("{base}/media/{id}/{}", media_extension(&transfer.media_name)))
-                .set("X-Listenook-Token", token)
-                .set("Content-Length", &length.to_string())
-                .send(&mut counted)
-                .map_err(
-                    |error| if progress.stop.load(Ordering::Relaxed) { "sync_cancelled" } else { failed(error) },
-                )?;
+            let mut request = call(http.put(&format!("{base}/media/{id}/{extension}")));
+            if have > 0 {
+                request = request.set("X-Listenook-Offset", &have.to_string());
+            }
+            request.set("Content-Length", &(length - have).to_string()).send(&mut counted).map_err(|error| {
+                if progress.stop.load(Ordering::Relaxed) { "sync_cancelled" } else { failed(error) }
+            })?;
         }
         if transfer.manifest {
             let manifest = fs::read(manifest_path(root, id)).map_err(|_| "sync_failed")?;
-            http.put(&format!("{base}/manifest/{id}"))
-                .set("X-Listenook-Token", token)
-                .send_bytes(&manifest)
-                .map_err(failed)?;
+            call(http.put(&format!("{base}/manifest/{id}"))).send_bytes(&manifest).map_err(failed)?;
         }
         Ok(())
     };
 
-    let mut summary = Summary::default();
     let mut outcome = Ok(());
     for (transfer, pulling) in plan.pull.iter().map(|t| (t, true)).chain(plan.push.iter().map(|t| (t, false))) {
         if progress.stop.load(Ordering::Relaxed) {
@@ -912,12 +1238,19 @@ fn exchange(
         }
         progress.items.fetch_add(1, Ordering::Relaxed);
     }
-    // Whatever happened, the other device is told the sync is over.
-    let _ = agent(Duration::from_secs(5))
-        .post(&format!("{base}/done"))
-        .set("X-Listenook-Token", token)
+    // Lost, it is taken up again: the other device keeps it open.
+    if matches!(outcome, Err(code) if recoverable(code)) && !progress.stop.load(Ordering::Relaxed) {
+        return outcome;
+    }
+    // Else, whatever happened, the other device is told the sync is over.
+    let told = call(agent(Duration::from_secs(5)).post(&format!("{base}/done")))
         .send_bytes(&serde_json::to_vec(&Done { complete: outcome.is_ok() }).unwrap_or_default());
-    outcome.map(|()| summary)
+    // It no longer knows this sync: it was ended there, which is why a
+    // transfer broke off.
+    if matches!(told, Err(ureq::Error::Status(403, _))) && matches!(outcome, Err(code) if code != "sync_cancelled") {
+        outcome = Err("sync_cancelled_there");
+    }
+    outcome
 }
 
 /// A reader that says how much was read of it, and ends when told to stop.
@@ -1031,13 +1364,20 @@ mod tests {
         // state is one per process, it is driven here without `sync_with`.
         let me = Device { app: "listenook".into(), protocol: PROTOCOL, id: "device-here".into(), ..Device::default() };
         let progress = Progress::default();
-        let summary = exchange(address, &here, me, &HashSet::new(), &progress).unwrap();
+        let mut summary = Summary::default();
+        exchange(address, &here, me, &HashSet::new(), &progress, false, &mut summary).unwrap();
         accepting.join().unwrap();
         assert_eq!(summary, Summary { received: 2, sent: 2 });
         assert_eq!(progress.items.load(Ordering::Relaxed), 4);
 
         let (incoming, events) = take();
-        assert!(events.contains(&Event::Served { name: String::new(), received: 1, sent: 2, complete: true }));
+        assert!(events.contains(&Event::Served {
+            name: String::new(),
+            received: 1,
+            sent: 2,
+            complete: true,
+            lost: false
+        }));
         let jobs: Vec<&Job> = incoming
             .iter()
             .filter_map(|incoming| match incoming {
@@ -1060,7 +1400,7 @@ mod tests {
 
         // Without a session nothing is given out.
         let refused = agent(Duration::from_secs(2)).get(&format!("http://{address}/listenook/manifest/both")).call();
-        assert!(matches!(refused, Err(ureq::Error::Status(403, _))));
+        assert!(matches!(refused, Err(ureq::Error::Status(410, _))));
         configure(None, String::new(), String::new(), false);
         let _ = (fs::remove_dir_all(there), fs::remove_dir_all(here));
     }
@@ -1092,7 +1432,8 @@ mod tests {
             }
         });
         let me = Device { app: "listenook".into(), protocol: PROTOCOL, id: "device-here".into(), ..Device::default() };
-        let outcome = exchange(address, &here, me, &HashSet::new(), &Progress::default());
+        let outcome =
+            exchange(address, &here, me, &HashSet::new(), &Progress::default(), false, &mut Summary::default());
         declining.join().unwrap();
         assert_eq!(outcome, Err("sync_declined"));
         assert!(take().0.is_empty());

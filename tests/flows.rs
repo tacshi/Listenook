@@ -34,14 +34,15 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
     let root = std::env::temp_dir().join(format!("listenook-flow-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    seed(&root);
     // SAFETY: tests that read these run one at a time, under `turn`.
     unsafe {
         std::env::set_var("LISTENOOK_DATA_DIR", &root);
         std::env::set_var("LISTENOOK_MEMORY_SECRETS", "1");
         std::env::set_var("SONIOX_API_KEY", "test-key");
         std::env::remove_var("LISTENOOK_START");
+        std::env::remove_var("LISTENOOK_SYNC_PORT");
     }
+    seed(&root);
     let app = Headless::start(EngineConfig {
         viewport: Size::new(Points(1200.0), Points(800.0)),
         network: Some(Arc::new(StubNetwork::new(routes))),
@@ -49,6 +50,17 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
     })
     .unwrap();
     App { app, root, _turn: turn }
+}
+
+/// Seeds the transcript and names the port this device answers other
+/// devices on (read when it becomes visible). Set here, once the test has
+/// its turn: tests that start an app run one at a time.
+fn on_port(port: u16) -> impl FnOnce(&Path) {
+    move |root| {
+        // SAFETY: under the turn `start` holds.
+        unsafe { std::env::set_var("LISTENOOK_SYNC_PORT", port.to_string()) };
+        seed_transcript(root);
+    }
 }
 
 fn manifest(root: &Path, id: &str) -> PathBuf {
@@ -380,10 +392,7 @@ fn two_sentences_are_merged_from_the_editor() {
 
 #[test]
 fn another_devices_sync_is_accepted_and_its_recording_arrives() {
-    // The port this device answers on; read when it becomes visible.
-    // SAFETY: only this test reads it, and tests that start an app run one at a time.
-    unsafe { std::env::set_var("LISTENOOK_SYNC_PORT", "47941") };
-    let mut it = start("sync", seed_transcript, Vec::new());
+    let mut it = start("sync", on_port(47941), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
     // Opening Sync makes the device visible and looks for others.
     it.app.press("label:Sync with another device…").unwrap();
@@ -438,6 +447,211 @@ fn another_devices_sync_is_accepted_and_its_recording_arrives() {
     assert!(arrived.contains("2026-11-12T09:00:00.000Z"), "its time of change stays the other device's");
     let catalog = std::fs::read_to_string(it.root.join("library_catalog.json")).unwrap();
     assert!(catalog.contains("shared"), "its tag came with it");
-    // SAFETY: as above.
-    unsafe { std::env::remove_var("LISTENOOK_SYNC_PORT") };
+}
+
+/// The sync another device drives shows in the Sync dialog, which can be
+/// put away meanwhile; a device that is no longer heard from ends it.
+#[test]
+fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
+    use std::io::Write;
+    let mut it = start("sync-served", on_port(47942), Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("label:Sync with another device…").unwrap();
+    it.app.wait_for("Nearby devices").unwrap();
+
+    let base = "http://127.0.0.1:47942/listenook";
+    let other = std::thread::spawn(move || -> Result<String, String> {
+        let hello = json!({
+            "device": {"app": "listenook", "protocol": 1, "id": "other", "name": "Studio Mac", "platform": "macos", "port": 47942},
+            "catalog": {"version": 1, "groups": [], "tags": []},
+        });
+        for _ in 0..50 {
+            match ureq::post(&format!("{base}/sync")).timeout(Duration::from_secs(30)).send_string(&hello.to_string()) {
+                Ok(response) => return response.into_string().map_err(|error| error.to_string()),
+                Err(ureq::Error::Transport(_)) => std::thread::sleep(Duration::from_millis(100)),
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Err("the device never answered".into())
+    });
+    it.app.wait_for("Sync request").unwrap();
+    it.app.press("role:button[Accept]").unwrap();
+    let welcome: serde_json::Value = serde_json::from_str(&other.join().unwrap().unwrap()).unwrap();
+    let token = welcome["token"].as_str().unwrap().to_owned();
+
+    // The dialog now tells whose sync runs, and how far the other device says it is.
+    it.app.wait_for("Syncing with Studio Mac…").unwrap();
+    assert!(!it.app.shows("Nearby devices"), "no device is chosen while one syncs");
+    let job = json!({
+        "manifest_version": 15, "id": "from-other", "source_path": "/elsewhere/talk.m4a",
+        "created_at": "2026-11-12T08:00:00.000Z", "updated_at": "2026-11-12T09:00:00.000Z",
+        "status": "completed", "display_title": "Sent from the studio",
+    });
+    ureq::put(&format!("{base}/manifest/from-other"))
+        .set("X-Listenook-Token", &token)
+        .set("X-Listenook-Progress", "1 3 0")
+        .send_string(&job.to_string())
+        .unwrap();
+    it.app.wait_for("1 / 3 recordings").unwrap();
+
+    // Put away, the dialog goes and the sync goes on: it is there when opened again.
+    it.app.press("role:button[Close]").unwrap();
+    it.app.wait_for_gone("Syncing with Studio Mac…", GONE).unwrap();
+    it.app.wait_for("Sent from the studio").unwrap();
+    it.app.press("label:Sync with another device…").unwrap();
+    it.app.wait_for("Syncing with Studio Mac…").unwrap();
+
+    // The other device drops off in the middle of a file, and says nothing more.
+    let mut broken = std::net::TcpStream::connect("127.0.0.1:47942").unwrap();
+    write!(
+        broken,
+        "PUT /listenook/media/from-other/m4a HTTP/1.1\r\nX-Listenook-Token: {token}\r\nContent-Length: 1000\r\n\r\nhalf"
+    )
+    .unwrap();
+    drop(broken);
+    it.app.wait_for_within("The sync did not finish", Duration::from_secs(20)).unwrap();
+    assert!(it.app.shows("The connection was lost. What was copied is kept; sync again to finish."));
+    let late = ureq::get(&format!("{base}/manifest/sample")).set("X-Listenook-Token", &token).call();
+    assert!(matches!(late, Err(ureq::Error::Status(410, _))), "the sync is over for the other device too");
+
+    // It comes back for the rest: let in without asking again, and the
+    // file goes on from what arrived of it.
+    let hello = json!({
+        "device": {"app": "listenook", "protocol": 1, "id": "other", "name": "Studio Mac", "platform": "macos", "port": 47942},
+        "catalog": {"version": 1, "groups": [], "tags": []},
+        "resume": true,
+    });
+    let welcome: serde_json::Value = ureq::post(&format!("{base}/sync"))
+        .timeout(Duration::from_secs(5))
+        .send_string(&hello.to_string())
+        .unwrap()
+        .into_string()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let token = welcome["token"].as_str().unwrap().to_owned();
+    it.app.wait_for("Syncing with Studio Mac…").unwrap();
+    assert!(!it.app.shows("Sync request"), "accepted once is enough");
+    let part: serde_json::Value = ureq::get(&format!("{base}/part/from-other/m4a"))
+        .set("X-Listenook-Token", &token)
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(part["size"], 4, "what arrived before the loss was kept");
+    ureq::put(&format!("{base}/media/from-other/m4a"))
+        .set("X-Listenook-Token", &token)
+        .set("X-Listenook-Offset", "4")
+        .send_string(&"z".repeat(996))
+        .unwrap();
+    let media = std::fs::read_to_string(it.root.join("media/sync-from-other.m4a")).unwrap();
+    assert_eq!(media, format!("half{}", "z".repeat(996)));
+    ureq::post(&format!("{base}/done")).set("X-Listenook-Token", &token).send_string(r#"{"complete":true}"#).unwrap();
+    it.app.wait_for("Synced with Studio Mac").unwrap();
+    it.app.press("role:button[Done]").unwrap();
+    it.app.wait_for_gone("Synced with Studio Mac", GONE).unwrap();
+}
+
+/// The device this one syncs with drops the connection in the middle of a
+/// file: the sync is taken up again by itself, and the file from where it broke off.
+#[test]
+fn a_lost_connection_is_taken_up_again_where_it_broke_off() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let mut it = start("sync-lost", on_port(47943), Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+
+    // The other device: it accepts at once, goes away a tenth into the
+    // file, and is back when asked again.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let other = std::thread::spawn(move || {
+        let device = json!({"app": "listenook", "protocol": 1, "id": "other", "name": "Studio Mac", "platform": "macos", "port": port});
+        // Each call: its path, the offset it names, its body.
+        let mut asked: Vec<(String, Option<String>, String)> = Vec::new();
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let (mut first, mut length, mut offset) = (String::new(), 0_usize, None);
+            reader.read_line(&mut first).unwrap();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line.trim().is_empty() {
+                    break;
+                }
+                let line = line.to_ascii_lowercase();
+                if let Some(value) = line.strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+                if let Some(value) = line.strip_prefix("x-listenook-offset:") {
+                    offset = Some(value.trim().to_owned());
+                }
+            }
+            let mut body = vec![0_u8; length];
+            reader.read_exact(&mut body).unwrap();
+            let path = first.split(' ').nth(1).unwrap_or("").to_owned();
+            let json = |body: serde_json::Value| {
+                let body = body.to_string();
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+            };
+            let answer = match (path.as_str(), offset.as_deref()) {
+                ("/listenook/info", _) => json(device.clone()),
+                ("/listenook/sync", _) => json(json!({
+                    "token": "token", "device": device,
+                    "index": {
+                        "entries": [{"id": "lost", "updated_at": "2026-11-12T09:00:00.000Z", "media_name": "talk.m4a", "media_size": 1000}],
+                        "catalog": {"version": 1, "groups": [], "tags": []},
+                    },
+                })),
+                // A tenth of the file, and the connection is gone.
+                ("/listenook/media/lost", None) => {
+                    format!("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n{}", "x".repeat(100))
+                }
+                ("/listenook/media/lost", Some("100")) => format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: 900\r\nX-Listenook-Offset: 100\r\nConnection: close\r\n\r\n{}",
+                    "y".repeat(900)
+                ),
+                ("/listenook/manifest/lost", _) => json(json!({
+                    "manifest_version": 15, "id": "lost", "source_path": "/elsewhere/talk.m4a",
+                    "created_at": "2026-11-12T08:00:00.000Z", "updated_at": "2026-11-12T09:00:00.000Z",
+                    "status": "completed", "display_title": "Came through",
+                })),
+                _ => json(json!({})),
+            };
+            stream.write_all(answer.as_bytes()).unwrap();
+            asked.push((path.clone(), offset, String::from_utf8_lossy(&body).into_owned()));
+            if path == "/listenook/done" {
+                break;
+            }
+        }
+        asked
+    });
+
+    it.app.press("label:Sync with another device…").unwrap();
+    it.app.wait_for("Nearby devices").unwrap();
+    it.app.type_text("text:IP address, such as 192.168.1.20", &format!("127.0.0.1:{port}")).unwrap();
+    it.app.press("role:button[Connect]").unwrap();
+    it.app.wait_for_within("Connection lost. Reconnecting…", Duration::from_secs(10)).unwrap();
+    it.app.wait_for_within("Synced with Studio Mac", Duration::from_secs(20)).unwrap();
+    let asked = other.join().unwrap();
+    let syncs: Vec<&String> =
+        asked.iter().filter(|(path, ..)| path == "/listenook/sync").map(|(.., body)| body).collect();
+    assert_eq!(syncs.len(), 2, "asked again after the loss");
+    assert!(!syncs[0].contains(r#""resume":true"#) && syncs[1].contains(r#""resume":true"#));
+    let media: Vec<Option<&str>> = asked
+        .iter()
+        .filter(|(path, ..)| path == "/listenook/media/lost")
+        .map(|(_, offset, _)| offset.as_deref())
+        .collect();
+    assert_eq!(media, [None, Some("100")], "the file is asked for from where it broke off");
+    assert_eq!(
+        asked.last().map(|(path, _, body)| (path.as_str(), body.as_str())),
+        Some(("/listenook/done", r#"{"complete":true}"#))
+    );
+    let file = std::fs::read_to_string(it.root.join("media/sync-lost.m4a")).unwrap();
+    assert_eq!(file, format!("{}{}", "x".repeat(100), "y".repeat(900)), "the two parts make the file");
+    it.app.press("role:button[Done]").unwrap();
+    it.app.wait_for("Came through").unwrap();
 }

@@ -530,6 +530,7 @@ const ZH: &[(&str, &str)] = &[
     ("Accept the sync on the other device.", "请在另一台设备上接受同步。"),
     ("recordings", "条录音"),
     ("Synced with", "已同步："),
+    ("Connection lost. Reconnecting…", "连接已中断，正在重新连接…"),
     ("The sync did not finish", "同步未完成"),
     ("The sync with", "与"),
     ("did not finish. Sync again to complete it.", "的同步未完成，再次同步即可补全。"),

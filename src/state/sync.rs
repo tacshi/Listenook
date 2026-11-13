@@ -27,8 +27,10 @@ pub(crate) enum Phase {
     Asking(Peer),
     /// Copying.
     Running(Peer),
-    /// Done, with what was copied.
-    Done(Peer, Summary),
+    /// Another device, of this name, is copying: this one accepted its sync.
+    Serving(String),
+    /// Done with the device of this name, with what was copied.
+    Done(String, Summary),
     /// It did not finish: the error's code.
     Failed(&'static str),
 }
@@ -40,6 +42,8 @@ pub(crate) struct Copied {
     pub(crate) items_total: u64,
     pub(crate) bytes: u64,
     pub(crate) bytes_total: u64,
+    /// The connection was lost, and is being looked for again.
+    pub(crate) waiting: bool,
 }
 
 /// The sync part of the store.
@@ -149,7 +153,7 @@ impl SyncState {
             state.progress.replace(None);
             let stopped = progress.stop.load(Ordering::Relaxed);
             state.phase.set(match outcome {
-                Ok(Ok(summary)) => Phase::Done(peer, summary),
+                Ok(Ok(summary)) => Phase::Done(peer.device.name, summary),
                 _ if stopped => Phase::Choosing,
                 Ok(Err(code)) => Phase::Failed(code),
                 Err(_) => Phase::Failed("sync_failed"),
@@ -177,8 +181,13 @@ impl SyncState {
         });
     }
 
-    /// Ends the sync this device started.
+    /// Ends the sync this device started, or the one it is answering.
     pub(crate) fn cancel(&self) {
+        if matches!(self.phase.get_untracked(), Phase::Serving(_)) {
+            service::stop_serving();
+            self.phase.set(Phase::Choosing);
+            return;
+        }
         let Some(progress) = self.progress.with(|progress| progress.clone()) else {
             return;
         };
@@ -189,13 +198,18 @@ impl SyncState {
         }
     }
 
-    /// Answers another device's request.
+    /// Answers another device's request. Accepted, its sync shows in the
+    /// Sync dialog, as one this device started does.
     pub(crate) fn answer(&self, accept: bool) {
         if let Some((serial, device)) = self.request.get_untracked() {
             service::answer(serial, accept.then(|| store().busy_ids()));
             self.request.set(None);
-            if accept {
-                toast(Tone::Info, format!("{} {}…", tr("Syncing with"), device.name));
+            if accept && !matches!(self.phase.get_untracked(), Phase::Asking(_) | Phase::Running(_)) {
+                batch(|| {
+                    self.copied.set(Copied::default());
+                    self.phase.set(Phase::Serving(device.name));
+                    self.open.set(true);
+                });
             }
         }
     }
@@ -221,14 +235,33 @@ impl SyncState {
                         self.request.set(None);
                     }
                 }
-                Event::Served { name, received, sent, complete } => toast(
-                    if complete { Tone::Success } else { Tone::Error },
-                    if complete {
-                        format!("{} {name}: {}", tr("Synced with"), counts(received, sent))
-                    } else {
-                        format!("{} {name} {}", tr("The sync with"), tr("did not finish. Sync again to complete it."))
-                    },
-                ),
+                Event::Served { name, received, sent, complete, lost } => {
+                    let shown = matches!(self.phase.get_untracked(), Phase::Serving(_));
+                    if shown {
+                        self.phase.set(if complete {
+                            Phase::Done(name.clone(), Summary { received, sent })
+                        } else if lost {
+                            Phase::Failed("sync_interrupted")
+                        } else {
+                            Phase::Failed("sync_cancelled_there")
+                        });
+                    }
+                    // The dialog tells it while it is up.
+                    if !(shown && self.open.get_untracked()) {
+                        toast(
+                            if complete { Tone::Success } else { Tone::Error },
+                            if complete {
+                                format!("{} {name}: {}", tr("Synced with"), counts(received, sent))
+                            } else {
+                                format!(
+                                    "{} {name} {}",
+                                    tr("The sync with"),
+                                    tr("did not finish. Sync again to complete it.")
+                                )
+                            },
+                        );
+                    }
+                }
             }
         }
     }
@@ -248,10 +281,32 @@ impl SyncState {
                 items_total: progress.items_total.load(Ordering::Relaxed),
                 bytes: progress.bytes.load(Ordering::Relaxed),
                 bytes_total: progress.bytes_total.load(Ordering::Relaxed),
+                waiting: progress.waiting.load(Ordering::Relaxed),
             };
             if self.copied.get_untracked() != copied {
                 self.copied.set(copied);
             }
+        }
+        // The sync this device is answering, wherever it was accepted.
+        match (service::serving(), self.phase.get_untracked()) {
+            (Some(serving), phase) => {
+                if matches!(phase, Phase::Choosing | Phase::Done(..) | Phase::Failed(_)) {
+                    self.phase.set(Phase::Serving(serving.name.clone()));
+                }
+                let copied = Copied {
+                    items: serving.items,
+                    items_total: serving.items_total,
+                    bytes: serving.bytes,
+                    bytes_total: serving.bytes_total,
+                    waiting: false,
+                };
+                if self.copied.get_untracked() != copied {
+                    self.copied.set(copied);
+                }
+            }
+            // It ended without a word (the service was set up again).
+            (None, Phase::Serving(_)) => self.phase.set(Phase::Choosing),
+            _ => {}
         }
         if self.open.get_untracked() && matches!(self.phase.get_untracked(), Phase::Choosing) {
             let found = service::peers();
