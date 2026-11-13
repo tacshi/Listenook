@@ -432,6 +432,53 @@ unsafe fn root_view(view: Id, depth: u8) -> Id {
     }
 }
 
+/// Has every page's view laid out again, which is when NSH measures where
+/// the page starts under the system's header. It measures a page coming
+/// back from under one that hides the header while the header is still on
+/// its way in, and hears no more of it: the page then sits a little under
+/// the header until something else lays it out.
+#[cfg(target_os = "ios")]
+pub(super) fn remeasure_pages() {
+    unsafe fn visit(view: Id, depth: u8) {
+        unsafe {
+            let count: unsafe extern "C" fn(Id, Sel) -> usize =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let is_kind: unsafe extern "C" fn(Id, Sel, Id) -> bool =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            // A view whose next responder is a view controller is that
+            // controller's own view: a page's among them.
+            let owner = send(view, c"nextResponder");
+            if !owner.is_null() && is_kind(owner, sel(c"isKindOfClass:"), class(c"UIViewController")) {
+                send(view, c"setNeedsLayout");
+            }
+            if depth >= 16 {
+                return;
+            }
+            let children = send(view, c"subviews");
+            for at in 0..count(children, sel(c"count")) {
+                visit(send_usize(children, c"objectAtIndex:", at), depth + 1);
+            }
+        }
+    }
+    on_main(|| unsafe {
+        let count: unsafe extern "C" fn(Id, Sel) -> usize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let asks: unsafe extern "C" fn(Id, Sel, Sel) -> bool =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let app = send(class(c"UIApplication"), c"sharedApplication");
+        let scenes = send(send(app, c"connectedScenes"), c"allObjects");
+        for index in 0..count(scenes, sel(c"count")) {
+            let scene = send_usize(scenes, c"objectAtIndex:", index);
+            if !asks(scene, sel(c"respondsToSelector:"), sel(c"windows")) {
+                continue;
+            }
+            let windows = send(scene, c"windows");
+            for at in 0..count(windows, sel(c"count")) {
+                visit(send_usize(windows, c"objectAtIndex:", at), 0);
+            }
+        }
+    });
+}
+
 /// Sees to it that a hardware keyboard's keys reach the app's shortcuts.
 /// UIKit hands a key to whatever holds the keyboard focus and up from
 /// there; with nothing holding it (no text field being typed in), the key

@@ -219,6 +219,7 @@ impl SyncState {
         let (incoming, events) = service::take();
         for incoming in incoming {
             match incoming {
+                Incoming::Removed(removed) => store.adopt_removals(&removed),
                 Incoming::Catalog(catalog) => drop(self.map.replace(store.adopt_catalog(&catalog))),
                 Incoming::Job(job) => self.map.with(|map| store.adopt_job(*job, map)),
                 Incoming::Media { id, path } => store.adopt_media(&id, &path),

@@ -40,6 +40,7 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
         std::env::set_var("LISTENOOK_MEMORY_SECRETS", "1");
         std::env::set_var("SONIOX_API_KEY", "test-key");
         std::env::remove_var("LISTENOOK_START");
+        std::env::remove_var("LISTENOOK_TABLET_MENUS");
         std::env::remove_var("LISTENOOK_SYNC_PORT");
     }
     seed(&root);
@@ -189,6 +190,33 @@ fn removing_a_recording_asks_first_and_deletes_it() {
     it.app.press("Remove…").unwrap();
     it.app.wait_for("Drop audio or video here").unwrap();
     assert!(!manifest(&it.root, "sample").exists());
+    let removed = std::fs::read_to_string(it.root.join("removed.json")).unwrap();
+    assert!(removed.contains("sample"), "a sync is told of the removal");
+}
+
+#[test]
+fn a_tablet_menu_still_closes_on_a_choice_after_its_page_was_left() {
+    let mut it = start(
+        "tablet-menu",
+        |root| {
+            // SAFETY: under the turn `start` holds.
+            unsafe { std::env::set_var("LISTENOOK_TABLET_MENUS", "1") };
+            seed_transcript(root);
+        },
+        Vec::new(),
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    // The first menus go with the page they were made in.
+    it.app.press("role:button[Podcasts]").unwrap();
+    it.app.wait_for_gone("Learning languages", GONE).unwrap();
+    it.app.press("Library").unwrap();
+    it.app.wait_for("Learning languages").unwrap();
+
+    it.app.on_dialog(|_| DialogAnswer::Press("Cancel".to_owned()));
+    it.app.press("label:More actions").unwrap();
+    it.app.wait_for("Rename…").unwrap();
+    it.app.press("Remove…").unwrap();
+    it.app.wait_for_gone("Rename…", GONE).unwrap();
 }
 
 #[test]
@@ -447,6 +475,57 @@ fn another_devices_sync_is_accepted_and_its_recording_arrives() {
     assert!(arrived.contains("2026-11-12T09:00:00.000Z"), "its time of change stays the other device's");
     let catalog = std::fs::read_to_string(it.root.join("library_catalog.json")).unwrap();
     assert!(catalog.contains("shared"), "its tag came with it");
+}
+
+/// What the other device removed goes here too, and stays gone when a
+/// device sends it again unchanged.
+#[test]
+fn a_recording_removed_on_the_other_device_is_removed_here() {
+    let mut it = start("sync-removed", on_port(47943), Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("label:Sync with another device…").unwrap();
+    it.app.wait_for("Nearby devices").unwrap();
+    let old = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+
+    let other = std::thread::spawn(move || -> Result<(), String> {
+        let base = "http://127.0.0.1:47943/listenook";
+        let hello = json!({
+            "device": {"app": "listenook", "protocol": 1, "id": "other", "name": "Studio Mac", "platform": "macos", "port": 47943},
+            "removed": {"sample": "2099-01-01T00:00:00.000Z"},
+        });
+        let mut welcome = None;
+        for _ in 0..50 {
+            match ureq::post(&format!("{base}/sync")).timeout(Duration::from_secs(30)).send_string(&hello.to_string()) {
+                Ok(response) => {
+                    welcome = Some(response.into_string().map_err(|error| error.to_string())?);
+                    break;
+                }
+                Err(ureq::Error::Transport(_)) => std::thread::sleep(Duration::from_millis(100)),
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        let welcome: serde_json::Value =
+            serde_json::from_str(&welcome.ok_or("the device never answered")?).map_err(|error| error.to_string())?;
+        let token = welcome["token"].as_str().ok_or("no token")?.to_owned();
+        // As a Listenook that knows nothing of removals would.
+        ureq::put(&format!("{base}/manifest/sample"))
+            .set("X-Listenook-Token", &token)
+            .send_string(&old)
+            .map_err(|error| error.to_string())?;
+        ureq::post(&format!("{base}/done"))
+            .set("X-Listenook-Token", &token)
+            .send_string(r#"{"complete":true}"#)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    });
+
+    it.app.wait_for("Sync request").unwrap();
+    it.app.press("role:button[Accept]").unwrap();
+    other.join().unwrap().unwrap();
+    it.app.wait_for_gone("Learning languages", GONE).unwrap();
+    assert!(!manifest(&it.root, "sample").exists());
+    let removed = std::fs::read_to_string(it.root.join("removed.json")).unwrap();
+    assert!(removed.contains("sample"), "the removal is remembered for the next device");
 }
 
 /// The sync another device drives shows in the Sync dialog, which can be

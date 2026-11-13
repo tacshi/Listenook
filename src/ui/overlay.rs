@@ -19,13 +19,17 @@ use super::{
 /// of the screen on every touch device, which on a tablet is far from
 /// the button that asked for it; a phone, and a narrow window, keep that.
 fn anchored() -> bool {
-    crate::platform::is_phone() && !untracked(crate::platform::compact)
+    // LISTENOOK_TABLET_MENUS: a test's, which runs on a computer.
+    (crate::platform::is_phone() || std::env::var_os("LISTENOOK_TABLET_MENUS").is_some())
+        && !untracked(crate::platform::compact)
 }
 
 thread_local! {
     /// Counts the commands chosen in menus that open beside their button:
-    /// each such menu closes when it changes.
-    static CHOSEN: Signal<u64> = signal(0);
+    /// each such menu closes when it changes. No one's: owned by the page
+    /// of the first menu made, it would go with that page, and the menus
+    /// of every later page would stay open.
+    static CHOSEN: Signal<u64> = Owner::detached().run(|| signal(0));
 }
 
 /// A menu opening from `trigger`. Its children are [`menu_action`]s and

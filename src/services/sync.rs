@@ -26,7 +26,7 @@ use std::{
 
 use listenook_core::{
     Job, LibraryCatalog,
-    sync::{Device, Entry, Index, PROTOCOL, Transfer, is_sync_name, media_extension, media_file_name, plan},
+    sync::{Device, Entry, Index, PROTOCOL, Transfer, is_sync_name, media_extension, media_file_name, plan_with},
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +68,8 @@ pub(crate) struct Peer {
 /// What a sync brought, for the store to take in.
 #[derive(Debug)]
 pub(crate) enum Incoming {
+    /// What was removed from the other device, and when.
+    Removed(listenook_core::sync::Removed),
     /// The other device's groups and tags. Comes before its recordings.
     Catalog(LibraryCatalog),
     /// A recording's manifest, new or newer than the one here.
@@ -667,6 +669,9 @@ struct Hello {
     /// The names of this device's own media files, by recording.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     names: HashMap<String, String>,
+    /// The recordings removed from this device, and when.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    removed: listenook_core::sync::Removed,
 }
 
 /// How much of a media file that was being sent is here.
@@ -873,6 +878,7 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello) -> io::Re
 }
 
 fn open_session(state: &mut State, hello: &Hello, token: &str, busy: HashSet<String>, (received, sent): (u32, u32)) {
+    state.incoming.push(Incoming::Removed(hello.removed.clone()));
     state.incoming.push(Incoming::Catalog(hello.catalog.clone()));
     state.incoming.extend(hello.names.iter().map(|(id, name)| Incoming::Name { id: id.clone(), name: name.clone() }));
     state.resumable = None;
@@ -960,7 +966,7 @@ fn index_of(root: &Path, busy: &HashSet<String>) -> Index {
             Entry { busy: busy.contains(&job.id), ..Entry::of(job, size) }
         })
         .collect();
-    Index { entries, catalog: persist::load_library_catalog(root) }
+    Index { entries, catalog: persist::load_library_catalog(root), removed: persist::load_removed(root) }
 }
 
 /// Copies `length` bytes, telling `alive` how many went each time; it
@@ -1124,6 +1130,7 @@ fn exchange(
         catalog: persist::load_library_catalog(root),
         resume,
         names: names(&local.entries).collect(),
+        removed: local.removed.clone(),
     };
     let welcome: Welcome = agent(ANSWER_WITHIN + Duration::from_secs(10))
         .post(&format!("{base}/sync"))
@@ -1140,11 +1147,12 @@ fn exchange(
     progress.bytes.store(0, Ordering::Relaxed);
     let http = agent(Duration::from_secs(30));
     let token = welcome.token.as_str();
-    let plan = plan(&local.entries, &welcome.index.entries);
+    let plan = plan_with(&local.entries, &welcome.index.entries, &local.removed, &welcome.index.removed);
     progress.items_total.store((plan.pull.len() + plan.push.len()) as u64, Ordering::Relaxed);
     progress.bytes_total.store(plan.media_bytes(), Ordering::Relaxed);
     {
         let mut state = state();
+        state.incoming.push(Incoming::Removed(welcome.index.removed.clone()));
         state.incoming.push(Incoming::Catalog(welcome.index.catalog.clone()));
         state.incoming.extend(names(&welcome.index.entries).map(|(id, name)| Incoming::Name { id, name }));
     }
@@ -1359,6 +1367,13 @@ mod tests {
         recording(&there, "both", "2026-03-01T00:00:00.000Z", None);
         recording(&here, "both", "2026-02-01T00:00:00.000Z", Some(b"local media"));
         recording(&here, "only-here", "2026-01-01T00:00:00.000Z", Some(b"pushed media"));
+        // Removed on one device since it was last changed on the other:
+        // copied neither way, and each device hears of the removal.
+        recording(&here, "gone-there", "2026-01-01T00:00:00.000Z", Some(b"unwanted there"));
+        recording(&there, "gone-here", "2026-01-01T00:00:00.000Z", Some(b"unwanted here"));
+        let removed = |id: &str| [(id.to_owned(), "2026-02-01T00:00:00.000Z".to_owned())].into();
+        persist::save_removed(&there, &removed("gone-there")).unwrap();
+        persist::save_removed(&here, &removed("gone-here")).unwrap();
         let catalog =
             LibraryCatalog { tags: vec![Named { id: "t1".into(), name: "todo".into() }], ..Default::default() };
         persist::save_library_catalog(&there, &catalog).unwrap();
@@ -1422,6 +1437,12 @@ mod tests {
         assert_eq!(fs::read(there.join("media/sync-both.mp3")).unwrap(), b"local media");
         assert!(incoming.iter().any(|incoming| matches!(incoming, Incoming::Media { id, .. } if id == "both")));
         assert!(incoming.iter().any(|incoming| matches!(incoming, Incoming::Catalog(c) if c.tags.len() == 1)));
+        assert!(!titles.iter().any(|title| title.contains("gone-")), "{titles:?}");
+        assert!(!here.join("media/sync-gone-here.mp3").exists() && !there.join("media/sync-gone-there.mp3").exists());
+        for id in ["gone-here", "gone-there"] {
+            let told = incoming.iter().any(|incoming| matches!(incoming, Incoming::Removed(r) if r.contains_key(id)));
+            assert!(told, "{id} is told as removed");
+        }
 
         // Without a session nothing is given out.
         let refused = agent(Duration::from_secs(2)).get(&format!("http://{address}/listenook/manifest/both")).call();
