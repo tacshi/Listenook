@@ -218,9 +218,52 @@ pub fn media_file_name(job_id: &str, name: &str) -> String {
     format!("sync-{job_id}.{}", media_extension(name))
 }
 
+/// Whether `name` is one [`media_file_name`] gives the recording's media.
+pub fn is_sync_name(job_id: &str, name: &str) -> bool {
+    name.strip_prefix("sync-").and_then(|rest| rest.strip_prefix(job_id)).is_some_and(|rest| rest.starts_with('.'))
+}
+
+/// Titles a recording after `name`, its media file's name on the device
+/// it came from, when the file a sync brought is all that names it here:
+/// a recording with no title of its own is called by its file. Whether
+/// that changed it.
+pub fn keep_title(job: &mut Job, name: &str) -> bool {
+    let lost = format!("sync-{}", job.id);
+    let title = match name.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => stem,
+        _ => name,
+    }
+    .trim();
+    if job.title() != lost || title.is_empty() || title == lost {
+        return false;
+    }
+    job.display_title = Some(title.to_owned());
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_synced_recording_keeps_the_name_of_its_file() {
+        let mut job = Job { id: "a-1".into(), source_path: "/there/Talk about it.mp3".into(), ..Job::default() };
+        let name = job.file_name();
+        // Its own file names it still.
+        assert!(!keep_title(&mut job, &name));
+        job.source_path = format!("/here/media/{}", media_file_name("a-1", &name));
+        assert_eq!(job.title(), "sync-a-1");
+        assert!(keep_title(&mut job, &name));
+        assert_eq!(job.title(), "Talk about it");
+        // A title of its own stays, and a sync's name is no title.
+        assert!(!keep_title(&mut job, "Other.mp3"));
+        job.display_title = None;
+        assert!(!keep_title(&mut job, "sync-a-1.mp3"));
+        assert_eq!(job.title(), "sync-a-1");
+        assert!(is_sync_name("a-1", "sync-a-1.mp3"));
+        assert!(!is_sync_name("a-1", "sync-a-12.mp3"));
+        assert!(!is_sync_name("a-1", "Talk.mp3"));
+    }
 
     fn entry(id: &str, at: &str, media: bool) -> Entry {
         Entry {

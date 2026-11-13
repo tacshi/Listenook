@@ -26,7 +26,7 @@ use std::{
 
 use listenook_core::{
     Job, LibraryCatalog,
-    sync::{Device, Entry, Index, PROTOCOL, Transfer, media_extension, media_file_name, plan},
+    sync::{Device, Entry, Index, PROTOCOL, Transfer, is_sync_name, media_extension, media_file_name, plan},
 };
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,9 @@ pub(crate) enum Incoming {
     Job(Box<Job>),
     /// The media of a recording that is here without its file.
     Media { id: String, path: PathBuf },
+    /// What the other device's file of a recording is called: its title,
+    /// when it has none of its own and the file here is one a sync brought.
+    Name { id: String, name: String },
 }
 
 /// What happened while this device answered another's sync.
@@ -661,6 +664,9 @@ struct Hello {
     catalog: LibraryCatalog,
     /// Takes up the sync this device lost, which was accepted already.
     resume: bool,
+    /// The names of this device's own media files, by recording.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    names: HashMap<String, String>,
 }
 
 /// How much of a media file that was being sent is here.
@@ -868,6 +874,7 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello) -> io::Re
 
 fn open_session(state: &mut State, hello: &Hello, token: &str, busy: HashSet<String>, (received, sent): (u32, u32)) {
     state.incoming.push(Incoming::Catalog(hello.catalog.clone()));
+    state.incoming.extend(hello.names.iter().map(|(id, name)| Incoming::Name { id: id.clone(), name: name.clone() }));
     state.resumable = None;
     state.session = Some(Session {
         token: token.to_owned(),
@@ -934,6 +941,15 @@ fn manifest_path(root: &Path, id: &str) -> PathBuf {
 /// iPad's after an update, see [`persist::rehomed`]).
 fn media_of(root: &Path, job: &Job) -> PathBuf {
     PathBuf::from(persist::rehomed(&job.source_path, root, Path::is_file).unwrap_or_else(|| job.source_path.clone()))
+}
+
+/// The names of the media files in `entries` that are a device's own, not
+/// ones a sync brought it, by recording.
+fn names(entries: &[Entry]) -> impl Iterator<Item = (String, String)> + '_ {
+    entries.iter().filter_map(|entry| {
+        let name = entry.media_name.as_ref().filter(|name| !is_sync_name(&entry.id, name))?;
+        Some((entry.id.clone(), name.clone()))
+    })
 }
 
 fn index_of(root: &Path, busy: &HashSet<String>) -> Index {
@@ -1102,7 +1118,13 @@ fn exchange(
     summary: &mut Summary,
 ) -> Result<(), &'static str> {
     let base = format!("http://{address}/listenook");
-    let hello = Hello { device: me, catalog: persist::load_library_catalog(root), resume };
+    let local = index_of(root, busy);
+    let hello = Hello {
+        device: me,
+        catalog: persist::load_library_catalog(root),
+        resume,
+        names: names(&local.entries).collect(),
+    };
     let welcome: Welcome = agent(ANSWER_WITHIN + Duration::from_secs(10))
         .post(&format!("{base}/sync"))
         .send_bytes(&serde_json::to_vec(&hello).map_err(|_| "sync_failed")?)
@@ -1118,11 +1140,14 @@ fn exchange(
     progress.bytes.store(0, Ordering::Relaxed);
     let http = agent(Duration::from_secs(30));
     let token = welcome.token.as_str();
-    let local = index_of(root, busy);
     let plan = plan(&local.entries, &welcome.index.entries);
     progress.items_total.store((plan.pull.len() + plan.push.len()) as u64, Ordering::Relaxed);
     progress.bytes_total.store(plan.media_bytes(), Ordering::Relaxed);
-    state().incoming.push(Incoming::Catalog(welcome.index.catalog.clone()));
+    {
+        let mut state = state();
+        state.incoming.push(Incoming::Catalog(welcome.index.catalog.clone()));
+        state.incoming.extend(names(&welcome.index.entries).map(|(id, name)| Incoming::Name { id, name }));
+    }
 
     // Each call says whose sync it is and how far, for the other device
     // to show.
