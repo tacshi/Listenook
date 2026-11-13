@@ -312,6 +312,24 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
         }
         pages
     });
+    // A page shown again under the system's header, from under one that
+    // hid it, is measured while the header is still coming back: once it
+    // is there, the pages are measured again.
+    {
+        let depth = computed(move || pushed.with(Vec::len));
+        let first = std::cell::Cell::new(true);
+        effect(move || {
+            depth.get();
+            if !first.replace(false) {
+                spawn(async {
+                    for wait in [450, 600] {
+                        timer(std::time::Duration::from_millis(wait)).await;
+                        crate::services::remeasure_pages();
+                    }
+                });
+            }
+        });
+    }
     // Android's back button puts the drawer away before it leaves a page.
     on_back_press(move || {
         let open = store.drawer_now();
@@ -360,7 +378,14 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
             move || pushed.get(),
             |page: &(Lang, Pushed)| format!("{page:?}"),
             move |page, _| {
-                let screen = nav_page().hides_bottom_bar_when_pushed(true).bg(|| theme().background);
+                // In a wide window (a tablet's) the system's back swipe
+                // starts anywhere on the page, where the page has drags of
+                // its own (the panel's divider, the seek bar): the back
+                // button is the way back there. A phone keeps the swipe.
+                let screen = nav_page()
+                    .hides_bottom_bar_when_pushed(true)
+                    .pop_on_swipe(platform::compact)
+                    .bg(|| theme().background);
                 // Beside the sidebar a pushed page keeps its button, next
                 // to the way back: or the sidebar could not be put away
                 // from here. A phone's page has the drawer's on the places.

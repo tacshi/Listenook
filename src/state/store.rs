@@ -660,7 +660,45 @@ impl Store {
     }
 
     /// Removes a job, its files in the app's folder, and stops its work.
+    /// Remembered, so that a sync removes it from the other device too.
     pub(crate) fn remove_job(&self, id: &str) {
+        self.erase_job(id);
+        self.note_removed(id, &listenook_core::models::now_iso());
+    }
+
+    /// Remembers that a recording was removed at `at` (the later time, when
+    /// it was removed before).
+    fn note_removed(&self, id: &str, at: &str) {
+        let Some(root) = self.data_root() else {
+            return;
+        };
+        let mut removed = persist::load_removed(&root);
+        if removed.get(id).is_some_and(|known| listenook_core::sync::removal_stands(known, at)) {
+            return;
+        }
+        removed.insert(id.to_owned(), at.to_owned());
+        if let Err(error) = persist::save_removed(&root, &removed) {
+            log::error!("saving the removed recordings: {error}");
+        }
+    }
+
+    /// Takes in what was removed from another device: a recording here
+    /// that was not changed since goes too, unless work is running for it
+    /// (it is left for the next sync).
+    pub(crate) fn adopt_removals(&self, theirs: &listenook_core::sync::Removed) {
+        for (id, at) in theirs {
+            match self.job_now(id) {
+                Some(job) if job.is_busy() || !listenook_core::sync::removal_stands(at, &job.updated_at) => {}
+                Some(_) => {
+                    self.erase_job(id);
+                    self.note_removed(id, at);
+                }
+                None => self.note_removed(id, at),
+            }
+        }
+    }
+
+    fn erase_job(&self, id: &str) {
         for key in [id.to_owned(), format!("{id}:translate"), format!("{id}:brief")] {
             self.cancel_work(&key);
         }
@@ -1033,6 +1071,19 @@ impl Store {
         // What the other device calls it, when it has no title of its own.
         let name = job.file_name();
         let brought = root.join("media").join(listenook_core::sync::media_file_name(&job.id, &job.file_name()));
+        // Removed here and not changed there since: it stays removed
+        // (a device that does not know of removals sends it all the same).
+        let mut removed = persist::load_removed(&root);
+        if let Some(at) = removed.get(&job.id) {
+            if listenook_core::sync::removal_stands(at, &job.updated_at) {
+                let _ = std::fs::remove_file(&brought);
+                return;
+            }
+            removed.remove(&job.id);
+            if let Err(error) = persist::save_removed(&root, &removed) {
+                log::error!("saving the removed recordings: {error}");
+            }
+        }
         let kept = existing.as_ref().map(|existing| existing.source_path.clone()).filter(|path| is_file(path));
         if let Some(path) = kept {
             job.source_path = path;

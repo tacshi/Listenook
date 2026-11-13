@@ -126,6 +126,17 @@ pub(crate) fn save_library_catalog(root: &Path, catalog: &LibraryCatalog) -> io:
     write_json(&root.join("library_catalog.json"), catalog)
 }
 
+/// The recordings removed from this device and when, for a sync to
+/// remove them from the other device rather than bring them back.
+pub(crate) fn load_removed(root: &Path) -> listenook_core::sync::Removed {
+    read_json(&root.join("removed.json")).unwrap_or_default()
+}
+
+/// Writes the removed recordings.
+pub(crate) fn save_removed(root: &Path, removed: &listenook_core::sync::Removed) -> io::Result<()> {
+    write_json(&root.join("removed.json"), removed)
+}
+
 /// The folder monitor's saved state, or none.
 pub(crate) fn load_monitor(root: &Path) -> super::monitor::MonitorFile {
     read_json(&root.join("inbox_monitor.json")).unwrap_or_default()

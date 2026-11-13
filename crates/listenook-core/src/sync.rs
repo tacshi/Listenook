@@ -6,8 +6,9 @@
 //! to the other, media and all. One both have keeps the manifest changed
 //! last, and its media goes to the side that lacks the file. A recording
 //! being worked on (transcribed, translated) on either side is left for
-//! the next sync. Nothing is deleted: a recording removed on one device
-//! comes back from the other.
+//! the next sync. A recording removed on one device is removed on the
+//! other too, unless it was changed there after it was removed: each
+//! device remembers what was removed from it, and when.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -79,6 +80,19 @@ impl Entry {
 pub struct Index {
     pub entries: Vec<Entry>,
     pub catalog: LibraryCatalog,
+    /// The recordings removed from the device, and when ([`Removed`]).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub removed: Removed,
+}
+
+/// The recordings removed from a device, by id, with the time of each
+/// removal.
+pub type Removed = BTreeMap<String, String>;
+
+/// Whether a recording removed at `removed_at` stays removed, last changed
+/// at `updated_at` where it still is: not when it was changed since.
+pub fn removal_stands(removed_at: &str, updated_at: &str) -> bool {
+    millis(removed_at) >= millis(updated_at)
 }
 
 /// What to copy for one recording.
@@ -119,6 +133,16 @@ fn millis(time: &str) -> i64 {
 
 /// What to copy so that both Libraries hold the union of `local` and `remote`.
 pub fn plan(local: &[Entry], remote: &[Entry]) -> Plan {
+    plan_with(local, remote, &Removed::new(), &Removed::new())
+}
+
+/// [`plan`], less what was removed from either device (`removed_here`,
+/// `removed_there`) and not changed on the other since: that is copied
+/// neither way, and each device removes what the other removed.
+pub fn plan_with(local: &[Entry], remote: &[Entry], removed_here: &Removed, removed_there: &Removed) -> Plan {
+    let gone = |entry: &Entry, removed: &Removed| {
+        removed.get(&entry.id).is_some_and(|at| removal_stands(at, &entry.updated_at))
+    };
     let theirs: BTreeMap<&str, &Entry> = remote.iter().map(|entry| (entry.id.as_str(), entry)).collect();
     let ours: BTreeMap<&str, &Entry> = local.iter().map(|entry| (entry.id.as_str(), entry)).collect();
     let transfer = |from: &Entry, manifest: bool, media: bool| Transfer {
@@ -131,6 +155,7 @@ pub fn plan(local: &[Entry], remote: &[Entry]) -> Plan {
     let mut plan = Plan::default();
     for mine in local {
         match theirs.get(mine.id.as_str()) {
+            None if gone(mine, removed_there) => {}
             None if !mine.busy => plan.push.push(transfer(mine, true, mine.has_media())),
             None => {}
             Some(other) if mine.busy || other.busy => {}
@@ -148,7 +173,7 @@ pub fn plan(local: &[Entry], remote: &[Entry]) -> Plan {
         }
     }
     for other in remote {
-        if !ours.contains_key(other.id.as_str()) && !other.busy {
+        if !ours.contains_key(other.id.as_str()) && !other.busy && !gone(other, removed_here) {
             plan.pull.push(transfer(other, true, other.has_media()));
         }
     }
@@ -308,6 +333,19 @@ mod tests {
         assert!(plan(&[working.clone()], &[entry("a", EARLY, true)]).is_empty());
         assert!(plan(&[working.clone()], &[]).is_empty());
         assert!(plan(&[], &[working]).is_empty());
+    }
+
+    #[test]
+    fn a_removed_recording_is_not_copied_back_unless_changed_since() {
+        let removed = |at: &str| Removed::from([("a".to_owned(), at.to_owned())]);
+        let none = Removed::new();
+        // Removed here after its last change there: it stays away.
+        assert!(plan_with(&[], &[entry("a", EARLY, true)], &removed(LATE), &none).is_empty());
+        // Removed there: it is not sent again.
+        assert!(plan_with(&[entry("a", EARLY, true)], &[], &none, &removed(LATE)).is_empty());
+        // Changed after it was removed: it comes back.
+        assert_eq!(plan_with(&[], &[entry("a", LATE, true)], &removed(EARLY), &none).pull.len(), 1);
+        assert_eq!(plan_with(&[entry("a", LATE, true)], &[], &none, &removed(EARLY)).push.len(), 1);
     }
 
     #[test]
