@@ -156,6 +156,13 @@ unsafe fn target() -> Id {
         for (name, method) in methods {
             class_addMethod(made, sel(name), std::mem::transmute(method), c"q@:@".as_ptr());
         }
+        #[cfg(target_os = "ios")]
+        class_addMethod(
+            made,
+            sel(c"leaving:"),
+            std::mem::transmute(leaving as extern "C" fn(Id, Sel, Id)),
+            c"v@:@".as_ptr(),
+        );
         objc_registerClassPair(made);
         TARGET.store(send(send(made, c"alloc"), c"init"), Ordering::Release);
     });
@@ -178,8 +185,70 @@ fn listen() {
             ] {
                 send_id_id(send(center, command), c"addTarget:action:", target, sel(action));
             }
+            #[cfg(target_os = "ios")]
+            {
+                let observe: unsafe extern "C" fn(Id, Sel, Id, Sel, Id, Id) =
+                    std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                observe(
+                    send(class(c"NSNotificationCenter"), c"defaultCenter"),
+                    sel(c"addObserver:selector:name:object:"),
+                    target,
+                    sel(c"leaving:"),
+                    string("UIApplicationWillResignActiveNotification"),
+                    std::ptr::null_mut(),
+                );
+            }
         });
     });
+}
+
+#[cfg(target_os = "ios")]
+extern "C" fn leaving(_: Id, _: Sel, _: Id) {
+    unsafe {
+        let player_layer = class(c"AVPlayerLayer");
+        if player_layer.is_null() {
+            return;
+        }
+        let count: unsafe extern "C" fn(Id, Sel) -> usize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let asks: unsafe extern "C" fn(Id, Sel, Sel) -> bool =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let app = send(class(c"UIApplication"), c"sharedApplication");
+        let scenes = send(send(app, c"connectedScenes"), c"allObjects");
+        for index in 0..count(scenes, sel(c"count")) {
+            let scene = send_usize(scenes, c"objectAtIndex:", index);
+            if !asks(scene, sel(c"respondsToSelector:"), sel(c"windows")) {
+                continue;
+            }
+            let windows = send(scene, c"windows");
+            for at in 0..count(windows, sel(c"count")) {
+                keep_playing(send(send_usize(windows, c"objectAtIndex:", at), c"layer"), player_layer, 0);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "ios")]
+unsafe fn keep_playing(layer: Id, player_layer: Id, depth: u8) {
+    unsafe {
+        if layer.is_null() || depth > 64 {
+            return;
+        }
+        let is: unsafe extern "C" fn(Id, Sel, Id) -> bool = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        if is(layer, sel(c"isKindOfClass:"), player_layer) {
+            let player = send(layer, c"player");
+            if !player.is_null() {
+                send_usize(player, c"setAudiovisualBackgroundPlaybackPolicy:", 3);
+            }
+        }
+        let sublayers = send(layer, c"sublayers");
+        if sublayers.is_null() {
+            return;
+        }
+        let count: unsafe extern "C" fn(Id, Sel) -> usize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        for index in 0..count(sublayers, sel(c"count")) {
+            keep_playing(send_usize(sublayers, c"objectAtIndex:", index), player_layer, depth + 1);
+        }
+    }
 }
 
 pub(super) fn now_playing(now: Option<Now>) {
