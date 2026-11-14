@@ -20,7 +20,7 @@ pub fn App() -> impl IntoElement {
     effect(move || set_color_scheme(if store.immersive() { Appearance::Dark } else { store.appearance() }));
     view()
         .flex_1()
-        .pt_safe_area()
+        .style_when(|| !shell::stack_reaches_top(), |s| s.pt_safe_area())
         .px_safe_area()
         .style_when(|| !shell::tab_bar_shown(), |s| s.pb_safe_area())
         .bg(move || if store.immersive() { ui::tokens::stage() } else { theme().background })
