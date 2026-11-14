@@ -312,24 +312,6 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
         }
         pages
     });
-    // A page shown again under the system's header, from under one that
-    // hid it, is measured while the header is still coming back: once it
-    // is there, the pages are measured again.
-    {
-        let depth = computed(move || pushed.with(Vec::len));
-        let first = std::cell::Cell::new(true);
-        effect(move || {
-            depth.get();
-            if !first.replace(false) {
-                spawn(async {
-                    for wait in [450, 600] {
-                        timer(std::time::Duration::from_millis(wait)).await;
-                        crate::services::remeasure_pages();
-                    }
-                });
-            }
-        });
-    }
     // Android's back button puts the drawer away before it leaves a page.
     on_back_press(move || {
         let open = store.drawer_now();

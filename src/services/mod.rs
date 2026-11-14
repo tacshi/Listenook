@@ -83,13 +83,6 @@ pub(crate) fn take_picked() -> Vec<String> {
     Vec::new()
 }
 
-/// Has the pages under the system's header on an iPhone or iPad measured
-/// again; nothing elsewhere.
-pub(crate) fn remeasure_pages() {
-    #[cfg(target_os = "ios")]
-    apple::remeasure_pages();
-}
-
 /// Keeps a hardware keyboard's keys coming to the app's shortcuts on an
 /// iPhone or iPad; nothing elsewhere.
 pub(crate) fn keep_keys() {

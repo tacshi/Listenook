@@ -14,11 +14,11 @@ path = "src/main.rs"
 members = ["crates/listenook-core"]
 exclude = ["vendor"]
 
-# NSH at the commit of the nightly CLI this app is built with (`nsh --version`).
+# NSH at the version of the stable CLI this app is built with (`nsh --version`).
 [dependencies]
 listenook-core = { path = "crates/listenook-core" }
-nsh-core = { version = "0.5.0" }
-nsh-base = { version = "0.5.0" }
+nsh-core = { version = "0.5.1" }
+nsh-base = { version = "0.5.1" }
 env_logger = "0.11"
 log = "0.4"
 serde_json = "1"
@@ -28,22 +28,22 @@ sha2 = "0.10"
 matrixmultiply = { version = "0.3", features = ["threading"] }
 symphonia = { version = "0.5", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-nsh-updater = { version = "0.5.0" }
+nsh-updater = { version = "0.5.1" }
 uuid = { version = "1", features = ["v4"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { version = "0.5.0", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+nsh-platform-linux = { version = "0.5.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { version = "0.5.0", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+nsh-platform-macos = { version = "0.5.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-nsh-platform-windows = { version = "0.5.0", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+nsh-platform-windows = { version = "0.5.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
 
 [dev-dependencies]
-nsh-engine = { version = "0.5.0", default-features = false }
-nsh-testing = { version = "0.5.0", default-features = false }
+nsh-engine = { version = "0.5.1", default-features = false }
+nsh-testing = { version = "0.5.1", default-features = false }
 
 # The speech engine: Accelerate on Apple's platforms; elsewhere its BLAS
 # call is answered by `services/blas.rs`.
