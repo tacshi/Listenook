@@ -335,12 +335,16 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
                                 store.job(&job).map(|job| SharedString::from(job.title())).unwrap_or_default()
                             })
                             .header_visible(false)
-                            .child(pages::reader(&id))
+                            .child(below_status_bar(pages::reader(&id)))
                             .on_dismiss(move || store.close_reader())
                     }
-                    Pushed::Video(path) => {
-                        screen.header_visible(false).child(pages::player(&path)).on_dismiss(move || store.close_video())
-                    }
+                    Pushed::Video(path) => screen
+                        .header_visible(false)
+                        .child(
+                            below_status_bar(pages::player(&path))
+                                .bg(move || if store.immersive() { ui::tokens::stage() } else { theme().background }),
+                        )
+                        .on_dismiss(move || store.close_video()),
                 }
             },
         ))
@@ -348,6 +352,15 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
 
 pub(crate) fn system_header() -> bool {
     platform::is_phone()
+}
+
+pub(crate) fn stack_reaches_top() -> bool {
+    cfg!(target_os = "ios")
+}
+
+fn below_status_bar(page: impl IntoElement) -> View {
+    let view = view().flex_1().child(page);
+    if stack_reaches_top() { view.pt_safe_area() } else { view }
 }
 
 pub(crate) fn tab_bar_shown() -> bool {
@@ -597,6 +610,7 @@ fn sidebar() -> impl IntoElement {
         .bg(|| if os() == Os::MacOs { theme().sidebar.opacity(0.0) } else { theme().sidebar })
         .border_r_1()
         .border_color(|| theme().sidebar_border)
+        .style_when(stack_reaches_top, |s| s.pt_safe_area())
         .child(if system_header() {
             view().h(px(8.0))
         } else {
