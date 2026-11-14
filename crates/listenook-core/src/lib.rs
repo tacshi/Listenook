@@ -5,6 +5,7 @@ pub mod container;
 pub mod dictation;
 pub mod export;
 pub mod format;
+pub mod highlights;
 pub mod l10n;
 pub mod local;
 pub mod models;

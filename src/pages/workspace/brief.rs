@@ -1,9 +1,10 @@
 use listenook_core::{
-    AiBrief, AiBriefSection, AiGenerationStatus, AiInsightType, AiLanguageNoteKind, AiLearningLevel,
+    AiBrief, AiBriefSection, AiGenerationStatus, AiInsightType, AiLanguageNote, AiLanguageNoteKind, AiLearningLevel,
     TRANSLATION_LANGUAGES,
     brief::BriefRequest,
     export,
     format::{clock, safe_file_name},
+    highlights,
 };
 use nsh_base::theme;
 use nsh_core::prelude::*;
@@ -15,7 +16,8 @@ use crate::{
     state::{error_text, l, tr},
     ui::{
         Icon, Size, Tone, Variant, button, card, checkbox, empty_state, field, hint, icon, icon_button,
-        icon_text_button, modal, modal_actions, progress_bar, section, select, text_area, text_field, toast,
+        icon_text_button, menu, menu_action, modal, modal_actions, progress_bar, section, select, text_area,
+        text_field, toast,
         tokens::{self, motion},
     },
 };
@@ -39,6 +41,17 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
     let generating = move || state().status == AiGenerationStatus::Generating;
     let brief = computed(move || review.job.with(|job| job.as_ref().and_then(|job| job.ai_brief.clone())));
     let configured = computed(move || store.setting(|s| s.llm_provider_settings.validate().is_none()));
+    let unseen = move || {
+        review.job.with(|job| {
+            let Some(job) = job.as_ref() else {
+                return 0;
+            };
+            match (job.document.as_ref(), job.ai_brief.as_ref()) {
+                (Some(document), Some(brief)) => highlights::unseen(document, &brief.highlights_seen),
+                _ => 0,
+            }
+        })
+    };
     let error = move || {
         Some(state())
             .filter(|s| s.status == AiGenerationStatus::Failed)
@@ -56,8 +69,10 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                     .gap_4()
                     .p_8()
                     .child(
-                        text(move || {
-                            if state().stage == "synthesizing" { tr("Organizing the brief…") } else { tr("Analyzing the transcript…") }
+                        text(move || match state().stage.as_str() {
+                            "synthesizing" => tr("Organizing the brief…"),
+                            "studying" => tr("Reading your highlights…"),
+                            _ => tr("Analyzing the transcript…"),
                         })
                         .text_sm()
                         .text_color(|| theme().muted_foreground),
@@ -121,12 +136,33 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                         toast(Tone::Success, tr("AI Brief copied"));
                                     }
                                 }))
-                                .child(button(Variant::Ghost, Size::Sm, l("Export…")).on_press(move || {
-                                    if let (Some(job), Some(brief)) = (store.job_now(&review.id()), brief.get_untracked()) {
-                                        let name = format!("{} - brief.md", safe_file_name(&job.title(), "transcript"));
-                                        save_text(name, export::export_brief(&job, &brief));
-                                    }
-                                }))
+                                .child(
+                                    menu(button(Variant::Ghost, Size::Sm, l("Export…")))
+                                        .child(menu_action(Icon::Export, l("AI Brief (Markdown)…"), move || {
+                                            if let (Some(job), Some(brief)) =
+                                                (store.job_now(&review.id()), brief.get_untracked())
+                                            {
+                                                let name =
+                                                    format!("{} - brief.md", safe_file_name(&job.title(), "transcript"));
+                                                save_text(name, export::export_brief(&job, &brief));
+                                            }
+                                        }))
+                                        .child(when(
+                                            move || brief.with(|b| b.as_ref().is_some_and(|b| !b.language_notes.is_empty())),
+                                            move || {
+                                                menu_action(Icon::Export, l("Flashcards (CSV)…"), move || {
+                                                    if let (Some(job), Some(brief)) =
+                                                        (store.job_now(&review.id()), brief.get_untracked())
+                                                    {
+                                                        save_text(
+                                                            export::flashcards_file_name(&job),
+                                                            export::export_flashcards(&job, &brief),
+                                                        );
+                                                    }
+                                                })
+                                            },
+                                        )),
+                                )
                                 .child(
                                     icon_text_button(Variant::Outline, Size::Sm, Icon::Refresh, l("Refresh AI Brief"))
                                         .on_press(move || dialog.set(true)),
@@ -134,6 +170,23 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                         )
                         .child(when(move || error().is_some(), move || {
                             text(move || error().unwrap_or_default()).text_sm().text_color(|| theme().destructive)
+                        }))
+                        .child(when(move || unseen() > 0, move || {
+                            card()
+                                .p_3()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .child(icon(Icon::Bold, 14.0))
+                                .child(
+                                    text(move || -> SharedString {
+                                        format!("{} {}", unseen(), tr("new highlights since this brief")).into()
+                                    })
+                                    .flex_1()
+                                    .text_sm()
+                                    .text_color(|| theme().foreground),
+                                )
+                                .child(button(Variant::Outline, Size::Sm, l("Refresh")).on_press(move || dialog.set(true)))
                         }))
                         .child(dynamic(move || {
                             let Some(brief) = brief.get() else {
@@ -282,6 +335,62 @@ fn body_text(content: impl Into<SharedString>) -> Text {
     text(content.into()).text_sm().line_height(nsh_core::LineHeight::Multiple(1.5)).text_color(|| theme().foreground)
 }
 
+fn labeled(label: &'static str, content: String) -> impl IntoElement {
+    view()
+        .gap_0p5()
+        .child(text(l(label)).text_xs().font_weight(FontWeight::MEDIUM).text_color(|| theme().muted_foreground))
+        .child(body_text(content))
+}
+
+fn language_note(review: Review, note: &AiLanguageNote) -> View {
+    let kind_label = match note.kind {
+        AiLanguageNoteKind::Vocabulary => "Vocabulary",
+        AiLanguageNoteKind::Expression => "Expression",
+        AiLanguageNoteKind::Grammar => "Grammar",
+    };
+    let marked = note.highlight.clone().filter(|marked| marked.to_lowercase() != note.term.to_lowercase());
+    item(
+        review,
+        BriefPart::Note(note.id.clone()),
+        view()
+            .gap_2()
+            .child(
+                view()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        text(note.term.clone())
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(|| theme().foreground),
+                    )
+                    .child(hint(l(kind_label))),
+            )
+            .child(marked.map(|marked| -> AnyElement {
+                hint(SharedString::from(format!("{} “{marked}”", tr("You marked")))).into_element()
+            }))
+            .child(body_text(note.explanation.clone()))
+            .child((!note.usage.is_empty()).then(|| labeled("How to use", note.usage.clone())))
+            .child((!note.examples.is_empty()).then(|| {
+                view().gap_0p5().children(note.examples.iter().map(|example| {
+                    text(example.clone())
+                        .text_sm()
+                        .italic()
+                        .line_height(nsh_core::LineHeight::Multiple(1.5))
+                        .text_color(|| theme().foreground)
+                }))
+            }))
+            .child((!note.related.is_empty()).then(|| labeled("Related", note.related.join(", "))))
+            .child((!note.pitfalls.is_empty()).then(|| labeled("Watch out", note.pitfalls.clone())))
+            .child(
+                text(format!("“{}”", note.source_excerpt)).text_sm().italic().text_color(|| theme().muted_foreground),
+            ),
+        &note.evidence_segment_ids,
+    )
+}
+
 fn content(review: Review, brief: &AiBrief) -> impl IntoElement {
     let mut sections: Vec<AnyElement> = Vec::new();
     if !brief.overview.trim().is_empty() {
@@ -339,12 +448,26 @@ fn content(review: Review, brief: &AiBrief) -> impl IntoElement {
                 view().gap_2().children(items.into_iter().map(|insight| {
                     let people: Vec<String> =
                         [insight.owner.clone(), insight.deadline.clone()].into_iter().flatten().collect();
+                    let marked = insight.highlighted;
                     item(
                         review,
                         BriefPart::Insight(insight.id.clone()),
                         view()
                             .gap_1()
-                            .child(body_text(insight.text.clone()))
+                            .child(
+                                view()
+                                    .flex_row()
+                                    .items_start()
+                                    .gap_2()
+                                    .child(marked.then(|| {
+                                        view()
+                                            .pt(px(3.0))
+                                            .label(tr("You marked this"))
+                                            .text_color(|| theme().primary)
+                                            .child(icon(Icon::Bold, 14.0))
+                                    }))
+                                    .child(body_text(insight.text.clone()).flex_1()),
+                            )
                             .child((!people.is_empty()).then(|| hint(SharedString::from(people.join(" · "))))),
                         &insight.evidence_segment_ids,
                     )
@@ -354,43 +477,43 @@ fn content(review: Review, brief: &AiBrief) -> impl IntoElement {
         );
     }
     if !brief.language_notes.is_empty() {
-        let kind_label = |kind| match kind {
-            AiLanguageNoteKind::Vocabulary => "Vocabulary",
-            AiLanguageNoteKind::Expression => "Expression",
-            AiLanguageNoteKind::Grammar => "Grammar",
+        let (mine, others): (Vec<&AiLanguageNote>, Vec<&AiLanguageNote>) =
+            brief.language_notes.iter().partition(|note| note.highlight.is_some());
+        let group = |title: &'static str, notes: Vec<&AiLanguageNote>| -> Option<AnyElement> {
+            (!notes.is_empty()).then(|| {
+                view()
+                    .gap_2()
+                    .child(
+                        text(l(title))
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(|| theme().muted_foreground),
+                    )
+                    .children(notes.into_iter().map(|note| language_note(review, note)))
+                    .into_element()
+            })
         };
+        let grouped = !mine.is_empty();
         sections.push(
             section(
                 l("Language notes"),
-                view().gap_2().children(brief.language_notes.iter().map(|note| {
-                    item(
-                        review,
-                        BriefPart::Note(note.id.clone()),
-                        view()
-                            .gap_1()
-                            .child(
-                                view()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        text(note.term.clone())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(|| theme().foreground),
-                                    )
-                                    .child(hint(l(kind_label(note.kind)))),
-                            )
-                            .child(body_text(note.explanation.clone()))
-                            .child(
-                                text(format!("“{}”", note.source_excerpt))
-                                    .text_sm()
-                                    .italic()
-                                    .text_color(|| theme().muted_foreground),
-                            ),
-                        &note.evidence_segment_ids,
+                view()
+                    .gap_4()
+                    .child(
+                        (!brief.learner_profile.trim().is_empty())
+                            .then(|| body_text(brief.learner_profile.clone()).text_color(|| theme().muted_foreground)),
                     )
-                })),
+                    .child(group("From your highlights", mine))
+                    .child(if grouped {
+                        group("Also worth learning", others)
+                    } else {
+                        Some(
+                            view()
+                                .gap_2()
+                                .children(others.into_iter().map(|note| language_note(review, note)))
+                                .into_element(),
+                        )
+                    }),
             )
             .into_element(),
         );
@@ -405,6 +528,35 @@ pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoEl
     let level = signal(AiLearningLevel::Intermediate);
     let languages: Vec<(SharedString, SharedString)> =
         TRANSLATION_LANGUAGES.iter().map(|(code, name)| ((*code).into(), (*name).into())).collect();
+    let marked =
+        move || review.job.with(|job| job.as_ref().and_then(|job| job.document.as_ref()).map_or(0, highlights::count));
+    effect(move || {
+        if !open.get() {
+            return;
+        }
+        untracked(|| {
+            let learning = review.job.with(|job| {
+                job.as_ref()
+                    .and_then(|job| job.document.as_ref())
+                    .is_some_and(|d| highlights::looks_like_learning(d, &output.get()))
+            });
+            batch(|| {
+                if learning {
+                    sections.update(|s| {
+                        if !s.contains(&AiBriefSection::LanguageNotes) {
+                            s.push(AiBriefSection::LanguageNotes);
+                            s.sort();
+                        }
+                    });
+                }
+                if marked() > 0 && level.get() == AiLearningLevel::Intermediate {
+                    level.set(AiLearningLevel::Auto);
+                } else if marked() == 0 && level.get() == AiLearningLevel::Auto {
+                    level.set(AiLearningLevel::Intermediate);
+                }
+            });
+        });
+    });
     modal(
         open,
         l("Create AI Brief"),
@@ -438,11 +590,15 @@ pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoEl
                             l("Proficiency"),
                             select(
                                 "Proficiency",
-                                vec![
-                                    ("beginner".into(), "Beginner (A1–A2)".into()),
-                                    ("intermediate".into(), "Intermediate (B1–B2)".into()),
-                                    ("advanced".into(), "Advanced (C1–C2)".into()),
-                                ],
+                                (marked() > 0)
+                                    .then(|| ("auto".into(), tr("Auto (from my highlights)")))
+                                    .into_iter()
+                                    .chain([
+                                        ("beginner".into(), "Beginner (A1–A2)".into()),
+                                        ("intermediate".into(), "Intermediate (B1–B2)".into()),
+                                        ("advanced".into(), "Advanced (C1–C2)".into()),
+                                    ])
+                                    .collect(),
                                 move || SharedString::from(level.get().as_str()),
                                 move |value| level.set(AiLearningLevel::parse(&value)),
                             ),
@@ -452,6 +608,20 @@ pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoEl
                 .child(field(
                     l("Output language"),
                     select("Output language", languages.clone(), move || output.get(), move |value| output.set(value)),
+                ))
+                .child(when(
+                    move || marked() > 0,
+                    move || {
+                        hint(move || -> SharedString {
+                            format!(
+                                "{} {} {}",
+                                marked(),
+                                tr("highlights ·"),
+                                tr("the AI decides whether each is a word to learn or a key point.")
+                            )
+                            .into()
+                        })
+                    },
                 ))
                 .child(hint(move || -> SharedString {
                     format!("{} {}", tr("Model:"), store.setting(|s| s.llm_provider_settings.model.clone())).into()
@@ -471,6 +641,12 @@ pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoEl
                         learning_language: None,
                         learning_level: level.get_untracked(),
                         model: store.settings().llm_provider_settings.model,
+                        highlights: review.job.with_untracked(|job| {
+                            job.as_ref()
+                                .and_then(|job| job.document.as_ref())
+                                .map(highlights::contexts)
+                                .unwrap_or_default()
+                        }),
                     };
                     llm::start_brief(&review.id(), request);
                     batch(|| {

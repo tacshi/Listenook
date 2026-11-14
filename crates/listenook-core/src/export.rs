@@ -4,7 +4,8 @@ use regex::Regex;
 
 use crate::{
     format::{clock, cue_time, safe_file_name},
-    models::{AiBrief, AiInsightType, ContentMode, Document, ExportFormat, ExportOptions, Job},
+    highlights,
+    models::{AiBrief, AiInsightType, ContentMode, Document, ExportFormat, ExportOptions, Job, Segment},
 };
 
 static NUMBERED_SPEAKER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Speaker (\d+)$").unwrap());
@@ -98,12 +99,21 @@ fn markdown(job: &Job, document: &Document, options: &ExportOptions) -> String {
         }
         if options.content_mode == ContentMode::Bilingual && segment.has_translation() {
             let translated = segment.translated_text.as_deref().unwrap_or("").trim();
-            out.push_str(&format!("{translated}\n\n*{}*\n\n", segment.text));
+            out.push_str(&format!("{translated}\n\n*{}*\n\n", marked_text(segment)));
+        } else if options.content_mode != ContentMode::Translated || !segment.has_translation() {
+            out.push_str(&format!("{}\n\n", marked_text(segment)));
         } else {
             out.push_str(&format!("{}\n\n", segment.content(options.content_mode)));
         }
     }
     out.trim_end().to_owned()
+}
+
+fn marked_text(segment: &Segment) -> String {
+    highlights::runs(&segment.text, &segment.highlights)
+        .into_iter()
+        .map(|(run, marked)| if marked && !run.trim().is_empty() { format!("**{run}**") } else { run })
+        .collect()
 }
 
 fn cues(document: &Document, options: &ExportOptions, vtt: bool) -> String {
@@ -181,11 +191,72 @@ pub fn export_brief(job: &Job, brief: &AiBrief) -> String {
     }
     if !brief.language_notes.is_empty() {
         out.push_str("\n## Language notes\n\n");
+        if !brief.learner_profile.trim().is_empty() {
+            out.push_str(&format!("{}\n\n", brief.learner_profile.trim()));
+        }
         for note in &brief.language_notes {
             out.push_str(&format!("- **{}** — {} (“{}”)\n", note.term, note.explanation, note.source_excerpt));
+            let mut details = Vec::new();
+            if let Some(marked) = note.highlight.as_deref().filter(|m| *m != note.term) {
+                details.push(format!("You marked: “{marked}”"));
+            }
+            if !note.usage.is_empty() {
+                details.push(format!("How to use: {}", note.usage));
+            }
+            if !note.examples.is_empty() {
+                details.push(format!("Examples: {}", note.examples.join(" / ")));
+            }
+            if !note.related.is_empty() {
+                details.push(format!("Related: {}", note.related.join(", ")));
+            }
+            if !note.pitfalls.is_empty() {
+                details.push(format!("Watch out: {}", note.pitfalls));
+            }
+            for detail in details {
+                out.push_str(&format!("  - {detail}\n"));
+            }
         }
     }
     out.trim_end().to_owned()
+}
+
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
+}
+
+pub fn export_flashcards(job: &Job, brief: &AiBrief) -> String {
+    let sentence = |ids: &[String]| -> String {
+        job.document
+            .as_ref()
+            .and_then(|d| d.segments.iter().find(|s| ids.contains(&s.id)))
+            .map(|s| s.text.trim().to_owned())
+            .unwrap_or_default()
+    };
+    let mut out = String::from("Front,Back,Example,Sentence\n");
+    for note in &brief.language_notes {
+        let back = [note.explanation.trim(), note.usage.trim()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let row = [
+            note.term.as_str(),
+            back.as_str(),
+            note.examples.first().map_or("", String::as_str),
+            &sentence(&note.evidence_segment_ids),
+        ];
+        out.push_str(&row.iter().map(|field| csv_field(field)).collect::<Vec<_>>().join(","));
+        out.push('\n');
+    }
+    out
+}
+
+pub fn flashcards_file_name(job: &Job) -> String {
+    format!("{} - flashcards.csv", safe_file_name(&job.title(), "transcript"))
 }
 
 #[cfg(test)]
@@ -249,5 +320,42 @@ mod tests {
         let text = export_transcript(&job(), &options);
         assert!(text.starts_with("# Team sync\n\n- 由聆页导出\n- 时长：01:05\n\n**说话人 1**\n\nHello."));
         assert_eq!(export_file_name(&job(), ExportFormat::Markdown), "Team sync.md");
+    }
+
+    #[test]
+    fn markdown_bolds_highlights_in_the_original_text() {
+        use crate::models::Highlight;
+        let mut job = job();
+        if let Some(document) = &mut job.document {
+            document.segments[1].text = "Bye for now.".into();
+            document.segments[1].highlights = vec![Highlight { start: 4, end: 11 }];
+        }
+        let mut options = ExportOptions { format: ExportFormat::Markdown, ..Default::default() };
+        assert!(export_transcript(&job, &options).ends_with("Bye **for now**."));
+        options.content_mode = ContentMode::Bilingual;
+        assert!(export_transcript(&job, &options).contains("你好。\n\n*Hello.*"));
+        options.format = ExportFormat::Txt;
+        assert!(export_transcript(&job, &options).ends_with("Bye for now."));
+    }
+
+    #[test]
+    fn flashcards_quote_fields_and_carry_the_sentence() {
+        use crate::models::AiLanguageNote;
+        let brief = AiBrief {
+            language_notes: vec![AiLanguageNote {
+                term: "bye".into(),
+                explanation: "a farewell, informal".into(),
+                usage: "Say \"bye\" to friends.".into(),
+                examples: vec!["Bye, see you!".into()],
+                evidence_segment_ids: vec!["segment-2".into()],
+                ..AiLanguageNote::default()
+            }],
+            ..AiBrief::default()
+        };
+        assert_eq!(
+            export_flashcards(&job(), &brief),
+            "Front,Back,Example,Sentence\nbye,\"a farewell, informal\nSay \"\"bye\"\" to friends.\",\"Bye, see you!\",Bye.\n"
+        );
+        assert_eq!(flashcards_file_name(&job()), "Team sync - flashcards.csv");
     }
 }

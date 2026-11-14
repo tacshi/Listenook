@@ -60,6 +60,7 @@ fn segment_of(tokens: &[&Token]) -> Option<Segment> {
         language: tokens.iter().find_map(|t| t.language.clone()),
         translated_text: None,
         preserve_boundary_before: false,
+        highlights: Vec::new(),
     })
 }
 

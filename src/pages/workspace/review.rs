@@ -1,6 +1,6 @@
 use std::{rc::Rc, time::Duration};
 
-use listenook_core::{ContentMode, Document, Job, Segment, dictation};
+use listenook_core::{ContentMode, Document, Job, Segment, dictation, highlights};
 use nsh_core::prelude::*;
 
 use crate::{
@@ -29,6 +29,13 @@ pub(super) struct Editing {
     pub(super) translation: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Picked {
+    pub(super) segment_id: String,
+    pub(super) range: std::ops::Range<u32>,
+    pub(super) text: String,
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Review {
     pub(super) store: Store,
@@ -54,6 +61,7 @@ pub(super) struct Review {
     pub(super) caret: Signal<u32>,
     pub(super) side_width: Signal<f32>,
     pub(super) brief_editing: Signal<Option<BriefPart>>,
+    pub(super) selection: Signal<Option<Picked>>,
     pub(super) video_on_top: Signal<bool>,
     pub(super) video_height: Signal<f32>,
     pub(super) fullscreen: Signal<bool>,
@@ -161,6 +169,7 @@ impl Review {
             draft: signal(String::new()),
             caret: signal(0),
             brief_editing: signal(None),
+            selection: signal(None),
             side_width: signal(
                 store
                     .setting(|s| s.extra.get("reader_side_width").and_then(serde_json::Value::as_f64))
@@ -427,6 +436,66 @@ impl Review {
         self.wait.replace(Some(wait));
     }
 
+    pub(super) fn pick(&self, segment_id: &str, event: &TextSelectionEvent) {
+        if event.text.trim().is_empty() {
+            let stale = self.selection.get_untracked().filter(|s| s.segment_id == segment_id);
+            if stale.is_some() {
+                let review = *self;
+                spawn(async move {
+                    timer(Duration::from_millis(400)).await;
+                    if review.selection.get_untracked() == stale {
+                        review.selection.set(None);
+                    }
+                });
+            }
+            return;
+        }
+        let found = self.job.with_untracked(|job| {
+            let segment = job.as_ref()?.document.as_ref()?.segments.iter().find(|s| s.id == segment_id)?;
+            let range = highlights::locate(&segment.text, &event.text, event.start)?;
+            Some(Picked { segment_id: segment_id.to_owned(), range, text: event.text.clone() })
+        });
+        self.selection.set(found);
+    }
+
+    pub(super) fn picked_in(&self, segment_id: Option<&str>) -> bool {
+        self.selection.with(|s| s.as_ref().is_some_and(|s| Some(s.segment_id.as_str()) == segment_id))
+    }
+
+    pub(super) fn picked_marked(&self) -> bool {
+        let Some(picked) = self.selection.get() else {
+            return false;
+        };
+        self.job.with(|job| {
+            job.as_ref()
+                .and_then(|job| job.document.as_ref())
+                .and_then(|d| d.segments.iter().find(|s| s.id == picked.segment_id))
+                .is_some_and(|s| highlights::overlapping(&s.highlights, picked.range.clone()))
+        })
+    }
+
+    pub(super) fn toggle_highlight(&self) {
+        let Some(picked) = self.selection.get_untracked() else {
+            return;
+        };
+        self.store.update_document(&self.id(), |document| {
+            if let Some(segment) = document.segments.iter_mut().find(|s| s.id == picked.segment_id) {
+                if highlights::overlapping(&segment.highlights, picked.range.clone()) {
+                    highlights::remove(&mut segment.highlights, picked.range.clone());
+                } else {
+                    highlights::add(&mut segment.highlights, picked.range.clone());
+                }
+            }
+        });
+        self.selection.set(None);
+    }
+
+    pub(super) fn copy_selection(&self) {
+        if let Some(picked) = self.selection.get_untracked() {
+            set_clipboard(picked.text);
+        }
+    }
+
     pub(super) fn edit(&self, index: usize, translation: bool) {
         let Some(segment) = self.segment_now(index) else {
             return;
@@ -485,7 +554,9 @@ impl Review {
             if editing.translation {
                 segment.translated_text = wanted;
             } else {
-                segment.text = wanted.unwrap_or_default();
+                let text = wanted.unwrap_or_default();
+                segment.highlights = highlights::reanchor(&segment.text, &text, &segment.highlights);
+                segment.text = text;
             }
             true
         });

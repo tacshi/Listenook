@@ -221,15 +221,15 @@ pub(crate) fn brief_key(id: &str) -> String {
     format!("{id}:brief")
 }
 
-async fn brief_json(settings: &LlmProviderSettings, prompt: &str) -> Result<Value, Failure> {
-    let reply = complete(settings, brief::SYSTEM_PROMPT, prompt, true).await?;
+async fn brief_json(settings: &LlmProviderSettings, system: &str, prompt: &str) -> Result<Value, Failure> {
+    let reply = complete(settings, system, prompt, true).await?;
     if let Some(value) = brief::decode_reply(&reply) {
         return Ok(value);
     }
     let again = format!(
         "{prompt}\nYour previous response was not valid JSON. Return only one valid JSON object matching the requested shape."
     );
-    let reply = complete(settings, brief::SYSTEM_PROMPT, &again, true).await?;
+    let reply = complete(settings, system, &again, true).await?;
     brief::decode_reply(&reply).ok_or_else(|| Failure::new("ai_brief_invalid_response", "The reply was not JSON."))
 }
 
@@ -245,6 +245,19 @@ async fn generate(store: Store, id: &str, request: &BriefRequest) -> Result<(), 
     }
     let total = chunks.len();
     let recode = |failure: Failure| recoded(failure, "ai_brief_");
+    let title = store.job_now(id).map(|job| job.title()).unwrap_or_default();
+    let batches: Vec<_> = request.highlights.chunks(brief::STUDY_BATCH).collect();
+    let mut replies = Vec::with_capacity(batches.len());
+    for (index, batch) in batches.iter().enumerate() {
+        store.update_job(id, |job| {
+            job.ai_generation_state.stage = "studying".into();
+            job.ai_generation_state.completed_chunks = index as u32;
+            job.ai_generation_state.total_chunks = batches.len() as u32;
+        });
+        let prompt = brief::study_prompt(request, batch, &title);
+        replies.push(brief_json(&settings, brief::STUDY_SYSTEM_PROMPT, &prompt).await.map_err(recode)?);
+    }
+    let study = brief::study_from_json(&replies, request, &document);
     let mut analyses = Vec::with_capacity(total);
     for (index, chunk) in chunks.iter().enumerate() {
         store.update_job(id, |job| {
@@ -252,15 +265,17 @@ async fn generate(store: Store, id: &str, request: &BriefRequest) -> Result<(), 
             job.ai_generation_state.completed_chunks = index as u32;
             job.ai_generation_state.total_chunks = total as u32;
         });
-        analyses.push(brief_json(&settings, &brief::chunk_prompt(request, chunk, index, total)).await.map_err(recode)?);
+        let prompt = brief::chunk_prompt(request, &study, chunk, index, total);
+        analyses.push(brief_json(&settings, brief::SYSTEM_PROMPT, &prompt).await.map_err(recode)?);
     }
     let combined = if total == 1 {
         analyses.remove(0)
     } else {
         store.update_job(id, |job| job.ai_generation_state.stage = "synthesizing".into());
-        brief_json(&settings, &brief::synthesis_prompt(request, &analyses)).await.map_err(recode)?
+        let prompt = brief::synthesis_prompt(request, &study, &analyses);
+        brief_json(&settings, brief::SYSTEM_PROMPT, &prompt).await.map_err(recode)?
     };
-    let made = brief::brief_from_json(&combined, request, &document).map_err(str::to_owned)?;
+    let made = brief::brief_from_json(&combined, request, &study, &document).map_err(str::to_owned)?;
     store.update_job(id, |job| {
         job.ai_brief = Some(made);
         job.ai_generation_state.status = AiGenerationStatus::Completed;
@@ -275,7 +290,7 @@ pub(crate) fn start_brief(id: &str, request: BriefRequest) {
     store.update_job(&id, |job| {
         job.ai_generation_state = AiGenerationState {
             status: AiGenerationStatus::Generating,
-            stage: "analyzing".into(),
+            stage: if request.highlights.is_empty() { "analyzing" } else { "studying" }.into(),
             output_language: request.output_language.clone(),
             model: request.model.clone(),
             ..AiGenerationState::default()
