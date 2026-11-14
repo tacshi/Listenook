@@ -267,7 +267,13 @@ fn opened(id: &str) -> impl IntoElement {
         .on_progress(move |progress: &VideoProgress| {
             review.on_progress((progress.current_time * 1000.0) as i64, (progress.duration * 1000.0) as i64);
         })
-        .on_end(move || review.paused.set(true))
+        .repeat(move || review.looping.get())
+        // The player starts over by itself when looping; only stop otherwise.
+        .on_end(move || {
+            if !review.looping.get_untracked() {
+                review.paused.set(true);
+            }
+        })
         .on_error(move |_: &str| {
             // The player complains once about having nothing to load while
             // a file is being made playable: that is not a missing file.
@@ -765,7 +771,8 @@ fn translation_strip(review: Review) -> impl IntoElement {
     })
 }
 
-/// The one transport: play, sentence steps, position, repeat and speed.
+/// The one transport: play, sentence steps, position, looping the whole
+/// recording, and speed.
 fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let dragging = signal(None::<f64>);
     let active = move || !review.paused.get() || review.waiting.get();
@@ -818,14 +825,10 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
         ui::toggle_button(
             variant(picture),
             Icon::Repeat,
-            tr("Repeat sentence"),
+            tr("Repeat all"),
             Size::Sm,
-            move || review.repeating.get().is_some(),
-            move || {
-                if let Some(index) = review.target_or_first() {
-                    review.toggle_repeat(index);
-                }
-            },
+            move || review.looping.get(),
+            move || review.looping.set(!review.looping.get_untracked()),
         )
     };
     let rate = move |picture: bool| {

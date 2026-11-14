@@ -56,6 +56,8 @@ pub(super) struct Review {
     pub(super) query: Signal<String>,
     /// The sentence that loops, by id.
     pub(super) repeating: Signal<Option<String>>,
+    /// Whether the whole recording starts over at its end.
+    pub(super) looping: Signal<bool>,
     /// The sentence shown in spite of blind listening, by id.
     pub(super) revealed: Signal<Option<String>>,
     pub(super) editing: Signal<Option<Editing>>,
@@ -174,6 +176,7 @@ impl Review {
             searching,
             query,
             repeating: signal(None),
+            looping: signal(false),
             revealed: signal(None),
             editing: signal(None),
             draft: signal(String::new()),
