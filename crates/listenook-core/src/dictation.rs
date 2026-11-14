@@ -1,6 +1,3 @@
-//! Dictation: what the user typed against what was said, word by word, and
-//! the pause mimic practice leaves after a sentence.
-
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -8,20 +5,14 @@ use regex::Regex;
 static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*").unwrap());
 static LATIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z]+").unwrap());
 
-/// How one word of the comparison came out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DictationWord {
-    /// Typed as said.
     Matching(String),
-    /// Another word typed in its place: what was said, what was typed.
     Different(String, String),
-    /// Said and not typed.
     Missing(String),
-    /// Typed and not said.
     Extra(String),
 }
 
-/// The words of `text`, punctuation left out.
 pub fn words(text: &str) -> Vec<String> {
     WORD.find_iter(text).map(|m| m.as_str().to_owned()).collect()
 }
@@ -30,8 +21,6 @@ fn normalized(word: &str) -> String {
     word.to_lowercase().replace('’', "'")
 }
 
-/// Aligns the typed answer with the reference by edit distance over words,
-/// ignoring case and the shape of apostrophes.
 pub fn compare(reference: &str, answer: &str) -> Vec<DictationWord> {
     let (expected, actual) = (words(reference), words(answer));
     let same = |i: usize, j: usize| normalized(&expected[i]) == normalized(&actual[j]);
@@ -69,13 +58,10 @@ pub fn compare(reference: &str, answer: &str) -> Vec<DictationWord> {
     out
 }
 
-/// Whether every word was typed as said.
 pub fn is_correct(result: &[DictationWord]) -> bool {
     !result.is_empty() && result.iter().all(|word| matches!(word, DictationWord::Matching(_)))
 }
 
-/// Word checking supports English: by the sentence's language when known,
-/// else by whether it has Latin letters.
 pub fn supports_dictation(text: &str, language: Option<&str>) -> bool {
     match language.filter(|l| !l.is_empty()) {
         Some(language) => language.split(['-', '_']).next().is_some_and(|l| l.eq_ignore_ascii_case("en")),
@@ -83,9 +69,6 @@ pub fn supports_dictation(text: &str, language: Option<&str>) -> bool {
     }
 }
 
-/// The pause after a sentence in mimic practice. A fixed interval of 1–10
-/// seconds, or automatic (0): the sentence's length at the playback speed
-/// plus half a second, at least 1.5 seconds.
 pub fn mimic_pause_ms(sentence_ms: i64, speed: f64, fixed_seconds: u32) -> i64 {
     if fixed_seconds > 0 {
         return i64::from(fixed_seconds.min(10)) * 1000;

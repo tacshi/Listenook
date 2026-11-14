@@ -1,7 +1,3 @@
-//! Provider payloads to transcripts: Soniox tokens become sentences, MOSS
-//! segments are taken as they are, and `normalize_segments` joins what a
-//! provider split in the middle of a sentence.
-
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -9,7 +5,6 @@ use serde_json::Value;
 
 use crate::models::{Document, Segment, Speaker, Token, now_iso};
 
-/// A silence longer than this starts a new sentence.
 pub const PAUSE_MS: i64 = 1500;
 
 static ENDS_SENTENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"[.!?。！？]["'”’)]?\s*$"#).unwrap());
@@ -24,8 +19,6 @@ fn punctuation_only(text: &str) -> bool {
     PUNCTUATION_ONLY.is_match(text)
 }
 
-/// A Soniox transcript payload as a document. `target_language` is the
-/// translation asked of Soniox, when one was.
 pub fn parse_soniox(payload: &Value, target_language: Option<&str>) -> Document {
     let raw = payload
         .get("tokens")
@@ -153,8 +146,6 @@ fn translated_segments(tokens: &[Token], target: &str) -> Vec<Segment> {
     segments
 }
 
-/// A MOSS task payload as a document: its segments in seconds, speakers
-/// numbered as they first appear.
 pub fn parse_moss(payload: &Value) -> Document {
     let ms = |value: Option<&Value>| -> i64 {
         let seconds = value.and_then(Value::as_f64).unwrap_or(0.0);
@@ -221,9 +212,6 @@ fn join_optional(left: Option<&str>, right: Option<&str>) -> Option<String> {
     }
 }
 
-/// Drops empty sentences and joins a piece to the one before it when it is
-/// only punctuation, or continues an unfinished sentence of the same speaker
-/// without a pause. Imported cues (`preserve_boundary_before`) stay apart.
 pub fn normalize_segments(document: &mut Document) {
     document.segments.retain(|s| !s.text.trim().is_empty());
     if document.segments.len() < 2 {

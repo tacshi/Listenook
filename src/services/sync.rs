@@ -1,15 +1,3 @@
-//! Syncing the Library with another device on the local network.
-//!
-//! A device that is visible answers on one port: who it is (`/info`), and,
-//! once its user accepts, a sync another device drives (`/sync`, then the
-//! manifests and media either way, then `/done`). Devices find each other
-//! by a multicast announcement where the system lets one through, and by
-//! asking every address of the local /24 otherwise. Nothing here runs on
-//! the engine thread: what a sync brings waits in [`take`] for the store.
-//!
-//! The traffic is plain HTTP, as on any local network share: a sync is
-//! only ever answered after the user of this device accepts it.
-
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -32,70 +20,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::persist;
 
-/// The port a visible device answers on (`LISTENOOK_SYNC_PORT` overrides
-/// it, for a second copy of the app on one machine).
 pub(crate) const PORT: u16 = 47823;
 const GROUP: Ipv4Addr = Ipv4Addr::new(239, 77, 76, 78);
-/// How long the other device's user has to answer.
 const ANSWER_WITHIN: Duration = Duration::from_secs(60);
-/// A sync that has been quiet this long is over.
 const QUIET: Duration = Duration::from_secs(120);
-/// So is one whose device asks for nothing this long between two calls:
-/// it makes the next as soon as one ends.
 const IDLE: Duration = Duration::from_secs(30);
-/// After a call that broke off, the device that drives the sync says it
-/// is over at once; one that says nothing this long is gone.
 const BROKEN: Duration = Duration::from_secs(8);
-/// A sync whose connection was lost is tried again this often, for this
-/// long without getting through.
 const RETRY_EVERY: Duration = Duration::from_secs(3);
 const RETRY_FOR: Duration = Duration::from_secs(300);
-/// The device whose sync was lost is let back in without asking for this long.
 const RESUME_WITHIN: Duration = Duration::from_secs(600);
-/// How long a datagram may wait to be sent.
 const ANNOUNCE_WITHIN: Duration = Duration::from_millis(500);
-/// A device not heard from for this long is no longer listed.
 const PEER_KEPT: Duration = Duration::from_secs(45);
 const MANIFEST_LIMIT: u64 = 256 * 1024 * 1024;
 
-/// A device found on the network.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Peer {
     pub(crate) device: Device,
     pub(crate) address: SocketAddr,
 }
 
-/// What a sync brought, for the store to take in.
 #[derive(Debug)]
 pub(crate) enum Incoming {
-    /// What was removed from the other device, and when.
     Removed(listenook_core::sync::Removed),
-    /// The other device's groups and tags. Comes before its recordings.
     Catalog(LibraryCatalog),
-    /// A recording's manifest, new or newer than the one here.
     Job(Box<Job>),
-    /// The media of a recording that is here without its file.
     Media { id: String, path: PathBuf },
-    /// What the other device's file of a recording is called: its title,
-    /// when it has none of its own and the file here is one a sync brought.
     Name { id: String, name: String },
 }
 
-/// What happened while this device answered another's sync.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Event {
-    /// A device asks to sync; `serial` names the request in [`answer`].
     Asked { serial: u64, device: Device },
-    /// The request was withdrawn, or waited too long.
     Withdrawn { serial: u64 },
-    /// The sync this device accepted ended: `complete`, or else `lost`
-    /// when the other device was no longer heard from (it said so itself
-    /// otherwise).
     Served { name: String, received: u32, sent: u32, complete: bool, lost: bool },
 }
 
-/// The sync this device is answering, as the page shows it. The totals
-/// are the other device's, and zero when it does not tell them.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Serving {
     pub(crate) name: String,
@@ -105,7 +64,6 @@ pub(crate) struct Serving {
     pub(crate) bytes_total: u64,
 }
 
-/// What a sync copied, as the device that started it counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Summary {
@@ -113,30 +71,23 @@ pub(crate) struct Summary {
     pub(crate) sent: u32,
 }
 
-/// How far a sync is, read by the page while it runs.
 #[derive(Debug, Default)]
 pub(crate) struct Progress {
-    /// Set once the other device has accepted.
     pub(crate) accepted: AtomicBool,
     pub(crate) items: AtomicU64,
     pub(crate) items_total: AtomicU64,
     pub(crate) bytes: AtomicU64,
     pub(crate) bytes_total: AtomicU64,
-    /// Set to end the sync early.
     pub(crate) stop: AtomicBool,
-    /// The connection was lost, and is being looked for again.
     pub(crate) waiting: AtomicBool,
 }
 
 struct Request {
     serial: u64,
     device: Device,
-    /// The ids of the recordings being worked on here, once accepted;
-    /// `Some(None)` once declined.
     answer: Option<Option<HashSet<String>>>,
 }
 
-/// The device whose sync was lost: it may take it up again.
 struct Resumable {
     device: String,
     busy: HashSet<String>,
@@ -145,17 +96,13 @@ struct Resumable {
 
 struct Session {
     token: String,
-    /// The id of the device that drives it.
     device: String,
-    /// The recordings left out, as when it was accepted.
     busy: HashSet<String>,
     name: String,
     last: Instant,
     received: u32,
     sent: u32,
-    /// The calls being answered now.
     calls: u32,
-    /// When a call last broke off.
     broken: Option<Instant>,
     items: u64,
     items_total: u64,
@@ -164,7 +111,6 @@ struct Session {
 }
 
 impl Session {
-    /// Whether the device that drives it is gone.
     fn is_over(&self) -> bool {
         let quiet = self.last.elapsed();
         quiet > QUIET
@@ -178,15 +124,12 @@ struct State {
     root: Option<PathBuf>,
     me: Device,
     visible: bool,
-    /// Bumped whenever visibility changes: threads of an older turn end.
     turn: u64,
     peers: HashMap<String, (Peer, Instant)>,
     request: Option<Request>,
     session: Option<Session>,
     resumable: Option<Resumable>,
-    /// The token of the sync this device's user ended.
     stopped: Option<String>,
-    /// This device is itself syncing with another.
     starting: bool,
     serial: u64,
     incoming: Vec<Incoming>,
@@ -203,7 +146,6 @@ fn port() -> u16 {
     std::env::var("LISTENOOK_SYNC_PORT").ok().and_then(|port| port.parse().ok()).unwrap_or(PORT)
 }
 
-/// A name for this device, until its user gives it one.
 pub(crate) fn default_name() -> String {
     let run = |program: &str, arguments: &[&str]| {
         std::process::Command::new(program)
@@ -234,7 +176,6 @@ pub(crate) fn default_name() -> String {
     })
 }
 
-/// This device's platform, as [`Device::platform`] names it.
 pub(crate) fn platform() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
@@ -249,8 +190,6 @@ pub(crate) fn platform() -> &'static str {
     }
 }
 
-/// Says whose Library this is and where it is kept, and whether other
-/// devices may find it. Visible, it answers on its port until told otherwise.
 pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible: bool) {
     let mut state = state();
     let visible = visible && root.is_some();
@@ -274,15 +213,12 @@ pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible
     }
 }
 
-/// The app whose Library is at `root` is gone: its port is given back,
-/// unless another has the service by now (the next of a test's apps).
 pub(crate) fn release(root: &Option<PathBuf>) {
     if state().root == *root {
         configure(None, String::new(), String::new(), false);
     }
 }
 
-/// The devices heard from lately, by name.
 pub(crate) fn peers() -> Vec<Peer> {
     let mut state = state();
     state.peers.retain(|_, (_, seen)| seen.elapsed() < PEER_KEPT);
@@ -293,7 +229,6 @@ pub(crate) fn peers() -> Vec<Peer> {
     peers
 }
 
-/// What syncs brought since the last call, and what happened meanwhile.
 pub(crate) fn take() -> (Vec<Incoming>, Vec<Event>) {
     let mut state = state();
     if state.session.as_ref().is_some_and(Session::is_over) {
@@ -302,10 +237,8 @@ pub(crate) fn take() -> (Vec<Incoming>, Vec<Event>) {
     (std::mem::take(&mut state.incoming), std::mem::take(&mut state.events))
 }
 
-/// The sync this device is answering, if any.
 pub(crate) fn serving() -> Option<Serving> {
     let state = state();
-    // Accepted a moment ago, it is one already.
     let accepted = || {
         let request = state.request.as_ref().filter(|request| matches!(request.answer, Some(Some(_))))?;
         Some(Serving { name: request.device.name.clone(), ..Serving::default() })
@@ -323,16 +256,12 @@ pub(crate) fn serving() -> Option<Serving> {
         .or_else(accepted)
 }
 
-/// Ends the sync this device is answering: the other device is refused
-/// from here on, and tells its user.
 pub(crate) fn stop_serving() {
     let mut state = state();
     state.stopped = state.session.take().map(|session| session.token);
     state.resumable = None;
 }
 
-/// Answers the request `serial`: `busy` (the recordings being worked on
-/// here, which are left out) accepts it, none declines.
 pub(crate) fn answer(serial: u64, busy: Option<HashSet<String>>) {
     if let Some(request) = state().request.as_mut().filter(|request| request.serial == serial) {
         request.answer = Some(busy);
@@ -341,7 +270,6 @@ pub(crate) fn answer(serial: u64, busy: Option<HashSet<String>>) {
 
 fn end_session(state: &mut State, complete: bool, lost: bool) {
     if let Some(session) = state.session.take() {
-        // Lost, the device may come back for the rest.
         state.resumable = lost.then(|| Resumable { device: session.device, busy: session.busy, at: Instant::now() });
         state.events.push(Event::Served {
             name: session.name,
@@ -361,27 +289,19 @@ fn remember(device: Device, address: SocketAddr) {
     state.peers.insert(device.id.clone(), (Peer { device, address }, Instant::now()));
 }
 
-// --- Finding devices ---------------------------------------------------------
-
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
 struct Announcement {
     device: Device,
-    /// Asks those who hear it to say who they are.
     asking: bool,
 }
 
-/// Hears other devices announce themselves, and answers those that ask.
 fn listen(turn: u64) {
     let Ok(socket) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT)) else {
         return;
     };
-    // Where the system lets no multicast through, the socket still hears
-    // what is sent straight to it.
     let _ = socket.join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED);
     let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
-    // A send waits while the network's queue is full, which a sync's
-    // media keeps it: it gives up instead (the clone shares the limit).
     let _ = socket.set_write_timeout(Some(ANNOUNCE_WITHIN));
     if let Ok(announcer) = socket.try_clone() {
         state().announcer = Some(announcer);
@@ -413,9 +333,6 @@ fn listen(turn: u64) {
     }
 }
 
-/// Tells the network this device is here; `asking`, also asks who else is.
-/// The send may wait on the network: never called on the engine thread,
-/// and the state is let go before it (every sync thread needs it).
 fn announce(asking: bool) {
     let (socket, me) = {
         let state = state();
@@ -428,10 +345,8 @@ fn announce(asking: bool) {
     }
 }
 
-/// This device's address on the local network, if it is on one.
 fn local_address() -> Option<Ipv4Addr> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
-    // Nothing is sent: connecting only picks the route.
     socket.connect((Ipv4Addr::new(10, 254, 254, 254), 9)).ok()?;
     match socket.local_addr().ok()?.ip() {
         IpAddr::V4(address) if address.is_private() => Some(address),
@@ -447,16 +362,12 @@ fn agent(read: Duration) -> ureq::Agent {
         .build()
 }
 
-/// Asks the device at `address` who it is.
 fn ask(address: SocketAddr) -> Option<Device> {
     let response = agent(Duration::from_secs(3)).get(&format!("http://{address}/listenook/info")).call().ok()?;
     let device: Device = serde_json::from_reader(response.into_reader().take(64 * 1024)).ok()?;
     device.is_compatible().then_some(device)
 }
 
-/// Looks for devices: asks by multicast, and asks every address of the
-/// local /24, which finds those a multicast does not reach (a phone, a
-/// network that drops it). What answers shows in [`peers`].
 pub(crate) fn search() {
     static SEARCHING: AtomicBool = AtomicBool::new(false);
     static ANNOUNCING: AtomicBool = AtomicBool::new(false);
@@ -481,21 +392,18 @@ pub(crate) fn search() {
                 .filter_map(|address| {
                     thread::Builder::new()
                         .stack_size(256 * 1024)
-                        .spawn(move || {
-                            match TcpStream::connect_timeout(&address, Duration::from_millis(700)) {
-                                Ok(_) => match ask(address) {
-                                    Some(device) => {
-                                        log::debug!("sync: found {} at {address}", device.name);
-                                        remember(device, address);
-                                    }
-                                    None => log::debug!("sync: {address} is open but is not Listenook"),
-                                },
-                                // Nothing listens there (refused, or no such host).
-                                Err(error) if address.ip() == IpAddr::V4(mine) => {
-                                    log::debug!("sync: {address}: {error}")
+                        .spawn(move || match TcpStream::connect_timeout(&address, Duration::from_millis(700)) {
+                            Ok(_) => match ask(address) {
+                                Some(device) => {
+                                    log::debug!("sync: found {} at {address}", device.name);
+                                    remember(device, address);
                                 }
-                                Err(_) => {}
+                                None => log::debug!("sync: {address} is open but is not Listenook"),
+                            },
+                            Err(error) if address.ip() == IpAddr::V4(mine) => {
+                                log::debug!("sync: {address}: {error}")
                             }
+                            Err(_) => {}
                         })
                         .ok()
                 })
@@ -508,8 +416,6 @@ pub(crate) fn search() {
     });
 }
 
-/// Finds the device at an address the user typed (`192.168.1.20`, or with
-/// a port). Blocks; returns it when it answered.
 pub(crate) fn find_at(text: &str) -> Option<Peer> {
     let text = text.trim().trim_start_matches("http://").trim_end_matches('/');
     let with_port = if text.rsplit_once(':').is_some_and(|(_, port)| port.parse::<u16>().is_ok()) {
@@ -523,9 +429,6 @@ pub(crate) fn find_at(text: &str) -> Option<Peer> {
     Some(Peer { device, address })
 }
 
-// --- Answering another device ------------------------------------------------
-
-/// Whether an address is on a local network (or this machine).
 fn is_local(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
@@ -538,7 +441,6 @@ fn is_local(address: IpAddr) -> bool {
     }
 }
 
-/// Answers other devices while this one is visible.
 fn serve(turn: u64) {
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, port())) {
         Ok(listener) => listener,
@@ -573,9 +475,7 @@ struct Call {
     path: String,
     length: u64,
     token: String,
-    /// How far the device that drives the sync says it is.
     progress: Option<(u64, u64, u64)>,
-    /// Where in the media file the call takes up.
     offset: u64,
     body: BufReader<TcpStream>,
 }
@@ -646,7 +546,6 @@ fn reply_json(stream: &mut TcpStream, value: &impl Serialize) -> io::Result<()> 
     reply(stream, 200, &serde_json::to_vec(value).map_err(io::Error::other)?)
 }
 
-/// The session `token` opens, kept alive; `count` notes what it carried.
 fn in_session(token: &str, count: impl FnOnce(&mut Session)) -> bool {
     let mut state = state();
     match state.session.as_mut().filter(|session| !token.is_empty() && session.token == token) {
@@ -664,17 +563,13 @@ fn in_session(token: &str, count: impl FnOnce(&mut Session)) -> bool {
 struct Hello {
     device: Device,
     catalog: LibraryCatalog,
-    /// Takes up the sync this device lost, which was accepted already.
     resume: bool,
-    /// The names of this device's own media files, by recording.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     names: HashMap<String, String>,
-    /// The recordings removed from this device, and when.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     removed: listenook_core::sync::Removed,
 }
 
-/// How much of a media file that was being sent is here.
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
 struct Part {
@@ -689,7 +584,6 @@ struct Welcome {
     index: Index,
 }
 
-/// How a sync ended, as the device that drove it tells the other.
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
 struct Done {
@@ -756,7 +650,6 @@ fn route(out: &mut TcpStream, call: &mut Call) -> io::Result<()> {
             drop(state);
             reply(out, 200, b"{}")
         }
-        // Ended by this device's user, or no longer known (lost, and over).
         _ if !in_session(&call.token, |_| {}) => {
             let ended = !call.token.is_empty() && state().stopped.as_deref() == Some(call.token.as_str());
             reply(out, if ended { 403 } else { 410 }, b"{}")
@@ -793,7 +686,6 @@ fn route(out: &mut TcpStream, call: &mut Call) -> io::Result<()> {
                 return reply(out, 404, b"{}");
             };
             let length = file.metadata()?.len();
-            // The rest of a file the other device has the start of.
             let offset = if call.offset < length { call.offset } else { 0 };
             file.seek(SeekFrom::Start(offset))?;
             let resumed = if offset > 0 { format!("X-Listenook-Offset: {offset}\r\n") } else { String::new() };
@@ -827,7 +719,6 @@ fn route(out: &mut TcpStream, call: &mut Call) -> io::Result<()> {
     }
 }
 
-/// Puts a request to sync before this device's user, and waits for the answer.
 fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello) -> io::Result<()> {
     if hello.device.app != "listenook" || hello.device.id.is_empty() {
         return reply(out, 400, b"{}");
@@ -844,8 +735,6 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello) -> io::Re
         let id = &hello.device.id;
         let free = hello.resume && !state.starting && state.request.is_none();
         if free && state.session.as_ref().is_some_and(|session| session.device == *id) {
-            // The connection was lost before this device noticed: the
-            // same sync goes on.
             let old = state.session.take().expect("checked above");
             open_session(&mut state, &hello, &token, old.busy.clone(), (old.received, old.sent));
             Some(old.busy)
@@ -871,7 +760,6 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello) -> io::Re
     in_session(&token, |_| {});
     let sent = reply_json(out, &Welcome { token: token.clone(), device: me, index });
     if sent.is_err() {
-        // The device that asked is gone already.
         in_session(&token, |session| session.broken = Some(Instant::now()));
     }
     sent
@@ -899,8 +787,6 @@ fn open_session(state: &mut State, hello: &Hello, token: &str, busy: HashSet<Str
     });
 }
 
-/// Asks this device's user: the recordings to leave out once accepted,
-/// else the status to answer with.
 fn ask_user(hello: &Hello, token: &str) -> Result<HashSet<String>, u16> {
     let serial = {
         let mut state = state();
@@ -918,13 +804,11 @@ fn ask_user(hello: &Hello, token: &str) -> Result<HashSet<String>, u16> {
         thread::sleep(Duration::from_millis(100));
         let mut state = state();
         let Some(request) = state.request.as_mut().filter(|request| request.serial == serial) else {
-            // Withdrawn by the device that asked.
             return Err(403);
         };
         if let Some(answer) = request.answer.take() {
             state.request = None;
             let busy = answer.ok_or(403_u16)?;
-            // The sync is on from the answer, with no moment in between.
             open_session(&mut state, hello, token, busy.clone(), (0, 0));
             return Ok(busy);
         }
@@ -940,17 +824,10 @@ fn manifest_path(root: &Path, id: &str) -> PathBuf {
     root.join("jobs").join(id).join("manifest.json")
 }
 
-/// The Library on disk, as the other device needs to know it. `busy`
-/// names the recordings being worked on in this run.
-/// Where a recording's media is: the path its manifest keeps, or where
-/// that leads now that the app's folder has another name (an iPhone's or
-/// iPad's after an update, see [`persist::rehomed`]).
 fn media_of(root: &Path, job: &Job) -> PathBuf {
     PathBuf::from(persist::rehomed(&job.source_path, root, Path::is_file).unwrap_or_else(|| job.source_path.clone()))
 }
 
-/// The names of the media files in `entries` that are a device's own, not
-/// ones a sync brought it, by recording.
 fn names(entries: &[Entry]) -> impl Iterator<Item = (String, String)> + '_ {
     entries.iter().filter_map(|entry| {
         let name = entry.media_name.as_ref().filter(|name| !is_sync_name(&entry.id, name))?;
@@ -969,8 +846,6 @@ fn index_of(root: &Path, busy: &HashSet<String>) -> Index {
     Index { entries, catalog: persist::load_library_catalog(root), removed: persist::load_removed(root) }
 }
 
-/// Copies `length` bytes, telling `alive` how many went each time; it
-/// answers whether to go on.
 fn copy(from: &mut impl Read, to: &mut impl Write, length: u64, mut alive: impl FnMut(u64) -> bool) -> io::Result<()> {
     let mut buffer = vec![0_u8; 128 * 1024];
     let mut left = length;
@@ -989,9 +864,6 @@ fn copy(from: &mut impl Read, to: &mut impl Write, length: u64, mut alive: impl 
     Ok(())
 }
 
-/// Writes `length` bytes to `path`, through a `.part` file beside it,
-/// after the `offset` bytes that file has from the time before. What came
-/// of a transfer that broke off stays in it, to be taken up again.
 fn receive(
     from: &mut impl Read,
     path: &Path,
@@ -1018,8 +890,6 @@ fn receive(
     fs::rename(&part, path)
 }
 
-// --- Syncing with another device ---------------------------------------------
-
 fn code_of(error: ureq::Error) -> &'static str {
     match error {
         ureq::Error::Status(403, _) => "sync_declined",
@@ -1030,7 +900,6 @@ fn code_of(error: ureq::Error) -> &'static str {
     }
 }
 
-/// Withdraws the request this device is waiting on at `address`.
 pub(crate) fn withdraw(address: SocketAddr) {
     let id = state().me.id.clone();
     thread::spawn(move || {
@@ -1038,10 +907,6 @@ pub(crate) fn withdraw(address: SocketAddr) {
     });
 }
 
-/// Syncs this Library with the one at `address`: asks, waits for its user
-/// to accept, then copies what each side lacks. Blocks until it is done.
-/// `busy` names the recordings being worked on here. What arrives waits
-/// in [`take`].
 pub(crate) fn sync_with(
     address: SocketAddr,
     busy: HashSet<String>,
@@ -1064,9 +929,6 @@ pub(crate) fn sync_with(
     result
 }
 
-/// [`exchange`], taken up again when the connection is lost after the
-/// other device accepted: it lets this one back in without asking, and
-/// what was copied, whole or in part, is not copied again.
 fn persist_with(
     address: SocketAddr,
     root: &Path,
@@ -1083,12 +945,10 @@ fn persist_with(
             Err(code) => code,
         };
         let stopped = || progress.stop.load(Ordering::Relaxed);
-        // The other device may not have noticed yet, and still be in the sync.
         let worth = recoverable(code) || (again && code == "sync_peer_busy");
         if stopped() || !worth || !progress.accepted.load(Ordering::Relaxed) {
             return Err(code);
         }
-        // An attempt that got through has all the time again.
         if !progress.waiting.load(Ordering::Relaxed) {
             lost = None;
         }
@@ -1107,13 +967,10 @@ fn persist_with(
     }
 }
 
-/// Whether a sync that ended so may go on once the network is back.
 fn recoverable(code: &str) -> bool {
     matches!(code, "sync_interrupted" | "sync_unreachable")
 }
 
-/// One go at the sync: `resume` takes up one that was lost. What it
-/// copies is added to `summary`.
 fn exchange(
     address: SocketAddr,
     root: &Path,
@@ -1142,7 +999,6 @@ fn exchange(
     }
     progress.accepted.store(true, Ordering::Relaxed);
     progress.waiting.store(false, Ordering::Relaxed);
-    // What is left to copy, when taken up again.
     progress.items.store(0, Ordering::Relaxed);
     progress.bytes.store(0, Ordering::Relaxed);
     let http = agent(Duration::from_secs(30));
@@ -1157,8 +1013,6 @@ fn exchange(
         state.incoming.extend(names(&welcome.index.entries).map(|(id, name)| Incoming::Name { id, name }));
     }
 
-    // Each call says whose sync it is and how far, for the other device
-    // to show.
     let call = |request: ureq::Request| {
         request.set("X-Listenook-Token", token).set(
             "X-Listenook-Progress",
@@ -1175,9 +1029,7 @@ fn exchange(
         !progress.stop.load(Ordering::Relaxed)
     };
     let failed = |error: ureq::Error| match error {
-        // The other device ended the sync.
         ureq::Error::Status(403, _) => "sync_cancelled_there",
-        // It gave the sync up for lost.
         ureq::Error::Status(410, _) => "sync_interrupted",
         other => code_of(other),
     };
@@ -1188,7 +1040,6 @@ fn exchange(
         let id = &transfer.id;
         let path = root.join("media").join(media_file_name(id, &transfer.media_name));
         if transfer.media {
-            // What came of it the time before is not asked for again.
             let part = path.with_extension("part");
             let have = fs::metadata(&part).map(|file| file.len()).unwrap_or(0);
             let have = if have < transfer.media_size { have } else { 0 };
@@ -1199,10 +1050,8 @@ fn exchange(
             let response = request.call().map_err(failed)?;
             let length: u64 =
                 response.header("Content-Length").and_then(|length| length.parse().ok()).ok_or("sync_failed")?;
-            // An older Listenook sends the whole file, and does not say from where.
             let from: u64 = response.header("X-Listenook-Offset").and_then(|from| from.parse().ok()).unwrap_or(0);
             if from > 0 && (from != have || from + length != transfer.media_size) {
-                // Not the rest of the file this is the start of: from the top, next time.
                 let _ = fs::remove_file(&part);
                 return Err("sync_interrupted");
             }
@@ -1228,8 +1077,6 @@ fn exchange(
             let mut file = fs::File::open(&source).map_err(|_| "sync_failed")?;
             let length = file.metadata().map_err(|_| "sync_failed")?.len();
             let extension = media_extension(&transfer.media_name);
-            // What the other device has of it from the time before (an
-            // older Listenook keeps nothing, and knows no such question).
             let have = call(http.get(&format!("{base}/part/{id}/{extension}")))
                 .call()
                 .ok()
@@ -1271,22 +1118,17 @@ fn exchange(
         }
         progress.items.fetch_add(1, Ordering::Relaxed);
     }
-    // Lost, it is taken up again: the other device keeps it open.
     if matches!(outcome, Err(code) if recoverable(code)) && !progress.stop.load(Ordering::Relaxed) {
         return outcome;
     }
-    // Else, whatever happened, the other device is told the sync is over.
     let told = call(agent(Duration::from_secs(5)).post(&format!("{base}/done")))
         .send_bytes(&serde_json::to_vec(&Done { complete: outcome.is_ok() }).unwrap_or_default());
-    // It no longer knows this sync: it was ended there, which is why a
-    // transfer broke off.
     if matches!(told, Err(ureq::Error::Status(403, _))) && matches!(outcome, Err(code) if code != "sync_cancelled") {
         outcome = Err("sync_cancelled_there");
     }
     outcome
 }
 
-/// A reader that says how much was read of it, and ends when told to stop.
 struct Counted<'a, R, F: Fn(u64) -> bool> {
     inner: R,
     moved: &'a F,
@@ -1305,7 +1147,6 @@ mod tests {
 
     use super::*;
 
-    /// One process is one device: these tests share its state.
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     fn library(name: &str) -> PathBuf {
@@ -1333,8 +1174,6 @@ mod tests {
         job
     }
 
-    /// An iPhone's or iPad's manifests keep paths into a container that
-    /// has another name by now (or the `@container` the app once wrote).
     #[test]
     #[cfg_attr(windows, ignore = "iOS container paths")]
     fn media_is_offered_from_where_the_apps_folder_is_now() {
@@ -1355,20 +1194,15 @@ mod tests {
         let _ = fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
     }
 
-    /// A device's side of a sync, played by this process: the server is
-    /// "there", and what the client pulls is checked as it arrives.
     #[test]
     fn two_libraries_end_as_their_union() {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        // SAFETY: the tests that read it run one at a time.
         unsafe { std::env::set_var("LISTENOOK_SYNC_PORT", "47931") };
         let (there, here) = (library("there"), library("here"));
         recording(&there, "only-there", "2026-01-01T00:00:00.000Z", Some(b"remote media"));
         recording(&there, "both", "2026-03-01T00:00:00.000Z", None);
         recording(&here, "both", "2026-02-01T00:00:00.000Z", Some(b"local media"));
         recording(&here, "only-here", "2026-01-01T00:00:00.000Z", Some(b"pushed media"));
-        // Removed on one device since it was last changed on the other:
-        // copied neither way, and each device hears of the removal.
         recording(&here, "gone-there", "2026-01-01T00:00:00.000Z", Some(b"unwanted there"));
         recording(&there, "gone-here", "2026-01-01T00:00:00.000Z", Some(b"unwanted here"));
         let removed = |id: &str| [(id.to_owned(), "2026-02-01T00:00:00.000Z".to_owned())].into();
@@ -1386,7 +1220,6 @@ mod tests {
         });
         assert_eq!(found.expect("the device answers").name, "There");
 
-        // The user there accepts as soon as asked.
         let accepting = thread::spawn(|| {
             for _ in 0..100 {
                 thread::sleep(Duration::from_millis(50));
@@ -1400,8 +1233,6 @@ mod tests {
                 }
             }
         });
-        // The client reads its own Library from another folder: as the
-        // state is one per process, it is driven here without `sync_with`.
         let me = Device { app: "listenook".into(), protocol: PROTOCOL, id: "device-here".into(), ..Device::default() };
         let progress = Progress::default();
         let mut summary = Summary::default();
@@ -1425,15 +1256,12 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // Pulled here: the recording only there, and the newer manifest of
-        // the one both have. Pushed there: the recording only here.
         let titles: Vec<String> = jobs.iter().map(|job| job.title()).collect();
         assert!(titles.contains(&"Title of only-there at 2026-01-01T00:00:00.000Z".to_owned()));
         assert!(titles.contains(&"Title of both at 2026-03-01T00:00:00.000Z".to_owned()));
         assert!(titles.contains(&"Title of only-here at 2026-01-01T00:00:00.000Z".to_owned()));
         assert_eq!(fs::read(here.join("media/sync-only-there.mp3")).unwrap(), b"remote media");
         assert_eq!(fs::read(there.join("media/sync-only-here.mp3")).unwrap(), b"pushed media");
-        // The media of the one both have went where it was missing.
         assert_eq!(fs::read(there.join("media/sync-both.mp3")).unwrap(), b"local media");
         assert!(incoming.iter().any(|incoming| matches!(incoming, Incoming::Media { id, .. } if id == "both")));
         assert!(incoming.iter().any(|incoming| matches!(incoming, Incoming::Catalog(c) if c.tags.len() == 1)));
@@ -1444,7 +1272,6 @@ mod tests {
             assert!(told, "{id} is told as removed");
         }
 
-        // Without a session nothing is given out.
         let refused = agent(Duration::from_secs(2)).get(&format!("http://{address}/listenook/manifest/both")).call();
         assert!(matches!(refused, Err(ureq::Error::Status(410, _))));
         configure(None, String::new(), String::new(), false);
@@ -1454,7 +1281,6 @@ mod tests {
     #[test]
     fn a_declined_sync_copies_nothing() {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        // SAFETY: the tests that read it run one at a time.
         unsafe { std::env::set_var("LISTENOOK_SYNC_PORT", "47932") };
         let (there, here) = (library("declining"), library("declined"));
         recording(&there, "kept", "2026-01-01T00:00:00.000Z", None);

@@ -1,12 +1,5 @@
-//! The system's media controls, as the app sees them: it says what is playing, and hears what the system asks. Whoever
-//! plays claims the controls; the last to claim them has them, and gives
-//! them back when it goes.
-
 use std::{cell::RefCell, rc::Rc};
 
-/// What the system asks of the app. Only Apple's platforms hear the
-/// system's media controls so far; elsewhere only `Toggle` is sent (by the
-/// global play/pause shortcut).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
 pub(crate) enum Command {
@@ -15,11 +8,9 @@ pub(crate) enum Command {
     Toggle,
     Next,
     Previous,
-    /// To a position, in milliseconds.
     Seek(i64),
 }
 
-/// What is playing, for the system to show.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Now {
     pub(crate) title: String,
@@ -33,18 +24,13 @@ pub(crate) struct Now {
 type Handler = Rc<dyn Fn(Command)>;
 
 thread_local! {
-    /// Who has the controls, the last to claim them last.
     static CLAIMS: RefCell<Vec<(u32, Handler)>> = const { RefCell::new(Vec::new()) };
     static NEXT: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
 }
 
-/// A claim on the media controls: dropped, they go back to whoever had
-/// them before.
 pub(crate) struct Claim(u32);
 
 impl Claim {
-    /// Says what the claimant is playing. Ignored while someone else has
-    /// claimed the controls since.
     pub(crate) fn publish(&self, now: Option<Now>) {
         if CLAIMS.with(|claims| claims.borrow().last().is_some_and(|(id, _)| *id == self.0)) {
             show(now);
@@ -66,16 +52,12 @@ impl Drop for Claim {
     }
 }
 
-/// Claims the media controls: `handle` hears play, pause, next, previous
-/// and seek until the claim is dropped or someone else claims them.
 pub(crate) fn claim(handle: impl Fn(Command) + 'static) -> Claim {
     let id = NEXT.with(|next| next.replace(next.get() + 1));
     CLAIMS.with(|claims| claims.borrow_mut().push((id, Rc::new(handle))));
     Claim(id)
 }
 
-/// Asks whoever has the controls to do `command`: what a key that works
-/// from anywhere presses.
 pub(crate) fn press(command: Command) {
     let handler = CLAIMS.with(|claims| claims.borrow().last().map(|(_, handler)| handler.clone()));
     if let Some(handler) = handler {
@@ -90,8 +72,6 @@ fn show(now: Option<Now>) {
     let _ = now;
 }
 
-/// Hands what the system asked since the last call to who should hear it.
-/// Call it regularly on the engine thread.
 pub(crate) fn pump() {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     for command in super::apple::take() {

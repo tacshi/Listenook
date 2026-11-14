@@ -1,6 +1,3 @@
-//! System notifications for work that finished while the user was
-//! elsewhere: a transcription, a download.
-
 use listenook_core::{Job, JobStatus};
 use nsh_core::{notifications::Notification, prelude::*};
 
@@ -10,10 +7,7 @@ thread_local! {
     static ASKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The title (untranslated) for a job going from `was` to the state it is
-/// in, if that is worth a notification: work ended, well or badly.
 fn title(job: &Job, was: JobStatus) -> Option<&'static str> {
-    // Word timing follows a transcript that was announced already.
     if !was.is_active() || was == JobStatus::Aligning {
         return None;
     }
@@ -27,8 +21,6 @@ fn title(job: &Job, was: JobStatus) -> Option<&'static str> {
     })
 }
 
-/// Tells the user a job's work ended, when they asked to be told and the
-/// app is not in front of them.
 pub(crate) fn job_changed(job: &Job, was: JobStatus) {
     let store = store();
     let wanted = store.setting(|s| s.extra.get("notify_when_done").and_then(|v| v.as_bool()).unwrap_or(true));
@@ -44,7 +36,6 @@ pub(crate) fn job_changed(job: &Job, was: JobStatus) {
     };
     let id = job.id.clone();
     store.run(async move {
-        // The system asks the user once; after that it remembers.
         if !ASKED.replace(true) {
             let _ = request_notification_permission().await;
         }

@@ -5,9 +5,7 @@ let package = Package(
     name: "ListenookSpeechWorker",
     platforms: [.macOS("15.0"), .iOS("18.0")],
     products: [
-        // The iOS app links this and runs it in process.
         .library(name: "ListenookSpeechCore", targets: ["ListenookSpeechCore"]),
-        // The macOS app runs this as a separate process.
         .executable(name: "ListenookSpeechWorker", targets: ["ListenookSpeechWorker"]),
     ],
     dependencies: [

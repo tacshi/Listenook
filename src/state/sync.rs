@@ -1,8 +1,3 @@
-//! Syncing with another device, as the app's surface sees it: the devices
-//! found, the sync this device started and how far it is, and the request
-//! of another device waiting for an answer. The network side is
-//! `services::sync`; what it brings is taken into the store here.
-
 use std::{
     collections::HashMap,
     sync::{Arc, atomic::Ordering},
@@ -17,49 +12,35 @@ use crate::{
     ui::{Tone, toast},
 };
 
-/// Where the sync this device started is.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) enum Phase {
-    /// Choosing a device.
     #[default]
     Choosing,
-    /// Waiting for the other device's user to accept.
     Asking(Peer),
-    /// Copying.
     Running(Peer),
-    /// Another device, of this name, is copying: this one accepted its sync.
     Serving(String),
-    /// Done with the device of this name, with what was copied.
     Done(String, Summary),
-    /// It did not finish: the error's code.
     Failed(&'static str),
 }
 
-/// How much a running sync has copied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct Copied {
     pub(crate) items: u64,
     pub(crate) items_total: u64,
     pub(crate) bytes: u64,
     pub(crate) bytes_total: u64,
-    /// The connection was lost, and is being looked for again.
     pub(crate) waiting: bool,
 }
 
-/// The sync part of the store.
 #[derive(Clone, Copy)]
 pub(crate) struct SyncState {
-    /// Whether the Sync dialog is up.
     pub(crate) open: Signal<bool>,
     peers: Signal<Vec<Peer>>,
     phase: Signal<Phase>,
     copied: Signal<Copied>,
-    /// Looking for the device at an address the user typed.
     connecting: Signal<bool>,
-    /// Another device's request, waiting for this device's user.
     request: Signal<Option<(u64, Device)>>,
     progress: Stored<Option<Arc<Progress>>>,
-    /// Where the other device's group and tag ids lead here.
     map: Stored<HashMap<String, String>>,
     ticks: Stored<u32>,
 }
@@ -79,33 +60,26 @@ impl SyncState {
         }
     }
 
-    /// The devices found on the network.
     pub(crate) fn peers(&self) -> Vec<Peer> {
         self.peers.get()
     }
 
-    /// Where the sync this device started is.
     pub(crate) fn phase(&self) -> Phase {
         self.phase.get()
     }
 
-    /// How much the running sync has copied.
     pub(crate) fn copied(&self) -> Copied {
         self.copied.get()
     }
 
-    /// Whether an address the user typed is being tried.
     pub(crate) fn connecting(&self) -> bool {
         self.connecting.get()
     }
 
-    /// The request of another device waiting for an answer.
     pub(crate) fn request(&self) -> Option<(u64, Device)> {
         self.request.get()
     }
 
-    /// Opens the Sync dialog and looks for devices. The first time, this
-    /// device becomes visible to them: a sync needs both to be.
     pub(crate) fn show(&self) {
         let store = store();
         if !store.sync_decided() {
@@ -119,18 +93,15 @@ impl SyncState {
         service::search();
     }
 
-    /// Back to choosing a device, after a sync ended.
     pub(crate) fn again(&self) {
         self.phase.set(Phase::Choosing);
         service::search();
     }
 
-    /// Looks for devices again.
     pub(crate) fn search(&self) {
         service::search();
     }
 
-    /// Syncs with a device: asks it, and copies once its user accepts.
     pub(crate) fn start(&self, peer: Peer) {
         if !matches!(self.phase.get_untracked(), Phase::Choosing) {
             return;
@@ -148,7 +119,6 @@ impl SyncState {
             let address = peer.address;
             let work = progress.clone();
             let outcome = blocking(move || service::sync_with(address, busy, &work)).await;
-            // What it brought is in the Library before it is called done.
             state.take_in();
             state.progress.replace(None);
             let stopped = progress.stop.load(Ordering::Relaxed);
@@ -161,7 +131,6 @@ impl SyncState {
         });
     }
 
-    /// Syncs with the device at an address the user typed.
     pub(crate) fn connect(&self, address: String) {
         if self.connecting.get_untracked() || address.trim().is_empty() {
             return;
@@ -181,7 +150,6 @@ impl SyncState {
         });
     }
 
-    /// Ends the sync this device started, or the one it is answering.
     pub(crate) fn cancel(&self) {
         if matches!(self.phase.get_untracked(), Phase::Serving(_)) {
             service::stop_serving();
@@ -192,14 +160,11 @@ impl SyncState {
             return;
         };
         progress.stop.store(true, Ordering::Relaxed);
-        // Still waiting for an answer: the question is taken back.
         if let Phase::Asking(peer) = self.phase.get_untracked() {
             service::withdraw(peer.address);
         }
     }
 
-    /// Answers another device's request. Accepted, its sync shows in the
-    /// Sync dialog, as one this device started does.
     pub(crate) fn answer(&self, accept: bool) {
         if let Some((serial, device)) = self.request.get_untracked() {
             service::answer(serial, accept.then(|| store().busy_ids()));
@@ -248,7 +213,6 @@ impl SyncState {
                             Phase::Failed("sync_cancelled_there")
                         });
                     }
-                    // The dialog tells it while it is up.
                     if !(shown && self.open.get_untracked()) {
                         toast(
                             if complete { Tone::Success } else { Tone::Error },
@@ -268,8 +232,6 @@ impl SyncState {
         }
     }
 
-    /// Called a few times a second by the shell: takes in what syncs
-    /// brought, and follows the one that is running.
     pub(crate) fn tick(&self) {
         self.take_in();
         if let Some(progress) = self.progress.with(|progress| progress.clone()) {
@@ -289,7 +251,6 @@ impl SyncState {
                 self.copied.set(copied);
             }
         }
-        // The sync this device is answering, wherever it was accepted.
         match (service::serving(), self.phase.get_untracked()) {
             (Some(serving), phase) => {
                 if matches!(phase, Phase::Choosing | Phase::Done(..) | Phase::Failed(_)) {
@@ -306,7 +267,6 @@ impl SyncState {
                     self.copied.set(copied);
                 }
             }
-            // It ended without a word (the service was set up again).
             (None, Phase::Serving(_)) => self.phase.set(Phase::Choosing),
             _ => {}
         }
@@ -315,7 +275,6 @@ impl SyncState {
             if self.peers.with_untracked(|peers| *peers != found) {
                 self.peers.set(found);
             }
-            // Devices come and go: asked again every few seconds.
             let ticks = self.ticks.with(|ticks| {
                 *ticks += 1;
                 *ticks
@@ -327,7 +286,6 @@ impl SyncState {
     }
 }
 
-/// "3 received, 2 sent", in the interface language.
 pub(crate) fn counts(received: u32, sent: u32) -> String {
     if received == 0 && sent == 0 {
         return tr("nothing to copy, the Libraries already match.").to_string();

@@ -1,19 +1,12 @@
-//! Opening the app when the user logs in: a launch agent on macOS, a `Run`
-//! entry in the registry on Windows. Nothing else has such a place here.
-
 use std::path::PathBuf;
 
-/// Whether this build can be opened at login: a packaged desktop app.
 pub(crate) fn supported() -> bool {
     cfg!(any(target_os = "macos", target_os = "windows")) && target().is_some()
 }
 
-/// What is opened: the app's bundle on macOS, its executable on Windows.
-/// None for a development run, which is not somewhere to come back to.
 fn target() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     if cfg!(target_os = "macos") {
-        // `<Name>.app/Contents/MacOS/<Name>`
         let bundle = executable.parent()?.parent()?.parent()?;
         return bundle.extension().is_some_and(|extension| extension == "app").then(|| bundle.to_owned());
     }
@@ -25,7 +18,6 @@ fn agent() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/LaunchAgents/app.capyvibe.listenook.plist"))
 }
 
-/// The launch agent that opens `bundle` at login.
 #[cfg(any(target_os = "macos", test))]
 fn agent_plist(bundle: &str) -> String {
     let escaped = bundle.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
@@ -52,7 +44,6 @@ fn agent_plist(bundle: &str) -> String {
     )
 }
 
-/// Turns opening at login on or off. Returns whether it is as asked.
 pub(crate) fn set(enabled: bool) -> bool {
     let Some(target) = target() else {
         return false;

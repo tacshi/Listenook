@@ -1,7 +1,3 @@
-//! Listenook's domain logic: models and their JSON, the transcript parser,
-//! exporters, subtitle import, dictation comparison, podcast feeds and the
-//! prompts of the AI features. Nothing here knows about the UI.
-
 pub mod audio;
 pub mod brief;
 pub mod caption;

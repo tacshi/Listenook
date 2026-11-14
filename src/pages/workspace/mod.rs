@@ -1,6 +1,3 @@
-//! The reader: one recording's transcript in a reading column, its media on
-//! one transport, and a side panel for practice, the AI Brief or the video.
-
 mod brief;
 mod practice;
 mod review;
@@ -24,7 +21,6 @@ use crate::{
     util::file_url,
 };
 
-/// The reader for job `id`, or a way back when it has no transcript.
 pub(crate) fn reader(id: &str) -> impl IntoElement {
     let store = store();
     if untracked(|| store.job(id)).is_some_and(|job| job.has_transcript()) {
@@ -42,8 +38,6 @@ pub(crate) fn reader(id: &str) -> impl IntoElement {
         .into_element()
 }
 
-/// The height of the practice panel under the transcript: its controls
-/// and the sentence being practiced.
 const PRACTICE_HEIGHT: f32 = 340.0;
 
 fn opened(id: &str) -> impl IntoElement {
@@ -54,8 +48,6 @@ fn opened(id: &str) -> impl IntoElement {
     let brief_dialog = signal(false);
     let has_video = review.has_video;
     let path = review.job.with_untracked(|job| job.as_ref().map(|job| job.source_path.clone()).unwrap_or_default());
-    // A file the player cannot open is made into one it can, once; until
-    // then there is nothing to load.
     let source = signal(if playable::needs_help(&path) { String::new() } else { file_url(&path) });
     let waiting_for_source = signal(playable::needs_help(&path));
     if playable::needs_help(&path) {
@@ -71,10 +63,6 @@ fn opened(id: &str) -> impl IntoElement {
         });
     }
     let start_at = review.position_ms.get_untracked();
-    // The page comes back when the window has left full screen, however
-    // it was asked to (the button, Escape, the system's own control), and
-    // only once the window has finished shrinking: until then the picture
-    // alone shrinks with it.
     let restore = move || {
         if review.fullscreen.get_untracked() {
             batch(|| {
@@ -83,14 +71,12 @@ fn opened(id: &str) -> impl IntoElement {
             });
         }
     };
-    // Kept outside the signals: the wait below may outlive the reader.
     let leaving = std::rc::Rc::new(std::cell::Cell::new(false));
     {
         let leaving = leaving.clone();
         current_window().on_mode_change(move |mode, _| {
             if mode != WindowMode::FullScreen && review.fullscreen.get_untracked() {
                 leaving.set(true);
-                // Should the window's new size never be told.
                 let leaving = leaving.clone();
                 spawn(async move {
                     timer(std::time::Duration::from_millis(1200)).await;
@@ -113,9 +99,6 @@ fn opened(id: &str) -> impl IntoElement {
     on_key("space", move |_| review.toggle_play());
     on_key("alt+left", move |_| review.step(-1));
     on_key("alt+right", move |_| review.step(1));
-    // R loops the current sentence while it is held, and lets go of it
-    // when the key is released. A key's release is not told: a held key
-    // repeats, so the hold lasts while its repeats keep coming.
     let held = std::rc::Rc::new(std::cell::RefCell::new(None::<Hold>));
     {
         let held = held.clone();
@@ -136,13 +119,11 @@ fn opened(id: &str) -> impl IntoElement {
             spawn(async move {
                 loop {
                     timer(std::time::Duration::from_millis(80)).await;
-                    // Gone: the reader closed, and its signals with it.
                     let Some((quiet, repeated)) =
                         held.borrow().as_ref().map(|hold| (hold.last.elapsed(), hold.repeated))
                     else {
                         return;
                     };
-                    // The first repeat of a held key takes longer to come than the rest.
                     let patience = if repeated { REPEAT_GAP } else { FIRST_REPEAT };
                     if quiet > patience {
                         if let Some(hold) = held.take() {
@@ -163,8 +144,6 @@ fn opened(id: &str) -> impl IntoElement {
         review.revealed.update(|revealed| *revealed = if revealed.is_some() { None } else { current });
     });
     on_key("mod+f", move |_| review.searching.set(true));
-    // E edits the current sentence (its translation when only that shows),
-    // as its Edit button and its menu do.
     on_key("e", move |_| {
         if let Some(index) = untracked(|| review.target_or_first()) {
             let translation = review.mode.get_untracked() == ContentMode::Translated
@@ -183,7 +162,6 @@ fn opened(id: &str) -> impl IntoElement {
             store.close_reader();
         }
     });
-    // The media keys and Now Playing follow the recording being read.
     let controls = std::rc::Rc::new(media::claim(move |command| match command {
         media::Command::Play => {
             if review.paused.get_untracked() {
@@ -200,8 +178,6 @@ fn opened(id: &str) -> impl IntoElement {
         media::Command::Previous => review.step(-1),
         media::Command::Seek(position_ms) => review.seek(position_ms),
     }));
-    // Now Playing counts on by itself: it is told again every five
-    // seconds, and at once when anything else changes.
     let beat = computed(move || review.position_ms.get() / 5000);
     effect(move || {
         beat.get();
@@ -215,14 +191,11 @@ fn opened(id: &str) -> impl IntoElement {
             rate: review.rate.get(),
         }));
     });
-    // Where playback is, kept outside the signals: when the reader closes
-    // they are gone before this last save runs.
     let last = std::rc::Rc::new(std::cell::Cell::new((review.position_ms.get_untracked(), 0_i64, false)));
     {
         let last = last.clone();
         effect(move || last.set((review.position_ms.get(), review.duration_ms.get(), review.fullscreen.get())));
     }
-    // A recording heard to its end starts over next time.
     let remember = move |job_id: &str, position: i64, duration: i64| {
         let resume = position > 3000 && (duration <= 0 || position < duration - 3000);
         store.update_settings(|settings| {
@@ -233,7 +206,6 @@ fn opened(id: &str) -> impl IntoElement {
             }
         });
     };
-    // Kept while playing too: quitting the app runs no cleanup.
     {
         let (job_id, pulse) = (id.to_owned(), computed(move || review.position_ms.get() / 15_000));
         let first = std::cell::Cell::new(true);
@@ -257,7 +229,6 @@ fn opened(id: &str) -> impl IntoElement {
         .element_ref(&review.player)
         .paused(move || review.paused.get())
         .rate(move || review.rate.get())
-        // Plays on with the screen locked or the app in the background.
         .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(50.0)
         .on_load(move |info: &VideoInfo| {
@@ -270,15 +241,12 @@ fn opened(id: &str) -> impl IntoElement {
             review.on_progress((progress.current_time * 1000.0) as i64, (progress.duration * 1000.0) as i64);
         })
         .repeat(move || review.looping.get())
-        // The player starts over by itself when looping; only stop otherwise.
         .on_end(move || {
             if !review.looping.get_untracked() {
                 review.paused.set(true);
             }
         })
         .on_error(move |_: &str| {
-            // The player complains once about having nothing to load while
-            // a file is being made playable: that is not a missing file.
             if waiting_for_source.get_untracked() {
                 waiting_for_source.set(false);
             } else {
@@ -286,26 +254,14 @@ fn opened(id: &str) -> impl IntoElement {
             }
         });
 
-    // The side column is always there, so the media element is made once:
-    // it is as wide as the panel showing, and the picture takes all of it
-    // when the panel is the video, a band above the others, and nothing for
-    // a recording without one.
     let side = move || review.side.get();
-    // The video can sit above the transcript instead of beside it. The
-    // other panels are lists that want height, and stay at the side.
-    // In a narrow window nothing fits beside the transcript: the video is
-    // always above it, and the other panels take the lower half.
     let narrow = move || crate::shell::page_stacks() && side() != Side::None && !review.fullscreen.get();
     let on_top = move || {
         has_video && side() == Side::Video && !review.fullscreen.get() && (review.video_on_top.get() || narrow())
     };
     let stacked = move || on_top() || narrow();
-    // The software keyboard is up, taking half of a tablet's screen.
     let typing = move || crate::platform::is_phone() && keyboard_height().0 > 0.0;
-    // In full screen the controls float over the picture, and go away
-    // while it plays: moving the pointer brings them back for a while.
     let hud = signal(true);
-    // The wait that puts them away; a new movement takes its place.
     let wait = std::rc::Rc::new(std::cell::RefCell::new(None::<Spawned<()>>));
     let wake = move || {
         if !review.fullscreen.get_untracked() {
@@ -313,7 +269,6 @@ fn opened(id: &str) -> impl IntoElement {
         }
         hud.set(true);
         let later = set_timeout(std::time::Duration::from_millis(2500), move || {
-            // Not while paused: then they are what the user is looking for.
             if !review.paused.get_untracked() {
                 hud.try_set(false);
             }
@@ -325,7 +280,6 @@ fn opened(id: &str) -> impl IntoElement {
     effect({
         let wake = wake.clone();
         move || {
-            // Shown on entering full screen and whenever playback stops or starts.
             let _ = (review.fullscreen.get(), review.paused.get());
             hud.set(true);
             untracked(&wake);
@@ -336,8 +290,6 @@ fn opened(id: &str) -> impl IntoElement {
             (true, _) => s.flex_1(),
             (false, Side::None) => s.w(px(0.0)),
             (false, Side::Video) if narrow() => s.w_full().h(px(crate::shell::page_width() * 9.0 / 16.0)).border_b_1(),
-            // Practice is a few controls: as tall as they are, not the half
-            // of the page a list of notes wants.
             (false, Side::Practice) if narrow() => {
                 s.w_full().h(px((window().height.0 * 0.45).min(PRACTICE_HEIGHT))).border_t_1()
             }
@@ -360,18 +312,12 @@ fn opened(id: &str) -> impl IntoElement {
                         .bg(move || if review.fullscreen.get() { tokens::stage() } else { theme().muted })
                         .style_with(move |s| match (has_video, side(), review.fullscreen.get()) {
                             (true, Side::Video, _) | (true, _, true) => s.flex_1(),
-                            // No room for the picture over a panel in a narrow
-                            // window, nor while the keyboard is up under one:
-                            // what is typed into, and its buttons, stay in sight.
                             (true, _, false) if narrow() || typing() => s.h(px(1.0)).opacity(0.0),
                             (true, _, false) => s.h(px(review.side_width.get() * 9.0 / 16.0)),
                             (false, ..) => s.h(px(1.0)).opacity(0.0),
                         })
                         .child(media.flex_1())
                         .child(when(move || review.fullscreen.get(), move || subtitle(review, hud)))
-                        // A phone's bar has no room for the title: it is over
-                        // the top of the picture while that is paused, and
-                        // goes as it plays.
                         .child(when(
                             move || {
                                 crate::platform::is_phone()
@@ -405,14 +351,11 @@ fn opened(id: &str) -> impl IntoElement {
                                         .text_base()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .number_of_lines(1)
-                                        // Light on the dark of the stage, in either theme.
                                         .text_color(|| theme().foreground.dark)
                                         .role(AccessibilityRole::Header),
                                     )
                             },
                         ))
-                        // Under a finger there is no pointer to move: a tap
-                        // on the picture shows the controls, or puts them away.
                         .child(when(move || review.fullscreen.get() && crate::platform::is_phone(), {
                             let wake = wake.clone();
                             move || {
@@ -438,7 +381,6 @@ fn opened(id: &str) -> impl IntoElement {
     view()
         .flex_1()
         .on_mouse_move(move |_: &MouseEvent| wake())
-        // No pointer over a picture that is playing by itself.
         .style_with(move |s| if review.fullscreen.get() && !hud.get() { s.cursor(Cursor::None) } else { s })
         .child(when(move || !review.fullscreen.get(), move || header(review, export, rename, translate)))
         .child(when(move || !review.fullscreen.get(), move || translation_strip(review)))
@@ -446,8 +388,6 @@ fn opened(id: &str) -> impl IntoElement {
             view()
                 .flex_1()
                 .min_h(px(0.0))
-                // The panel comes second: to the right in a row, on top
-                // in a column read from its end.
                 .style_with(move |s| match (on_top(), narrow()) {
                     (true, _) => s.flex_col_reverse(),
                     (false, true) => s.flex_col(),
@@ -461,9 +401,7 @@ fn opened(id: &str) -> impl IntoElement {
                         .style_when(move || review.fullscreen.get(), |s| s.hidden())
                         .child(transcript::transcript(review)),
                 )
-                // The handle goes in last, over the panel's content.
                 .child(side_column.child(when(
-                    // A narrow window lays the panel out itself: nothing to drag.
                     move || !narrow(),
                     move || when(on_top, move || divider(review, true)).otherwise(move || divider(review, false)),
                 ))),
@@ -484,13 +422,10 @@ fn has_translation(review: Review) -> bool {
     })
 }
 
-/// A toolbar toggle for a side panel: lit while its panel shows.
 fn side_toggle(review: Review, side: Side, glyph: Icon, name: &'static str) -> impl IntoElement {
     let on = move || review.side.get() == side;
     view().window_drag(false).child(ui::toggle_button(Variant::Ghost, glyph, tr(name), Size::Sm, on, move || {
         let closing = untracked(on);
-        // The Video button says whether the picture is wanted; closing
-        // Practice or the AI Brief leaves it as it was before them.
         if side == Side::Video {
             review.video_wanted.set(!closing);
         }
@@ -500,8 +435,6 @@ fn side_toggle(review: Review, side: Side, glyph: Icon, name: &'static str) -> i
             (true, _) if review.has_video && review.video_wanted.get_untracked() => Side::Video,
             (true, _) => Side::None,
         };
-        // No sliding into place here: the transcript's lines wrap anew
-        // at its new width, and rows animated to it keep wrong heights.
         match next {
             Side::Practice => practice::start(review, Practice::Mimic),
             _ => {
@@ -526,10 +459,6 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
     let mode_item = move |mode: ContentMode, label: &'static str| {
         ui::menu_choice(l(label), move || review.mode.get() == mode, move || review.mode.set(mode))
     };
-    // On a phone or a tablet the system's header is done without (it
-    // cannot be put away for a video filling the screen): a bar like it
-    // stands above this one, with the way back, the sidebar's button
-    // beside the sidebar, and the title.
     let touch = crate::platform::is_phone();
     let lead = if touch {
         view()
@@ -556,8 +485,6 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
                     .role(AccessibilityRole::Header),
             )
     };
-    // There the tools are one capsule at the end of that bar, as the
-    // system groups the buttons of its own.
     let base = if touch {
         view()
             .h(px(44.0))
@@ -595,7 +522,6 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
         .child(when(
             move || review.has_video && review.side.get() == Side::Video && !crate::shell::page_stacks(),
             move || {
-                // The button shows the layout it changes to.
                 view().window_drag(false).child(dynamic(move || {
                     let on_top = review.video_on_top.get();
                     icon_button(
@@ -615,8 +541,6 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
         .child(view().window_drag(false).child({
             let open = signal(false);
             ui::menu_with(open, ui::menu_trigger(Icon::More, tr("More actions"), Size::Sm, open))
-                // Not while an answer is typed from hearing: that is blind
-                // listening already, and the switch would change nothing.
                 .child(when(
                     move || !(review.side.get() == Side::Practice && review.practice.get() == Practice::Dictation),
                     move || {
@@ -662,11 +586,6 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
     if !touch {
         return bar.into_element();
     }
-    // One line: the way back, the sidebar's button beside the sidebar, the
-    // title, the tools. A phone's page has no room for the title there:
-    // it is over the picture while that is paused (see `opened`), and for
-    // a recording without one, or with its picture away, a line under the
-    // bar.
     let tight = crate::shell::page_narrow;
     let pictured = move || review.has_video && review.side.get() == Side::Video;
     view()
@@ -712,7 +631,6 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
         .into_element()
 }
 
-/// How the translation goes, while it runs or after it stopped short.
 fn translation_strip(review: Review) -> impl IntoElement {
     let state =
         move || review.job.with(|job| job.as_ref().map(|job| job.translation_state.clone()).unwrap_or_default());
@@ -758,7 +676,6 @@ fn translation_strip(review: Review) -> impl IntoElement {
                     button(Variant::Ghost, Size::Sm, l("Cancel"))
                         .on_press(move || llm::cancel_translation(&review.id()))
                 })
-                // What stopped has been said: the note can be put away.
                 .otherwise(move || {
                     view().flex_1().items_end().child(button(Variant::Ghost, Size::Sm, l("Dismiss")).on_press(
                         move || {
@@ -773,13 +690,9 @@ fn translation_strip(review: Review) -> impl IntoElement {
     })
 }
 
-/// The one transport: play, sentence steps, position, looping the whole
-/// recording, and speed.
 fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let dragging = signal(None::<f64>);
     let active = move || !review.paused.get() || review.waiting.get();
-    // Over the picture in full screen the controls are light in either
-    // theme, as a video's are; in the page they are the theme's.
     let variant = move |picture: bool| if picture { Variant::Picture } else { Variant::Ghost };
     let position = move |picture: bool| {
         (if picture { ui::slider_on_picture } else { ui::slider })(
@@ -794,7 +707,6 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
         )
         .flex_1()
     };
-    // The parts, laid out one way in a wide page and another in a narrow one.
     let skip = move |size: Size, picture: bool| {
         view()
             .flex_row()
@@ -857,7 +769,6 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             },
         )
     };
-    // A wide page: one row, the position between the times.
     let wide = move |picture: bool| {
         view()
             .h(px(48.0))
@@ -872,9 +783,6 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             .child(rate(picture))
             .child(screen(picture))
     };
-    // A narrow one, held in a hand: the position between the times on a
-    // row of its own, and under it playing in the middle, where a thumb
-    // is, with the speed at one side and the rest at the other.
     let narrow = move |picture: bool| {
         view()
             .child(
@@ -906,19 +814,15 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                     ),
             )
     };
-    // Laid out again only when the page changes width class or the
-    // picture takes the screen, not on every resize.
     let layout = computed(move || (crate::shell::page_narrow(), review.fullscreen.get()));
     view()
         .flex_shrink_0()
         .px(px(ui::PAGE_INSET))
         .border_color(|| theme().border)
-        // See-through over the picture.
         .bg(move || if review.fullscreen.get() { theme().card.opacity(0.0) } else { theme().card })
         .style_when(move || review.fullscreen.get(), tokens::glass)
         .transition_opacity()
         .duration(motion::BASE)
-        // In full screen: a bar floating over the picture, there while wanted.
         .style_with(move |s| {
             if review.fullscreen.get() {
                 s.absolute()
@@ -940,29 +844,20 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
         }))
 }
 
-/// The R key being held: what was looping before it, and when the key
-/// last said it was down.
 struct Hold {
     before: Option<String>,
     last: std::time::Instant,
     repeated: bool,
 }
 
-/// How long after a key goes down its first repeat may take to come (an
-/// iPad's comes after 0.4 s; a Mac's as the user set it, up to about 2 s),
-/// and the longest gap between the repeats after it.
 const FIRST_REPEAT: std::time::Duration =
     std::time::Duration::from_millis(if cfg!(target_os = "ios") { 650 } else { 1500 });
 const REPEAT_GAP: std::time::Duration = std::time::Duration::from_millis(450);
 
-/// Fills the window, and the screen, with the video and the sentence being
-/// said; or goes back to the reader.
 fn set_fullscreen(review: Review, on: bool) {
     if review.fullscreen.get_untracked() == on {
         return;
     }
-    // A phone's or a tablet's window is the screen already: the picture
-    // takes it, and there is no window to wait for.
     if crate::platform::is_phone() {
         batch(|| {
             review.fullscreen.set(on);
@@ -971,28 +866,20 @@ fn set_fullscreen(review: Review, on: bool) {
         return;
     }
     if on {
-        // The picture takes the window first, then the window the screen:
-        // one thing grows, instead of the page changing as it does.
         batch(|| {
             review.fullscreen.set(true);
             review.store.set_immersive(true);
         });
         current_window().set_mode(WindowMode::FullScreen);
     } else {
-        // The other way round going back: the window shrinks with the
-        // picture in it, and the page returns once it has (see `reader`,
-        // which hears the window leave full screen).
         current_window().set_mode(WindowMode::Normal);
     }
 }
 
-/// The sentence being said, over the bottom of the picture, a line at a time
-/// when it is long, with the word being said marked as the transcript marks it.
 fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let index = move || review.target();
     let current = move || index().and_then(|index| review.segment(index));
     let hidden = move || review.blind() && current().is_none_or(|segment| review.revealed.get() != Some(segment.id));
-    // A long sentence shows a line at a time: the one being said.
     let words = computed(move || {
         index().and_then(|index| review.words(index)).map(|words| {
             caption::tidy(&words)
@@ -1004,16 +891,12 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let lines = computed(move || words.with(|words| words.as_deref().map(caption::lines).unwrap_or_default()));
     let said = computed(move || {
         let position = review.position_ms.get();
-        words.with(|words| {
-            // The last word that has started: none is passed over in a pause.
-            words.as_ref()?.partition_point(|(_, start, _)| *start <= position).checked_sub(1)
-        })
+        words.with(|words| words.as_ref()?.partition_point(|(_, start, _)| *start <= position).checked_sub(1))
     });
     let line = computed(move || lines.with(|lines| lines.get(caption::line_of(lines, said.get())).cloned()));
     let translated = move || current().is_some_and(|segment| segment.has_translation());
     let shows_original = move || review.mode.get() != ContentMode::Translated || !translated();
     let shows_translation = move || review.mode.get() != ContentMode::Original && translated();
-    // Clear of the controls while they show.
     view()
         .absolute()
         .left(px(0.0))
@@ -1054,8 +937,6 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
                                             .children(
                                                 spans.into_iter().enumerate().skip(first).take(line.len()).flat_map(
                                                     |(at, (word, ..))| {
-                                                        // The mark is on the word alone, not on the
-                                                        // space or the quote before it.
                                                         let (lead, word) = listenook_core::local::lead_and_word(&word);
                                                         let word = text(SharedString::from(word.to_owned()));
                                                         [
@@ -1088,12 +969,10 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
         ))
 }
 
-/// A line of the full-screen subtitle: light on its dark plate.
 fn subtitle_text(line: Text) -> Text {
     line.text_2xl().font_weight(FontWeight::SEMIBOLD).text_center().text_color(|| theme().foreground.dark)
 }
 
-/// Translate the transcript with the AI provider.
 fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
     let store = review.store;
     let target = signal(SharedString::from(
@@ -1157,12 +1036,10 @@ fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
     )
 }
 
-/// The search field over the transcript, while searching.
 fn search_bar(review: Review) -> impl IntoElement {
     when(
         move || review.searching.get(),
         move || {
-            // Escape closes the search from inside its field too.
             on_key_with(
                 "escape",
                 KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() },
@@ -1187,14 +1064,10 @@ fn search_bar(review: Review) -> impl IntoElement {
     )
 }
 
-/// The handle on the panel's edge: dragged, it resizes the panel, and the
-/// size is kept for the next recording. Beside the transcript it changes
-/// the panel's width; under a video on top, the video's height.
 fn divider(review: Review, under: bool) -> impl IntoElement {
     use nsh_core::{TouchPhase, element::TouchEvent};
 
     use self::review::{SIDE_MAX, SIDE_MIN, VIDEO_MAX, VIDEO_MIN};
-    // Where the drag began: the pointer, and the size then.
     let from = signal(None::<(f32, f32)>);
     let size = if under { review.video_height } else { review.side_width };
     let handle = view().absolute();
@@ -1217,8 +1090,6 @@ fn divider(review: Review, under: bool) -> impl IntoElement {
                 TouchPhase::Start => from.set(Some((at, size.get_untracked()))),
                 TouchPhase::Move => {
                     if let Some((start, before)) = from.get_untracked() {
-                        // The side panel is on the right, so moving left
-                        // widens it; the video grows downwards.
                         size.set(if under {
                             (before + at - start).clamp(VIDEO_MIN, VIDEO_MAX)
                         } else {

@@ -1,5 +1,3 @@
-//! Small helpers shared by pages.
-
 use listenook_core::subtitles;
 use nsh_core::{
     file_dialog::{FileFilter, OpenDialog},
@@ -11,8 +9,6 @@ use crate::{
     ui::{Tone, toast},
 };
 
-/// A local path as the `file:` URL a media element loads.
-/// A Windows path (`C:\Users\…`) becomes `file:///C:/Users/…`.
 pub(crate) fn file_url(path: &str) -> String {
     let path = path.replace('\\', "/");
     let mut url = String::from("file://");
@@ -22,7 +18,6 @@ pub(crate) fn file_url(path: &str) -> String {
     for (at, byte) in path.bytes().enumerate() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => url.push(byte as char),
-            // A drive's colon stays as it is.
             b':' if at == 1 && has_drive(&path) => url.push(':'),
             _ => url.push_str(&format!("%{byte:02X}")),
         }
@@ -30,13 +25,11 @@ pub(crate) fn file_url(path: &str) -> String {
     url
 }
 
-/// Whether `path` starts with a Windows drive (`C:`).
 fn has_drive(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
-/// The local path of a `file:` URL, or the text itself when it is a path.
 pub(crate) fn path_of_url(url: &str) -> String {
     let Some(rest) = url.strip_prefix("file://") else {
         return url.to_owned();
@@ -60,14 +53,12 @@ pub(crate) fn path_of_url(url: &str) -> String {
         }
     }
     let path = String::from_utf8_lossy(&out).into_owned();
-    // `file:///C:/…` names `C:/…` on Windows.
     match path.strip_prefix('/') {
         Some(rest) if has_drive(rest) => rest.to_owned(),
         _ => path,
     }
 }
 
-/// Shows a file in the system's file manager.
 pub(crate) fn reveal(path: String) {
     let answer = reveal_path(path);
     store().run(async move {
@@ -77,7 +68,6 @@ pub(crate) fn reveal(path: String) {
     });
 }
 
-/// Every media and subtitle file under the given paths, folders opened.
 fn expanded(paths: Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
     let mut pending = paths;
@@ -97,8 +87,6 @@ fn expanded(paths: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Adds files and folders to the Library and shows them there; says so when
-/// none of them is new media.
 pub(crate) fn add_media(paths: Vec<String>) {
     let store = store();
     let added = store.add_files(&expanded(paths));
@@ -109,17 +97,11 @@ pub(crate) fn add_media(paths: Vec<String>) {
     }
 }
 
-/// Asks for media and subtitle files, then adds them to the Library.
 pub(crate) fn pick_media() {
-    // Not for a recording to relink, should one have been asked for and
-    // then given up on.
     RELINKING.set(None);
-    // An iPhone or iPad shows the Files app's browser; what is picked
-    // arrives later (`take_picked`).
     if crate::services::pick_documents() {
         return;
     }
-    // Android has no file dialog here: media comes in through the app's folder.
     if crate::platform::is_phone() {
         import_shared();
         return;
@@ -136,9 +118,6 @@ pub(crate) fn pick_media() {
     });
 }
 
-/// Asks for a subtitle file and makes it the recording's transcript. A
-/// recording that has one already is asked about first: its translation
-/// and AI Brief go with the old transcript.
 pub(crate) fn attach_subtitles(job_id: String) {
     let dialog = OpenDialog::files().filter(FileFilter::new("Subtitles", subtitles::SUBTITLE_EXTENSIONS.to_vec()));
     let answer = pick_paths(dialog);
@@ -152,8 +131,6 @@ pub(crate) fn attach_subtitles(job_id: String) {
     });
 }
 
-/// Makes a subtitle file a recording's transcript, asking first when it
-/// would replace one.
 pub(crate) fn import_subtitle_file(job_id: String, path: String) {
     let store = store();
     let Some(job) = store.job_now(&job_id) else {
@@ -195,14 +172,10 @@ pub(crate) fn import_subtitle_file(job_id: String, path: String) {
 }
 
 thread_local! {
-    /// The recording the next files picked on a phone are for, when they
-    /// were asked for to relink it.
     static RELINKING: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Asks for the media file a recording has lost, and points it there.
 pub(crate) fn relink(job_id: String) {
-    // On an iPhone or iPad the file browser answers later (`import_picked`).
     RELINKING.set(Some(job_id.clone()));
     if crate::services::pick_documents() {
         return;
@@ -220,7 +193,6 @@ pub(crate) fn relink(job_id: String) {
     });
 }
 
-/// Points a recording at `path`, its media from now on.
 fn relinked(job_id: &str, path: &str) {
     let store = store();
     store.update_job(job_id, |job| {
@@ -238,13 +210,10 @@ fn relinked(job_id: &str, path: &str) {
             job.error_message = None;
         }
     });
-    // What was made playable was made from the old file.
     crate::services::playable::forget(job_id);
     toast(Tone::Success, tr("Media relinked."));
 }
 
-/// Saves a copy of a recording's media where the user chooses: a
-/// downloaded episode lives in the app's own folder otherwise.
 pub(crate) fn save_copy(source: String) {
     let name = std::path::Path::new(&source).file_name().and_then(|name| name.to_str()).unwrap_or("media").to_owned();
     store().run(async move {
@@ -260,7 +229,6 @@ pub(crate) fn save_copy(source: String) {
     });
 }
 
-/// Asks for a video and opens it in the player.
 pub(crate) fn pick_video() {
     let answer =
         pick_paths(OpenDialog::files().filter(FileFilter::new("Videos", crate::pages::VIDEO_EXTENSIONS.to_vec())));
@@ -273,9 +241,6 @@ pub(crate) fn pick_video() {
     });
 }
 
-/// Takes in the media people put in the app's folder (the Files app on
-/// iOS): each file is moved into the app's own storage, so the folder is
-/// empty again and the recording does not depend on it.
 pub(crate) fn import_shared() {
     let Some(shared) = crate::platform::shared_folder() else {
         return;
@@ -288,14 +253,10 @@ pub(crate) fn import_shared() {
     }
 }
 
-/// Takes in the files picked in the system's file browser on an iPhone or
-/// iPad: the copies it made are moved into the app's own storage.
 pub(crate) fn import_picked(paths: Vec<String>) {
     let picked = paths.len();
     let found: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
     let copies = found.clone();
-    // Picked for a recording that lost its media: the first media file
-    // becomes that recording's, kept with the app's own.
     if let Some(job_id) = RELINKING.take() {
         let media = found.iter().find(|path| path.is_file() && path.to_str().is_some_and(subtitles::is_media));
         let kept = media.and_then(|path| {
@@ -318,23 +279,17 @@ pub(crate) fn import_picked(paths: Vec<String>) {
     if take_in(found) == 0 && picked > 0 {
         toast(Tone::Info, tr("No new audio or video files were found."));
     }
-    // What was not media was copied for nothing.
     for copy in copies {
         let _ = std::fs::remove_file(copy);
     }
 }
 
-/// Takes in the media another app handed over, from its share sheet or
-/// "Open in": on a phone or a tablet, where a recording is kept with the
-/// app's own. Returns how many were taken.
 pub(crate) fn import_opened(paths: Vec<String>) -> usize {
     take_in_with(paths.into_iter().map(std::path::PathBuf::from).collect(), |from, to| {
         let Some(source) = from.to_str() else {
             return false;
         };
         let copied = crate::services::copy_opened(source, to);
-        // What the system copied into the app's inbox for this is the
-        // app's to clear; a file opened where it lies stays its owner's.
         if copied && source.contains("/Inbox/") {
             let _ = std::fs::remove_file(from);
         }
@@ -342,16 +297,12 @@ pub(crate) fn import_opened(paths: Vec<String>) -> usize {
     })
 }
 
-/// Moves media files into the app's own storage and adds them to the
-/// Library under their own names. Returns how many were taken.
 fn take_in(found: Vec<std::path::PathBuf>) -> usize {
     take_in_with(found, |from, to| {
         std::fs::rename(from, to).is_ok() || (std::fs::copy(from, to).is_ok() && std::fs::remove_file(from).is_ok())
     })
 }
 
-/// Brings media files into the app's own storage as `bring` does it, and
-/// adds them to the Library under their own names.
 fn take_in_with(found: Vec<std::path::PathBuf>, bring: impl Fn(&std::path::Path, &std::path::Path) -> bool) -> usize {
     let store = store();
     let Some(root) = store.data_root() else {
@@ -359,8 +310,6 @@ fn take_in_with(found: Vec<std::path::PathBuf>, bring: impl Fn(&std::path::Path,
     };
     let media = root.join("media");
     let mut taken: Vec<(String, String)> = Vec::new();
-    // Not `is_file`: a file opened where it lies cannot be looked at
-    // before the system gives leave, which `bring` asks for.
     for path in found.into_iter().filter(|path| path.to_str().is_some_and(subtitles::is_media)) {
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("media").to_lowercase();
         let title = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Recording").to_owned();
@@ -375,7 +324,6 @@ fn take_in_with(found: Vec<std::path::PathBuf>, bring: impl Fn(&std::path::Path,
     }
     let paths: Vec<String> = taken.iter().map(|(path, _)| path.clone()).collect();
     store.add_files(&paths);
-    // The copy is named for the app; the recording keeps the file's name.
     for (path, title) in taken {
         if let Some(job) = store.jobs().iter().find(|job| job.source_path == path) {
             store.update_job(&job.id, |job| job.display_title = Some(title));
@@ -385,8 +333,6 @@ fn take_in_with(found: Vec<std::path::PathBuf>, bring: impl Fn(&std::path::Path,
     paths.len()
 }
 
-/// Where to save a file named `name`: asked of the user where there is a
-/// save dialog; on a phone, the app's folder, which the Files app shows.
 pub(crate) async fn save_target(name: String) -> Option<std::path::PathBuf> {
     if crate::platform::is_phone() {
         return crate::platform::export_path(&name);
@@ -394,7 +340,6 @@ pub(crate) async fn save_target(name: String) -> Option<std::path::PathBuf> {
     pick_save_path(nsh_core::file_dialog::SaveDialog::new().file_name(name)).await.ok().flatten()
 }
 
-/// What to say once a file is saved: on a phone, also where it went.
 pub(crate) fn saved_text() -> SharedString {
     if crate::platform::is_phone() {
         tr("Saved to the Listenook folder in Files, under Exports.")

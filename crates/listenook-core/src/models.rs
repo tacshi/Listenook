@@ -1,30 +1,20 @@
-//! The persisted models. JSON keys and enum names match the Flutter app's
-//! manifests (`jobs/<id>/manifest.json`, `settings.json`), so a library
-//! written by either app reads in the other. Unknown keys are kept in
-//! `extra` and written back.
-
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
-/// The manifest version both apps write.
 pub const MANIFEST_VERSION: u32 = 15;
-/// The longest media a job accepts: 300 minutes.
 pub const MAX_MEDIA_DURATION_MS: i64 = 300 * 60 * 1000;
 
-/// Now, as the ISO-8601 UTC string the manifests use.
 pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-/// A time given in milliseconds since 1970 as the manifests write times.
 pub fn iso_from_millis(milliseconds: i64) -> Option<String> {
     chrono::DateTime::from_timestamp_millis(milliseconds)
         .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Micros, true))
 }
 
-/// An enum stored by name; an unknown or missing name reads as the default.
 macro_rules! named_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident = $text:literal),+ $(,)? } default $default:ident) => {
         $(#[$meta])*
@@ -32,15 +22,12 @@ macro_rules! named_enum {
         pub enum $name { $($variant),+ }
 
         impl $name {
-            /// Every value, in declaration order.
             pub const ALL: &'static [$name] = &[$($name::$variant),+];
 
-            /// The stored name.
             pub fn as_str(self) -> &'static str {
                 match self { $($name::$variant => $text),+ }
             }
 
-            /// The value named `text`, or the default.
             pub fn parse(text: &str) -> Self {
                 match text { $($text => $name::$variant,)+ _ => $name::$default }
             }
@@ -66,7 +53,6 @@ macro_rules! named_enum {
 }
 
 named_enum!(
-    /// Where a job is in its life.
     JobStatus {
         Pending = "pending", Probing = "probing", Ready = "ready", Downloading = "downloading",
         Converting = "converting", Uploading = "uploading", QueuedRemote = "queuedRemote",
@@ -77,24 +63,20 @@ named_enum!(
 );
 
 impl JobStatus {
-    /// Work is running for the job.
     pub fn is_active(self) -> bool {
         use JobStatus::*;
         matches!(self, Probing | Downloading | Converting | Uploading | QueuedRemote | Processing | Fetching | Aligning)
     }
 
-    /// The job ended, well or not.
     pub fn is_terminal(self) -> bool {
         use JobStatus::*;
         matches!(self, Completed | Empty | Failed | Cancelled | MissingSource)
     }
 
-    /// The job waits for the user to start it.
     pub fn is_transcribable(self) -> bool {
         matches!(self, JobStatus::Ready | JobStatus::Paused)
     }
 
-    /// The job can be tried again.
     pub fn is_retryable(self) -> bool {
         use JobStatus::*;
         matches!(self, Failed | Cancelled | MissingSource | Empty)
@@ -104,7 +86,6 @@ impl JobStatus {
 named_enum!(CleanupState { None = "none", Pending = "pending", Complete = "complete" } default None);
 named_enum!(JobSourceOrigin { Manual = "manual", MonitoredFolder = "monitoredFolder", Podcast = "podcast" } default Manual);
 named_enum!(
-    /// Who transcribes.
     TranscriptionProvider {
         Soniox = "soniox", MossPro = "mossPro", MossLocal = "mossLocal", Qwen3Local = "qwen3Local",
     } default Soniox
@@ -146,7 +127,6 @@ named_enum!(ThemeMode { System = "system", Light = "light", Dark = "dark" } defa
 named_enum!(LocaleMode { System = "system", English = "english", SimplifiedChinese = "simplifiedChinese" } default System);
 named_enum!(ExportFormat { Txt = "txt", Markdown = "markdown", Srt = "srt", WebVtt = "webVtt" } default Txt);
 named_enum!(
-    /// Which text of a segment is shown or exported.
     ContentMode { Original = "original", Translated = "translated", Bilingual = "bilingual" } default Original
 );
 named_enum!(
@@ -159,7 +139,6 @@ named_enum!(
 );
 
 impl LlmProvider {
-    /// The preset's base URL (empty for a custom endpoint).
     pub fn base_url(self) -> &'static str {
         match self {
             LlmProvider::Custom => "",
@@ -178,7 +157,6 @@ impl LlmProvider {
         }
     }
 
-    /// The name shown in settings.
     pub fn label(self) -> &'static str {
         match self {
             LlmProvider::Custom => "Custom",
@@ -206,8 +184,6 @@ fn truthy() -> bool {
     true
 }
 
-/// A value of any JSON type read as text (speaker ids are numbers in some
-/// providers' payloads).
 fn loose_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
     Ok(match Value::deserialize(deserializer)? {
         Value::Null => None,
@@ -216,9 +192,6 @@ fn loose_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Str
     })
 }
 
-// --- Transcript -------------------------------------------------------------
-
-/// One recognized word or piece, with its time.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Token {
@@ -239,7 +212,6 @@ pub struct Token {
     pub source_language: Option<String>,
 }
 
-/// One sentence of a transcript.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Segment {
@@ -258,12 +230,10 @@ pub struct Segment {
 }
 
 impl Segment {
-    /// Whether it has a translation worth showing.
     pub fn has_translation(&self) -> bool {
         self.translated_text.as_deref().is_some_and(|t| !t.trim().is_empty())
     }
 
-    /// The text for `mode`: a missing translation falls back to the original.
     pub fn content(&self, mode: ContentMode) -> String {
         let translated = self.translated_text.as_deref().map(str::trim).filter(|t| !t.is_empty());
         match (mode, translated) {
@@ -274,7 +244,6 @@ impl Segment {
     }
 }
 
-/// A speaker's display name.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Speaker {
@@ -287,7 +256,6 @@ fn loose_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Err
     Ok(loose_string(deserializer)?.unwrap_or_default())
 }
 
-/// A transcript: its sentences, the tokens they came from and its speakers.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Document {
@@ -298,7 +266,6 @@ pub struct Document {
 }
 
 impl Document {
-    /// A speaker's name: the profile's, else `Speaker <id>`; empty with no id.
     pub fn speaker_name(&self, id: Option<&str>) -> String {
         let Some(id) = id.filter(|id| !id.is_empty()) else {
             return String::new();
@@ -311,23 +278,16 @@ impl Document {
             .unwrap_or_else(|| format!("Speaker {id}"))
     }
 
-    /// Marks it changed now.
     pub fn touch(&mut self) {
         self.updated_at = now_iso();
     }
 
-    /// Where playing sentence `index` begins: a little before its marked
-    /// start, since transcribers often mark a sentence after its first
-    /// sound and a short first word ("A", "I") would be lost, but not
-    /// before the sentence before it has ended.
     pub fn play_start(&self, index: usize) -> Option<i64> {
         let segment = self.segments.get(index)?;
         let before = index.checked_sub(1).map_or(0, |before| self.segments[before].end_ms);
         Some((segment.start_ms - LEAD_IN_MS).max(before).max(0).min(segment.start_ms))
     }
 
-    /// The sentence playing at `position_ms`: the last one whose
-    /// [`Self::play_start`] it has reached.
     pub fn segment_at(&self, position_ms: i64) -> Option<usize> {
         let after = self.segments.partition_point(|segment| segment.start_ms <= position_ms);
         if self.play_start(after).is_some_and(|start| start <= position_ms) {
@@ -337,10 +297,7 @@ impl Document {
     }
 }
 
-/// How far before a sentence's marked start [`Document::play_start`] goes.
 pub const LEAD_IN_MS: i64 = 250;
-
-// --- Job --------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -474,8 +431,6 @@ pub struct PodcastProvenance {
     pub extra: Map<String, Value>,
 }
 
-// --- AI Brief ---------------------------------------------------------------
-
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiChapter {
@@ -513,7 +468,6 @@ pub struct AiLanguageNote {
     pub edited: bool,
 }
 
-/// A generated brief of a transcript, every item citing its segments.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiBrief {
@@ -534,7 +488,6 @@ pub struct AiBrief {
 }
 
 impl AiBrief {
-    /// Nothing in it to show.
     pub fn is_empty(&self) -> bool {
         self.overview.trim().is_empty()
             && self.chapters.is_empty()
@@ -560,7 +513,6 @@ pub struct AiGenerationState {
     pub extra: Map<String, Value>,
 }
 
-/// One recording and everything made from it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Job {
@@ -595,10 +547,8 @@ pub struct Job {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_title: Option<String>,
     pub source_origin: JobSourceOrigin,
-    /// The library group it is filed in, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
-    /// The library tags it carries, sorted.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tag_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -647,18 +597,14 @@ impl Default for Job {
 }
 
 impl Job {
-    /// A job id is a directory name: letters, digits, `_` and `-` only.
     pub fn is_valid_id(id: &str) -> bool {
         !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     }
 
-    /// The source's file name.
     pub fn file_name(&self) -> String {
         self.source_path.rsplit(['/', '\\']).next().unwrap_or(&self.source_path).to_owned()
     }
 
-    /// What the library calls it: its title, else the file's name without
-    /// its extension.
     pub fn title(&self) -> String {
         if let Some(title) = self.display_title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
             return title.to_owned();
@@ -675,37 +621,29 @@ impl Job {
         }
     }
 
-    /// Its length in milliseconds, 0 when unknown.
     pub fn duration_ms(&self) -> i64 {
         self.metadata.as_ref().map_or(0, |m| m.duration_ms)
     }
 
-    /// Whether its source has a picture.
     pub fn has_video(&self) -> bool {
         self.metadata.as_ref().is_some_and(|m| m.has_video)
     }
 
-    /// Work of any kind is running for it.
     pub fn is_busy(&self) -> bool {
         self.status.is_active()
             || self.translation_state.status == TranslationStatus::Translating
             || self.ai_generation_state.status == AiGenerationStatus::Generating
     }
 
-    /// Whether it has a transcript to open.
     pub fn has_transcript(&self) -> bool {
         self.document.as_ref().is_some_and(|d| !d.segments.is_empty())
     }
 
-    /// Marks it changed now.
     pub fn touch(&mut self) {
         self.updated_at = now_iso();
     }
 }
 
-// --- Library catalog ---------------------------------------------------------
-
-/// A group or a tag of the library: an id jobs refer to, and its name.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Named {
@@ -713,7 +651,6 @@ pub struct Named {
     pub name: String,
 }
 
-/// `library_catalog.json`: the groups and tags jobs are filed under.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LibraryCatalog {
@@ -727,8 +664,6 @@ impl Default for LibraryCatalog {
         Self { version: 1, groups: Vec::new(), tags: Vec::new() }
     }
 }
-
-// --- Settings ---------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -761,19 +696,16 @@ pub struct LlmProviderSettings {
 }
 
 impl LlmProviderSettings {
-    /// The base URL without trailing slashes.
     pub fn endpoint(&self) -> String {
         self.base_url.trim().trim_end_matches('/').to_owned()
     }
 
-    /// Whether the endpoint is on this machine, where no key is needed.
     pub fn is_loopback(&self) -> bool {
         let url = self.endpoint();
         let host = url.split("://").nth(1).unwrap_or("").split(['/', ':']).next().unwrap_or("");
         matches!(host, "localhost" | "127.0.0.1") || url.contains("://[::1]")
     }
 
-    /// Why it cannot be used, as the app's error code, or none.
     pub fn validate(&self) -> Option<&'static str> {
         let url = self.endpoint();
         let Some((scheme, rest)) = url.split_once("://") else {
@@ -805,7 +737,6 @@ pub struct TranslationPreferences {
     pub auto_translate: bool,
 }
 
-/// The app's settings (`settings.json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -854,7 +785,6 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Puts out-of-range values back to their defaults, as the readers do.
     pub fn sanitized(mut self) -> Self {
         if self.mimic_rep_goal == 0 {
             self.mimic_rep_goal = 3;
@@ -867,7 +797,6 @@ impl Settings {
     }
 }
 
-/// The target languages text translation offers: code and English name.
 pub const TRANSLATION_LANGUAGES: &[(&str, &str)] = &[
     ("en", "English"),
     ("zh-Hans", "Simplified Chinese"),
@@ -899,7 +828,6 @@ pub const TRANSLATION_LANGUAGES: &[(&str, &str)] = &[
     ("ms", "Malay"),
 ];
 
-/// A translation language's English name.
 pub fn language_name(code: &str) -> Option<&'static str> {
     TRANSLATION_LANGUAGES.iter().find(|(c, _)| *c == code).map(|(_, name)| *name)
 }
@@ -932,15 +860,11 @@ mod tests {
             segments: vec![segment(210, 5070), segment(5200, 9000), segment(9900, 12000), segment(11900, 13000)],
             ..Default::default()
         };
-        // The first: from the recording's start; "A" sounds before 210 ms.
         assert_eq!(document.play_start(0), Some(0));
-        // Not back into the sentence before.
         assert_eq!(document.play_start(1), Some(5070));
         assert_eq!(document.play_start(2), Some(9650));
-        // Sentences that overlap: from the marked start.
         assert_eq!(document.play_start(3), Some(11900));
         assert_eq!(document.play_start(4), None);
-        // The lead-in belongs to the sentence it leads into.
         assert_eq!(document.segment_at(0), Some(0));
         assert_eq!(document.segment_at(5069), Some(0));
         assert_eq!(document.segment_at(5070), Some(1));

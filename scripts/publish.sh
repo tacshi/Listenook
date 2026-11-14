@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
-# Builds and publishes a Listenook release from macOS: the macOS apps (both
-# processors) and the Android .apk are built here, the Windows artifacts
-# are brought from their machine, and everything goes to a GitHub Release
-# of this repository with the manifest (`latest.json`) the in-app updater
-# reads.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 cd "$ROOT"
 
-# Where installed apps look: nsh.json's "updater".
 RELEASE_REPO="${LISTENOOK_RELEASE_REPO:-$(python3 -c \
   'import json,sys; print(json.load(open(sys.argv[1]))["updater"]["github"])' "$ROOT/nsh.json")}"
 STAGE_DIR="$OUT/release"
@@ -27,10 +21,6 @@ if [[ "$HOST_ARCH" == "x86_64" ]]; then HOST_ARCH="x64"; fi
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
-# The changes since the last release, one per line: commit subjects, and for
-# a squash merge the subjects of the commits it holds. GitHub writes those
-# as "* <subject>" paragraphs of the body; a "* " line with more lines under
-# it is a list inside one commit's own message, not a subject.
 write_release_notes() {
   local notes_file="$1" range="$2" sha subjects
   while IFS= read -r sha; do
@@ -90,29 +80,19 @@ step "preflight"
 TAG="v$VERSION"
 BUILD_NUMBER="$(git rev-list --count HEAD)"
 HEAD_COMMIT="$(git rev-parse HEAD)"
-# The updater compares the version in nsh.json, and the manifest is written
-# from it: it has to be the one being released. When it is not, it is set
-# below, in a commit of its own, once the notes are approved.
 NEEDS_BUMP=false
 if [[ "$(nsh_json version)" != "$VERSION" ]] ||
   ! grep -q "^version = \"$VERSION\"$" "$ROOT/Cargo.toml"; then
   NEEDS_BUMP=true
   ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null ||
     die "$TAG already exists, but nsh.json has version $(nsh_json version); release versions are immutable"
-  # The commit that sets the version is one more.
   [[ "$NO_UPLOAD" == true ]] || BUILD_NUMBER=$((BUILD_NUMBER + 1))
 fi
 info "version: $VERSION+$BUILD_NUMBER"
 info "releases: $RELEASE_REPO"
 
-# An artifact built on another machine has to come from this release's
-# source: the commit that sets the version, or the one just before it,
-# which differs in nothing but the version files. The app takes its version
-# and build number from the build scripts, not from those files.
 read_json() { sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$2" | head -1 | tr -d ' '; }
 SOURCE_COMMITS=("$HEAD_COMMIT")
-# The number the release has once the version is committed, which a dry run
-# does not do.
 RELEASE_BUILD="$(git rev-list --count HEAD)"
 [[ "$NEEDS_BUMP" == false ]] || RELEASE_BUILD=$((RELEASE_BUILD + 1))
 if [[ "$NEEDS_BUMP" == false ]] &&
@@ -136,7 +116,6 @@ Pull on that machine, build it again with -Version $VERSION, and copy it into bu
   [[ "$(read_json dirty "$sidecar")" != "true" && "$(read_json dirty "$sidecar")" != "True" ]] ||
     die "$label artifact was built from a dirty checkout"
 }
-# Checked here, before the notes are asked for and the version is committed.
 WIN_EXE="$APP_NAME-$VERSION-windows-x64-release-setup.exe"
 WIN_UPDATE="$APP_NAME-$VERSION-windows-x86_64.zip"
 if [[ "$SKIP_WINDOWS" == false ]]; then
@@ -170,9 +149,7 @@ if [[ "$NO_UPLOAD" == false ]]; then
   [[ "$(gh repo view "$RELEASE_REPO" --json visibility --jq .visibility)" == PUBLIC ]] ||
     die "$RELEASE_REPO must be public for anonymous app updates"
 fi
-# A signed manifest, when the app has a key to check it with.
 UPDATE_KEY="${LISTENOOK_UPDATE_KEY:-}"
-# Where the key is kept when nothing says otherwise: outside the repository.
 DEFAULT_UPDATE_KEY="$HOME/.config/listenook/update.secret"
 [[ -n "$UPDATE_KEY" || ! -f "$DEFAULT_UPDATE_KEY" ]] || UPDATE_KEY="$DEFAULT_UPDATE_KEY"
 if python3 -c 'import json,sys; sys.exit(0 if "publicKey" in json.load(open(sys.argv[1]))["updater"] else 1)' \
@@ -212,8 +189,6 @@ if [[ "$NO_UPLOAD" == false ]]; then
   done
 fi
 
-# The version in nsh.json, Cargo.toml and Cargo.lock, committed and pushed so
-# that the release is cut from a commit origin has. A dry run only edits.
 if [[ "$NEEDS_BUMP" == true ]]; then
   step "setting the version to $VERSION"
   python3 - "$ROOT" "$VERSION" <<'PY'
@@ -248,8 +223,6 @@ PY
   fi
 fi
 
-# What each platform contributes: installers people download, and the
-# archives the updater downloads (named as `nsh update-manifest` expects).
 MAC_DMG="$APP_NAME-$VERSION-macos-$HOST_ARCH-release.dmg"
 MAC_UPDATE="$APP_NAME-$VERSION-macos-$([[ "$HOST_ARCH" == arm64 ]] && echo aarch64 || echo x86_64).tar.gz"
 INSTALLERS=("$MAC_DMG")
@@ -293,7 +266,6 @@ fi
 step "writing latest.json"
 MANIFEST_ARGS=(--entry "$ROOT" --notes "$NOTES_FILE" --out "$STAGE_DIR")
 [[ -z "$UPDATE_KEY" ]] || MANIFEST_ARGS+=(--key "$UPDATE_KEY")
-# Phones cannot replace the app themselves: they are sent to these.
 [[ -z "${LISTENOOK_IOS_LINK:-}" ]] || MANIFEST_ARGS+=(--link "ios=$LISTENOOK_IOS_LINK")
 if [[ -n "${LISTENOOK_ANDROID_LINK:-}" ]]; then
   MANIFEST_ARGS+=(--link "android=$LISTENOOK_ANDROID_LINK")
@@ -321,8 +293,6 @@ if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 fi
 git push origin "$TAG"
 
-# A draft is not offered to installed apps: the release becomes visible
-# only once every file, the manifest last, is in place.
 step "uploading to $RELEASE_REPO"
 if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
   gh release edit "$TAG" --repo "$RELEASE_REPO" --title "$APP_NAME $VERSION" --notes-file "$NOTES_FILE"

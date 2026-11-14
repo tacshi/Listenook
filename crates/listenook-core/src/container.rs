@@ -1,8 +1,3 @@
-//! Media containers the system players do not open, made into ones they
-//! do without decoding anything: a Matroska file's H.264 video and AAC
-//! sound are put into an MP4 file, and an AVI file's sound track is taken
-//! out as it is.
-
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use matroska_demuxer::{Frame, MatroskaFile, TrackEntry, TrackType};
@@ -15,8 +10,6 @@ const VIDEO_TIMESCALE: u64 = 90_000;
 const AVC: &str = "V_MPEG4/ISO/AVC";
 const AAC: &str = "A_AAC";
 
-/// The first sequence and picture parameter sets of an `avcC` record,
-/// when its samples carry four-byte lengths as MP4 files written here do.
 fn parameter_sets(record: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     if record.len() < 7 || record[0] != 1 || record[4] & 3 != 3 || record[5] & 0x1f == 0 {
         return None;
@@ -26,7 +19,6 @@ fn parameter_sets(record: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
         Some((record.get(at + 2..at + 2 + length)?.to_vec(), at + 2 + length))
     };
     let (sps, mut at) = set(6)?;
-    // Further sequence sets are passed over.
     for _ in 1..record[5] & 0x1f {
         at = set(at)?.1;
     }
@@ -36,7 +28,6 @@ fn parameter_sets(record: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((sps, set(at + 1)?.0))
 }
 
-/// What an AAC track's `AudioSpecificConfig` says, for plain AAC-LC.
 fn aac_config(private: &[u8]) -> Option<AacConfig> {
     let (first, second) = (*private.first()?, *private.get(1)?);
     let profile = AudioObjectType::try_from(first >> 3).ok()?;
@@ -69,8 +60,6 @@ fn plan(tracks: &[TrackEntry]) -> Result<Plan<'_>, &'static str> {
     Ok(Plan { video, audio })
 }
 
-/// Whether a Matroska file can be put into an MP4 file: H.264 video, and
-/// AAC sound or none.
 pub fn mkv_fits_mp4<R: Read + Seek>(input: R) -> bool {
     MatroskaFile::open(input).is_ok_and(|file| {
         plan(file.tracks()).is_ok_and(|plan| {
@@ -80,7 +69,6 @@ pub fn mkv_fits_mp4<R: Read + Seek>(input: R) -> bool {
     })
 }
 
-/// Whether length-prefixed H.264 data holds a picture decoding can start at.
 fn is_sync(data: &[u8]) -> bool {
     let mut at = 0;
     while at + 5 <= data.len() {
@@ -93,9 +81,6 @@ fn is_sync(data: &[u8]) -> bool {
     false
 }
 
-/// Puts a Matroska file's H.264 video and AAC sound into an MP4 file, as
-/// they are. `open` gives the input afresh: it is read twice, so that a
-/// long film is never held in memory.
 pub fn mkv_to_mp4<R: Read + Seek, W: Write + Seek>(
     mut open: impl FnMut() -> std::io::Result<R>,
     output: W,
@@ -118,9 +103,6 @@ pub fn mkv_to_mp4<R: Read + Seek, W: Write + Seek>(
         None => None,
     };
 
-    // First reading: when every picture is shown and every sound frame
-    // starts. Pictures are stored in the order they are decoded, which is
-    // not the order they are shown in, and an MP4 file wants both.
     let ticks = |timestamp: u64, per_second: u64| {
         (u128::from(timestamp) * u128::from(scale) * u128::from(per_second) / 1_000_000_000) as u64
     };
@@ -136,8 +118,6 @@ pub fn mkv_to_mp4<R: Read + Seek, W: Write + Seek>(
     if shown.is_empty() {
         return Err("no pictures".into());
     }
-    // Decoding times are the showing times in order; a picture is shown
-    // at its own time, later by as much as the furthest one waits.
     let mut decoded = shown.clone();
     decoded.sort_unstable();
     let wait = decoded.iter().zip(&shown).map(|(decode, show)| decode.saturating_sub(*show)).max().unwrap_or(0);
@@ -174,7 +154,6 @@ pub fn mkv_to_mp4<R: Read + Seek, W: Write + Seek>(
             .map_err(|e| fail(&e))?;
     }
 
-    // Second reading: the data, in the file's order.
     let mut file = MatroskaFile::open(open().map_err(|e| fail(&e))?).map_err(|e| fail(&e))?;
     let (mut picture, mut sound) = (0, 0);
     while file.next_frame(&mut frame).map_err(|e| fail(&e))? {
@@ -204,7 +183,6 @@ pub fn mkv_to_mp4<R: Read + Seek, W: Write + Seek>(
     writer.write_end().map_err(|e| fail(&e))
 }
 
-/// What an AVI file's sound track was written out as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AviSound {
     Mp3,
@@ -223,7 +201,6 @@ impl AviSound {
 struct Avi<'a, R, W> {
     input: &'a mut R,
     output: &'a mut W,
-    /// The sound track: its number in the file and its `WAVEFORMATEX`.
     sound: Option<(usize, Vec<u8>)>,
     streams: usize,
     stream_is_sound: bool,
@@ -231,9 +208,7 @@ struct Avi<'a, R, W> {
 }
 
 impl<R: Read + Seek, W: Write + Seek> Avi<'_, R, W> {
-    /// Reads the chunks from here to `end`, into lists that matter.
     fn walk(&mut self, end: u64, depth: u8) -> std::io::Result<()> {
-        // Real files nest four lists deep; a file made to nest without end is not followed.
         if depth > 8 {
             return Ok(());
         }
@@ -265,7 +240,6 @@ impl<R: Read + Seek, W: Write + Seek> Avi<'_, R, W> {
                     let mut format = vec![0_u8; size.min(64) as usize];
                     self.input.read_exact(&mut format)?;
                     if format.len() >= 16 {
-                        // A place for the WAV header, should it be PCM.
                         self.output.write_all(&[0_u8; 44])?;
                         self.sound = Some((self.streams, format));
                     }
@@ -283,8 +257,6 @@ impl<R: Read + Seek, W: Write + Seek> Avi<'_, R, W> {
     }
 }
 
-/// Writes an AVI file's sound track to `output` as it is: MP3 as an MP3
-/// file, PCM as a WAV file. Other sound (AC-3, AAC) is refused.
 pub fn avi_sound<R: Read + Seek, W: Write + Seek>(mut input: R, mut output: W) -> Result<AviSound, String> {
     let fail = |error: std::io::Error| error.to_string();
     let end = input.seek(SeekFrom::End(0)).map_err(fail)?;
@@ -299,8 +271,6 @@ pub fn avi_sound<R: Read + Seek, W: Write + Seek>(mut input: R, mut output: W) -
         return Err("an empty sound track".into());
     }
     match u16::from_le_bytes([format[0], format[1]]) {
-        // MP3 frames need no header: the placeholder is filled with a tag
-        // players skip.
         0x55 => {
             let mut tag = [0_u8; 44];
             tag[..3].copy_from_slice(b"ID3");
@@ -397,7 +367,6 @@ mod tests {
         let record = [1, 100, 0, 31, 0xff, 0xe1, 0, 2, 0x67, 0x64, 1, 0, 3, 0x68, 0xee, 0x3c];
         assert_eq!(parameter_sets(&record), Some((vec![0x67, 0x64], vec![0x68, 0xee, 0x3c])));
         assert!(parameter_sets(&[1, 100, 0, 31, 0xfd, 0xe1, 0, 0]).is_none(), "two-byte lengths are refused");
-        // AAC-LC, 44.1 kHz, stereo.
         let config = aac_config(&[0x12, 0x10]).unwrap();
         assert_eq!((config.freq_index, config.chan_conf), (SampleFreqIndex::Freq44100, ChannelConfig::Stereo));
         assert!(aac_config(&[0x2b, 0x92]).is_none(), "HE-AAC is refused");
@@ -405,18 +374,12 @@ mod tests {
     }
 }
 
-// --- Subtitle tracks ----------------------------------------------------------
-
-/// A text subtitle track built into a video file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubtitleTrack {
-    /// Its name in the file, else its language, else its number.
     pub label: String,
     pub cues: Vec<crate::subtitles::Cue>,
 }
 
-/// The text of an ASS event as Matroska stores it: the ninth field on,
-/// without its styling.
 fn ass_text(line: &str) -> String {
     let text = line.splitn(9, ',').nth(8).unwrap_or(line);
     let mut out = String::new();
@@ -447,15 +410,12 @@ fn label_of(name: Option<&str>, language: Option<&str>, number: usize) -> String
         .map_or_else(|| format!("Track {number}"), str::to_owned)
 }
 
-/// The text subtitle tracks of a Matroska file. Picture subtitles (PGS,
-/// VobSub) are not text and are left out.
 pub fn mkv_subtitles<R: Read + Seek>(input: R) -> Vec<SubtitleTrack> {
     let Ok(mut file) = MatroskaFile::open(input) else {
         return Vec::new();
     };
     let scale = file.info().timestamp_scale().get();
     let milliseconds = |ticks: u64| (u128::from(ticks) * u128::from(scale) / 1_000_000) as i64;
-    // Track number, whether it is ASS, and the track being filled.
     let mut tracks: Vec<(u64, bool, SubtitleTrack)> = file
         .tracks()
         .iter()
@@ -479,7 +439,6 @@ pub fn mkv_subtitles<R: Read + Seek>(input: R) -> Vec<SubtitleTrack> {
         let raw = String::from_utf8_lossy(&frame.data);
         let text = crate::subtitles::clean_caption(&if *ass { ass_text(&raw) } else { raw.into_owned() }, true);
         let start_ms = milliseconds(frame.timestamp);
-        // A cue without a length lasts until the next, at most a few seconds.
         let end_ms = start_ms + frame.duration.map_or(4000, milliseconds).max(1);
         if !text.trim().is_empty() {
             track.cues.push(crate::subtitles::Cue { start_ms, end_ms, text });
@@ -488,7 +447,6 @@ pub fn mkv_subtitles<R: Read + Seek>(input: R) -> Vec<SubtitleTrack> {
     tracks.into_iter().map(|(.., track)| track).filter(|track| !track.cues.is_empty()).collect()
 }
 
-/// The text subtitle tracks (`mov_text`) of an MP4 file.
 pub fn mp4_subtitles<R: Read + Seek>(input: R, size: u64) -> Vec<SubtitleTrack> {
     let Ok(mut file) = mp4::Mp4Reader::read_header(input, size) else {
         return Vec::new();
@@ -507,7 +465,6 @@ pub fn mp4_subtitles<R: Read + Seek>(input: R, size: u64) -> Vec<SubtitleTrack> 
             let Ok(Some(sample)) = file.read_sample(id, sample) else {
                 continue;
             };
-            // A text sample: its length in two bytes, then the text.
             let bytes = &sample.bytes;
             let length = bytes.get(..2).map_or(0, |size| usize::from(u16::from_be_bytes([size[0], size[1]])));
             let text = bytes.get(2..2 + length).map(String::from_utf8_lossy).unwrap_or_default();

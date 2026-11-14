@@ -41,8 +41,6 @@ func alignmentBoundaryRetryBounds(
     return (startMs, endMs)
 }
 
-/// Returns owners whose aligned timestamps would be rejected by the Dart
-/// boundary validator after clamping them to their authoritative MOSS segment.
 func alignmentOwnersNeedingBoundaryRetry(
     tokens: [[String: Any]],
     segments: [[String: Any]]

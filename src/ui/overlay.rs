@@ -1,5 +1,3 @@
-//! Surfaces over the page: menus, dialogs, confirmations and toasts.
-
 use std::time::Duration;
 
 use nsh_base::{
@@ -14,35 +12,21 @@ use super::{
     tokens::{self, motion},
 };
 
-/// Whether menus open beside their button on this device: on a tablet,
-/// in a window wide enough for it. NSH's own menu is a sheet at the bottom
-/// of the screen on every touch device, which on a tablet is far from
-/// the button that asked for it; a phone, and a narrow window, keep that.
 fn anchored() -> bool {
-    // LISTENOOK_TABLET_MENUS: a test's, which runs on a computer.
     (crate::platform::is_phone() || std::env::var_os("LISTENOOK_TABLET_MENUS").is_some())
         && !untracked(crate::platform::compact)
 }
 
 thread_local! {
-    /// Counts the commands chosen in menus that open beside their button:
-    /// each such menu closes when it changes. No one's: owned by the page
-    /// of the first menu made, it would go with that page, and the menus
-    /// of every later page would stay open.
     static CHOSEN: Signal<u64> = Owner::detached().run(|| signal(0));
 }
 
-/// A menu opening from `trigger`. Its children are [`menu_action`]s and
-/// [`menu_divider`]s.
 pub enum Menu {
-    /// NSH's menu: a popup on a computer, a sheet on a phone.
     Native(MenuElement),
-    /// A panel beside the trigger, on a tablet.
     Anchored(nsh_base::PopoverElement),
 }
 
 impl Menu {
-    /// Adds an item (or several, or a region of them).
     pub fn child(self, item: impl IntoElements) -> Self {
         match self {
             Menu::Native(menu) => Menu::Native(menu.children(item.into_elements())),
@@ -50,7 +34,6 @@ impl Menu {
         }
     }
 
-    /// Adds items.
     pub fn children<E: IntoElement>(self, items: impl IntoIterator<Item = E>) -> Self {
         let items: Vec<AnyElement> = items.into_iter().map(IntoElement::into_element).collect();
         self.child(items)
@@ -66,17 +49,12 @@ impl IntoElement for Menu {
     }
 }
 
-/// A menu opening from `trigger`. Its children are [`menu_action`]s and
-/// [`menu_divider`]s.
 pub fn menu(trigger: impl IntoElement) -> Menu {
     menu_with(signal(false), trigger)
 }
 
-/// A [`menu`] whose state is `open`, so its trigger can stay pressed while
-/// it shows (see [`super::menu_trigger`]).
 pub fn menu_with(open: Signal<bool>, trigger: impl IntoElement) -> Menu {
     if anchored() {
-        // A command chosen in it closes it.
         let chosen = CHOSEN.with(|chosen| *chosen);
         let first = std::cell::Cell::new(true);
         effect(move || {
@@ -119,10 +97,6 @@ pub fn menu_with(open: Signal<bool>, trigger: impl IntoElement) -> Menu {
     )
 }
 
-/// The menu of what is under the pointer: a secondary click on `target`
-/// opens it there (Shift+F10 or the Menu key from the keyboard). Its
-/// children are [`menu_action`]s and [`menu_divider`]s; it is for a
-/// computer, where they are NSH's menu items.
 pub fn context_menu(target: impl IntoElement) -> nsh_base::ContextMenuElement {
     nsh_base::context_menu()
         .offset(px(4.0))
@@ -133,7 +107,6 @@ pub fn context_menu(target: impl IntoElement) -> nsh_base::ContextMenuElement {
         .trigger(target)
 }
 
-/// A panel of controls opening from `trigger`, without leaving the page.
 pub fn popover(trigger: impl IntoElement, content: impl Fn() -> AnyElement + 'static) -> nsh_base::PopoverElement {
     nsh_base::popover()
         .offset(px(6.0))
@@ -145,10 +118,6 @@ pub fn popover(trigger: impl IntoElement, content: impl Fn() -> AnyElement + 'st
         .child(dynamic(content))
 }
 
-/// A row of a menu: an icon or a check mark, and a label. In NSH's menu
-/// it is a menu item; beside the trigger on a tablet, a button that
-/// closes the panel once it has done its work (`stays`: unless it is a
-/// setting, toggled with the menu left open).
 fn menu_row(
     mark: AnyElement,
     label: impl IntoReactive<SharedString>,
@@ -191,8 +160,6 @@ fn menu_row(
         Some(checked) => row.checked(move || Some(checked())),
         None => row,
     };
-    // A pointer's size on a computer, a finger's on a phone (44 points,
-    // the smallest a finger hits surely).
     let row = if touch { row.gap_3().px_3().min_h(px(44.0)) } else { row.gap_2().px_2().py_1p5() };
     row.flex_row()
         .items_center()
@@ -211,17 +178,14 @@ fn mark_size() -> f32 {
     if crate::platform::is_phone() { 18.0 } else { 14.0 }
 }
 
-/// A command of a menu.
 pub fn menu_action(glyph: Icon, label: impl IntoReactive<SharedString>, on_select: impl Fn() + 'static) -> AnyElement {
     menu_row(icon(glyph, mark_size()).into_element(), label, false, false, None, on_select)
 }
 
-/// A destructive command of a menu, set apart by its color.
 pub fn menu_danger(glyph: Icon, label: impl IntoReactive<SharedString>, on_select: impl Fn() + 'static) -> AnyElement {
     menu_row(icon(glyph, mark_size()).into_element(), label, true, false, None, on_select)
 }
 
-/// A setting toggled from a menu; the menu stays open.
 pub fn menu_toggle(
     label: impl IntoReactive<SharedString>,
     checked: impl Fn() -> bool + Copy + 'static,
@@ -232,8 +196,6 @@ pub fn menu_toggle(
     menu_row(mark, label, false, true, Some(Box::new(checked)), on_select)
 }
 
-/// One of several choices in a menu, the chosen one checked; choosing
-/// closes the menu.
 pub fn menu_choice(
     label: impl IntoReactive<SharedString>,
     checked: impl Fn() -> bool + Copy + 'static,
@@ -244,7 +206,6 @@ pub fn menu_choice(
     menu_row(mark, label, false, false, Some(Box::new(checked)), on_select)
 }
 
-/// The line between groups of a menu.
 pub fn menu_divider() -> AnyElement {
     if anchored() {
         return view().h(px(1.0)).my_1().bg(|| theme().border).into_element();
@@ -252,8 +213,6 @@ pub fn menu_divider() -> AnyElement {
     menu_separator().h(px(1.0)).my_1().bg(|| theme().border).into_element()
 }
 
-/// A dialog centered in the window: a title, the content and a row of
-/// actions. Escape and a press on the backdrop close it.
 pub fn modal(
     open: Signal<bool>,
     title: impl Fn() -> SharedString + Copy + 'static,
@@ -264,9 +223,6 @@ pub fn modal(
     modal_sized(open, title, width, None, content, actions)
 }
 
-/// A [`modal`] that keeps one height whatever it shows (as far as the
-/// window allows), for a dialog whose content changes, such as tabs:
-/// its parts stay where they are.
 pub fn modal_sized(
     open: Signal<bool>,
     title: impl Fn() -> SharedString + Copy + 'static,
@@ -275,8 +231,6 @@ pub fn modal_sized(
     content: impl Fn() -> AnyElement + 'static,
     actions: impl Fn() -> AnyElement + 'static,
 ) -> AnyElement {
-    // A tall dialog is the system's sheet on an iPhone or an iPad: it
-    // comes up from the bottom and is swiped down to put away.
     if cfg!(target_os = "ios") && height.is_some() {
         return when(open, move || {
             dialog()
@@ -322,9 +276,6 @@ pub fn modal_sized(
         .into_element();
     }
     when(open, move || {
-        // The dialog fades in whole, backdrop and card together (left to
-        // itself it slides up from the bottom, backdrop and all), and the
-        // card rises a little into place as it does.
         let card = motion().entering(MotionPreset::FadeInUp);
         dialog()
             .animation(nsh_core::ModalAnimation::Fade)
@@ -391,7 +342,6 @@ pub fn modal_sized(
     .into_element()
 }
 
-/// The Cancel and commit buttons of a dialog.
 pub fn modal_actions(
     open: Signal<bool>,
     cancel: impl IntoReactive<SharedString>,
@@ -407,8 +357,6 @@ pub fn modal_actions(
         .into_element()
 }
 
-/// Asks before something that cannot be undone, with the system's alert.
-/// `on_confirm` runs only for the destructive answer.
 pub fn confirm_destructive(
     title: impl Into<SharedString>,
     description: impl Into<SharedString>,
@@ -429,7 +377,6 @@ pub fn confirm_destructive(
     });
 }
 
-/// How a toast reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Info,
@@ -449,8 +396,6 @@ struct Pending {
     waiting: Vec<(u64, ToastData)>,
 }
 
-/// Shows a short message at the bottom of the window. For results that are
-/// not already visible where they happened.
 pub fn toast(tone: Tone, text: impl Into<SharedString>) {
     let text = text.into();
     global::<Pending>().update(|pending| {
@@ -459,7 +404,6 @@ pub fn toast(tone: Tone, text: impl Into<SharedString>) {
     });
 }
 
-/// The stack toasts appear in: placed once, at the app's root.
 pub fn toast_host() -> impl IntoElement {
     let manager = stored(ToastManager::<u64, ToastData>::new(ToastMotion::sonner()));
     let shown = signal(Vec::new());
@@ -492,7 +436,6 @@ pub fn toast_host() -> impl IntoElement {
         .placement(Anchor::BottomCenter)
         .state(state)
         .w(px(360.0))
-        // Clear of the system's tab bar on a phone.
         .style_with(|s| if crate::platform::is_phone() && crate::platform::compact() { s.mb(px(72.0)) } else { s })
         .child(each(
             shown,

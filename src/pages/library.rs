@@ -1,7 +1,3 @@
-//! Library: every recording in one list, whatever its state. A recording
-//! that is not transcribed yet is transcribed from here; one that has a
-//! transcript opens in the reader.
-
 use std::rc::Rc;
 
 use listenook_core::{
@@ -27,7 +23,6 @@ use crate::{
     util,
 };
 
-/// The dialogs a row's menu opens.
 #[derive(Clone, Copy)]
 struct Dialogs {
     export: JobDialog,
@@ -36,7 +31,6 @@ struct Dialogs {
     tags: JobDialog,
 }
 
-/// The Library page.
 pub(crate) fn library() -> impl IntoElement {
     let store = store();
     let query = signal(String::new());
@@ -61,10 +55,7 @@ pub(crate) fn library() -> impl IntoElement {
         .child(
             top_bar()
                 .child(search_field(query, l("Search your library")).flex_1().min_w(px(96.0)).max_w(px(420.0)).window_drag(false))
-                // In a narrow window the search has the room to itself.
                 .child(view().style_with(|s| if crate::shell::page_narrow() { s } else { s.flex_1() }))
-                // What is waiting, how it will be transcribed, and the
-                // button that starts it: here only while something waits.
                 .child(when(
                     move || waiting() > 0,
                     move || {
@@ -75,7 +66,6 @@ pub(crate) fn library() -> impl IntoElement {
                             .window_drag(false)
                             .child(
                                 icon_text_button(Variant::Primary, Size::Sm, Icon::Transcribe, move || -> SharedString {
-                                    // Only the count where there is no room for the words.
                                     if crate::shell::page_narrow() {
                                         waiting().to_string().into()
                                     } else {
@@ -99,14 +89,12 @@ pub(crate) fn library() -> impl IntoElement {
                             })
                     },
                 ))
-                // What the Library can take in and give out, an icon each.
                 .child(
                     view()
                         .flex_row()
                         .items_center()
                         .gap_1()
                         .window_drag(false)
-                        // The system's header has the first where it draws one.
                         .child(when(
                             || !crate::shell::system_header(),
                             || ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, util::pick_media),
@@ -146,7 +134,6 @@ pub(crate) fn library() -> impl IntoElement {
                     .estimated_item_size(px(64.0))
                     .content_padding(px(ui::PAGE_INSET - 12.0))
                     .empty(
-                        // Why the list is empty, and what fills it.
                         text(move || {
                             if query.with(|q| !q.trim().is_empty()) {
                                 return tr("No recordings match your search.");
@@ -194,7 +181,6 @@ fn kind_icon(job: &Job) -> Icon {
     }
 }
 
-/// What a recording is, or what is happening to it: one line.
 fn detail(job: &Job) -> SharedString {
     if let Some(code) = job.error_code.as_deref().filter(|_| !job.status.is_active() && !job.has_transcript()) {
         return error_text(code);
@@ -227,8 +213,6 @@ fn detail(job: &Job) -> SharedString {
     parts.join(" · ").into()
 }
 
-/// A cell of the list: it shows whatever row it is given, so everything it
-/// shows is read from `at` in bindings.
 fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoElement {
     let store = store();
     let job = computed(move || shown.with(|jobs| jobs.get(at.index()).cloned()));
@@ -236,7 +220,6 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
     let id = move || job.with_untracked(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
     let status = move || job.with(|job| job.as_deref().map_or(Status::Neutral, status_of));
     let busy = move || read(Job::is_busy);
-    // The names of its tags, in the order the sidebar lists them.
     let tags = computed(move || {
         let carried = job.with(|job| job.as_ref().map(|job| job.tag_ids.clone()).unwrap_or_default());
         if carried.is_empty() {
@@ -250,8 +233,6 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         .items_center()
         .gap_1()
         .child(
-            // Only a recording with a transcript opens; the others offer
-            // their next step at the end of the row.
             ui::list_row(|| false)
                 .disabled(move || !read(Job::has_transcript))
                 .on_press(move || store.open_transcript(&id()))
@@ -291,7 +272,6 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                                     .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
                                     .number_of_lines(1)
-                                    // A long title gives way; the tags stay whole.
                                     .flex_shrink(1.0)
                                     .min_w(px(0.0))
                                     .text_color(move || {
@@ -302,7 +282,6 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                                         }
                                     }),
                                 )
-                                // The tags it carries, after its title.
                                 .child(dynamic(move || {
                                     let names = tags.get();
                                     view()
@@ -353,7 +332,6 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                         })),
                 ),
         )
-        // The one thing to do next with a recording, when there is one.
         .child(when(
             move || read(|job| job.status.is_transcribable()),
             move || button(Variant::Outline, Size::Sm, l("Transcribe")).on_press(move || transcribe::start(&id())),
@@ -418,7 +396,6 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                     )
                 },
             ))
-            // Wherever a file can be picked: a computer, an iPhone or iPad.
             .child(when(
                 || !platform::is_phone() || cfg!(target_os = "ios"),
                 move || menu_action(Icon::Refresh, l("Relink media…"), move || util::relink(id())),
@@ -443,8 +420,6 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                 let Some(job) = store.job_now(&id) else {
                     return;
                 };
-                // The app's own copy of the media (an episode, or a file
-                // brought in on a phone) goes with the recording.
                 let owned =
                     store.data_root().is_some_and(|root| std::path::Path::new(&job.source_path).starts_with(root));
                 if !job.has_transcript() && !owned && !job.status.is_active() {
@@ -466,7 +441,6 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         )
 }
 
-/// How the next recordings are transcribed. The one place these are set.
 fn options() -> impl IntoElement {
     let store = store();
     let provider = move || store.setting(|s| s.default_transcription_provider);

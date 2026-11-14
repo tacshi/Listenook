@@ -1,6 +1,3 @@
-//! Podcast: find shows, follow them, listen to an episode, and send one to
-//! the Inbox to study it ("Deep listen").
-
 use std::time::Duration;
 
 use listenook_core::{
@@ -22,10 +19,8 @@ use crate::{
     util::file_url,
 };
 
-/// The page's state: which show is open over the directory.
 #[derive(Clone, Copy)]
 struct Page {
-    /// The feed URL of the show that is open, if one is.
     open: Signal<Option<String>>,
     feed: Signal<Option<Feed>>,
     loading: Signal<bool>,
@@ -42,29 +37,22 @@ impl Page {
 }
 
 impl Page {
-    /// The state of a page that shows the open show: its feed is fetched
-    /// as the show is opened.
     fn loading_shows() -> Self {
         let page = Self::idle();
         page.load();
         page
     }
 
-    /// The state of a page that only opens shows: another shows them.
     fn idle() -> Self {
         Self { open: store().podcast.open_show, feed: signal(None), loading: signal(false), error: signal(None) }
     }
 }
 
-/// A show as a screen of its own, pushed over the directory by the
-/// system's stack: on a phone or a tablet.
 pub(crate) fn show_screen() -> impl IntoElement {
     view().flex_1().child(show_page(Page::loading_shows()))
 }
 
-/// The Podcasts page: the shows followed, and a directory to find more.
 pub(crate) fn podcasts_page() -> impl IntoElement {
-    // Under the system's header a show is pushed over this page.
     if crate::shell::system_header() {
         let page = Page::idle();
         return view().flex_1().child(discover(page)).child(add_dialog(page));
@@ -80,7 +68,6 @@ impl Page {
     fn load(self) {
         let store = store();
         let page = self;
-        // Opening a show: what was cached shows at once, then the feed is fetched.
         effect(move || {
             let Some(url) = page.open.get() else {
                 return;
@@ -93,7 +80,6 @@ impl Page {
             });
             spawn(async move {
                 match podcasts::load_feed(&url).await {
-                    // The page may have been left meanwhile, and its signals with it.
                     Ok(feed) => drop(page.feed.try_set(Some(feed))),
                     Err(code) => drop(page.error.try_set(Some(code))),
                 }
@@ -103,8 +89,6 @@ impl Page {
     }
 }
 
-/// The dialog a show is added with by its feed's address: for the ones
-/// the directory does not list.
 fn add_dialog(page: Page) -> impl IntoElement {
     let open = store().podcast.adding;
     let url = signal(String::new());
@@ -158,8 +142,6 @@ fn discover(page: Page) -> impl IntoElement {
     let busy = signal(false);
     let failed = signal(None::<&'static str>);
     let searching = move || query.with(|q| q.trim().chars().count() >= 2);
-    // The shelf browsed: suggestions, the chart, or a purpose. Choosing
-    // another drops the load of the last one.
     let shelf = signal(0_usize);
     effect(move || {
         let chosen = shelf.get();
@@ -178,7 +160,6 @@ fn discover(page: Page) -> impl IntoElement {
             }
         });
     });
-    // A new query drops the search of the last one.
     effect(move || {
         let term = query.with(|q| q.trim().to_owned());
         if term.chars().count() < 2 {
@@ -203,7 +184,6 @@ fn discover(page: Page) -> impl IntoElement {
         .child(
             top_bar()
                 .child(search_field(query, l("Search podcasts")).flex_1().max_w(px(420.0)).window_drag(false))
-                // Under the system's header the button is in that header.
                 .child(when(
                     || !crate::shell::system_header(),
                     move || {
@@ -279,8 +259,6 @@ fn discover(page: Page) -> impl IntoElement {
                             };
                             section(
                                 l("Browse"),
-                                // In a narrow window, or under a finger, the shelves are one row
-                                // that scrolls sideways, out to both edges.
                                 when(
                                     || crate::platform::compact() || crate::platform::is_phone(),
                                     move || {
@@ -330,16 +308,11 @@ fn show_row(page: Page, show: ReadSignal<ShowSummary>) -> impl IntoElement {
         .child(view().text_color(|| theme().muted_foreground).child(icon(Icon::ChevronRight, 14.0)))
 }
 
-/// A grid of show cards: as many columns as fit, sharing the whole width.
-/// The cards pad their artwork to leave room for the hover wash: the grid
-/// is pulled out by that much, so the artwork sits on the same edges as
-/// the headings.
 fn card_grid() -> View {
     view().grid().grid_template_columns("repeat(auto-fill, minmax(112px, 1fr))").gap_2().mx(px(-8.0))
 }
 
 fn show_card(page: Page, show: impl Fn() -> ShowSummary + Copy + 'static) -> impl IntoElement {
-    // The page fades in as a whole: its cards do not each move as well.
     nsh_base::button()
         .on_press(move || page.open_show(&untracked(show).feed_url))
         .gap_2()
@@ -371,7 +344,6 @@ fn show_card(page: Page, show: impl Fn() -> ShowSummary + Copy + 'static) -> imp
         )
 }
 
-/// A show: what it is, and its episodes.
 fn show_page(page: Page) -> impl IntoElement {
     let store = store();
     let feed = page.feed;
@@ -381,8 +353,6 @@ fn show_page(page: Page) -> impl IntoElement {
         })
     };
     let episodes = computed(move || feed.with(|f| f.as_ref().map(|f| f.episodes.clone()).unwrap_or_default()));
-    // The system's header has the title and the way back; the button that
-    // follows the show is then beside its description.
     let pushed = crate::shell::system_header();
     let follow = move || {
         button(Variant::Default, Size::Md, move || if followed() { tr("Unfollow") } else { tr("Follow") }).on_press(
@@ -505,7 +475,6 @@ fn show_page(page: Page) -> impl IntoElement {
         )
 }
 
-/// A cell of the episode list: everything it shows is read from `at`.
 fn episode_row(page: Page, episodes: Memo<Vec<Episode>>, at: Position) -> impl IntoElement {
     let store = store();
     let player = store.podcast;
@@ -516,8 +485,6 @@ fn episode_row(page: Page, episodes: Memo<Vec<Episode>>, at: Position) -> impl I
         let id = id();
         store.jobs().into_iter().find(|job| job.podcast_provenance.as_ref().is_some_and(|p| p.episode_id == id))
     };
-    // In a narrow window the title has two lines, and the description is
-    // left to the episode itself.
     let narrow = untracked(crate::platform::compact);
     let meta = move || -> SharedString {
         episode.with(|e| {
@@ -565,7 +532,6 @@ fn episode_row(page: Page, episodes: Memo<Vec<Episode>>, at: Position) -> impl I
                     player.set_paused(!player.paused());
                     return;
                 }
-                // The downloaded file when there is one, else the stream.
                 let local = untracked(job).filter(|job| std::path::Path::new(&job.source_path).exists());
                 let source = local.map_or_else(|| episode.enclosure_url.clone(), |job| file_url(&job.source_path));
                 let show = page

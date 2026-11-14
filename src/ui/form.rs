@@ -1,5 +1,3 @@
-//! Fields and selection controls.
-
 use nsh_base::{SelectEntry, SelectItem, SliderValue, input, theme};
 use nsh_core::prelude::*;
 
@@ -9,7 +7,6 @@ use super::{
     tokens::{self, motion},
 };
 
-/// The one look of a field: the same edge, fill and height as a select.
 fn field_look(field: Input) -> Input {
     field_text(field)
         .px_3()
@@ -22,7 +19,6 @@ fn field_look(field: Input) -> Input {
         .focus(|s| s.border_color(|| theme().ring))
 }
 
-/// The text of a field, without its edge.
 fn field_text(field: Input) -> Input {
     field
         .placeholder_color(|| color(theme().muted_foreground))
@@ -31,11 +27,6 @@ fn field_text(field: Input) -> Input {
         .text_color(|| theme().foreground)
 }
 
-/// A single-line field around `input`. On iOS the edge and the padding
-/// are a view's and the field inside has none: on an iPad (iOS 27) a
-/// field's own padding did not move its text, which sat on the left
-/// edge. Elsewhere they are the field's own, so a click
-/// in the padding edits.
 fn line_field(input: Input) -> View {
     if cfg!(target_os = "ios") {
         view()
@@ -54,8 +45,6 @@ fn line_field(input: Input) -> View {
     }
 }
 
-/// A single-line text field for a value kept elsewhere: `value` reads it,
-/// `set` writes what is typed.
 pub fn bound_field(
     value: impl Fn() -> String + 'static,
     set: impl Fn(String) + 'static,
@@ -64,8 +53,6 @@ pub fn bound_field(
     bound_field_with(value, set, placeholder, |input| input)
 }
 
-/// A [`bound_field`] whose input `more` sets up further (its keyboard,
-/// what Return does).
 pub fn bound_field_with(
     value: impl Fn() -> String + 'static,
     set: impl Fn(String) + 'static,
@@ -80,13 +67,10 @@ pub fn bound_field_with(
     ))
 }
 
-/// A single-line text field bound to `value`.
 pub fn text_field(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> View {
     text_field_with(value, placeholder, |input| input)
 }
 
-/// A [`text_field`] whose input `more` sets up further (its keyboard,
-/// focus, what Return does).
 pub fn text_field_with(
     value: Signal<String>,
     placeholder: impl Fn() -> SharedString + 'static,
@@ -100,7 +84,6 @@ pub fn text_field_with(
     ))
 }
 
-/// A multi-line text field bound to `value`.
 pub fn text_area(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> Input {
     field_look(
         input()
@@ -113,13 +96,10 @@ pub fn text_area(value: Signal<String>, placeholder: impl Fn() -> SharedString +
     .min_h(px(72.0))
 }
 
-/// A search field: a text field with a leading glass.
 pub fn search_field(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> View {
     search_field_with(value, placeholder, false)
 }
 
-/// A [`search_field`] that takes the keyboard as it appears: for one
-/// the user just asked for.
 pub fn focused_search_field(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> View {
     search_field_with(value, placeholder, true)
 }
@@ -152,7 +132,6 @@ fn search_field_with(value: Signal<String>, placeholder: impl Fn() -> SharedStri
         )
 }
 
-/// A label over a control, with an optional description under it.
 pub fn field(label: impl IntoReactive<SharedString>, control: impl IntoElement) -> View {
     view()
         .gap_1p5()
@@ -160,12 +139,10 @@ pub fn field(label: impl IntoReactive<SharedString>, control: impl IntoElement) 
         .child(control)
 }
 
-/// Supporting text under a control or a title.
 pub fn hint(label: impl IntoReactive<SharedString>) -> Text {
     text(label).text_xs().text_color(|| theme().muted_foreground)
 }
 
-/// A switch with its label: a setting that takes effect at once.
 pub fn switch(
     label: impl IntoReactive<SharedString>,
     checked: impl Fn() -> bool + 'static,
@@ -197,12 +174,9 @@ pub fn switch(
         })
         .focus_visible(tokens::focus_ring)
         .disabled_style(|s| s.opacity(0.45))
-        // The label takes the room left and wraps: a long setting's name
-        // must not push the switch out of a narrow panel.
         .child(text(label).text_sm().flex_1().min_w(px(0.0)).text_color(|| theme().foreground))
 }
 
-/// A checkbox with its label: an independent choice.
 pub fn checkbox(
     label: impl IntoReactive<SharedString>,
     checked: impl Fn() -> bool + Copy + 'static,
@@ -229,7 +203,6 @@ pub fn checkbox(
         .child(text(label).text_sm().text_color(|| theme().foreground))
 }
 
-/// A choice from a list: `options` are `(value, label)`.
 pub fn select(
     name: impl Into<SharedString>,
     options: Vec<(SharedString, SharedString)>,
@@ -252,8 +225,6 @@ pub fn select(
         })
         .accessibility_label(name.into())
         .offset(px(4.0))
-        // Under a finger the choices are taller, and clear of the bar at
-        // the foot of the screen.
         .popup_style(move |s| {
             let s = tokens::popup_surface(s).max_h(px(320.0));
             if touch { s.pb_8() } else { s }
@@ -289,9 +260,6 @@ pub fn select(
         )
 }
 
-/// A segmented control: a few exclusive views of one thing, one selection
-/// sliding between them. The labels are given untranslated and shown in
-/// the interface language, which they follow when it changes.
 pub fn segmented<T: Copy + PartialEq + 'static>(
     options: Vec<(T, &'static str)>,
     value: impl Fn() -> T + Copy + 'static,
@@ -328,8 +296,6 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
         }))
 }
 
-/// A slider from `min` to `max`. `on_change` hears every value of a drag,
-/// `on_commit` the one it ends at.
 pub fn slider(
     name: impl Into<SharedString>,
     value: impl Fn() -> f64 + 'static,
@@ -340,7 +306,6 @@ pub fn slider(
     slider_in(false, name, value, max, on_change, on_commit)
 }
 
-/// A [`slider`] lying over a video: light on dark in either theme.
 pub fn slider_on_picture(
     name: impl Into<SharedString>,
     value: impl Fn() -> f64 + 'static,
@@ -363,7 +328,6 @@ fn slider_in(
         SliderValue::Single(v) => *v,
         SliderValue::Range(_, v) => *v,
     };
-    // Over a picture the dark theme's light is used whatever the theme.
     let track = move || if on_picture { theme().foreground.dark.opacity(0.3) } else { color(theme().input) };
     let fill = move || if on_picture { theme().foreground.dark } else { color(theme().primary) };
     nsh_base::slider()
@@ -379,14 +343,11 @@ fn slider_in(
         .rounded_full()
         .focus_visible(tokens::focus_ring)
         .track_style(move |s| s.h(px(4.0)).rounded_full().bg(track))
-        // The rail the thumb is centered on: as tall as the track, or the
-        // thumb is centered on the track's top edge instead of its middle.
         .indicator_style(|s| s.h(px(4.0)))
         .range_style(move |s| s.h(px(4.0)).rounded_full().bg(fill))
         .thumb_style(move |s| s.size(px(12.0)).rounded_full().bg(fill).shadow_sm().transition_transform())
 }
 
-/// A progress bar: `fraction` from 0 to 1, or none while the length is unknown.
 pub fn progress_bar(fraction: impl Fn() -> Option<f32> + Copy + 'static) -> nsh_base::ProgressElement {
     nsh_base::progress()
         .value(move || fraction().unwrap_or(0.0) * 100.0)

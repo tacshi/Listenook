@@ -1,7 +1,3 @@
-//! Watching a folder: media that appears in it is added to the Library,
-//! not transcribed. A file is taken once it has stopped changing, and one
-//! the user removed from the Library is not taken again.
-
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -11,19 +7,15 @@ use std::{
 use listenook_core::subtitles;
 use serde::{Deserialize, Serialize};
 
-/// What is watched (`inbox_monitor.json`, as the Flutter app writes it).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct MonitorConfig {
     pub(crate) folder_path: String,
     pub(crate) paused: bool,
-    /// What the Flutter app keeps here besides (extensions, tray and dock
-    /// choices): written back as it was.
     #[serde(flatten)]
     pub(crate) extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// A file as it was when it was taken: its path, size and time of change.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Seen {
@@ -31,8 +23,6 @@ pub(crate) struct Seen {
     pub(crate) modified_ms: u64,
 }
 
-/// The monitor's file: its configuration and a record of every file it
-/// has taken, by path, as the Flutter app writes them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct MonitorFile {
@@ -50,14 +40,10 @@ impl Default for MonitorFile {
 }
 
 impl MonitorFile {
-    /// Whether a file was taken before as it is now: added, or added and
-    /// then removed from the Library by the user. A file that has changed
-    /// size since is a new one.
     pub(crate) fn took(&self, path: &str, state: &Seen) -> bool {
         self.records.get(path).and_then(|record| record["fingerprint"]["size_bytes"].as_u64()) == Some(state.size_bytes)
     }
 
-    /// Records that a file was taken into the Library as job `job_id`.
     pub(crate) fn record(&mut self, path: &str, state: &Seen, job_id: Option<&str>) {
         let modified = listenook_core::iso_from_millis(state.modified_ms as i64);
         let mut record = serde_json::json!({
@@ -72,8 +58,6 @@ impl MonitorFile {
     }
 }
 
-/// The media files under `folder`, hidden files and folders left out, each
-/// with its size and time of change. None when the folder cannot be read.
 pub(crate) fn scan(folder: &Path) -> Option<BTreeMap<String, Seen>> {
     let mut found = BTreeMap::new();
     let mut pending: Vec<PathBuf> = vec![folder.to_owned()];
@@ -102,8 +86,6 @@ pub(crate) fn scan(folder: &Path) -> Option<BTreeMap<String, Seen>> {
     Some(found)
 }
 
-/// The files to take now: in this scan as they were in the last one (so
-/// they have stopped changing), and not taken before as they are.
 pub(crate) fn settled(last: &BTreeMap<String, Seen>, now: &BTreeMap<String, Seen>, file: &MonitorFile) -> Vec<String> {
     now.iter()
         .filter(|(path, state)| last.get(*path) == Some(state) && !file.took(path, state))

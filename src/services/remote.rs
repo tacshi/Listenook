@@ -1,7 +1,3 @@
-//! The cloud transcription providers, Soniox and MOSS Pro (MOSI): upload a
-//! file, start a transcription, ask how it goes, fetch the transcript and
-//! delete what was uploaded.
-
 use std::{path::PathBuf, time::Duration};
 
 use listenook_core::Job;
@@ -10,14 +6,10 @@ use serde_json::{Value, json};
 
 use crate::state::secrets::Secret;
 
-/// Why a request did not give what was asked.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Failure {
-    /// The app's error code (`bad_credentials`, `moss_rate_limit`, ..).
     pub(crate) code: String,
-    /// What the service said, for the log.
     pub(crate) message: String,
-    /// Whether asking again may work.
     pub(crate) retryable: bool,
 }
 
@@ -26,20 +18,17 @@ impl Failure {
         Self { code: code.into(), message: message.into(), retryable: false }
     }
 
-    /// The network failed: worth another try.
     pub(crate) fn network(message: String) -> Self {
         Self { code: "network_error".into(), message, retryable: true }
     }
 }
 
-/// A cloud transcription provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Provider {
     Soniox,
     Moss,
 }
 
-/// The Soniox model transcriptions use.
 pub(crate) const SONIOX_MODEL: &str = "stt-async-v6";
 const MOSS_MODEL: &str = "moss-transcribe-diarize";
 const MOSS_VERSION: &str = "v20260410-streamparam-20260703";
@@ -60,7 +49,6 @@ impl Provider {
         }
     }
 
-    /// The name in messages.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Provider::Soniox => "Soniox",
@@ -68,7 +56,6 @@ impl Provider {
         }
     }
 
-    /// The key it needs.
     pub(crate) fn secret(self) -> Secret {
         match self {
             Provider::Soniox => Secret::Soniox,
@@ -143,7 +130,6 @@ impl Provider {
             .ok_or_else(|| Failure::new(self.code("invalid_response"), "The response did not contain an id."))
     }
 
-    /// Checks that a key works.
     pub(crate) async fn validate_key(self, key: &str) -> Result<(), Failure> {
         match self {
             Provider::Soniox => self.get("/files?limit=1", key).await.map(|_| ()),
@@ -162,7 +148,6 @@ impl Provider {
         }
     }
 
-    /// Uploads a file; the id the provider gives it.
     pub(crate) async fn upload(self, path: PathBuf, key: &str) -> Result<String, Failure> {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("audio").replace('"', "");
         let boundary = format!("listenook-{}", uuid::Uuid::new_v4().simple());
@@ -178,7 +163,6 @@ impl Provider {
         );
         let tail = format!("\r\n--{boundary}--\r\n");
         let moss = self == Provider::Moss;
-        // The file is read once, straight into the request's body.
         let body = blocking(move || -> Result<Vec<u8>, Failure> {
             use std::io::Read;
             let missing = |e: std::io::Error| Failure::new("missing_source", e.to_string());
@@ -201,7 +185,6 @@ impl Provider {
         self.id_of(&answer, &["id"])
     }
 
-    /// Starts transcribing an uploaded file with the job's options.
     pub(crate) async fn create(self, file_id: &str, job: &Job, key: &str) -> Result<String, Failure> {
         match self {
             Provider::Soniox => {
@@ -235,7 +218,6 @@ impl Provider {
         }
     }
 
-    /// How a transcription goes.
     pub(crate) async fn progress(self, id: &str, key: &str) -> Result<Progress, Failure> {
         let path = match self {
             Provider::Soniox => format!("/transcriptions/{id}"),
@@ -262,8 +244,6 @@ impl Provider {
         })
     }
 
-    /// The finished transcript's payload. `done` is what [`Self::progress`]
-    /// answered last: MOSS's task carries the transcript itself.
     pub(crate) async fn transcript(self, id: &str, done: Value, key: &str) -> Result<Value, Failure> {
         match self {
             Provider::Soniox => self.get(&format!("/transcriptions/{id}/transcript"), key).await,
@@ -271,7 +251,6 @@ impl Provider {
         }
     }
 
-    /// Deletes the transcription and the uploaded file from the provider.
     pub(crate) async fn cleanup(self, transcription_id: Option<&str>, file_id: Option<&str>, key: &str) {
         if let (Provider::Soniox, Some(id)) = (self, transcription_id) {
             self.delete(&format!("/transcriptions/{id}"), key).await;
@@ -282,15 +261,10 @@ impl Provider {
     }
 }
 
-/// How a transcription goes.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Progress {
-    /// Waiting its turn: ask again after this long.
     Queued(Duration),
-    /// Being transcribed: ask again after this long.
     Running(Duration),
-    /// Finished: the status payload.
     Done(Value),
-    /// Failed for good.
     Failed(Failure),
 }

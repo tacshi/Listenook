@@ -1,8 +1,3 @@
-//! The app's state: jobs, settings and where the user is. Its signals stay
-//! private; pages read through these methods (tracked where they are read)
-//! and change state only through them, and every change that should outlive
-//! the run is written to disk here.
-
 use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
@@ -22,7 +17,6 @@ use super::{
     sync::SyncState,
 };
 
-/// A top-level place in the app. A recording that is open covers either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub(crate) enum Place {
     #[default]
@@ -30,22 +24,16 @@ pub(crate) enum Place {
     Podcasts,
 }
 
-/// Which recordings the Library lists.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) enum Filter {
-    /// Every recording.
     #[default]
     All,
-    /// Not transcribed yet, being worked on, or failed.
     InProgress,
-    /// The recordings of one group, by its id.
     Group(String),
-    /// The recordings with one tag, by its id.
     Tag(String),
 }
 
 impl Filter {
-    /// Whether a job belongs under the filter.
     pub(crate) fn admits(&self, job: &Job) -> bool {
         match self {
             Filter::All => true,
@@ -56,7 +44,6 @@ impl Filter {
     }
 }
 
-/// The app's store. `Copy`: closures capture it as they do a signal.
 #[derive(Clone, Copy)]
 pub(crate) struct Store {
     owner: Owner,
@@ -69,44 +56,30 @@ pub(crate) struct Store {
     place: Signal<Place>,
     filter: Signal<Filter>,
     open_job: Signal<Option<String>>,
-    /// The video open in the player, over everything else.
     open_video: Signal<Option<String>>,
-    /// How many videos play in windows of their own, and whether the app
-    /// was opened only to play one (its main window never shown).
     players: Signal<usize>,
     video_only: Signal<bool>,
     settings_open: Signal<bool>,
     update_check: Signal<bool>,
     immersive: Signal<bool>,
     sidebar_hidden: Signal<bool>,
-    /// Whether the app's window has the keyboard: what finishes while it
-    /// has not is worth a notification.
     focused: Signal<bool>,
-    /// In a narrow window the sidebar is a drawer over the page: whether it is out.
     drawer: Signal<bool>,
-    /// Recordings added with several subtitle files beside them: which
-    /// one is the transcript is the user's choice.
     subtitle_choices: Signal<Vec<(String, Vec<String>)>>,
     language_hints: Signal<String>,
     context_terms: Signal<String>,
     running: Stored<HashMap<String, Spawned<()>>>,
-    /// Podcasts: the catalog and what is playing.
     pub(crate) podcast: PodcastState,
-    /// Syncing with another device on the local network.
     pub(crate) sync: SyncState,
 }
 
 #[derive(Clone, Default)]
 struct Handle(Option<Store>);
 
-/// The store, from anywhere on the engine thread: a body, a listener or a
-/// task. Reading it subscribes to nothing; its methods do.
 pub(crate) fn store() -> Store {
     global::<Handle>().get_untracked().0.expect("the root component makes the store")
 }
 
-/// Brings a job read from disk to a state this run can continue from: work
-/// that was running when the app quit did not survive it.
 fn recovered(mut job: Job) -> Job {
     if job.status == JobStatus::Downloading {
         job.status = JobStatus::Failed;
@@ -128,8 +101,6 @@ fn recovered(mut job: Job) -> Job {
     job
 }
 
-/// A job whose media is where the app's folder is now (see
-/// [`persist::rehomed`]), no longer marked as missing it.
 fn rehomed(mut job: Job, root: &std::path::Path) -> Job {
     if let Some(path) = persist::rehomed(&job.source_path, root, |path| path.exists()) {
         job.source_path = path;
@@ -146,8 +117,6 @@ fn rehomed(mut job: Job, root: &std::path::Path) -> Job {
 }
 
 impl Store {
-    /// Loads the store from disk and makes it the app's. Call once, in the
-    /// root component's body: tasks the store starts belong to that owner.
     pub(crate) fn install() -> Store {
         persist::learn_data_root();
         let root = persist::data_root();
@@ -194,9 +163,6 @@ impl Store {
             podcast: PodcastState::new(catalog, root_listened),
             sync: SyncState::new(),
         };
-        // For development: `LISTENOOK_START=reader` opens the newest
-        // transcript, `podcasts` and `settings` those places, `import` takes in
-        // what is in the app's folder, `sync` opens the Sync dialog.
         match std::env::var("LISTENOOK_START").as_deref() {
             Ok("reader") => {
                 let newest = store
@@ -205,8 +171,6 @@ impl Store {
                 store.open_job.set(newest);
             }
             Ok("podcasts") => store.place.set(Place::Podcasts),
-            // Takes in the media put in the app's folder (the simulator
-            // has no hand to pick it in the Files browser).
             Ok("import") => {
                 spawn(async {
                     timer(std::time::Duration::from_millis(500)).await;
@@ -214,8 +178,6 @@ impl Store {
                 });
             }
             Ok("settings") => store.settings_open.set(true),
-            // `sync` opens the Sync dialog; `sync:<address>` also starts a
-            // sync with the device there.
             Ok(start) if start == "sync" || start.starts_with("sync:") => {
                 let address = start.strip_prefix("sync:").map(str::to_owned);
                 spawn(async move {
@@ -233,8 +195,6 @@ impl Store {
         store.sidebar_hidden.set(
             store.settings.with_untracked(|s| s.extra.get("sidebar_hidden").and_then(|v| v.as_bool()).unwrap_or(false)),
         );
-        // What the player made playable is for one sitting: a run that
-        // ended without closing it leaves its file behind.
         if let Some(temporary) = store.data_root().map(|root| root.join("temporary")) {
             for entry in std::fs::read_dir(temporary).into_iter().flatten().flatten() {
                 if entry.file_name().to_string_lossy().starts_with("player-") {
@@ -244,25 +204,19 @@ impl Store {
         }
         global::<Handle>().set(Handle(Some(store)));
         store.configure_sync();
-        // The port is given back when the app's surface goes.
         let root = store.data_root();
         cleanup(move || crate::services::sync::release(&root));
         store
     }
 
-    /// Where the app's files are; none when nothing is written to disk.
     pub(crate) fn data_root(&self) -> Option<PathBuf> {
         self.root.with(|root| root.clone())
     }
 
-    // --- Where the user is ---------------------------------------------------
-
-    /// The place showing under any open recording.
     pub(crate) fn place(&self) -> Place {
         self.place.get()
     }
 
-    /// Goes to a place, closing the open recording.
     pub(crate) fn go(&self, place: Place) {
         batch(|| {
             self.open_job.set(None);
@@ -271,12 +225,10 @@ impl Store {
         });
     }
 
-    /// The Library's filter.
     pub(crate) fn filter(&self) -> Filter {
         self.filter.get()
     }
 
-    /// Shows the Library under a filter.
     pub(crate) fn show(&self, filter: Filter) {
         batch(|| {
             self.open_job.set(None);
@@ -286,12 +238,10 @@ impl Store {
         });
     }
 
-    /// The recording open in the reader.
     pub(crate) fn open_job_id(&self) -> Option<String> {
         self.open_job.get()
     }
 
-    /// Opens a recording's transcript in the reader.
     pub(crate) fn open_transcript(&self, id: &str) {
         batch(|| {
             self.open_video.set(None);
@@ -299,50 +249,37 @@ impl Store {
         });
     }
 
-    /// Closes the reader: back to where it was opened from.
-    /// The video open in the player, if any.
     pub(crate) fn open_video_path(&self) -> Option<String> {
         self.open_video.get()
     }
 
-    /// Opens a video in the player, without adding it to the Library.
     pub(crate) fn open_video(&self, path: &str) {
-        // On a computer the video plays in a window of its own; on a
-        // phone, where there is one window, in place of the page.
         if crate::platform::is_phone() || !crate::pages::open_player(path) {
             self.open_video.set(Some(path.to_owned()));
         }
     }
 
-    /// Whether a video is playing, in the page or in a window of its own.
     pub(crate) fn video_playing(&self) -> bool {
         self.open_video.with(Option::is_some) || self.players.get() > 0
     }
 
-    /// A player window opened.
     pub(crate) fn player_opened(&self) {
         self.players.update(|count| *count += 1);
     }
 
-    /// A player window closed. Returns whether the app should end with
-    /// it: it was opened only to play a video, nothing else of it shows,
-    /// and there is no tray icon to find it by.
     pub(crate) fn player_closed(&self) -> bool {
         self.players.update(|count| *count = count.saturating_sub(1));
         self.players.get_untracked() == 0 && self.video_only.get_untracked() && !untracked(|| self.tray_enabled())
     }
 
-    /// Whether the app is showing only a video.
     pub(crate) fn video_only(&self) -> bool {
         self.video_only.get_untracked()
     }
 
-    /// Whether only a video shows: the main window stays away.
     pub(crate) fn set_video_only(&self, only: bool) {
         self.video_only.set(only);
     }
 
-    /// Closes the player.
     pub(crate) fn close_video(&self) {
         self.open_video.set(None);
     }
@@ -351,18 +288,14 @@ impl Store {
         self.open_job.set(None);
     }
 
-    /// Whether the open recording has the whole window (full-screen video).
     pub(crate) fn immersive(&self) -> bool {
         self.immersive.get()
     }
 
-    /// Gives the open recording the whole window, or the sidebar back.
-    /// The first recording waiting for its subtitle file to be chosen.
     pub(crate) fn subtitle_choice(&self) -> Option<(String, Vec<String>)> {
         self.subtitle_choices.with(|choices| choices.first().cloned())
     }
 
-    /// That recording's choice is made (or declined).
     pub(crate) fn subtitle_chosen(&self) {
         self.subtitle_choices.update(|choices| {
             if !choices.is_empty() {
@@ -371,34 +304,26 @@ impl Store {
         });
     }
 
-    /// Whether the app's window has the keyboard.
     pub(crate) fn focused(&self) -> bool {
         self.focused.get_untracked()
     }
 
-    /// The window gained or lost the keyboard.
     pub(crate) fn set_focused(&self, focused: bool) {
         self.focused.set(focused);
     }
 
-    /// Whether the user has put the sidebar away.
     pub(crate) fn sidebar_hidden(&self) -> bool {
         self.sidebar_hidden.get()
     }
 
-    /// Whether the sidebar's drawer is out (a narrow window).
     pub(crate) fn drawer(&self) -> bool {
         self.drawer.get()
     }
 
-    /// Pulls the drawer out or pushes it back.
     pub(crate) fn set_drawer(&self, out: bool) {
         self.drawer.set(out);
     }
 
-    /// Shows the sidebar, or puts it away. In a wide window that is
-    /// remembered for the next launch; in a narrow one it is the drawer.
-    /// Whether the sidebar is out over the page, read without following it.
     pub(crate) fn drawer_now(&self) -> bool {
         self.drawer.get_untracked()
     }
@@ -409,8 +334,6 @@ impl Store {
             return;
         }
         let hidden = !self.sidebar_hidden.get_untracked();
-        // Not over an open transcript: its lines wrap anew at the new
-        // width, and rows animated to it keep wrong heights.
         if self.open_job.get_untracked().is_none() {
             crate::ui::tokens::motion::reflow();
         }
@@ -424,36 +347,27 @@ impl Store {
         self.immersive.set(on);
     }
 
-    /// Whether the Settings dialog is open, as the signal a dialog follows.
     pub(crate) fn settings_open(&self) -> Signal<bool> {
         self.settings_open
     }
 
-    /// Whether a check for updates was asked for from a menu: Settings'
-    /// About page takes it and checks.
     pub(crate) fn update_check(&self) -> Signal<bool> {
         self.update_check
     }
 
-    /// Opens Settings at About and checks for updates there.
     pub(crate) fn check_for_updates(&self) {
         self.update_check.set(true);
         self.settings_open.set(true);
     }
 
-    // --- Settings ------------------------------------------------------------
-
-    /// The settings.
     pub(crate) fn settings(&self) -> Settings {
         self.settings.get()
     }
 
-    /// One value of the settings, tracked without cloning them all.
     pub(crate) fn setting<T>(&self, read: impl FnOnce(&Settings) -> T) -> T {
         self.settings.with(read)
     }
 
-    /// Changes the settings and saves them.
     pub(crate) fn update_settings(&self, change: impl FnOnce(&mut Settings)) {
         self.settings.update(change);
         if let Some(root) = self.data_root() {
@@ -464,7 +378,6 @@ impl Store {
         }
     }
 
-    /// The interface language: the chosen one, else the system's.
     pub(crate) fn lang(&self) -> Lang {
         match self.settings.with(|s| s.locale_mode) {
             LocaleMode::English => Lang::En,
@@ -473,7 +386,6 @@ impl Store {
         }
     }
 
-    /// The appearance the settings ask for.
     pub(crate) fn appearance(&self) -> Appearance {
         match self.settings.with(|s| s.theme_mode) {
             ThemeMode::System => Appearance::System,
@@ -482,40 +394,31 @@ impl Store {
         }
     }
 
-    /// The language hints of the next batch, as the user typed them.
     pub(crate) fn language_hints(&self) -> Signal<String> {
         self.language_hints
     }
 
-    /// The context terms of the next batch, as the user typed them.
     pub(crate) fn context_terms(&self) -> Signal<String> {
         self.context_terms
     }
 
-    // --- Jobs ----------------------------------------------------------------
-
-    /// Every job, newest first.
     pub(crate) fn jobs(&self) -> Vec<Rc<Job>> {
         self.jobs.get()
     }
 
-    /// One job, or none once it is removed.
     pub(crate) fn job(&self, id: &str) -> Option<Rc<Job>> {
         self.jobs.with(|jobs| jobs.iter().find(|job| job.id == id).cloned())
     }
 
-    /// One job as it is now, without subscribing: for listeners and tasks.
     pub(crate) fn job_now(&self, id: &str) -> Option<Rc<Job>> {
         self.jobs.with_untracked(|jobs| jobs.iter().find(|job| job.id == id).cloned())
     }
 
-    /// The recordings the Library lists now, newest first.
     pub(crate) fn library(&self) -> Vec<Rc<Job>> {
         let filter = self.filter.get();
         self.jobs.with(|jobs| jobs.iter().filter(|job| filter.admits(job)).cloned().collect())
     }
 
-    /// How many recordings a filter admits.
     pub(crate) fn count(&self, filter: &Filter) -> usize {
         self.jobs.with(|jobs| jobs.iter().filter(|job| filter.admits(job)).count())
     }
@@ -533,13 +436,10 @@ impl Store {
         self.jobs.update(|jobs| jobs.insert(0, Rc::new(job)));
     }
 
-    /// Changes a job and saves it. Nothing happens once the job is removed.
     pub(crate) fn update_job(&self, id: &str, change: impl FnOnce(&mut Job)) {
         self.change_job(id, true, change);
     }
 
-    /// Changes a job's progress without writing it to disk: progress is
-    /// reported many times a second and does not outlive the run.
     pub(crate) fn set_progress(&self, id: &str, stage: &str, fraction: Option<f64>) {
         self.change_job(id, false, |job| {
             job.progress = JobProgress { stage: stage.to_owned(), fraction, detail: None };
@@ -569,7 +469,6 @@ impl Store {
         }
     }
 
-    /// Changes a job's transcript and marks it edited now.
     pub(crate) fn update_document(&self, id: &str, change: impl FnOnce(&mut Document)) {
         self.update_job(id, |job| {
             if let Some(document) = &mut job.document {
@@ -579,7 +478,6 @@ impl Store {
         });
     }
 
-    /// A job for a file, not yet in the store.
     pub(crate) fn new_job(&self, path: &str, origin: JobSourceOrigin) -> Job {
         let mut job = Job {
             id: uuid::Uuid::new_v4().to_string(),
@@ -594,9 +492,6 @@ impl Store {
         job
     }
 
-    /// Gives a job the way recordings are transcribed now: the options
-    /// may have changed since it was added, and it is transcribed as the
-    /// user last set them.
     pub(crate) fn apply_options(&self, job: &mut Job) {
         let settings = self.settings.get_untracked();
         let split = |text: String| -> Vec<String> {
@@ -614,14 +509,10 @@ impl Store {
         job.translation_options.model = settings.llm_provider_settings.model.clone();
     }
 
-    /// Adds a job to the store and saves it.
     pub(crate) fn add_job(&self, job: Job) {
         self.insert(job);
     }
 
-    /// Adds media files to the Library. A subtitle file beside a media file,
-    /// with its name, becomes that file's transcript at once; a file that
-    /// already waits there is not added twice. Returns how many were added.
     pub(crate) fn add_files(&self, paths: &[String]) -> usize {
         let media: Vec<&String> = paths.iter().filter(|path| subtitles::is_media(path)).collect();
         let mut added = 0;
@@ -659,15 +550,11 @@ impl Store {
         added
     }
 
-    /// Removes a job, its files in the app's folder, and stops its work.
-    /// Remembered, so that a sync removes it from the other device too.
     pub(crate) fn remove_job(&self, id: &str) {
         self.erase_job(id);
         self.note_removed(id, &listenook_core::models::now_iso());
     }
 
-    /// Remembers that a recording was removed at `at` (the later time, when
-    /// it was removed before).
     fn note_removed(&self, id: &str, at: &str) {
         let Some(root) = self.data_root() else {
             return;
@@ -682,9 +569,6 @@ impl Store {
         }
     }
 
-    /// Takes in what was removed from another device: a recording here
-    /// that was not changed since goes too, unless work is running for it
-    /// (it is left for the next sync).
     pub(crate) fn adopt_removals(&self, theirs: &listenook_core::sync::Removed) {
         for (id, at) in theirs {
             match self.job_now(id) {
@@ -702,7 +586,6 @@ impl Store {
         for key in [id.to_owned(), format!("{id}:translate"), format!("{id}:brief")] {
             self.cancel_work(&key);
         }
-        // Media imported on a phone is the app's own copy: it goes too.
         if let (Some(root), Some(job)) = (self.data_root(), self.job_now(id))
             && std::path::Path::new(&job.source_path).starts_with(root.join("media"))
         {
@@ -721,22 +604,16 @@ impl Store {
         crate::services::playable::forget(id);
     }
 
-    /// The playback speed last chosen, kept apart for recordings
-    /// (`"playback_rate"`) and podcasts (`"podcast_rate"`).
     pub(crate) fn saved_rate(&self, key: &str) -> f32 {
         self.settings
             .with_untracked(|s| s.extra.get(key).and_then(serde_json::Value::as_f64))
             .map_or(1.0, |rate| (rate as f32).clamp(0.5, 2.0))
     }
 
-    /// Keeps a playback speed for next time.
     pub(crate) fn save_rate(&self, key: &'static str, rate: f32) {
         self.update_settings(|s| drop(s.extra.insert(key.into(), f64::from(rate).into())));
     }
 
-    // --- Groups and tags -----------------------------------------------------
-
-    /// The library's groups and tags.
     pub(crate) fn catalog(&self) -> LibraryCatalog {
         self.catalog.get()
     }
@@ -750,7 +627,6 @@ impl Store {
         }
     }
 
-    /// Adds a group; the id of the one with that name when it exists.
     pub(crate) fn add_group(&self, name: &str) -> Option<String> {
         let name = name.trim();
         if name.is_empty() {
@@ -766,7 +642,6 @@ impl Store {
         Some(id)
     }
 
-    /// Renames a group.
     pub(crate) fn rename_group(&self, id: &str, name: &str) {
         let name = name.trim().to_owned();
         if !name.is_empty() {
@@ -778,7 +653,6 @@ impl Store {
         }
     }
 
-    /// Deletes a group; its recordings stay, unfiled.
     pub(crate) fn delete_group(&self, id: &str) {
         let members: Vec<String> = self.jobs.with_untracked(|jobs| {
             jobs.iter().filter(|job| job.group_id.as_deref() == Some(id)).map(|job| job.id.clone()).collect()
@@ -792,12 +666,10 @@ impl Store {
         }
     }
 
-    /// Files a recording in a group, or in none.
     pub(crate) fn set_group(&self, job_id: &str, group_id: Option<String>) {
         self.update_job(job_id, |job| job.group_id = group_id);
     }
 
-    /// Adds a tag; the id of the one with that name when it exists.
     pub(crate) fn add_tag(&self, name: &str) -> Option<String> {
         let name = name.trim();
         if name.is_empty() {
@@ -813,7 +685,6 @@ impl Store {
         Some(id)
     }
 
-    /// Renames a tag.
     pub(crate) fn rename_tag(&self, id: &str, name: &str) {
         let name = name.trim().to_owned();
         if name.is_empty() {
@@ -826,7 +697,6 @@ impl Store {
         });
     }
 
-    /// Deletes a tag, taking it off the recordings that carry it.
     pub(crate) fn delete_tag(&self, id: &str) {
         let tagged: Vec<String> = self.jobs.with_untracked(|jobs| {
             jobs.iter().filter(|job| job.tag_ids.iter().any(|tag| tag == id)).map(|job| job.id.clone()).collect()
@@ -840,8 +710,6 @@ impl Store {
         }
     }
 
-    /// Puts a tag on a recording or takes it off, making the tag when new.
-    /// A tag stays in the library until it is deleted.
     pub(crate) fn toggle_tag(&self, job_id: &str, name: &str) {
         let Some(tag) = self.add_tag(name) else {
             return;
@@ -856,9 +724,6 @@ impl Store {
         });
     }
 
-    // --- The watched folder --------------------------------------------------
-
-    /// The watched folder's configuration.
     pub(crate) fn monitor(&self) -> MonitorConfig {
         self.monitor.with(|file| file.config.clone())
     }
@@ -872,18 +737,12 @@ impl Store {
         }
     }
 
-    /// Whether the app stays in the menu bar (the tray) when its window is
-    /// closed, kept where the Flutter app kept it. On by default on a Mac,
-    /// where closing a window does not quit an app; off elsewhere, where
-    /// the close button is expected to quit it.
     pub(crate) fn tray_enabled(&self) -> bool {
         self.monitor.with(|file| {
             file.config.extra.get("show_tray_icon").and_then(|v| v.as_bool()).unwrap_or(cfg!(target_os = "macos"))
         })
     }
 
-    /// Keeps the app in the menu bar, or not. Not while the Dock icon is
-    /// hidden: with neither, a closed window could not be opened again.
     pub(crate) fn set_tray_enabled(&self, enabled: bool) {
         if !enabled && !untracked(|| self.dock_visible()) {
             return;
@@ -893,8 +752,6 @@ impl Store {
         });
     }
 
-    /// Whether the app shows in the Dock (kept where the Flutter app kept
-    /// it): always while there is no menu-bar icon to reach it by.
     pub(crate) fn dock_visible(&self) -> bool {
         !cfg!(target_os = "macos")
             || !self.tray_enabled()
@@ -903,7 +760,6 @@ impl Store {
                 .with(|file| file.config.extra.get("show_dock_icon").and_then(|v| v.as_bool()).unwrap_or(true))
     }
 
-    /// Shows the app in the Dock, or not; hiding needs the menu-bar icon.
     pub(crate) fn set_dock_visible(&self, visible: bool) {
         if !visible && !untracked(|| self.tray_enabled()) {
             return;
@@ -913,12 +769,10 @@ impl Store {
         });
     }
 
-    /// Whether the app is opened at login (kept where the Flutter app kept it).
     pub(crate) fn opens_at_login(&self) -> bool {
         self.monitor.with(|file| file.config.extra.get("launch_at_login").and_then(|v| v.as_bool()).unwrap_or(false))
     }
 
-    /// Opens the app at login, or stops.
     pub(crate) fn set_opens_at_login(&self, enabled: bool) {
         if crate::services::login::set(enabled) {
             self.change_monitor(|file| {
@@ -927,7 +781,6 @@ impl Store {
         }
     }
 
-    /// Watches a folder, or none (an empty path).
     pub(crate) fn watch_folder(&self, folder: &str) {
         self.last_scan.replace(BTreeMap::new());
         self.change_monitor(|file| {
@@ -936,13 +789,10 @@ impl Store {
         });
     }
 
-    /// Pauses or resumes watching.
     pub(crate) fn set_monitor_paused(&self, paused: bool) {
         self.change_monitor(|file| file.config.paused = paused);
     }
 
-    /// Looks at the watched folder once and adds the media that has settled
-    /// since the last look. Called on a timer by the shell.
     pub(crate) fn scan_watched_folder(&self) {
         let config = self.monitor();
         if config.folder_path.is_empty() || config.paused {
@@ -979,27 +829,19 @@ impl Store {
         });
     }
 
-    // --- Syncing with another device -----------------------------------------
-
-    /// Whether other devices on the local network can find this one. Not
-    /// before the user has opened Sync once: until then the app neither
-    /// listens nor announces itself.
     pub(crate) fn sync_visible(&self) -> bool {
         self.settings.with(|s| s.extra.get("sync_visible").and_then(|v| v.as_bool()).unwrap_or(false))
     }
 
-    /// Whether the user has ever decided about being visible.
     pub(crate) fn sync_decided(&self) -> bool {
         self.settings.with_untracked(|s| s.extra.contains_key("sync_visible"))
     }
 
-    /// Lets other devices find this one, or not.
     pub(crate) fn set_sync_visible(&self, visible: bool) {
         self.update_settings(|s| drop(s.extra.insert("sync_visible".into(), visible.into())));
         self.configure_sync();
     }
 
-    /// The name other devices see for this one.
     pub(crate) fn device_name(&self) -> String {
         self.settings
             .with(|s| s.extra.get("sync_device_name").and_then(|v| v.as_str()).map(str::to_owned))
@@ -1007,21 +849,18 @@ impl Store {
             .unwrap_or_else(|| DEFAULT_DEVICE_NAME.with(|name| name.clone()))
     }
 
-    /// Names this device for the others.
     pub(crate) fn set_device_name(&self, name: &str) {
         let name: String = name.chars().take(64).collect();
         self.update_settings(|s| drop(s.extra.insert("sync_device_name".into(), name.into())));
         self.configure_sync();
     }
 
-    /// Tells the sync service whose Library this is, as the settings have it.
     fn configure_sync(&self) {
         let visible = untracked(|| self.sync_visible());
         let known =
             self.settings.with_untracked(|s| s.extra.get("sync_device_id").and_then(|v| v.as_str()).map(str::to_owned));
         let id = match known {
             Some(id) => id,
-            // Made the first time the device is to be seen.
             None if visible => {
                 let id = uuid::Uuid::new_v4().to_string();
                 self.update_settings(|s| drop(s.extra.insert("sync_device_id".into(), id.clone().into())));
@@ -1032,7 +871,6 @@ impl Store {
         crate::services::sync::configure(self.data_root(), id, untracked(|| self.device_name()), visible);
     }
 
-    /// The recordings being worked on now: a sync leaves them alone.
     pub(crate) fn busy_ids(&self) -> std::collections::HashSet<String> {
         self.jobs.with_untracked(|jobs| {
             jobs.iter()
@@ -1042,8 +880,6 @@ impl Store {
         })
     }
 
-    /// Takes in another device's groups and tags. Returns where its ids
-    /// lead here, for the recordings that follow (`adopt_job`).
     pub(crate) fn adopt_catalog(&self, theirs: &LibraryCatalog) -> HashMap<String, String> {
         let mut merged = self.catalog.get_untracked();
         let map = listenook_core::sync::merge_catalog(&mut merged, theirs);
@@ -1053,26 +889,18 @@ impl Store {
         map
     }
 
-    /// Takes in a recording as another device has it: new here, or newer
-    /// than the one here. Its time of change stays the other device's, so
-    /// the two are equal afterwards. The media stays this device's own
-    /// file when it has one, else the file the sync brought.
     pub(crate) fn adopt_job(&self, job: Job, map: &HashMap<String, String>) {
         let Some(root) = self.data_root() else {
             return;
         };
         let existing = self.job_now(&job.id);
-        // Work begun on it since the sync was planned wins.
         if existing.as_ref().is_some_and(|existing| existing.is_busy()) {
             return;
         }
         let mut job = recovered(job);
         listenook_core::sync::rehome(&mut job, map);
-        // What the other device calls it, when it has no title of its own.
         let name = job.file_name();
         let brought = root.join("media").join(listenook_core::sync::media_file_name(&job.id, &job.file_name()));
-        // Removed here and not changed there since: it stays removed
-        // (a device that does not know of removals sends it all the same).
         let mut removed = persist::load_removed(&root);
         if let Some(at) = removed.get(&job.id) {
             if listenook_core::sync::removal_stands(at, &job.updated_at) {
@@ -1106,8 +934,6 @@ impl Store {
         }
     }
 
-    /// Points a recording that was here without its media at the file a
-    /// sync brought.
     pub(crate) fn adopt_media(&self, id: &str, path: &std::path::Path) {
         let mut changed = None;
         self.jobs.update(|jobs| {
@@ -1126,8 +952,6 @@ impl Store {
         }
     }
 
-    /// Gives a recording an earlier sync left named after the file it
-    /// brought the name of its file on the other device.
     pub(crate) fn adopt_name(&self, id: &str, name: &str) {
         let mut changed = None;
         self.jobs.update(|jobs| {
@@ -1144,10 +968,6 @@ impl Store {
         }
     }
 
-    // --- Background work -----------------------------------------------------
-
-    /// Runs `work` for a job until it ends, whatever page the user is on.
-    /// Work already running for that job is stopped first.
     pub(crate) fn run_for(&self, id: &str, work: impl Future<Output = ()> + 'static) {
         self.cancel_work(id);
         let (store, key) = (*self, id.to_owned());
@@ -1160,12 +980,10 @@ impl Store {
         self.running.with(|running| running.insert(id.to_owned(), task));
     }
 
-    /// Runs work that belongs to no job (a search, a feed) for the app's life.
     pub(crate) fn run(&self, work: impl Future<Output = ()> + 'static) {
         drop(self.owner.run(|| spawn(work)));
     }
 
-    /// Stops the work running for a job, if any. Returns whether there was some.
     pub(crate) fn cancel_work(&self, id: &str) -> bool {
         match self.running.with(|running| running.remove(id)) {
             Some(task) => {
@@ -1178,7 +996,6 @@ impl Store {
 }
 
 thread_local! {
-    /// What the machine calls itself, asked once.
     static DEFAULT_DEVICE_NAME: String = crate::services::sync::default_name();
 }
 
@@ -1186,7 +1003,6 @@ fn is_file(path: &str) -> bool {
     !path.is_empty() && std::path::Path::new(path).is_file()
 }
 
-/// A job whose media is there is no longer marked as missing it.
 fn found_again(job: &mut Job) {
     if !is_file(&job.source_path) {
         return;
@@ -1201,7 +1017,6 @@ fn found_again(job: &mut Job) {
     }
 }
 
-/// The subtitle files beside `media` that carry its name.
 fn sibling_subtitles(media: &str) -> Vec<String> {
     let Some(directory) = std::path::Path::new(media).parent() else {
         return Vec::new();

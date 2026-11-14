@@ -3,8 +3,6 @@ import MossTranscribe
 import Qwen3ASR
 import SpeechVAD
 
-/// A speech command that failed in a way the app can explain. The exit
-/// code is what the standalone worker process exits with.
 public struct WorkerFailure: Error {
     public let code: String
     public let message: String
@@ -67,15 +65,9 @@ private struct WindowAlignmentRecovery {
     let unresolvedFailures: [String: String]
 }
 
-/// Local transcription and word alignment, shared by the macOS worker
-/// process and the iOS app, which runs it in process.
 public enum SpeechEngine {
     public static let protocolVersion = 1
 
-    /// Runs one command ("transcribe-moss", "transcribe-qwen3" or
-    /// "align-qwen3") on a request in the worker's JSON protocol. Progress
-    /// goes to [onProgress]; cancelling the calling task stops the work at
-    /// the next chunk, span or window.
     public static func run(
         command: String,
         request: [String: Any],
@@ -106,7 +98,6 @@ public enum SpeechEngine {
         }
     }
 
-    /// An error message without newlines, short enough to show.
     public static func safeMessage(_ raw: String) -> String {
         let compact = raw.replacingOccurrences(
             of: #"\s+"#,
@@ -117,7 +108,6 @@ public enum SpeechEngine {
     }
 }
 
-/// Where progress goes during the one command that runs at a time.
 private enum ProgressSink {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var sink: (@Sendable (Double?, String) -> Void)?

@@ -1,6 +1,3 @@
-//! Podcasts: the catalog models, Apple's search results, RSS feeds and
-//! publisher transcripts.
-
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -12,7 +9,6 @@ use crate::{
     subtitles,
 };
 
-/// A show in search results and charts.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ShowSummary {
     pub id: String,
@@ -23,7 +19,6 @@ pub struct ShowSummary {
     pub genre: String,
 }
 
-/// One episode of a feed.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Episode {
@@ -44,12 +39,10 @@ pub struct Episode {
     pub artwork_url: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub transcripts: Vec<PodcastTranscriptReference>,
-    /// What the Flutter app wrote that this one does not read: written back as it was.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// A show with its episodes, as fetched.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Feed {
@@ -66,12 +59,10 @@ pub struct Feed {
     pub language: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fetched_at: Option<String>,
-    /// What the Flutter app wrote that this one does not read: written back as it was.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// A show the user follows.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Followed {
@@ -84,19 +75,16 @@ pub struct Followed {
     pub artwork_url: Option<String>,
     pub last_seen_episode_ids: Vec<String>,
     pub unseen_episode_count: u32,
-    /// What the Flutter app wrote that this one does not read: written back as it was.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// `podcast_catalog.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Catalog {
     pub version: u32,
     pub followed: Vec<Followed>,
     pub feeds: Vec<Feed>,
-    /// What the Flutter app wrote that this one does not read: written back as it was.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -107,7 +95,6 @@ impl Default for Catalog {
     }
 }
 
-/// How far the user listened to an episode.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ListenProgress {
@@ -116,19 +103,16 @@ pub struct ListenProgress {
     pub duration_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
-    /// What the Flutter app wrote that this one does not read: written back as it was.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl ListenProgress {
-    /// Started and not finished: at least 3 s in, and 5 s or more from the end.
     pub fn is_continuable(&self) -> bool {
         self.position_ms >= 3000 && (self.duration_ms <= 0 || self.position_ms <= self.duration_ms - 5000)
     }
 }
 
-/// Apple's featured shows for studying English, by collection id.
 pub const FEATURED_IDS: &[&str] = &[
     "751574016",
     "160904630",
@@ -144,7 +128,6 @@ pub const FEATURED_IDS: &[&str] = &[
     "1545953110",
 ];
 
-/// The search request for `term`.
 pub fn search_url(term: &str) -> String {
     format!(
         "https://itunes.apple.com/search?term={}&media=podcast&entity=podcast&country=us&limit=25",
@@ -152,18 +135,15 @@ pub fn search_url(term: &str) -> String {
     )
 }
 
-/// The lookup request for collection ids.
 pub fn lookup_url(ids: &[&str]) -> String {
     format!("https://itunes.apple.com/lookup?id={}&entity=podcast", ids.join(","))
 }
 
-/// Apple's top-shows chart, of one genre or of all.
 pub fn chart_url(genre: Option<u32>, limit: u32) -> String {
     let genre = genre.map(|id| format!("/genre={id}")).unwrap_or_default();
     format!("https://itunes.apple.com/us/rss/toppodcasts/limit={limit}{genre}/explicit=true/json")
 }
 
-/// The collection ids of a chart, in its order.
 pub fn parse_chart_ids(body: &str) -> Vec<String> {
     let Ok(value) = serde_json::from_str::<Value>(body) else {
         return Vec::new();
@@ -179,7 +159,6 @@ pub fn parse_chart_ids(body: &str) -> Vec<String> {
         .collect()
 }
 
-/// The purposes the directory is browsed by: a name and Apple's genre.
 pub const COLLECTIONS: &[(&str, u32)] = &[
     ("News English", 1489),
     ("Explainers", 1304),
@@ -189,7 +168,6 @@ pub const COLLECTIONS: &[(&str, u32)] = &[
     ("Stories", 1487),
 ];
 
-/// Percent-encodes a query value.
 pub fn url_encode(text: &str) -> String {
     text.bytes()
         .map(|b| match b {
@@ -199,7 +177,6 @@ pub fn url_encode(text: &str) -> String {
         .collect()
 }
 
-/// The shows of an iTunes search or lookup response.
 pub fn parse_itunes(body: &str) -> Vec<ShowSummary> {
     let Ok(value) = serde_json::from_str::<Value>(body) else {
         return Vec::new();
@@ -225,8 +202,6 @@ pub fn parse_itunes(body: &str) -> Vec<ShowSummary> {
         .collect()
 }
 
-/// A URL in the one form ids are made of: lower-cased scheme and host, no
-/// trailing slash. Empty when it is not http or https.
 pub fn canonical_url(url: &str) -> String {
     let url = url.trim();
     let Some((scheme, rest)) = url.split_once("://") else {
@@ -260,7 +235,6 @@ static RFC822: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s+(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?").unwrap()
 });
 
-/// HTML as plain text: breaks and paragraph ends become new lines.
 pub fn strip_html(html: &str) -> String {
     let broken = BREAKS.replace_all(html, "\n");
     let text = TAGS
@@ -322,8 +296,6 @@ fn extension_of(url: &str, mime: Option<&str>) -> Option<String> {
     )
 }
 
-/// An RSS document as a feed; `requested_url` is where it came from. The
-/// error is the app's code: `podcast_invalid_feed` or `podcast_feed_empty`.
 pub fn parse_feed(xml: &str, requested_url: &str) -> Result<Feed, &'static str> {
     let document = roxmltree::Document::parse(xml).map_err(|_| "podcast_invalid_feed")?;
     let channel = document.descendants().find(|n| n.has_tag_name("channel")).ok_or("podcast_invalid_feed")?;
@@ -407,8 +379,6 @@ pub fn parse_feed(xml: &str, requested_url: &str) -> Result<Feed, &'static str> 
     })
 }
 
-/// A publisher's VTT or SRT transcript as a document, short cues joined
-/// into sentences. JSON and untimed text are not read.
 pub fn publisher_transcript(body: &str, reference: &PodcastTranscriptReference) -> Result<Document, &'static str> {
     let hint = format!("{} {}", reference.mime_type.as_deref().unwrap_or(""), reference.url).to_lowercase();
     let head = body.trim_start_matches('\u{feff}').trim_start();
@@ -448,7 +418,6 @@ pub fn publisher_transcript(body: &str, reference: &PodcastTranscriptReference) 
     Ok(Document { tokens: Vec::new(), segments, speakers: imported.document.speakers, updated_at: now_iso() })
 }
 
-/// The file name an episode is downloaded to.
 pub fn download_file_name(episode: &Episode) -> String {
     let title: String = episode
         .title

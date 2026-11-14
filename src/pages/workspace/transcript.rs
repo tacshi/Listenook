@@ -1,5 +1,3 @@
-//! The transcript: a virtualized list of sentences that follows playback.
-
 use listenook_core::{ContentMode, Segment, format::clock};
 use nsh_base::theme;
 use nsh_core::{element::Position, prelude::*};
@@ -17,12 +15,8 @@ use crate::{
     },
 };
 
-/// The transcript pane.
 pub(super) fn transcript(review: Review) -> impl IntoElement {
     let speaker = signal(None::<String>);
-    // Follow playback: bring the current sentence into view as it changes,
-    // and at once when playback starts, which may be far from where the
-    // list was left. Paused, the list is the reader's to scroll.
     let bring = move |animated: bool| {
         let Some(current) = review.current.get_untracked() else {
             return;
@@ -40,8 +34,6 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
             bring(true);
         }
     });
-    // A recording opens where it was left: so does its transcript, once
-    // the list is there to scroll.
     let open = std::rc::Rc::new(std::cell::Cell::new(true));
     {
         let open = open.clone();
@@ -49,7 +41,6 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
     }
     spawn(async move {
         timer(std::time::Duration::from_millis(250)).await;
-        // Unless the reader closed meanwhile, and its signals with it.
         if open.get() {
             bring(false);
         }
@@ -79,14 +70,12 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
         .child(speaker_dialog(review, speaker))
 }
 
-/// A cell: it shows the sentence at `at`, whichever that is now.
 fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> impl IntoElement {
     let store = review.store;
     let index = computed(move || review.shown.with(|shown| shown.get(at.index()).copied()));
     let segment = computed(move || index.get().and_then(|index| review.segment(index)));
     let read = move |f: fn(&Segment) -> SharedString| segment.with(|s| s.as_ref().map(f).unwrap_or_default());
     let id = move || segment.with(|s| s.as_ref().map(|s| s.id.clone()));
-    // The sentence being practiced stays marked while playback pauses past its end.
     let is_current = move || index.get().is_some() && index.get() == review.target();
     let is_repeating = move || id().is_some() && id() == review.repeating.get();
     let editing = move |translation: bool| {
@@ -99,7 +88,6 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
         let position = review.position_ms.get();
         words.with(|words| {
             let words = words.as_ref()?;
-            // The last word that has started: none is passed over in a pause.
             words.partition_point(|(_, start, _)| *start <= position).checked_sub(1)
         })
     });
@@ -121,7 +109,6 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
             review.play_from(index);
         }
     };
-    // The sentence's commands, on its buttons and on its menu alike.
     let toggle_repeat = move || {
         if let Some(index) = index.get_untracked() {
             review.toggle_repeat(index);
@@ -137,9 +124,6 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
             review.edit(index, true);
         }
     };
-    // The highlight is the row's own fill; the hover wash is a translucent
-    // layer over it, so the current sentence stays marked under the pointer.
-    // A reading column: lines stay a comfortable length in a wide window.
     let line = view()
         .w_full()
         .max_w(px(760.0))
@@ -209,9 +193,6 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                         ))
                         .child(when(move || editing(false) || editing(true), move || editor(review)).otherwise(
                             move || {
-                                // The button is outside the veil: a hidden sentence
-                                // plays from a press as a shown one does, and what is
-                                // under the veil is transparent, which takes no touch.
                                 nsh_base::button()
                                     .on_press(press)
                                     .rounded(tokens::radius_sm)
@@ -221,8 +202,6 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                                             .items_start()
                                             .gap_1()
                                             .child(when(shows_original, move || {
-                                                // With word timing, the current sentence is drawn
-                                                // word by word and the one being said is marked.
                                                 when(
                                                     move || words.with(Option::is_some),
                                                     move || {
@@ -236,8 +215,6 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                                                                     .text_color(tokens::highlight_foreground)
                                                                     .children(spans.into_iter().enumerate().flat_map(
                                                                         |(at, (word, ..))| {
-                                                                            // The mark is on the word alone, not on
-                                                                            // the space or the quote before it.
                                                                             let (lead, word) =
                                                                                 listenook_core::local::lead_and_word(
                                                                                     &word,
@@ -246,7 +223,6 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                                                                                 word.to_owned(),
                                                                             ));
                                                                             [
-                                                                                // A sentence does not begin with a space.
                                                                                 text(SharedString::from(
                                                                                     if at == 0 {
                                                                                         lead.trim_start()
@@ -309,9 +285,6 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                             },
                         )),
                 )
-                // The lane of a sentence's own commands: quiet until the row is
-                // pointed at, and always there for the current sentence. The same
-                // commands are on the keyboard (R) and in the transport.
                 .child(
                     view()
                         .flex_row()
@@ -320,9 +293,6 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                         .duration(motion::INSTANT)
                         .opacity(move || if is_current() || is_repeating() { 1.0_f32 } else { 0.0 })
                         .group_hover(|s| s.opacity(1.0))
-                        // Lit while this sentence repeats, as the
-                        // transport's repeat button is; no taller than
-                        // its button in a sentence of several lines.
                         .child(
                             ui::toggle_button(
                                 Variant::Ghost,
@@ -344,12 +314,9 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                         )),
                 ),
         );
-    // On a computer the same commands are on the sentence's own menu
-    // (a secondary click, or Shift+F10), so none of them needs the hover.
     if crate::platform::is_phone() {
         return view().items_center().child(line).into_element();
     }
-    // The column is the menu's own width, so its line fills it as before.
     view()
         .items_center()
         .child(
@@ -380,10 +347,8 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
         .into_element()
 }
 
-/// The inline editor of a sentence or its translation.
 fn editor(review: Review) -> impl IntoElement {
     let store = review.store;
-    // Bound for the text field too: that is where the caret is.
     on_key_with("escape", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
         review.editing.set(None)
     });
@@ -403,11 +368,8 @@ fn editor(review: Review) -> impl IntoElement {
             view()
                 .flex_row()
                 .gap_2()
-                // Cancel, then the commit, as in the app's dialogs.
                 .child(button(Variant::Outline, Size::Sm, l("Cancel")).on_press(move || review.editing.set(None)))
                 .child(button(Variant::Primary, Size::Sm, l("Save")).on_press(move || review.save_edit()))
-                // A sentence's structure is changed where its text is: cut
-                // at the caret, or join with the next one.
                 .child(when(
                     move || review.editing.with(|e| e.as_ref().is_some_and(|e| !e.translation)),
                     move || {
@@ -428,9 +390,10 @@ fn editor(review: Review) -> impl IntoElement {
                 .child(when(
                     move || {
                         review.editing.with(|e| e.as_ref().is_some_and(|e| e.translation))
-                            // One sentence would take the place of a translation under way.
                             && !review.job.with(|job| {
-                                job.as_ref().is_some_and(|job| job.translation_state.status == listenook_core::TranslationStatus::Translating)
+                                job.as_ref().is_some_and(|job| {
+                                    job.translation_state.status == listenook_core::TranslationStatus::Translating
+                                })
                             })
                             && store.setting(|s| s.llm_provider_settings.validate().is_none())
                     },
@@ -450,7 +413,6 @@ fn editor(review: Review) -> impl IntoElement {
         )
 }
 
-/// Rename a speaker: `speaker` holds the id while the dialog is open.
 fn speaker_dialog(review: Review, speaker: Signal<Option<String>>) -> impl IntoElement {
     let open = signal(false);
     let name = signal(String::new());

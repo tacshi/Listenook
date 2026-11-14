@@ -1,9 +1,5 @@
-//! The app's icons: one family (Lucide's outlines, ISC license), drawn in
-//! the text color of where they are placed.
-
 use nsh_core::prelude::*;
 
-/// An icon of the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
     Library,
@@ -16,7 +12,6 @@ pub enum Icon {
     Maximize,
     Minimize,
     Captions,
-    /// Sound becoming text: bars of a waveform, then lines of writing.
     Transcribe,
     Wave,
     Tag,
@@ -32,7 +27,6 @@ pub enum Icon {
     Check,
     ChevronRight,
     ChevronLeft,
-    /// The way back as the system's header draws it: taller and heavier.
     Back,
     ChevronDown,
     More,
@@ -51,7 +45,6 @@ pub enum Icon {
     Clock,
     Film,
     Info,
-    /// A computer and a phone side by side: syncing between devices.
     Devices,
 }
 
@@ -149,8 +142,6 @@ impl Icon {
                 r#"<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/>"#
             }
             Icon::Back => r#"<path d="M15.5 3.5 7 12l8.5 8.5" stroke-width="2.6"/>"#,
-            // As the system's own (`sidebar.left`): a wide pane, the side one
-            // marked with its rows.
             Icon::Sidebar => {
                 r#"<rect width="20" height="16" x="2" y="4" rx="4"/><path d="M9 4v16"/><path d="M4.8 8.5h1.6"/><path d="M4.8 11.5h1.6"/><path d="M4.8 14.5h1.6"/>"#
             }
@@ -163,7 +154,6 @@ impl Icon {
         }
     }
 
-    /// The icon as a `data:` URL an `svg` element draws at once.
     fn source(self) -> String {
         let markup = format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">{}</svg>"#,
@@ -173,7 +163,6 @@ impl Icon {
     }
 }
 
-/// SVG markup as a `data:` URL.
 fn data_url(markup: &str) -> String {
     let mut url = String::from("data:image/svg+xml,");
     for byte in markup.bytes() {
@@ -185,18 +174,14 @@ fn data_url(markup: &str) -> String {
     url
 }
 
-/// The app's glyph for the tray, as an image source: a template the menu
-/// bar draws in its own color.
 pub fn tray_icon_url() -> String {
     data_url(include_str!("../../assets/tray.svg"))
 }
 
-/// An icon at `size` points, in the surrounding text color.
 pub fn icon(icon: Icon, size: f32) -> Svg {
     svg(icon.source()).size(px(size)).flex_shrink_0()
 }
 
-/// An icon that follows a signal (play / pause).
 pub fn icon_of(icon: impl Fn() -> Icon + 'static, size: f32) -> Svg {
     svg(move || icon().source()).size(px(size)).flex_shrink_0()
 }

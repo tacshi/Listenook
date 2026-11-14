@@ -1,6 +1,3 @@
-//! The app's flows, with the steps a user takes, on the real engine without
-//! a window. Each test has its own data folder; the network is a stub.
-
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
@@ -12,7 +9,6 @@ use nsh_engine::{EngineConfig, Points, Root, Size};
 use nsh_testing::{DialogAnswer, Headless, StubNetwork, StubResponse};
 use serde_json::json;
 
-/// The data folder comes from the environment, which tests share: one at a time.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 const GONE: Duration = Duration::from_secs(5);
 
@@ -34,7 +30,6 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
     let root = std::env::temp_dir().join(format!("listenook-flow-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    // SAFETY: tests that read these run one at a time, under `turn`.
     unsafe {
         std::env::set_var("LISTENOOK_DATA_DIR", &root);
         std::env::set_var("LISTENOOK_MEMORY_SECRETS", "1");
@@ -53,12 +48,8 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
     App { app, root, _turn: turn }
 }
 
-/// Seeds the transcript and names the port this device answers other
-/// devices on (read when it becomes visible). Set here, once the test has
-/// its turn: tests that start an app run one at a time.
 fn on_port(port: u16) -> impl FnOnce(&Path) {
     move |root| {
-        // SAFETY: under the turn `start` holds.
         unsafe { std::env::set_var("LISTENOOK_SYNC_PORT", port.to_string()) };
         seed_transcript(root);
     }
@@ -68,7 +59,6 @@ fn manifest(root: &Path, id: &str) -> PathBuf {
     root.join("jobs").join(id).join("manifest.json")
 }
 
-/// A finished job with a five-sentence bilingual transcript.
 fn seed_transcript(root: &Path) {
     let sentences = [
         ("Welcome back to the show.", "欢迎回到节目。"),
@@ -160,7 +150,6 @@ fn dictation_checks_the_answer_without_showing_the_sentence() {
     it.app.press("label:Practice").unwrap();
     it.app.press("Type answer").unwrap();
     it.app.wait_for("text:Type what you hear").unwrap();
-    // Typing from hearing is blind listening: the transcript is out of sight.
     it.app.wait_for("label:Hidden sentence").unwrap();
     it.app.type_text("text:Type what you hear", "welcome to the show").unwrap();
     it.app.press("role:button[Check]").unwrap();
@@ -199,14 +188,12 @@ fn a_tablet_menu_still_closes_on_a_choice_after_its_page_was_left() {
     let mut it = start(
         "tablet-menu",
         |root| {
-            // SAFETY: under the turn `start` holds.
             unsafe { std::env::set_var("LISTENOOK_TABLET_MENUS", "1") };
             seed_transcript(root);
         },
         Vec::new(),
     );
     it.app.wait_for("Learning languages").unwrap();
-    // The first menus go with the page they were made in.
     it.app.press("role:button[Podcasts]").unwrap();
     it.app.wait_for_gone("Learning languages", GONE).unwrap();
     it.app.press("Library").unwrap();
@@ -305,7 +292,6 @@ fn a_show_opens_from_discover_and_lists_its_episodes() {
     assert!(catalog.contains("https://feeds.example/daily"), "the followed show is saved");
 }
 
-/// A local AI endpoint (no key needed) answering every chat completion with `content`.
 fn llm(root: &Path, content: &str) -> Vec<(String, StubResponse)> {
     let settings = json!({"llm_provider_settings": {"provider": "lmStudio", "base_url": "http://localhost:1234/v1", "model": "local-model"}});
     std::fs::write(root.join("settings.json"), settings.to_string()).unwrap();
@@ -373,7 +359,6 @@ fn an_ai_brief_is_generated_with_evidence_and_unsupported_items_dropped() {
     it.app.wait_for("A talk about daily listening.").unwrap();
     assert!(it.app.shows("Consistency beats intensity."));
     assert!(!it.app.shows("Invented chapter"), "a chapter citing no real sentence is dropped");
-    // An evidence chip takes the user back to the transcript at that moment.
     it.app.press("label:Play from 00:03").unwrap();
     it.app.wait_for("Today we are talking about how people learn languages.").unwrap();
 }
@@ -422,11 +407,9 @@ fn two_sentences_are_merged_from_the_editor() {
 fn another_devices_sync_is_accepted_and_its_recording_arrives() {
     let mut it = start("sync", on_port(47941), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
-    // Opening Sync makes the device visible and looks for others.
     it.app.press("label:Sync with another device…").unwrap();
     it.app.wait_for("Nearby devices").unwrap();
 
-    // The other device: it asks, and once accepted sends a recording.
     let other = std::thread::spawn(|| -> Result<serde_json::Value, String> {
         let base = "http://127.0.0.1:47941/listenook";
         let hello = json!({
@@ -477,8 +460,6 @@ fn another_devices_sync_is_accepted_and_its_recording_arrives() {
     assert!(catalog.contains("shared"), "its tag came with it");
 }
 
-/// What the other device removed goes here too, and stays gone when a
-/// device sends it again unchanged.
 #[test]
 fn a_recording_removed_on_the_other_device_is_removed_here() {
     let mut it = start("sync-removed", on_port(47943), Vec::new());
@@ -507,7 +488,6 @@ fn a_recording_removed_on_the_other_device_is_removed_here() {
         let welcome: serde_json::Value =
             serde_json::from_str(&welcome.ok_or("the device never answered")?).map_err(|error| error.to_string())?;
         let token = welcome["token"].as_str().ok_or("no token")?.to_owned();
-        // As a Listenook that knows nothing of removals would.
         ureq::put(&format!("{base}/manifest/sample"))
             .set("X-Listenook-Token", &token)
             .send_string(&old)
@@ -528,8 +508,6 @@ fn a_recording_removed_on_the_other_device_is_removed_here() {
     assert!(removed.contains("sample"), "the removal is remembered for the next device");
 }
 
-/// The sync another device drives shows in the Sync dialog, which can be
-/// put away meanwhile; a device that is no longer heard from ends it.
 #[test]
 fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
     use std::io::Write;
@@ -558,7 +536,6 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
     let welcome: serde_json::Value = serde_json::from_str(&other.join().unwrap().unwrap()).unwrap();
     let token = welcome["token"].as_str().unwrap().to_owned();
 
-    // The dialog now tells whose sync runs, and how far the other device says it is.
     it.app.wait_for("Syncing with Studio Mac…").unwrap();
     assert!(!it.app.shows("Nearby devices"), "no device is chosen while one syncs");
     let job = json!({
@@ -573,14 +550,12 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
         .unwrap();
     it.app.wait_for("1 / 3 recordings").unwrap();
 
-    // Put away, the dialog goes and the sync goes on: it is there when opened again.
     it.app.press("role:button[Close]").unwrap();
     it.app.wait_for_gone("Syncing with Studio Mac…", GONE).unwrap();
     it.app.wait_for("Sent from the studio").unwrap();
     it.app.press("label:Sync with another device…").unwrap();
     it.app.wait_for("Syncing with Studio Mac…").unwrap();
 
-    // The other device drops off in the middle of a file, and says nothing more.
     let mut broken = std::net::TcpStream::connect("127.0.0.1:47942").unwrap();
     write!(
         broken,
@@ -593,8 +568,6 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
     let late = ureq::get(&format!("{base}/manifest/sample")).set("X-Listenook-Token", &token).call();
     assert!(matches!(late, Err(ureq::Error::Status(410, _))), "the sync is over for the other device too");
 
-    // It comes back for the rest: let in without asking again, and the
-    // file goes on from what arrived of it.
     let hello = json!({
         "device": {"app": "listenook", "protocol": 1, "id": "other", "name": "Studio Mac", "platform": "macos", "port": 47942},
         "catalog": {"version": 1, "groups": [], "tags": []},
@@ -633,21 +606,16 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
     it.app.wait_for_gone("Synced with Studio Mac", GONE).unwrap();
 }
 
-/// The device this one syncs with drops the connection in the middle of a
-/// file: the sync is taken up again by itself, and the file from where it broke off.
 #[test]
 fn a_lost_connection_is_taken_up_again_where_it_broke_off() {
     use std::io::{BufRead, BufReader, Read, Write};
     let mut it = start("sync-lost", on_port(47943), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
 
-    // The other device: it accepts at once, goes away a tenth into the
-    // file, and is back when asked again.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let other = std::thread::spawn(move || {
         let device = json!({"app": "listenook", "protocol": 1, "id": "other", "name": "Studio Mac", "platform": "macos", "port": port});
-        // Each call: its path, the offset it names, its body.
         let mut asked: Vec<(String, Option<String>, String)> = Vec::new();
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
@@ -684,7 +652,6 @@ fn a_lost_connection_is_taken_up_again_where_it_broke_off() {
                         "catalog": {"version": 1, "groups": [], "tags": []},
                     },
                 })),
-                // A tenth of the file, and the connection is gone.
                 ("/listenook/media/lost", None) => {
                     format!("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n{}", "x".repeat(100))
                 }

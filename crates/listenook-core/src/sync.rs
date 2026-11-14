@@ -1,64 +1,40 @@
-//! Syncing two Libraries over the local network: what each device tells
-//! the other about itself and its recordings, and what is then copied
-//! which way. The transport is the app's; nothing here touches the network.
-//!
-//! Both Libraries end as their union. A recording only one has is copied
-//! to the other, media and all. One both have keeps the manifest changed
-//! last, and its media goes to the side that lacks the file. A recording
-//! being worked on (transcribed, translated) on either side is left for
-//! the next sync. A recording removed on one device is removed on the
-//! other too, unless it was changed there after it was removed: each
-//! device remembers what was removed from it, and when.
-
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
 use crate::models::{Job, LibraryCatalog, Named};
 
-/// The version of the conversation; devices that differ do not sync.
 pub const PROTOCOL: u32 = 1;
 
-/// A device, as it names itself to others.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Device {
-    /// `"listenook"`: what tells the app's answer from another program's.
     pub app: String,
     pub protocol: u32,
-    /// Made once per installation.
     pub id: String,
     pub name: String,
-    /// `macos`, `ios`, `android`, `windows` or `linux`.
     pub platform: String,
-    /// The port it answers on.
     pub port: u16,
 }
 
 impl Device {
-    /// Whether this is the app, speaking the protocol this build speaks.
     pub fn is_compatible(&self) -> bool {
         self.app == "listenook" && self.protocol == PROTOCOL && !self.id.is_empty()
     }
 }
 
-/// One recording of a Library, as the other device needs to know it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Entry {
     pub id: String,
     pub updated_at: String,
-    /// The media file's name, when the device has the file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_name: Option<String>,
     pub media_size: u64,
-    /// Work is running for it: it is left alone this time.
     pub busy: bool,
 }
 
 impl Entry {
-    /// What a job is to the other device. `media_size` is its file's size,
-    /// or none when the file is not there.
     pub fn of(job: &Job, media_size: Option<u64>) -> Entry {
         Entry {
             id: job.id.clone(),
@@ -74,39 +50,30 @@ impl Entry {
     }
 }
 
-/// A Library, as one device tells it to the other.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Index {
     pub entries: Vec<Entry>,
     pub catalog: LibraryCatalog,
-    /// The recordings removed from the device, and when ([`Removed`]).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub removed: Removed,
 }
 
-/// The recordings removed from a device, by id, with the time of each
-/// removal.
 pub type Removed = BTreeMap<String, String>;
 
-/// Whether a recording removed at `removed_at` stays removed, last changed
-/// at `updated_at` where it still is: not when it was changed since.
 pub fn removal_stands(removed_at: &str, updated_at: &str) -> bool {
     millis(removed_at) >= millis(updated_at)
 }
 
-/// What to copy for one recording.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transfer {
     pub id: String,
     pub manifest: bool,
     pub media: bool,
-    /// The media file's name and size, when it is copied.
     pub media_name: String,
     pub media_size: u64,
 }
 
-/// What a sync copies: `pull` from the other device, `push` to it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Plan {
     pub pull: Vec<Transfer>,
@@ -114,31 +81,23 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Nothing differs.
     pub fn is_empty(&self) -> bool {
         self.pull.is_empty() && self.push.is_empty()
     }
 
-    /// The bytes of media it copies, both ways.
     pub fn media_bytes(&self) -> u64 {
         self.pull.iter().chain(&self.push).filter(|t| t.media).map(|t| t.media_size).sum()
     }
 }
 
-/// A manifest's time as milliseconds, for comparing times written with
-/// different precision. Text that is no time sorts before every time.
 fn millis(time: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(time).map_or(i64::MIN, |time| time.timestamp_millis())
 }
 
-/// What to copy so that both Libraries hold the union of `local` and `remote`.
 pub fn plan(local: &[Entry], remote: &[Entry]) -> Plan {
     plan_with(local, remote, &Removed::new(), &Removed::new())
 }
 
-/// [`plan`], less what was removed from either device (`removed_here`,
-/// `removed_there`) and not changed on the other since: that is copied
-/// neither way, and each device removes what the other removed.
 pub fn plan_with(local: &[Entry], remote: &[Entry], removed_here: &Removed, removed_there: &Removed) -> Plan {
     let gone = |entry: &Entry, removed: &Removed| {
         removed.get(&entry.id).is_some_and(|at| removal_stands(at, &entry.updated_at))
@@ -180,10 +139,6 @@ pub fn plan_with(local: &[Entry], remote: &[Entry], removed_here: &Removed, remo
     plan
 }
 
-/// Takes the other device's groups and tags into `local`. One whose name
-/// is already here under another id is not added twice: the returned map
-/// leads from the other device's id to the one used here, for the
-/// recordings that come with it (see [`rehome`]).
 pub fn merge_catalog(local: &mut LibraryCatalog, remote: &LibraryCatalog) -> HashMap<String, String> {
     fn merge(local: &mut Vec<Named>, remote: &[Named], map: &mut HashMap<String, String>) {
         for other in remote {
@@ -202,8 +157,6 @@ pub fn merge_catalog(local: &mut LibraryCatalog, remote: &LibraryCatalog) -> Has
     map
 }
 
-/// Files a recording that came from the other device under this device's
-/// groups and tags (`map` is [`merge_catalog`]'s).
 pub fn rehome(job: &mut Job, map: &HashMap<String, String>) {
     if map.is_empty() {
         return;
@@ -222,8 +175,6 @@ pub fn rehome(job: &mut Job, map: &HashMap<String, String>) {
     job.tag_ids.dedup();
 }
 
-/// The extension a media file named `name` is kept under: lowercase
-/// letters and digits only, `media` when it has none.
 pub fn media_extension(name: &str) -> String {
     let extension: String = name
         .rsplit_once('.')
@@ -237,21 +188,14 @@ pub fn media_extension(name: &str) -> String {
     if extension.is_empty() { "media".into() } else { extension }
 }
 
-/// The name, in the app's `media` folder, of the file a synced recording's
-/// media is kept in.
 pub fn media_file_name(job_id: &str, name: &str) -> String {
     format!("sync-{job_id}.{}", media_extension(name))
 }
 
-/// Whether `name` is one [`media_file_name`] gives the recording's media.
 pub fn is_sync_name(job_id: &str, name: &str) -> bool {
     name.strip_prefix("sync-").and_then(|rest| rest.strip_prefix(job_id)).is_some_and(|rest| rest.starts_with('.'))
 }
 
-/// Titles a recording after `name`, its media file's name on the device
-/// it came from, when the file a sync brought is all that names it here:
-/// a recording with no title of its own is called by its file. Whether
-/// that changed it.
 pub fn keep_title(job: &mut Job, name: &str) -> bool {
     let lost = format!("sync-{}", job.id);
     let title = match name.rsplit_once('.') {
@@ -274,13 +218,11 @@ mod tests {
     fn a_synced_recording_keeps_the_name_of_its_file() {
         let mut job = Job { id: "a-1".into(), source_path: "/there/Talk about it.mp3".into(), ..Job::default() };
         let name = job.file_name();
-        // Its own file names it still.
         assert!(!keep_title(&mut job, &name));
         job.source_path = format!("/here/media/{}", media_file_name("a-1", &name));
         assert_eq!(job.title(), "sync-a-1");
         assert!(keep_title(&mut job, &name));
         assert_eq!(job.title(), "Talk about it");
-        // A title of its own stays, and a sync's name is no title.
         assert!(!keep_title(&mut job, "Other.mp3"));
         job.display_title = None;
         assert!(!keep_title(&mut job, "sync-a-1.mp3"));
@@ -315,7 +257,6 @@ mod tests {
 
     #[test]
     fn the_manifest_changed_last_wins_and_media_goes_where_it_is_missing() {
-        // Ours is newer; theirs has the file we lost.
         let plan = plan(&[entry("a", LATE, false)], &[entry("a", EARLY, true)]);
         assert_eq!(plan.push.len(), 1);
         assert!(plan.push[0].manifest && !plan.push[0].media);
@@ -325,7 +266,6 @@ mod tests {
 
     #[test]
     fn equal_recordings_and_busy_ones_are_left_alone() {
-        // The same instant, written with different precision.
         let same = plan(&[entry("a", EARLY, true)], &[entry("a", "2026-01-01T00:00:00.000000Z", true)]);
         assert!(same.is_empty());
         let mut working = entry("a", LATE, true);
@@ -339,11 +279,8 @@ mod tests {
     fn a_removed_recording_is_not_copied_back_unless_changed_since() {
         let removed = |at: &str| Removed::from([("a".to_owned(), at.to_owned())]);
         let none = Removed::new();
-        // Removed here after its last change there: it stays away.
         assert!(plan_with(&[], &[entry("a", EARLY, true)], &removed(LATE), &none).is_empty());
-        // Removed there: it is not sent again.
         assert!(plan_with(&[entry("a", EARLY, true)], &[], &none, &removed(LATE)).is_empty());
-        // Changed after it was removed: it comes back.
         assert_eq!(plan_with(&[], &[entry("a", LATE, true)], &removed(EARLY), &none).pull.len(), 1);
         assert_eq!(plan_with(&[entry("a", LATE, true)], &[], &none, &removed(EARLY)).push.len(), 1);
     }

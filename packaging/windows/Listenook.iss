@@ -59,7 +59,6 @@ ChangesAssociations=yes
 Type: files; Name: "{app}\MeowSTT.exe"
 Type: files; Name: "{autoprograms}\MeowSTT.lnk"
 Type: files; Name: "{autodesktop}\MeowSTT.lnk"
-; What the Flutter build installed and this one does not have.
 Type: filesandordirs; Name: "{app}\data"
 Type: filesandordirs; Name: "{app}\flac"
 Type: files; Name: "{app}\flutter_windows.dll"
@@ -72,8 +71,6 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Name: "videoassoc"; Description: "Open video files with Listenook (MP4, MKV, MOV, M4V, WebM, AVI)"; GroupDescription: "File associations:"
 
 [Registry]
-; Video player: Listenook appears in "Open with" and in Default apps. Windows
-; lets the user, not the installer, make it the default.
 Root: HKA; Subkey: "Software\Classes\Listenook.Video"; ValueType: string; ValueName: ""; ValueData: "Video"; Flags: uninsdeletekey; Tasks: videoassoc
 Root: HKA; Subkey: "Software\Classes\Listenook.Video\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\Listenook.exe,0"; Tasks: videoassoc
 Root: HKA; Subkey: "Software\Classes\Listenook.Video\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Listenook.exe"" ""%1"""; Tasks: videoassoc

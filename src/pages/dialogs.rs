@@ -1,5 +1,3 @@
-//! Dialogs more than one page opens: exporting and renaming a transcript.
-
 use listenook_core::{ContentMode, ExportFormat, export};
 use nsh_core::prelude::*;
 
@@ -8,7 +6,6 @@ use crate::{
     ui::{Tone, checkbox, field, hint, modal, modal_actions, select, text_field, text_field_with, toast},
 };
 
-/// A dialog about one job: which job, and whether it is open.
 #[derive(Clone, Copy)]
 pub(crate) struct JobDialog {
     job: Signal<String>,
@@ -16,12 +13,10 @@ pub(crate) struct JobDialog {
 }
 
 impl JobDialog {
-    /// A closed dialog. Make it in a page's body.
     pub(crate) fn new() -> Self {
         Self { job: signal(String::new()), open: signal(false) }
     }
 
-    /// Opens it for a job.
     pub(crate) fn show(&self, id: &str) {
         batch(|| {
             self.job.set(id.to_owned());
@@ -34,7 +29,6 @@ impl JobDialog {
     }
 }
 
-/// Writes `contents` where the user chooses, proposing `file_name`.
 pub(crate) fn save_text(file_name: String, contents: String) {
     store().run(async move {
         let Some(path) = crate::util::save_target(file_name).await else {
@@ -47,7 +41,6 @@ pub(crate) fn save_text(file_name: String, contents: String) {
     });
 }
 
-/// The export dialog: format, content and labels, remembered for next time.
 pub(crate) fn export_dialog(dialog: JobDialog) -> impl IntoElement {
     let store = store();
     let options = move || store.setting(|s| s.export_options.clone());
@@ -134,7 +127,6 @@ pub(crate) fn export_dialog(dialog: JobDialog) -> impl IntoElement {
     )
 }
 
-/// The rename dialog: a transcript's display title.
 pub(crate) fn rename_dialog(dialog: JobDialog) -> impl IntoElement {
     let store = store();
     let title = signal(String::new());
@@ -170,7 +162,6 @@ pub(crate) fn rename_dialog(dialog: JobDialog) -> impl IntoElement {
     )
 }
 
-/// The group dialog: file a recording in a group, a new one, or none.
 pub(crate) fn group_dialog(dialog: JobDialog) -> impl IntoElement {
     let store = store();
     let chosen = signal(SharedString::default());
@@ -217,7 +208,6 @@ pub(crate) fn group_dialog(dialog: JobDialog) -> impl IntoElement {
     )
 }
 
-/// The tags dialog: each tag is on or off at once; a new name makes a tag.
 pub(crate) fn tags_dialog(dialog: JobDialog) -> impl IntoElement {
     let store = store();
     let new_name = signal(String::new());
@@ -225,7 +215,6 @@ pub(crate) fn tags_dialog(dialog: JobDialog) -> impl IntoElement {
         let name = new_name.get_untracked();
         let name = name.trim();
         if !name.is_empty() {
-            // A tag the recording already carries stays on it.
             let carried = store.job_now(&dialog.id()).is_some_and(|job| job.tag_ids.iter().any(|tag| tag == name));
             if !carried {
                 store.toggle_tag(&dialog.id(), name);
@@ -278,8 +267,6 @@ pub(crate) fn tags_dialog(dialog: JobDialog) -> impl IntoElement {
     )
 }
 
-/// Saves the transcripts of `jobs` as one ZIP, with the export options last
-/// used. Names that repeat get `-2`, `-3`, ...
 pub(crate) fn export_zip(jobs: Vec<std::rc::Rc<listenook_core::Job>>) {
     let store = store();
     let mut options = store.settings().export_options;
@@ -327,8 +314,6 @@ pub(crate) fn export_zip(jobs: Vec<std::rc::Rc<listenook_core::Job>>) {
     });
 }
 
-/// Asks which of several subtitle files beside a new recording is its
-/// transcript. Placed once, in the shell.
 pub(crate) fn subtitle_choice_dialog() -> impl IntoElement {
     let store = store();
     let open = signal(false);
@@ -342,7 +327,6 @@ pub(crate) fn subtitle_choice_dialog() -> impl IntoElement {
             open.set(waiting.is_some());
         });
     });
-    // Closed any other way, the recording stays without a transcript.
     effect(move || {
         if !open.get() && untracked(|| store.subtitle_choice().is_some()) {
             store.subtitle_chosen();

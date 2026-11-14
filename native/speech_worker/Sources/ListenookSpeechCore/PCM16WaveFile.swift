@@ -5,8 +5,6 @@ enum PCM16WaveFileError: Error, Equatable {
     case invalid
 }
 
-/// Metadata and bounded range access for a 16-bit mono PCM WAVE file.
-/// The audio data chunk is never materialized as one duration-sized array.
 struct PCM16WaveFile: Sendable {
     let path: String
     let sampleRate: Int

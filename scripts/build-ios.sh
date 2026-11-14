@@ -1,11 +1,4 @@
 #!/usr/bin/env bash
-# Builds the iOS and iPadOS app with `nsh package`.
-#
-#   build-ios.sh debug     an unsigned .app: a check that everything builds
-#   build-ios.sh release   a signed .ipa in build/
-#
-# A release needs LISTENOOK_IOS_SIGN_IDENTITY (such as "Apple Distribution:
-# Example Inc (ABCDE12345)") and LISTENOOK_IOS_PROFILE (a .mobileprovision).
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"

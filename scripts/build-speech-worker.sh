@@ -1,11 +1,4 @@
 #!/usr/bin/env bash
-# Builds the Swift helper that runs MOSS with Core ML, and the MLX Metal
-# library it loads, for Apple silicon Macs.
-#
-#   build-speech-worker.sh [output path]
-#
-# Without a path the helper goes to build/native/speech_worker/. Point a
-# development run at it with LISTENOOK_SPEECH_WORKER.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,9 +19,6 @@ grep -qF "$SPEECH_SWIFT_COMMIT" "$PACKAGE/Package.swift" || {
 }
 mkdir -p "$MODULE_CACHE" "$XDG_CACHE"
 
-# The Metal toolchain is mounted under a name that changes with each mount
-# (a restart, an Xcode update). A build plan kept from before then points
-# at a compiler that is no longer there: it is dropped and made again.
 PLANS="$SCRATCH/out/Intermediates.noindex/XCBuildData"
 if [[ -d "$PLANS" ]]; then
   while IFS= read -r MOUNT; do
@@ -66,9 +56,6 @@ METAL_BUILD_ROOT="$SCRATCH/listenook-metal-build"
 mkdir -p "$METAL_BUILD_ROOT"
 ln -sfn "$SCRATCH/checkouts" "$METAL_BUILD_ROOT/checkouts"
 ln -sfn "$BIN_DIR" "$METAL_BUILD_ROOT/release"
-# Match the worker's platforms: [.macOS("15.0")] so the Metal compiler targets
-# Metal 3.2, as MLX's own build does. Newer Xcode defaults to Metal 4.x, whose
-# address-space rules reject MLX kernels and whose metallib needs a newer OS.
 export MACOSX_DEPLOYMENT_TARGET=15.0
 METAL_TOOLCHAIN_ID=""
 if ! xcrun metal --version >/dev/null 2>&1; then

@@ -1,6 +1,3 @@
-//! Settings: appearance and language, the transcription providers' keys,
-//! the AI provider, the shortcuts, and updates.
-
 use listenook_core::{LlmProvider, LocaleMode, ThemeMode, local::Model};
 
 use nsh_base::theme;
@@ -36,7 +33,6 @@ enum Tab {
 impl Tab {
     const ALL: [Tab; 5] = [Tab::General, Tab::Transcription, Tab::Ai, Tab::Shortcuts, Tab::About];
 
-    /// The tab's name, untranslated.
     fn key(self) -> &'static str {
         match self {
             Tab::General => "General",
@@ -48,20 +44,14 @@ impl Tab {
     }
 }
 
-/// The app's version, as `nsh.json` has it.
-/// The version shown in About: the one a release is built as
-/// (`LISTENOOK_VERSION`, which the build scripts set), else the crate's.
 pub(crate) const VERSION: &str = match option_env!("LISTENOOK_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };
 
-/// The Settings dialog: defaults and accounts. What is decided per
-/// recording (how to transcribe, what to show) is decided where it is used.
 pub(crate) fn settings_dialog() -> impl IntoElement {
     let open = store().settings_open();
     let tab = signal(Tab::General);
-    // A check asked for from a menu shows where its answer is.
     effect(move || {
         if store().update_check().get() {
             tab.set(Tab::About);
@@ -76,8 +66,6 @@ pub(crate) fn settings_dialog() -> impl IntoElement {
             view()
                 .gap_5()
                 .child(
-                    // Five tabs do not fit a phone's width: there the row
-                    // scrolls sideways.
                     when(crate::platform::compact, move || {
                         scroll().horizontal().scrollbar(false).child(segmented(
                             Tab::ALL.iter().map(|tab| (*tab, tab.key())).collect(),
@@ -105,7 +93,6 @@ pub(crate) fn settings_dialog() -> impl IntoElement {
                 }))
                 .into_element()
         },
-        // Settings take effect as they are made: Done only closes.
         move || button(Variant::Default, Size::Md, l("Done")).on_press(move || open.set(false)).into_element(),
     )
 }
@@ -164,7 +151,6 @@ fn general() -> impl IntoElement {
                         move || store.tray_enabled(),
                         move |on| store.set_tray_enabled(on),
                     )
-                    // Hiding both icons would leave no way back in.
                     .disabled(move || !store.dock_visible()))
                     .child(hint(move || {
                         tr(if store.dock_visible() {
@@ -240,8 +226,6 @@ fn general() -> impl IntoElement {
     )))
 }
 
-/// A field for a secret: it shows whether one is stored, never the key.
-/// `keyless` says when the provider can be tested without any key.
 fn key_field(
     secret: Secret,
     keyless: impl Fn() -> bool + Copy + 'static,
@@ -332,7 +316,6 @@ fn test_provider(provider: Provider) -> impl Fn(String, Signal<SharedString>) + 
     move |key, status| {
         store().run(async move {
             let result = provider.validate_key(&key).await;
-            // The dialog may have closed meanwhile, and its signals with it.
             status.try_set(match result {
                 Ok(()) => format!("{} {}", provider.name(), tr("key is valid.")).into(),
                 Err(failure) => error_text(&failure.code),
@@ -402,7 +385,6 @@ fn transcription() -> impl IntoElement {
         .child(when(local::supported, on_this_mac))
 }
 
-/// Where a set of models stands together.
 fn state_of(models: &'static [Model]) -> ModelState {
     let states: Vec<ModelState> = models.iter().map(local::model_state).collect();
     let size = |model: &Model| model.size() as f64;
@@ -426,8 +408,6 @@ fn state_of(models: &'static [Model]) -> ModelState {
     }
 }
 
-/// One thing to download: what it is for, how large, where it stands and
-/// the one action that fits.
 fn model_row(title: &'static str, about: &'static str, models: &'static [Model]) -> impl IntoElement {
     let store = store();
     let state = move || state_of(models);
@@ -508,7 +488,6 @@ fn model_row(title: &'static str, about: &'static str, models: &'static [Model])
         ))
 }
 
-/// Transcription and word timing on this machine.
 fn on_this_mac() -> impl IntoElement {
     let store = store();
     let ready = |model: &'static Model| local::model_state(model) == ModelState::Ready;
@@ -581,7 +560,6 @@ fn ai() -> impl IntoElement {
             let settings = store.settings().llm_provider_settings;
             match llm::list_models(&settings, Some(key)).await {
                 Ok(found) => {
-                    // The dialog may have closed meanwhile, and its signals with it.
                     if !status.try_set(format!("{} {}", found.len(), tr("models available.")).into()) {
                         return;
                     }
@@ -656,8 +634,6 @@ fn ai() -> impl IntoElement {
     ))
 }
 
-/// A text field whose value is a setting: each edit is saved. The app's
-/// one field, as every other.
 fn settings_input(
     value: impl Fn() -> String + 'static,
     set: impl Fn(String) + 'static,
@@ -740,7 +716,6 @@ fn shortcuts() -> impl IntoElement {
 fn about() -> impl IntoElement {
     let store = store();
     let state = signal(UpdateState::default());
-    // A check asked for from a menu, before this page showed or while it does.
     effect(move || {
         if store.update_check().get() {
             store.update_check().set(false);

@@ -1,15 +1,10 @@
-//! SRT, WebVTT and ASS/SSA files as transcripts. Imported cues keep their
-//! own timings: nothing is recognized or aligned.
-
 use std::{path::Path, sync::LazyLock};
 
 use regex::Regex;
 
 use crate::models::{Document, Segment, Speaker, now_iso};
 
-/// The media a job can be made from.
 pub const MEDIA_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "ogg", "mp4", "mkv", "avi"];
-/// The subtitle files that pair with media.
 pub const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "ssa"];
 const LANGUAGE_SUFFIXES: &[&str] = &["zh", "yue", "en", "de", "es", "fr", "it", "pt", "ru", "ko", "ja"];
 
@@ -23,7 +18,6 @@ static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]*>").unwrap());
 static ASS_OVERRIDE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{[^}]*\}").unwrap());
 static ASS_DRAW_ON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\p[1-9]").unwrap());
 
-/// One timed line of a subtitle file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cue {
     pub start_ms: i64,
@@ -31,31 +25,24 @@ pub struct Cue {
     pub text: String,
 }
 
-/// What a subtitle file gave.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportedSubtitles {
     pub document: Document,
-    /// Cues left out: unreadable, empty or ending before they start.
     pub ignored: usize,
 }
 
-/// The lower-cased extension of a path.
 pub fn extension(path: &str) -> String {
     Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
-/// Whether a job can be made from the file.
 pub fn is_media(path: &str) -> bool {
     MEDIA_EXTENSIONS.contains(&extension(path).as_str())
 }
 
-/// Whether the file is a subtitle file this app reads.
 pub fn is_subtitle(path: &str) -> bool {
     SUBTITLE_EXTENSIONS.contains(&extension(path).as_str())
 }
 
-/// Whether a subtitle file belongs to a media file: beside it, with the same
-/// name, or the same name and a language suffix (`talk.en.srt`).
 pub fn pairs_with(subtitle: &str, media: &str) -> bool {
     let (subtitle, media) = (Path::new(subtitle), Path::new(media));
     if subtitle.parent() != media.parent() {
@@ -72,8 +59,6 @@ pub fn pairs_with(subtitle: &str, media: &str) -> bool {
     })
 }
 
-/// Bytes of a subtitle file as text: UTF-8 or UTF-16 by their marks, else
-/// UTF-8, else Windows-1252.
 pub fn decode(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(rest).into_owned();
@@ -99,7 +84,6 @@ pub fn decode(bytes: &[u8]) -> String {
     }
 }
 
-/// Removes `[sound]` notes and `>>` marks, and tidies the spaces of each line.
 pub fn clean_caption(text: &str, keep_line_breaks: bool) -> String {
     let text = BRACKETED.replace_all(text, "").replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<String> = text
@@ -126,7 +110,6 @@ fn timing(line: &str) -> Option<(i64, i64)> {
     Some((clock_ms(start.split_whitespace().next()?)?, clock_ms(end.split_whitespace().next()?)?))
 }
 
-/// Cues of an SRT or WebVTT text, and how many blocks could not be read.
 fn block_cues(text: &str, vtt: bool) -> (Vec<Cue>, usize) {
     let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
     if vtt {
@@ -225,8 +208,6 @@ fn decode_entities(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// A subtitle file's text as a transcript. `extension` is `srt`, `vtt`,
-/// `ass` or `ssa`; `duration_ms` cuts cues to the media's length when known.
 pub fn import_subtitles(
     text: &str,
     extension: &str,
