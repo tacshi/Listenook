@@ -696,8 +696,8 @@ fn shortcuts() -> impl IntoElement {
             "Playback",
             vec![
                 ("space", "Play or pause"),
-                ("alt+left", "Previous sentence"),
-                ("alt+right", "Next sentence"),
+                ("left", "Previous sentence"),
+                ("right", "Next sentence"),
                 ("r", "Repeat the sentence while held"),
                 ("s", "Reveal current sentence"),
                 ("e", "Edit current sentence"),
@@ -708,6 +708,7 @@ fn shortcuts() -> impl IntoElement {
             vec![
                 ("mod+f", "Search transcript"),
                 ("mod+enter", "Save an edit, or check your answer"),
+                ("mod+z", "Undo the last sentence change"),
                 ("escape", "Cancel an edit, close search, or go back"),
             ],
         ))

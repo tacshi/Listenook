@@ -97,6 +97,8 @@ fn opened(id: &str) -> impl IntoElement {
     }
     cleanup(move || leaving.set(false));
     on_key("space", move |_| review.toggle_play());
+    on_key("left", move |_| review.step(-1));
+    on_key("right", move |_| review.step(1));
     on_key("alt+left", move |_| review.step(-1));
     on_key("alt+right", move |_| review.step(1));
     let held = std::rc::Rc::new(std::cell::RefCell::new(None::<Hold>));
@@ -144,6 +146,9 @@ fn opened(id: &str) -> impl IntoElement {
         review.revealed.update(|revealed| *revealed = if revealed.is_some() { None } else { current });
     });
     on_key("mod+f", move |_| review.searching.set(true));
+    on_key("mod+z", move |_| {
+        review.undo();
+    });
     on_key("e", move |_| {
         if let Some(index) = untracked(|| review.target_or_first()) {
             let translation = review.mode.get_untracked() == ContentMode::Translated
@@ -691,18 +696,17 @@ fn translation_strip(review: Review) -> impl IntoElement {
 }
 
 fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
-    let dragging = signal(None::<f64>);
     let active = move || !review.paused.get() || review.waiting.get();
     let variant = move |picture: bool| if picture { Variant::Picture } else { Variant::Ghost };
     let position = move |picture: bool| {
         (if picture { ui::slider_on_picture } else { ui::slider })(
             "Position",
-            move || dragging.get().unwrap_or(review.position_ms.get() as f64),
+            move || review.scrub.get().unwrap_or(review.position_ms.get()) as f64,
             move || review.duration_ms.get() as f64,
-            move |value| dragging.set(Some(value)),
+            move |value| review.scrub.set(Some(value as i64)),
             move |value| {
                 review.seek(value as i64);
-                dragging.set(None);
+                review.scrub.set(None);
             },
         )
         .flex_1()
@@ -732,7 +736,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
         if picture { time.text_color(|| theme().foreground.dark.opacity(0.8)) } else { time }
     };
     let at = move |picture: bool| {
-        on_picture(time_text(move || dragging.get().map_or(review.position_ms.get(), |ms| ms as i64)), picture)
+        on_picture(time_text(move || review.scrub.get().unwrap_or(review.position_ms.get())), picture)
     };
     let length = move |picture: bool| on_picture(time_text(move || review.duration_ms.get()), picture);
     let repeat = move |picture: bool| {
