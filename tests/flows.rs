@@ -145,6 +145,69 @@ fn an_edited_sentence_is_saved_to_the_manifest() {
 }
 
 #[test]
+fn saving_an_emptied_sentence_deletes_it() {
+    let mut it = open_sample("delete");
+    it.app.press("role:button[Bilingual]").unwrap();
+    it.app.press("Original").unwrap();
+    it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.wait_for("role:button[Save]").unwrap();
+    it.app.clear("id:segment-editor").unwrap();
+    it.app.press("role:button[Save]").unwrap();
+    it.app.wait_for_gone("role:button[Save]", GONE).unwrap();
+    assert!(!it.app.shows("Welcome back to the show."));
+    assert!(it.app.shows("Today we are talking about how people learn languages."));
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(!saved.contains("segment-1\""));
+    assert!(saved.contains("segment-2"));
+
+    it.app.press("role:button[Undo]").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(saved.contains("segment-1\""), "Undo puts the sentence back");
+}
+
+#[test]
+fn the_delete_button_removes_a_sentence_and_the_undo_key_brings_it_back() {
+    let mut it = open_sample("delete-button");
+    it.app.press("role:button[Bilingual]").unwrap();
+    it.app.press("Original").unwrap();
+    it.app.press("label:Edit >> nth=1").unwrap();
+    it.app.wait_for("role:button[Save]").unwrap();
+    it.app.press("label:Delete sentence").unwrap();
+    it.app.wait_for_gone("Today we are talking about how people learn languages.", GONE).unwrap();
+    it.app.wait_for("Sentence deleted").unwrap();
+    it.app.press_key("mod+z").unwrap();
+    it.app.wait_for("Today we are talking about how people learn languages.").unwrap();
+    it.app.press_key("mod+z").unwrap();
+    assert!(it.app.shows("Today we are talking about how people learn languages."), "one step back only");
+}
+
+#[test]
+fn the_arrow_keys_move_between_sentences() {
+    let mut it = open_sample("arrows");
+    it.app.press_key("right").unwrap();
+    it.app.wait_for("00:02").unwrap();
+    it.app.press_key("right").unwrap();
+    it.app.wait_for("00:05").unwrap();
+    it.app.press_key("left").unwrap();
+    it.app.wait_for("00:02").unwrap();
+    assert!(!it.app.shows("00:05"));
+}
+
+#[test]
+fn tapping_a_sentence_while_paused_moves_there_without_playing() {
+    let mut it = open_sample("tap-paused");
+    it.app.press("Listening every day matters more than studying hard once a week.").unwrap();
+    it.app.wait_for("00:05").unwrap();
+    it.app.wait_for("role:button[Play]").unwrap();
+    it.app.press("role:button[Play]").unwrap();
+    it.app.wait_for("role:button[Pause]").unwrap();
+    it.app.press("So, what should a beginner do first?").unwrap();
+    it.app.wait_for("00:08").unwrap();
+    it.app.wait_for("role:button[Pause]").unwrap();
+}
+
+#[test]
 fn dictation_checks_the_answer_without_showing_the_sentence() {
     let mut it = open_sample("dictation");
     it.app.press("label:Practice").unwrap();

@@ -388,6 +388,25 @@ pub enum Tone {
 struct ToastData {
     tone: Tone,
     text: SharedString,
+    action: Option<ToastAction>,
+}
+
+#[derive(Clone)]
+struct ToastAction {
+    label: SharedString,
+    run: std::rc::Rc<dyn Fn()>,
+}
+
+impl std::fmt::Debug for ToastAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToastAction").field("label", &self.label).finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for ToastAction {
+    fn eq(&self, other: &Self) -> bool {
+        self.label == other.label && std::rc::Rc::ptr_eq(&self.run, &other.run)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -397,10 +416,23 @@ struct Pending {
 }
 
 pub fn toast(tone: Tone, text: impl Into<SharedString>) {
-    let text = text.into();
+    push_toast(ToastData { tone, text: text.into(), action: None });
+}
+
+pub fn toast_with_action(
+    tone: Tone,
+    text: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    run: impl Fn() + 'static,
+) {
+    let action = ToastAction { label: label.into(), run: std::rc::Rc::new(run) };
+    push_toast(ToastData { tone, text: text.into(), action: Some(action) });
+}
+
+fn push_toast(data: ToastData) {
     global::<Pending>().update(|pending| {
         pending.next_id += 1;
-        pending.waiting.push((pending.next_id, ToastData { tone, text }));
+        pending.waiting.push((pending.next_id, data));
     });
 }
 
@@ -421,7 +453,7 @@ pub fn toast_host() -> impl IntoElement {
         untracked(|| {
             global::<Pending>().update(|pending| pending.waiting.clear());
             for (id, data) in waiting {
-                let seconds = if data.tone == Tone::Error { 7 } else { 4 };
+                let seconds = if data.tone == Tone::Error || data.action.is_some() { 7 } else { 4 };
                 manager.with(|m| m.push(id, data, ToastOptions::timeout(Some(Duration::from_secs(seconds))), now()));
             }
             sync();
@@ -481,6 +513,13 @@ pub fn toast_host() -> impl IntoElement {
                             )),
                     )
                     .child(text(data.text).text_sm().flex_1().text_color(|| theme().popover_foreground))
+                    .children(data.action.map(|action| {
+                        let run = action.run;
+                        button(Variant::Ghost, Size::Sm, action.label).on_press(move || {
+                            run();
+                            manager.with(|m| m.dismiss(&id, now()));
+                        })
+                    }))
             },
         ))
 }

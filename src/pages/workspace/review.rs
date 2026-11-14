@@ -1,9 +1,12 @@
 use std::{rc::Rc, time::Duration};
 
-use listenook_core::{ContentMode, Job, Segment, dictation};
+use listenook_core::{ContentMode, Document, Job, Segment, dictation};
 use nsh_core::prelude::*;
 
-use crate::state::{Store, store};
+use crate::{
+    state::{Store, store, tr},
+    ui::{Tone, toast_with_action},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Side {
@@ -60,6 +63,8 @@ pub(super) struct Review {
     pub(super) stop_at: Signal<Option<i64>>,
     wait: Stored<Option<Spawned<()>>>,
     pub(super) current: Memo<Option<usize>>,
+    pub(super) scrub: Signal<Option<i64>>,
+    pub(super) scrubbed: Memo<Option<usize>>,
     pub(super) shown: Memo<Vec<usize>>,
 }
 
@@ -107,6 +112,11 @@ impl Review {
         let current = computed(move || {
             let position = position_ms.get();
             job.with(|job| job.as_ref()?.document.as_ref()?.segment_at(position))
+        });
+        let scrub = signal(None::<i64>);
+        let scrubbed = computed(move || {
+            let at = scrub.get()?;
+            job.with(|job| job.as_ref()?.document.as_ref()?.segment_at(at))
         });
         let shown = computed(move || {
             let needle = if searching.get() { query.with(|q| q.trim().to_lowercase()) } else { String::new() };
@@ -173,6 +183,8 @@ impl Review {
             stop_at: signal(None),
             wait: stored(None),
             current,
+            scrub,
+            scrubbed,
             shown,
         }
     }
@@ -272,6 +284,15 @@ impl Review {
     }
 
     pub(super) fn play_from(&self, index: usize) {
+        self.go_to(index, true);
+    }
+
+    pub(super) fn jump_to(&self, index: usize) {
+        let playing = !self.paused.get_untracked() || self.waiting.get_untracked();
+        self.go_to(index, playing);
+    }
+
+    fn go_to(&self, index: usize, play: bool) {
         let Some(segment) = self.segment_now(index) else {
             return;
         };
@@ -285,7 +306,7 @@ impl Review {
             self.revealed.set(None);
         });
         self.seek(self.play_start(index));
-        self.paused.set(false);
+        self.paused.set(!play);
     }
 
     pub(super) fn step(&self, by: isize) {
@@ -420,24 +441,77 @@ impl Review {
         });
     }
 
+    fn change(&self, done: &'static str, edit: impl FnOnce(&mut Document) -> bool) -> bool {
+        let id = self.id();
+        let before = self.job.with_untracked(|job| job.as_ref().and_then(|job| job.document.clone()));
+        let mut changed = false;
+        self.store.update_document(&id, |document| changed = edit(document));
+        if let (true, Some(before)) = (changed, before) {
+            let generation = keep_for_undo(id, before);
+            toast_with_action(Tone::Success, tr(done), tr("Undo"), move || {
+                undo_change(Some(generation));
+            });
+        }
+        changed
+    }
+
+    pub(super) fn undo(&self) -> bool {
+        let undone = undo_change(None);
+        if undone {
+            self.editing.set(None);
+        }
+        undone
+    }
+
     pub(super) fn save_edit(&self) {
         let Some(editing) = self.editing.get_untracked() else {
             return;
         };
         let text = self.draft.get_untracked().trim().to_owned();
         if text.is_empty() && !editing.translation {
+            self.remove_editing(&editing.segment_id);
             return;
         }
-        self.store.update_document(&self.id(), |document| {
-            if let Some(segment) = document.segments.iter_mut().find(|s| s.id == editing.segment_id) {
-                if editing.translation {
-                    segment.translated_text = (!text.is_empty()).then_some(text);
-                } else {
-                    segment.text = text;
-                }
+        self.change("Sentence updated", |document| {
+            let Some(segment) = document.segments.iter_mut().find(|s| s.id == editing.segment_id) else {
+                return false;
+            };
+            let current =
+                if editing.translation { segment.translated_text.clone() } else { Some(segment.text.clone()) };
+            let wanted = (!text.is_empty()).then_some(text);
+            if current == wanted {
+                return false;
             }
+            if editing.translation {
+                segment.translated_text = wanted;
+            } else {
+                segment.text = wanted.unwrap_or_default();
+            }
+            true
         });
         self.editing.set(None);
+    }
+
+    pub(super) fn delete_editing(&self) {
+        if let Some(editing) = self.editing.get_untracked() {
+            self.remove_editing(&editing.segment_id);
+        }
+    }
+
+    fn remove_editing(&self, segment_id: &str) {
+        let Some(index) = self.index_of(segment_id) else {
+            return;
+        };
+        self.change("Sentence deleted", |document| listenook_core::structure::remove(document, index));
+        batch(|| {
+            self.editing.set(None);
+            if self.repeating.get_untracked().as_deref() == Some(segment_id) {
+                self.repeating.set(None);
+            }
+            if self.revealed.get_untracked().as_deref() == Some(segment_id) {
+                self.revealed.set(None);
+            }
+        });
     }
 
     pub(super) fn split_editing(&self) {
@@ -448,12 +522,16 @@ impl Review {
         let Some(index) = self.index_of(&editing.segment_id) else {
             return;
         };
-        let mut changed = false;
-        self.store.update_document(&self.id(), |document| {
-            document.segments[index].text = text.clone();
-            changed = listenook_core::structure::split_at(document, index, caret);
+        let split = self.change("Sentence split", |document| {
+            let mut trial = document.clone();
+            trial.segments[index].text = text.clone();
+            let split = listenook_core::structure::split_at(&mut trial, index, caret);
+            if split {
+                *document = trial;
+            }
+            split
         });
-        if changed {
+        if split {
             self.editing.set(None);
         }
     }
@@ -462,11 +540,7 @@ impl Review {
         let Some(index) = self.editing.get_untracked().and_then(|editing| self.index_of(&editing.segment_id)) else {
             return;
         };
-        let mut changed = false;
-        self.store.update_document(&self.id(), |document| {
-            changed = listenook_core::structure::merge_with_next(document, index);
-        });
-        if changed {
+        if self.change("Sentences merged", |document| listenook_core::structure::merge_with_next(document, index)) {
             self.editing.set(None);
         }
     }
@@ -483,11 +557,47 @@ impl Review {
         if name.is_empty() {
             return;
         }
-        self.store.update_document(&self.id(), |document| {
+        self.change("Speaker renamed", |document| {
             match document.speakers.iter_mut().find(|speaker| speaker.id == speaker_id) {
+                Some(speaker) if speaker.name == name => return false,
                 Some(speaker) => speaker.name = name,
                 None => document.speakers.push(listenook_core::Speaker { id: speaker_id.to_owned(), name }),
             }
+            true
         });
     }
+}
+
+struct Undoable {
+    generation: u64,
+    job_id: String,
+    before: Document,
+}
+
+thread_local! {
+    static LAST_CHANGE: std::cell::RefCell<(u64, Option<Undoable>)> = const { std::cell::RefCell::new((0, None)) };
+}
+
+fn keep_for_undo(job_id: String, before: Document) -> u64 {
+    LAST_CHANGE.with_borrow_mut(|(count, last)| {
+        *count += 1;
+        *last = Some(Undoable { generation: *count, job_id, before });
+        *count
+    })
+}
+
+fn undo_change(generation: Option<u64>) -> bool {
+    let taken = LAST_CHANGE.with_borrow_mut(|(_, last)| {
+        let matches = last.as_ref().is_some_and(|last| generation.is_none_or(|wanted| wanted == last.generation));
+        if matches { last.take() } else { None }
+    });
+    let Some(Undoable { job_id, before, .. }) = taken else {
+        return false;
+    };
+    store().update_document(&job_id, |document| {
+        document.segments = before.segments;
+        document.tokens = before.tokens;
+        document.speakers = before.speakers;
+    });
+    true
 }

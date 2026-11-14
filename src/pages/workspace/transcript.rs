@@ -17,21 +17,28 @@ use crate::{
 
 pub(super) fn transcript(review: Review) -> impl IntoElement {
     let speaker = signal(None::<String>);
-    let bring = move |animated: bool| {
-        let Some(current) = review.current.get_untracked() else {
-            return;
-        };
+    let reveal = move |segment: usize, animated: bool| {
         if review.editing.get_untracked().is_some() {
             return;
         }
-        if let Some(row) = review.shown.with_untracked(|shown| shown.iter().position(|index| *index == current)) {
+        if let Some(row) = review.shown.with_untracked(|shown| shown.iter().position(|index| *index == segment)) {
             review.list.scroll_to_index(row as u32, percentage(0.35), px(0.0), animated && !reduce_motion());
+        }
+    };
+    let bring = move |animated: bool| {
+        if let Some(current) = review.current.get_untracked() {
+            reveal(current, animated);
         }
     };
     effect(move || {
         review.current.get();
-        if !review.paused.get() {
+        if !review.paused.get() && review.scrub.get_untracked().is_none() {
             bring(true);
+        }
+    });
+    effect(move || {
+        if let Some(segment) = review.scrubbed.get() {
+            untracked(|| reveal(segment, false));
         }
     });
     let open = std::rc::Rc::new(std::cell::Cell::new(true));
@@ -76,7 +83,7 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
     let segment = computed(move || index.get().and_then(|index| review.segment(index)));
     let read = move |f: fn(&Segment) -> SharedString| segment.with(|s| s.as_ref().map(f).unwrap_or_default());
     let id = move || segment.with(|s| s.as_ref().map(|s| s.id.clone()));
-    let is_current = move || index.get().is_some() && index.get() == review.target();
+    let is_current = move || index.get().is_some() && index.get() == review.scrubbed.get().or_else(|| review.target());
     let is_repeating = move || id().is_some() && id() == review.repeating.get();
     let editing = move |translation: bool| {
         review.editing.with(|editing| {
@@ -106,7 +113,7 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
     };
     let press = move || {
         if let Some(index) = index.get_untracked() {
-            review.play_from(index);
+            review.jump_to(index);
         }
     };
     let toggle_repeat = move || {
@@ -385,6 +392,18 @@ fn editor(review: Review) -> impl IntoElement {
                                     .disabled(move || !review.can_merge_editing())
                                     .on_press(move || review.merge_editing()),
                             )
+                    },
+                ))
+                .child(when(
+                    move || review.editing.with(|e| e.as_ref().is_some_and(|e| !e.translation)),
+                    move || {
+                        view().flex_1().flex_row().justify_end().child(ui::icon_button_as(
+                            Variant::Danger,
+                            Icon::Trash,
+                            tr("Delete sentence"),
+                            Size::Sm,
+                            move || review.delete_editing(),
+                        ))
                     },
                 ))
                 .child(when(

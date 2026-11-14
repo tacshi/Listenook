@@ -19,5 +19,5 @@ pub(crate) use layout::{
 };
 pub(crate) use overlay::{
     Menu, Tone, confirm_destructive, context_menu, menu, menu_action, menu_choice, menu_danger, menu_divider,
-    menu_toggle, menu_with, modal, modal_actions, modal_sized, popover, toast, toast_host,
+    menu_toggle, menu_with, modal, modal_actions, modal_sized, popover, toast, toast_host, toast_with_action,
 };

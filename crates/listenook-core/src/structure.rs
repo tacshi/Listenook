@@ -35,6 +35,15 @@ pub fn merge_with_next(document: &mut Document, index: usize) -> bool {
     true
 }
 
+pub fn remove(document: &mut Document, index: usize) -> bool {
+    if index >= document.segments.len() {
+        return false;
+    }
+    let gone = document.segments.remove(index);
+    document.tokens.retain(|token| token.segment_id.as_deref() != Some(gone.id.as_str()));
+    true
+}
+
 pub fn split_at(document: &mut Document, index: usize, at: usize) -> bool {
     let Some(segment) = document.segments.get(index).cloned() else {
         return false;
@@ -150,6 +159,20 @@ mod tests {
         assert_eq!(document.segments[0].translated_text.as_deref(), Some("你好我的朋友。"));
         assert_eq!((document.segments[0].start_ms, document.segments[0].end_ms), (0, 4000));
         assert!(!merge_with_next(&mut document, 0), "the last sentence has nothing after it");
+    }
+
+    #[test]
+    fn removing_drops_the_sentence_and_its_words() {
+        let mut document = document();
+        document.tokens = vec![
+            Token { text: "Hello".into(), segment_id: Some("a".into()), ..Token::default() },
+            Token { text: "my".into(), segment_id: Some("b".into()), ..Token::default() },
+        ];
+        assert!(remove(&mut document, 0));
+        assert_eq!(document.segments.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["b"]);
+        assert_eq!(document.tokens.len(), 1);
+        assert_eq!(document.tokens[0].text, "my");
+        assert!(!remove(&mut document, 1));
     }
 
     #[test]
