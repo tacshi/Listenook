@@ -1,12 +1,7 @@
-//! Local speech: the models the worker runs, what its results mean, and
-//! word alignment's windows and tokens. Running the worker and fetching
-//! the models is the app's.
-
 use serde_json::Value;
 
 use crate::models::{Document, Segment, Speaker, Token, now_iso};
 
-/// One file of a model, as its repository has it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelFile {
     pub path: &'static str,
@@ -14,7 +9,6 @@ pub struct ModelFile {
     pub sha256: &'static str,
 }
 
-/// A model the user downloads: a pinned revision of a Hugging Face repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Model {
     pub id: &'static str,
@@ -25,12 +19,10 @@ pub struct Model {
 }
 
 impl Model {
-    /// The download's size in bytes.
     pub fn size(&self) -> u64 {
         self.files.iter().map(|file| file.size).sum()
     }
 
-    /// Where a file is fetched from.
     pub fn url(&self, file: &ModelFile) -> String {
         format!("https://huggingface.co/{}/resolve/{}/{}?download=true", self.repository, self.revision, file.path)
     }
@@ -154,22 +146,16 @@ pub const ALIGNER: Model = Model {
     ],
 };
 
-/// Every model, in the order they are listed.
 pub const MODELS: &[Model] = &[MOSS, QWEN3, QWEN3_LARGE, ALIGNER];
 
-/// The model with this id.
 pub fn model(id: &str) -> Option<&'static Model> {
     MODELS.iter().find(|model| model.id == id)
 }
-
-// --- Results ------------------------------------------------------------------
 
 fn int(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
 }
 
-/// The worker's MOSS result as a transcript: speakers numbered as they
-/// first speak, times kept inside the recording.
 pub fn moss_document(result: &Value, duration_ms: i64) -> Document {
     let mut segments = Vec::new();
     let mut speakers: Vec<Speaker> = Vec::new();
@@ -212,9 +198,6 @@ pub fn moss_document(result: &Value, duration_ms: i64) -> Document {
     Document { tokens: Vec::new(), segments, speakers, updated_at: now_iso() }
 }
 
-// --- Qwen3 ----------------------------------------------------------------------
-
-/// The languages Qwen3 knows, by the name it calls them and their code.
 pub const LANGUAGES: &[(&str, &str)] = &[
     ("Chinese", "zh"),
     ("English", "en"),
@@ -248,18 +231,15 @@ pub const LANGUAGES: &[(&str, &str)] = &[
     ("Macedonian", "mk"),
 ];
 
-/// Qwen3's name for a language hint (`en-US` → `English`).
 pub fn language_name(hint: &str) -> Option<&'static str> {
     let code = hint.split(['-', '_']).next().unwrap_or("").to_lowercase();
     LANGUAGES.iter().find(|(_, known)| *known == code).map(|(name, _)| *name)
 }
 
-/// Qwen3's name for a language, as this table has it.
 pub fn known_language(name: &str) -> Option<&'static str> {
     LANGUAGES.iter().find(|(known, _)| known.eq_ignore_ascii_case(name)).map(|(known, _)| *known)
 }
 
-/// The language to split words by when nothing says which: by script.
 pub fn guess_language(text: &str) -> &'static str {
     let has = |from: u32, to: u32| text.chars().any(|c| (from..=to).contains(&(c as u32)));
     if has(0x3040, 0x30FF) {
@@ -273,9 +253,6 @@ pub fn guess_language(text: &str) -> &'static str {
     }
 }
 
-/// The language to split a text's words by, given the job's hints: the
-/// one hint, else the hinted language the text's script fits, else what
-/// the script says.
 pub fn language_for(hints: &[String], text: &str) -> &'static str {
     let hinted: Vec<&'static str> = hints.iter().filter_map(|hint| language_name(hint)).collect();
     let guess = guess_language(text);
@@ -288,9 +265,6 @@ pub fn language_for(hints: &[String], text: &str) -> &'static str {
     }
 }
 
-/// Where to cut a recording into pieces the models take whole: at the
-/// quietest tenth of a second in the last stretch of each piece. Returns
-/// the end of every piece, in samples.
 pub fn cut_points(samples: &[i16], rate: usize, piece_seconds: usize, search_seconds: usize) -> Vec<usize> {
     let (piece, search, frame) = (piece_seconds * rate, search_seconds * rate, (rate / 10).max(1));
     let mut cuts = Vec::new();
@@ -308,7 +282,6 @@ pub fn cut_points(samples: &[i16], rate: usize, piece_seconds: usize, search_sec
     cuts
 }
 
-/// A word the aligner timed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Word {
     pub text: String,
@@ -316,15 +289,12 @@ pub struct Word {
     pub end_ms: i64,
 }
 
-/// A text in sentences: cut after a full stop, a question or exclamation
-/// mark, and at a comma once a sentence runs long.
 pub fn sentences(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         current.push(c);
-        // Closing quotes and brackets stay with their sentence.
         if matches!(c, '.' | '?' | '!' | '…' | '。' | '？' | '！') {
             while let Some(close) = chars.next_if(|next| matches!(next, '"' | '”' | '’' | '」' | '』' | ')' | '）'))
             {
@@ -358,8 +328,6 @@ pub fn sentences(text: &str) -> Vec<String> {
     out
 }
 
-/// Gives each text the words that are in it, reading words and texts in
-/// order. A word found in none of the texts ahead is left out.
 pub fn distribute(words: &[Word], texts: &[&str]) -> Vec<Vec<Word>> {
     let mut out = vec![Vec::new(); texts.len()];
     let (mut text, mut at) = (0, 0);
@@ -380,8 +348,6 @@ pub fn distribute(words: &[Word], texts: &[&str]) -> Vec<Vec<Word>> {
     out
 }
 
-/// A sentence's timed words as tokens: inside the sentence, each starting
-/// where the one before ends.
 pub fn word_tokens(segment: &Segment, words: &[Word]) -> Vec<Token> {
     let mut times: Vec<(i64, i64)> = words
         .iter()
@@ -410,9 +376,6 @@ pub fn word_tokens(segment: &Segment, words: &[Word]) -> Vec<Token> {
         .collect()
 }
 
-/// A piece of a recording as Qwen3 heard it and the aligner timed it, in
-/// sentences. `words` are in the recording's time; `end_ms` is the piece's
-/// end; sentence ids continue from `first_index`.
 pub fn timed_sentences(text: &str, words: &[Word], end_ms: i64, first_index: usize) -> (Vec<Segment>, Vec<Token>) {
     let texts = sentences(text);
     let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
@@ -421,7 +384,6 @@ pub fn timed_sentences(text: &str, words: &[Word], end_ms: i64, first_index: usi
     let mut waiting = String::new();
     for (text, words) in texts.iter().zip(per) {
         if words.is_empty() {
-            // Nothing timed: it reads with the sentence before, else the next.
             match pieces.last_mut() {
                 Some((before, _)) => *before = format!("{before} {text}"),
                 None => waiting = format!("{waiting}{text} "),
@@ -436,8 +398,6 @@ pub fn timed_sentences(text: &str, words: &[Word], end_ms: i64, first_index: usi
         let start = words[0].start_ms;
         let next = pieces.get(index + 1).map_or(end_ms, |(_, words)| words[0].start_ms);
         let last = words[words.len() - 1].end_ms;
-        // The last word often has no length of its own: let it run to the
-        // next sentence, but not across a long silence.
         let end = if last > words[words.len() - 1].start_ms { last } else { next.min(last + 600) };
         let segment = Segment {
             id: format!("qwen3-{}", first_index + segments.len()),
@@ -452,11 +412,7 @@ pub fn timed_sentences(text: &str, words: &[Word], end_ms: i64, first_index: usi
     (segments, tokens)
 }
 
-// --- Word alignment -----------------------------------------------------------
-
-/// The longest sentence the aligner takes, and the longest window.
 pub const WINDOW_MAX_MS: i64 = 29_000;
-/// What a window adds before its first sentence and after its last.
 pub const WINDOW_PADDING_MS: i64 = 250;
 const MIN_TOKEN_MS: i64 = 40;
 
@@ -471,8 +427,6 @@ fn is_word(c: char) -> bool {
         || c == '\u{2019}'
 }
 
-/// The units of a sentence the aligner times: each CJK character, and each
-/// run of letters or of digits.
 pub fn units(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut run = String::new();
@@ -499,7 +453,6 @@ pub fn units(text: &str) -> Vec<String> {
     out
 }
 
-/// A sentence as the aligner gets it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AlignSegment {
     pub id: String,
@@ -508,7 +461,6 @@ pub struct AlignSegment {
     pub units: Vec<String>,
 }
 
-/// Sentences aligned in one pass over one stretch of audio.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Window {
     pub id: String,
@@ -517,11 +469,9 @@ pub struct Window {
     pub segments: Vec<AlignSegment>,
 }
 
-/// What can be aligned of a transcript.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AlignmentPlan {
     pub windows: Vec<Window>,
-    /// Sentences longer than the aligner takes.
     pub too_long: usize,
 }
 
@@ -538,8 +488,6 @@ fn prompt_tokens(first_start: i64, last_end: i64, segments: &[AlignSegment]) -> 
     15 + (padded * 13 + 999) / 1000 + units
 }
 
-/// The windows to align a transcript in: sentences that follow each other
-/// closely share one, a sentence overlapping another has its own.
 pub fn plan(document: &Document) -> AlignmentPlan {
     let mut plan = AlignmentPlan::default();
     let mut eligible: Vec<AlignSegment> = Vec::new();
@@ -594,7 +542,6 @@ pub fn plan(document: &Document) -> AlignmentPlan {
     plan
 }
 
-/// The worker's alignment request for some windows.
 pub fn stabilize(tokens: &mut [(i64, i64)], segment_end: i64) {
     let count = tokens.len();
     for index in 1..count {
@@ -620,9 +567,6 @@ pub fn stabilize(tokens: &mut [(i64, i64)], segment_end: i64) {
     }
 }
 
-/// The words the worker timed, for the sentences whose answer is usable:
-/// one time per unit, in order, inside the sentence. `segments` are the
-/// sentences that were asked about.
 pub fn spans(text: &str, units: &[(String, i64, i64)]) -> Option<Vec<(String, i64, i64)>> {
     let mut at = 0;
     let mut out: Vec<(String, i64, i64)> = Vec::with_capacity(units.len());
@@ -636,17 +580,12 @@ pub fn spans(text: &str, units: &[(String, i64, i64)]) -> Option<Vec<(String, i6
     (!out.is_empty()).then_some(out)
 }
 
-/// Timed pieces of a sentence as whole words. A transcription service times
-/// pieces smaller than words (`" rem"`, `"inder"`): a piece that neither
-/// starts with a space nor follows one belongs to the word before it. A
-/// character of a script written without spaces is a word of its own.
 pub fn whole_words(pieces: &[(String, i64, i64)]) -> Vec<(String, i64, i64)> {
     let mut words: Vec<(String, i64, i64)> = Vec::new();
     for (text, start, end) in pieces {
         let joins = words.last().is_some_and(|(before, ..)| {
             let glued = !text.starts_with(char::is_whitespace) && !before.ends_with(char::is_whitespace);
             let spaced = |c: Option<char>| c.is_some_and(|c| !is_cjk(c));
-            // Punctuation goes with the word before it, whatever the script.
             let punctuation = !text.chars().any(|c| c.is_alphanumeric() || is_cjk(c));
             glued && (punctuation || (spaced(text.chars().next()) && spaced(before.chars().last())))
         });
@@ -661,16 +600,10 @@ pub fn whole_words(pieces: &[(String, i64, i64)]) -> Vec<(String, i64, i64)> {
     words
 }
 
-/// The word being said at `position_ms`: the last one that has started.
-/// A word stays marked until the next begins, so none is passed over in
-/// the silence between two, and one with no length of its own is not lost.
-/// `words` are in the order they are said.
 pub fn word_at(words: &[(String, i64, i64)], position_ms: i64) -> Option<usize> {
     words.partition_point(|(_, start, _)| *start <= position_ms).checked_sub(1)
 }
 
-/// A word as it is drawn: what stands before it (spaces, an opening quote)
-/// and the word itself, which alone is marked.
 pub fn lead_and_word(text: &str) -> (&str, &str) {
     let at = text.find(|c: char| c.is_alphanumeric() || is_cjk(c)).unwrap_or(text.len());
     text.split_at(at)

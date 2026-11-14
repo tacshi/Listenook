@@ -1,7 +1,3 @@
-//! Changing a transcript's structure: joining two sentences, or cutting
-//! one in two. Times come from the words when the transcript has them, and
-//! from the share of the text otherwise.
-
 use crate::models::{Document, Segment};
 
 fn join(left: &str, right: &str) -> String {
@@ -11,13 +7,10 @@ fn join(left: &str, right: &str) -> String {
     if spaced { format!("{left} {right}") } else { format!("{left}{right}") }
 }
 
-/// Whether the sentence at `index` can be joined with the one after it.
 pub fn can_merge(document: &Document, index: usize) -> bool {
     index + 1 < document.segments.len()
 }
 
-/// Joins the sentence at `index` with the one after it: the first keeps its
-/// id, start and speaker. Returns whether anything changed.
 pub fn merge_with_next(document: &mut Document, index: usize) -> bool {
     if !can_merge(document, index) {
         return false;
@@ -42,10 +35,6 @@ pub fn merge_with_next(document: &mut Document, index: usize) -> bool {
     true
 }
 
-/// Cuts the sentence at `index` in two at character `at` of its text. The
-/// translation stays with the first half, which the user can translate
-/// again. Returns whether anything changed: a cut at either end, or in a
-/// sentence that is not there, changes nothing.
 pub fn split_at(document: &mut Document, index: usize, at: usize) -> bool {
     let Some(segment) = document.segments.get(index).cloned() else {
         return false;
@@ -56,10 +45,8 @@ pub fn split_at(document: &mut Document, index: usize, at: usize) -> bool {
     if first.is_empty() || second.is_empty() {
         return false;
     }
-    // The cut's time: the start of the first word after it, else by length.
     let share = at as f64 / total.max(1) as f64;
     let by_length = segment.start_ms + ((segment.end_ms - segment.start_ms) as f64 * share).round() as i64;
-    // Words carry no spaces: neither does what they are counted against.
     let letters = |text: &str| text.chars().filter(|c| !c.is_whitespace()).count();
     let before = letters(first);
     let mut seen = 0;
@@ -87,7 +74,6 @@ pub fn split_at(document: &mut Document, index: usize, at: usize) -> bool {
         translated_text: None,
         ..segment.clone()
     };
-    // The words after the cut belong to the new sentence.
     for token in &mut document.tokens {
         if token.segment_id.as_deref() == Some(segment.id.as_str()) && token.start_ms >= cut_ms {
             token.segment_id = Some(tail.id.clone());
@@ -129,7 +115,6 @@ mod tests {
                 .collect(),
             ..Document::default()
         };
-        // After "a b c d": the fifth word starts at four seconds.
         assert!(split_at(&mut document, 0, 7));
         assert_eq!((document.segments[0].end_ms, document.segments[1].start_ms), (4000, 4000));
         let tail = document.segments[1].id.clone();

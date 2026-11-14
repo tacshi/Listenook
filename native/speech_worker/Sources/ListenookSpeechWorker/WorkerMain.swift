@@ -2,10 +2,6 @@ import Darwin
 import Foundation
 import ListenookSpeechCore
 
-/// The macOS worker process (lib/data/local_speech_process.dart): reads a
-/// private request file, reports progress as JSON lines on stdout, writes the
-/// result file and exits with the failure's code. It exits too when the app
-/// that started it goes away.
 @main
 private enum WorkerMain {
     static func main() async {

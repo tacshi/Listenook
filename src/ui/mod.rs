@@ -1,6 +1,3 @@
-//! The app's styled component layer. Pages compose these and layout
-//! primitives; they do not style `nsh_base` controls themselves.
-
 mod button;
 mod form;
 mod icons;

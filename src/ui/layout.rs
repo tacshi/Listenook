@@ -1,6 +1,3 @@
-//! The pieces pages are laid out with: headers, cards, rows, badges and the
-//! states of content.
-
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
@@ -9,15 +6,12 @@ use super::{
     tokens::{self, motion},
 };
 
-/// The inset every page region shares, so their content starts on one line.
 pub const PAGE_INSET: f32 = 24.0;
 
-/// A flat surface with a hairline: a group of settings, a panel.
 pub fn card() -> View {
     view().rounded(tokens::radius_lg).border_1().border_color(|| theme().border).bg(|| theme().card)
 }
 
-/// A titled group inside a page.
 pub fn section(title: impl IntoReactive<SharedString>, content: impl IntoElement) -> View {
     view()
         .gap_3()
@@ -31,12 +25,10 @@ pub fn section(title: impl IntoReactive<SharedString>, content: impl IntoElement
         .child(content)
 }
 
-/// A hairline between regions.
 pub fn separator() -> View {
     view().h(px(1.0)).flex_shrink_0().bg(|| theme().border)
 }
 
-/// The meaning a badge or status dot carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Neutral,
@@ -47,7 +39,6 @@ pub enum Status {
 }
 
 impl Status {
-    /// The status's color.
     pub fn color(self) -> AdaptiveColor {
         match self {
             Status::Neutral => theme().muted_foreground,
@@ -59,7 +50,6 @@ impl Status {
     }
 }
 
-/// A short state or count.
 pub fn badge(label: impl IntoReactive<SharedString>, status: impl Fn() -> Status + Copy + 'static) -> View {
     view()
         .px_1p5()
@@ -69,8 +59,6 @@ pub fn badge(label: impl IntoReactive<SharedString>, status: impl Fn() -> Status
         .child(text(label).text_xs().font_weight(FontWeight::MEDIUM).text_color(move || status().color()))
 }
 
-/// What a region shows when it has nothing: what belongs here and, as
-/// `action`, how to get it.
 pub fn empty_state(
     glyph: Icon,
     title: impl IntoReactive<SharedString>,
@@ -107,7 +95,6 @@ pub fn empty_state(
         .child(action)
 }
 
-/// A turning ring: work of unknown length.
 pub fn spinner(size: f32) -> impl IntoElement {
     let turn = motion();
     if !reduce_motion() {
@@ -121,7 +108,6 @@ pub fn spinner(size: f32) -> impl IntoElement {
         .child(icon(Icon::Refresh, size))
 }
 
-/// A pressable row of a list: a hover wash, a deeper press, a selected fill.
 pub fn list_row(selected: impl Fn() -> bool + 'static) -> nsh_base::ButtonElement {
     nsh_base::button()
         .selected(selected)
@@ -136,12 +122,10 @@ pub fn list_row(selected: impl Fn() -> bool + 'static) -> nsh_base::ButtonElemen
         .hover(|s| s.bg(tokens::hover_wash))
         .active(|s| s.bg(|| theme().input))
         .selected_style(|s| s.bg(|| theme().accent))
-        // A row that cannot be opened does not answer the pointer.
         .disabled_style(|s| s.bg(|| theme().background.opacity(0.0)))
         .focus_visible(tokens::focus_ring)
 }
 
-/// A key as it is printed on the keyboard.
 pub fn key_cap(keystroke: &'static str) -> View {
     view()
         .px_1p5()
@@ -158,7 +142,6 @@ pub fn key_cap(keystroke: &'static str) -> View {
         )
 }
 
-/// The platform's own monospaced face, for when the theme names none.
 fn mono_font() -> &'static str {
     if cfg!(target_os = "windows") {
         "Consolas"
@@ -169,9 +152,6 @@ fn mono_font() -> &'static str {
     }
 }
 
-/// Content the user chose not to see yet (blind listening): while `hidden`
-/// a quiet bar of the same size stands in for it, so the layout does not
-/// move when it is revealed. The content is built again when it flips.
 pub fn veil<E: IntoElement>(
     hidden: impl Fn() -> bool + 'static,
     content: impl Fn() -> E + Clone + 'static,
@@ -188,7 +168,6 @@ pub fn veil<E: IntoElement>(
     .otherwise(content)
 }
 
-/// One of a few exclusive choices shown side by side: lit when chosen.
 pub fn chip(
     label: impl IntoReactive<SharedString>,
     selected: impl Fn() -> bool + Copy + 'static,

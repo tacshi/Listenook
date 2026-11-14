@@ -1,15 +1,4 @@
 #!/usr/bin/env bash
-# Builds the macOS app: `nsh package`, then the speech helper, the
-# localized names and notices, and signing. A release also gets the disk
-# image, notarization and the archive the in-app updater downloads.
-#
-#   build-macos.sh debug   [--arch arm64|x64]   build/Listenook-<arch>-debug.app
-#   build-macos.sh release [--arch arm64|x64] [--provenance]
-#
-# Signing: LISTENOOK_MAC_SIGN_IDENTITY (or DEVELOPER_ID_APPLICATION); a
-# release is notarized with the notarytool keychain profile named by
-# LISTENOOK_NOTARY_PROFILE (default: Listenook). Without an identity the
-# app is signed ad hoc. LISTENOOK_SKIP_HELPER=1 leaves the speech helper out.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -23,27 +12,20 @@ PROVENANCE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="${2:?--arch requires arm64 or x64}"; shift 2 ;;
-    # Records the commit beside the artifacts, for a build that is
-    # published from another machine.
     --provenance) PROVENANCE=true; shift ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-# What the processor is called in a Mach-O file and in the updater's archive.
 case "$ARCH" in
   arm64) MACHO="arm64"; UPDATER_ARCH="aarch64" ;;
   x64) MACHO="x86_64"; UPDATER_ARCH="x86_64" ;;
   *) echo "--arch must be arm64 or x64" >&2; exit 2 ;;
 esac
-# MOSS runs in the Swift helper, on Apple silicon only.
 WITH_HELPER=false
 if [[ "$ARCH" == "arm64" && -z "${LISTENOOK_SKIP_HELPER:-}" ]]; then WITH_HELPER=true; fi
 NOTARY_PROFILE="${LISTENOOK_NOTARY_PROFILE:-Listenook}"
 start_log "macos-$MODE"
 
-# The Developer ID to sign with, or "-" for an ad hoc signature. A debug
-# build signed like the installed app reads the same keychain items
-# without asking.
 sign_identity() {
   local chosen="${LISTENOOK_MAC_SIGN_IDENTITY:-${DEVELOPER_ID_APPLICATION:-}}"
   if [[ -n "$chosen" || "$MODE" == "release" ]]; then
@@ -60,7 +42,6 @@ sign_identity() {
   fi
 }
 
-# sign_app APP IDENTITY: inner code first, then the bundle.
 sign_app() {
   local app="$1" identity="$2" component
   local args=(--force --sign "$identity")
@@ -77,7 +58,6 @@ sign_app() {
   codesign --verify --deep --strict "$app"
 }
 
-# The processes running an executable.
 pids_of() {
   ps -axww -o pid= -o command= | awk -v exe="$1" '{
     pid = $1; $1 = ""; sub(/^ +/, "")
@@ -96,7 +76,6 @@ fi
 
 echo "Building $APP_NAME $VERSION macOS $ARCH $MODE"
 PACKAGE="$OUT/nsh/macos-$ARCH"
-# nsh builds either processor from any Mac (the Rust target must be installed).
 nsh_package macos "$PACKAGE" --arch "$MACHO"
 APP="$PACKAGE/$APP_NAME.app"
 [[ -d "$APP" ]] || { echo "Missing build product: $APP" >&2; exit 1; }
@@ -104,7 +83,6 @@ APP="$PACKAGE/$APP_NAME.app"
   echo "The app was not built for $MACHO." >&2; exit 1;
 }
 
-# The app's name in each language (聆页 in Chinese).
 cp -R "$ROOT/packaging/macos/"*.lproj "$APP/Contents/Resources/"
 
 if [[ "$WITH_HELPER" == true ]]; then
@@ -112,16 +90,10 @@ if [[ "$WITH_HELPER" == true ]]; then
   mkdir -p "$APP/Contents/Helpers" "$APP/Contents/Resources/third_party"
   quiet bash "$ROOT/scripts/build-speech-worker.sh" "$HELPER"
   cp "$ROOT/packaging/notices/"* "$APP/Contents/Resources/third_party/"
-  # MLX looks for its Metal library beside the worker. Signed there, a file
-  # that is not a program keeps its signature in extended attributes, which
-  # the in-app updater does not unpack: the updated app then fails its
-  # signature check. Among the resources the bundle's own signature covers
-  # it, and a link beside the worker leads to it.
   mv "$APP/Contents/Helpers/mlx.metallib" "$APP/Contents/Resources/mlx.metallib"
   ln -s ../Resources/mlx.metallib "$APP/Contents/Helpers/mlx.metallib"
 fi
 
-# Files that were downloaded carry marks that fail notarization.
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 xattr -dr com.apple.provenance "$APP" 2>/dev/null || true
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
@@ -138,7 +110,6 @@ fi
 
 if [[ "$MODE" == "debug" ]]; then
   DEBUG_APP="$OUT/$APP_NAME-$ARCH-debug.app"
-  # A running copy keeps its files open: close it before replacing them.
   RUNNING="$(pids_of "$DEBUG_APP/Contents/MacOS/$APP_NAME")"
   if [[ -n "$RUNNING" ]]; then
     echo "Closing the running debug app"
@@ -186,12 +157,8 @@ else
   echo "Warning: ad hoc-signed release artifacts will not pass Gatekeeper." >&2
 fi
 
-# What the in-app updater downloads: the signed (and stapled) app, under
-# the name `nsh update-manifest` reads the platform from.
 UPDATE_ARCHIVE="$OUT/$APP_NAME-$VERSION-macos-$UPDATER_ARCH.tar.gz"
 rm -f "$UPDATE_ARCHIVE"
-# The updater unpacks the files alone, so the archive holds no more, and the
-# app must pass the updater's check unpacked that way.
 COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$UPDATE_ARCHIVE" -C "$PACKAGE" "$APP_NAME.app"
 UNPACKED="$(mktemp -d)"
 tar --no-xattrs --no-mac-metadata -xzf "$UPDATE_ARCHIVE" -C "$UNPACKED"

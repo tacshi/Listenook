@@ -1,6 +1,3 @@
-//! A job from a file to a transcript: upload, transcribe, fetch, parse,
-//! clean up, and translate when the job asks for it.
-
 use std::{path::PathBuf, time::Duration};
 
 use listenook_core::{
@@ -15,7 +12,6 @@ use super::{
 };
 use crate::state::{Store, secrets, store};
 
-/// Starts every recording that waits to be transcribed.
 pub(crate) fn start_ready() {
     let ready: Vec<String> =
         store().jobs().iter().filter(|job| job.status.is_transcribable()).map(|job| job.id.clone()).collect();
@@ -24,12 +20,10 @@ pub(crate) fn start_ready() {
     }
 }
 
-/// Starts transcribing a job, whatever page the user goes to.
 pub(crate) fn start(id: &str) {
     let store = store();
     let id = id.to_owned();
     store.update_job(&id, |job| {
-        // Nothing was sent yet: it goes as the options are now.
         if job.remote_file_id.is_none() {
             store.apply_options(job);
         }
@@ -53,7 +47,6 @@ pub(crate) fn start(id: &str) {
     });
 }
 
-/// Stops a job's work; what was uploaded is deleted from the provider.
 pub(crate) fn cancel(id: &str) {
     let store = store();
     store.cancel_work(id);
@@ -63,7 +56,6 @@ pub(crate) fn cancel(id: &str) {
     for kind in ["wav", "m4a"] {
         let _ = std::fs::remove_file(std::env::temp_dir().join(format!("listenook-{id}.{kind}")));
     }
-    // Stopping word timing leaves the transcript it was for.
     if store.job_now(id).is_some_and(|job| job.status == JobStatus::Aligning) {
         store.update_job(id, |job| {
             job.status = JobStatus::Completed;
@@ -84,10 +76,8 @@ pub(crate) fn cancel(id: &str) {
     store.run(async move { clean_up(store, &id).await });
 }
 
-/// Puts a failed or cancelled job back in line.
 pub(crate) fn retry(id: &str) {
     let store = store();
-    // An episode that never arrived is fetched again.
     if store
         .job_now(id)
         .is_some_and(|job| job.podcast_provenance.is_some() && !std::path::Path::new(&job.source_path).exists())
@@ -114,10 +104,6 @@ fn provider_of(job: &Job) -> Result<Provider, Failure> {
     }
 }
 
-/// The file to upload: of a video only its sound, which is a fraction of
-/// its size. macOS's converter makes a small AAC file of an MP4; anywhere
-/// else, and of the other containers, the sound is decoded here and sent
-/// as a 16 kHz WAV file, when that is smaller than the video.
 async fn upload_source(job: &Job) -> PathBuf {
     let source = PathBuf::from(&job.source_path);
     let extension = subtitles::extension(&job.source_path);
@@ -289,13 +275,11 @@ async fn run(store: Store, id: &str) -> Result<(), Failure> {
     Ok(())
 }
 
-/// Transcribes a job on this machine.
 async fn run_local(store: Store, id: &str, job: &Job) -> Result<(), Failure> {
     let size = std::fs::metadata(&job.source_path).map_err(|e| Failure::new("missing_source", e.to_string()))?.len();
     if !subtitles::is_media(&job.source_path) {
         return Err(Failure::new("unsupported_format", "Unsupported file type."));
     }
-    // One recording at a time, from here on.
     let _turn = local::Lane::turn().await;
     store.update_job(id, |job| job.status = JobStatus::Converting);
     store.set_progress(id, "converting", None);
@@ -304,7 +288,6 @@ async fn run_local(store: Store, id: &str, job: &Job) -> Result<(), Failure> {
     store.update_job(id, |job| job.status = JobStatus::Processing);
     let document = local::transcribe(store, job, samples.clone()).await?;
     let empty = document.segments.is_empty();
-    // Qwen3 times its words as it goes.
     let timed = !document.tokens.is_empty();
     let has_video = matches!(subtitles::extension(&job.source_path).as_str(), "mp4" | "mkv" | "avi");
     store.update_job(id, |job| {
@@ -332,9 +315,6 @@ async fn run_local(store: Store, id: &str, job: &Job) -> Result<(), Failure> {
     Ok(())
 }
 
-/// Times the words of a finished transcript, where the settings ask for it
-/// and the aligner is here. `samples` is the audio already prepared, if
-/// any. The job is complete either way.
 async fn add_word_timing(store: Store, id: &str, samples: Option<std::sync::Arc<Vec<i16>>>) {
     let Some(job) = store.job_now(id) else {
         return;
@@ -366,19 +346,16 @@ async fn time_words(store: Store, id: &str, job: &Job, samples: Option<std::sync
     });
 }
 
-/// Times the words of a transcript the user asks about.
 pub(crate) fn align(id: &str) {
     let store = store();
     let id = id.to_owned();
     store.run_for(&id.clone(), async move {
-        // Asked for by hand: whatever the setting for doing it unasked.
         if let Some(job) = store.job_now(&id).filter(|job| local::can_align(job)) {
             time_words(store, &id, &job, None).await;
         }
     });
 }
 
-/// Deletes what a job left at its provider.
 async fn clean_up(store: Store, id: &str) {
     let Some(job) = store.job_now(id) else {
         return;

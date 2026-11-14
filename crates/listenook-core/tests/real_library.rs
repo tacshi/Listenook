@@ -1,23 +1,14 @@
-//! A check against a real library: everything read from it is written back
-//! as it was, so taking over a Flutter library loses nothing.
-//!
-//! `LISTENOOK_LIBRARY=<data folder> cargo test -p listenook-core --test real_library -- --ignored --nocapture`
-//! Only reads.
-
 use std::path::Path;
 
 use listenook_core::{Job, LibraryCatalog, Settings, podcast::Catalog};
 use serde_json::Value;
 
-/// Where two JSON values differ, as paths. A number written `1` and read
-/// `1.0` is the same number.
 fn differences(path: &str, before: &Value, after: &Value, out: &mut Vec<String>) {
     match (before, after) {
         (Value::Object(a), Value::Object(b)) => {
             for (key, value) in a {
                 match b.get(key) {
                     Some(other) => differences(&format!("{path}.{key}"), value, other, out),
-                    // An absent key and a null one read the same.
                     None if value.is_null() => {}
                     None => out.push(format!("{path}.{key} lost")),
                 }

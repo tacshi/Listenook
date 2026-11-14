@@ -6,23 +6,8 @@ param(
   [switch]$AllowBranch
 )
 
-# Builds the Windows app with `nsh package` and signs it when a certificate
-# is configured (LISTENOOK_WINDOWS_PFX).
-#
-#   build-windows.ps1 debug                    build\Listenook-x64-debug
-#   build-windows.ps1 release                  the installer and updater archive
-#   build-windows.ps1 release -Version 1.2.3   the same for a published release:
-#                                              built from a clean main that
-#                                              matches origin, with a record of
-#                                              the commit for scripts/publish.sh.
-#                                              Build it before or after
-#                                              publish.sh sets the version.
-#
-# A release needs Inno Setup 6 or 7.
-
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-# nsh packages Windows apps for x64 only.
 $Arch = "x64"
 $HostArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 if (-not (Get-Command nsh -ErrorAction SilentlyContinue)) {
@@ -48,9 +33,6 @@ if ($Version) {
     }
   }
   $BuildNumber = [int](git -C $Root rev-list --count HEAD).Trim()
-  # scripts/publish.sh sets the version in a commit of its own. Built before
-  # that commit exists, this takes the number that commit will have, so that
-  # every platform of the release has the same one.
   if ($Manifest.version -ne $Version) { $BuildNumber += 1 }
 } else {
   $Version = $Manifest.version
@@ -126,7 +108,6 @@ try {
   $Package = Join-Path $Root "build\nsh\windows-$Arch"
   if (Test-Path $Package) { Remove-Item $Package -Recurse -Force }
   $PackageArgs = @("package", "--target", "windows", "--out", $Package, "--app-version", $Version)
-  # What About shows, whatever version Cargo.toml has when this is built.
   $env:LISTENOOK_VERSION = $Version
   if ($BuildNumber) { $PackageArgs += @("--build", $BuildNumber) }
   & nsh @PackageArgs
@@ -172,9 +153,6 @@ try {
     return
   }
 
-  # What the in-app updater downloads, under the name `nsh update-manifest`
-  # reads the platform from. It is made again here, laid out as nsh laid
-  # it out, so that it holds the signed executable and the notices.
   $UpdateName = "$Name-$Version-windows-x86_64.zip"
   $Packaged = Join-Path $Package $UpdateName
   if (-not (Test-Path -LiteralPath $Packaged -PathType Leaf)) {
@@ -216,7 +194,6 @@ try {
   Invoke-CodeSign $Setup
 
   if ($BuildNumber) {
-    # Where the installer came from, for the machine that publishes it.
     [ordered]@{
       version = $Version
       build = [int]$BuildNumber

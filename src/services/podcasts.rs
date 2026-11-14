@@ -1,6 +1,3 @@
-//! Podcast networking: Apple's directory, feeds, publisher captions and
-//! downloading an episode into a job.
-
 use listenook_core::{
     JobProgress, JobSourceOrigin, JobStatus, MediaMetadata, PodcastProvenance, TranscriptAcquisitionMode,
     podcast::{self, Episode, Feed, ShowSummary},
@@ -24,19 +21,16 @@ async fn get(url: &str, failure: &'static str) -> Result<Vec<u8>, &'static str> 
     if response.ok() { Ok(response.body) } else { Err(failure) }
 }
 
-/// Shows matching `term` in Apple's directory.
 pub(crate) async fn search(term: &str) -> Result<Vec<ShowSummary>, &'static str> {
     let body = get(&podcast::search_url(term), "podcast_search_failed").await?;
     Ok(podcast::parse_itunes(&String::from_utf8_lossy(&body)))
 }
 
-/// The shows Listenook suggests for studying English.
 pub(crate) async fn featured() -> Result<Vec<ShowSummary>, &'static str> {
     let body = get(&podcast::lookup_url(podcast::FEATURED_IDS), "podcast_lookup_failed").await?;
     Ok(podcast::parse_itunes(&String::from_utf8_lossy(&body)))
 }
 
-/// The top shows of a genre (or of all), with their feeds.
 pub(crate) async fn top_shows(genre: Option<u32>, limit: u32) -> Result<Vec<ShowSummary>, &'static str> {
     let chart = get(&podcast::chart_url(genre, limit), "podcast_lookup_failed").await?;
     let ids = podcast::parse_chart_ids(&String::from_utf8_lossy(&chart));
@@ -48,7 +42,6 @@ pub(crate) async fn top_shows(genre: Option<u32>, limit: u32) -> Result<Vec<Show
     Ok(podcast::parse_itunes(&String::from_utf8_lossy(&body)))
 }
 
-/// Fetches a feed and keeps it in the catalog.
 pub(crate) async fn load_feed(url: &str) -> Result<Feed, &'static str> {
     let canonical = podcast::canonical_url(url);
     if canonical.is_empty() {
@@ -60,7 +53,6 @@ pub(crate) async fn load_feed(url: &str) -> Result<Feed, &'static str> {
     Ok(feed)
 }
 
-/// The job made from an episode, if there is one.
 pub(crate) fn job_of(episode_id: &str) -> Option<String> {
     store()
         .jobs()
@@ -69,9 +61,6 @@ pub(crate) fn job_of(episode_id: &str) -> Option<String> {
         .map(|job| job.id.clone())
 }
 
-/// "Deep listen": downloads the episode into the Library. The publisher's
-/// captions become its transcript when it has some; otherwise it waits
-/// there to be transcribed.
 pub(crate) fn deep_listen(episode: &Episode, feed: &Feed) {
     let store = store();
     if let Some(existing) = job_of(&episode.id) {
@@ -116,7 +105,6 @@ pub(crate) fn deep_listen(episode: &Episode, feed: &Feed) {
     download(&id);
 }
 
-/// Downloads a podcast job's episode (again, after a failure).
 pub(crate) fn download(id: &str) {
     let store = store();
     let id = id.to_owned();
@@ -133,10 +121,7 @@ pub(crate) fn download(id: &str) {
     });
     store.run_for(&id.clone(), async move {
         let path = std::path::PathBuf::from(&job.source_path);
-        // The transfer runs off the engine thread and says how far it is
-        // through these; a part file left by an earlier try is continued.
         let (received, total) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
-        // Set when this work is dropped (Cancel, Remove): the transfer ends.
         let stop = Arc::new(AtomicBool::new(false));
         let _halt = Halt(stop.clone());
         let transfer = blocking({
@@ -201,7 +186,6 @@ pub(crate) fn download(id: &str) {
     });
 }
 
-/// Sets its flag when dropped.
 struct Halt(Arc<AtomicBool>);
 
 impl Drop for Halt {
@@ -210,8 +194,6 @@ impl Drop for Halt {
     }
 }
 
-/// Downloads `url` to `path` through a `.part` file beside it, continuing
-/// one an earlier try left. Returns the file's size. `stop` ends it early.
 fn fetch_to_file(
     url: &str,
     path: &std::path::Path,
@@ -231,8 +213,6 @@ fn fetch_to_file(
         request.call().map_err(std::io::Error::other)
     };
     let response = match ask(have) {
-        // What was kept no longer fits what the server has (it is whole
-        // already, or the episode changed): start over.
         Err(_) if have > 0 => {
             have = 0;
             ask(0)

@@ -1,6 +1,3 @@
-//! AI Briefs: the prompts, cutting a transcript into chunks, and turning a
-//! model's JSON into a brief in which every item cites real segments.
-
 use std::collections::HashSet;
 
 use serde_json::Value;
@@ -13,15 +10,12 @@ use crate::{
     },
 };
 
-/// The most characters of rendered transcript in one request.
 pub const CHUNK_CHARACTERS: usize = 8000;
 
-/// The system prompt of every brief request.
 pub const SYSTEM_PROMPT: &str = "You turn timestamped transcripts into concise, trustworthy work products. Use only facts explicitly supported by the supplied segments. Every chapter and insight must cite one or more exact segment IDs. Never invent decisions, owners, deadlines, or questions. Language-learning explanations may use established linguistic knowledge, but every selected term and source excerpt must come from the cited transcript segments. Omit unsupported items. Return JSON only, with no Markdown fences.";
 
 const SHAPE: &str = r#"{"overview":"concise overview or empty string","overview_evidence":["segment-id"],"chapters":[{"title":"...","summary":"...","evidence":["segment-id"]}],"insights":[{"type":"keyIdea|notableMoment|decision|actionItem|openQuestion","text":"...","owner":null,"deadline":null,"evidence":["segment-id"]}],"language_notes":[{"kind":"vocabulary|expression|grammar","term":"...","explanation":"...","source_excerpt":"...","evidence":["segment-id"]}]}"#;
 
-/// What the user asked a brief to contain.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BriefRequest {
     pub sections: Vec<AiBriefSection>,
@@ -32,8 +26,6 @@ pub struct BriefRequest {
 }
 
 impl BriefRequest {
-    /// The sections a new brief has unless the user chooses: all but the
-    /// language notes.
     pub fn default_sections() -> Vec<AiBriefSection> {
         AiBriefSection::ALL.iter().copied().filter(|s| *s != AiBriefSection::LanguageNotes).collect()
     }
@@ -83,7 +75,6 @@ impl BriefRequest {
     }
 }
 
-/// The transcript as the lines the model reads, cut into chunks.
 pub fn chunks(document: &Document) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for segment in document.segments.iter().filter(|s| !s.text.trim().is_empty()) {
@@ -107,7 +98,6 @@ pub fn chunks(document: &Document) -> Vec<String> {
     out
 }
 
-/// The prompt analyzing chunk `index` of `total`.
 pub fn chunk_prompt(request: &BriefRequest, chunk: &str, index: usize, total: usize) -> String {
     format!(
         "Analyze transcript chunk {} of {total}.\nWrite all user-facing text in language code \"{}\".\nRequested sections: {}.\n{}\n\nReturn exactly this JSON shape:\n{SHAPE}\n\nFor owner and deadline, use null unless the cited transcript states them explicitly. Keep overview_evidence to the smallest useful set of supporting segments.\n\nTranscript:\n{chunk}",
@@ -118,7 +108,6 @@ pub fn chunk_prompt(request: &BriefRequest, chunk: &str, index: usize, total: us
     )
 }
 
-/// The prompt joining several chunks' analyses into one brief.
 pub fn synthesis_prompt(request: &BriefRequest, candidates: &[Value]) -> String {
     format!(
         "Synthesize the candidate analyses below into one non-repetitive brief.\nWrite all user-facing text in language code \"{}\".\nRequested sections: {}.\nPreserve only supplied evidence segment IDs. Do not introduce facts.\n{}\n\nReturn exactly this JSON shape:\n{SHAPE}\n\nCandidates:\n{}",
@@ -129,8 +118,6 @@ pub fn synthesis_prompt(request: &BriefRequest, candidates: &[Value]) -> String 
     )
 }
 
-/// The JSON object in a reply, fences or prose around it ignored: the one
-/// with a brief's keys when there are several.
 pub fn decode_reply(reply: &str) -> Option<Value> {
     const KEYS: &[&str] = &["overview", "overview_evidence", "chapters", "insights", "language_notes"];
     let bytes = reply.as_bytes();
@@ -174,7 +161,6 @@ fn normalized(text: &str) -> String {
 }
 
 fn stable_id(prefix: &str, text: &str, index: usize) -> String {
-    // FNV-1a: stable across runs and platforms.
     let hash = normalized(text).bytes().fold(0x811c_9dc5_u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
     format!("{prefix}-{hash:x}-{index}")
 }
@@ -183,9 +169,6 @@ fn text_of(value: &Value, key: &str) -> String {
     value.get(key).and_then(Value::as_str).unwrap_or("").trim().to_owned()
 }
 
-/// A model's JSON as a brief: evidence limited to real segment ids, items
-/// without evidence dropped, owners and deadlines kept only when the cited
-/// text states them. `ai_brief_no_supported_content` when nothing is left.
 pub fn brief_from_json(value: &Value, request: &BriefRequest, document: &Document) -> Result<AiBrief, &'static str> {
     let known: HashSet<&str> = document.segments.iter().map(|s| s.id.as_str()).collect();
     let evidence = |value: &Value, key: &str| -> Vec<String> {

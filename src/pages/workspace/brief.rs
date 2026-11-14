@@ -1,6 +1,3 @@
-//! The AI Brief of a transcript: an overview, chapters and insights, each
-//! with the moments of the recording that support it.
-
 use listenook_core::{
     AiBrief, AiBriefSection, AiGenerationStatus, AiInsightType, AiLanguageNoteKind, AiLearningLevel,
     TRANSLATION_LANGUAGES,
@@ -35,7 +32,6 @@ fn section_label(section: AiBriefSection) -> &'static str {
     }
 }
 
-/// The AI Brief pane.
 pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoElement {
     let store = review.store;
     let state =
@@ -89,8 +85,6 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                             }
                         })
                     },
-                    // Follows the settings: saving a key there turns this
-                    // into the Create button without leaving the pane.
                     dynamic(move || {
                         let configured = configured.get();
                         untracked(|| {
@@ -120,8 +114,6 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                 .flex_wrap()
                                 .items_center()
                                 .gap_2()
-                                // The note has a line of its own: in a narrow
-                                // panel the buttons would squeeze it to a column.
                                 .child(hint(l("AI-generated draft · verify against evidence")).w_full())
                                 .child(button(Variant::Ghost, Size::Sm, l("Copy")).on_press(move || {
                                     if let (Some(job), Some(brief)) = (store.job_now(&review.id()), brief.get_untracked()) {
@@ -155,7 +147,6 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
     }))
 }
 
-/// The moments that support an item: each seeks the recording.
 fn evidence(review: Review, ids: &[String]) -> impl IntoElement {
     let moments: Vec<(usize, i64)> = review.job.with_untracked(|job| {
         let Some(document) = job.as_ref().and_then(|job| job.document.as_ref()) else {
@@ -202,7 +193,6 @@ fn item(review: Review, part: BriefPart, body: impl IntoElement, ids: &[String])
         .child(evidence(review, ids))
 }
 
-/// Edits one part of the brief: its text, and its title where it has one.
 pub(super) fn edit_dialog(review: Review) -> impl IntoElement {
     let open = signal(false);
     let (title, body) = (signal(String::new()), signal(String::new()));
@@ -408,7 +398,6 @@ fn content(review: Review, brief: &AiBrief) -> impl IntoElement {
     view().gap_6().children(sections)
 }
 
-/// Choose what a brief contains, then generate it.
 pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
     let store = review.store;
     let sections = signal(BriefRequest::default_sections());

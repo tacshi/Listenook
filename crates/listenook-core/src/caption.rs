@@ -1,20 +1,9 @@
-//! A long sentence as the lines of a subtitle. A sentence stays one unit
-//! everywhere else; over a picture it shows a line at a time, cut where the
-//! speaker pauses or the text has a comma, so no line is longer than can be
-//! read at a glance.
-
 use std::ops::Range;
 
-/// The widest a line may be, in the width of a Latin letter: about two rows
-/// of a subtitle.
 pub const MAX_WIDTH: usize = 84;
-/// The longest a line may stay up.
 pub const MAX_MS: i64 = 7000;
-/// A line narrower than this is a poor place to stop.
 const MIN_WIDTH: usize = 16;
 
-/// What a line's width counts: a character of a script written without
-/// spaces is as wide as two Latin letters.
 fn width(text: &str) -> usize {
     text.chars()
         .map(|c| match c as u32 {
@@ -31,7 +20,6 @@ fn width(text: &str) -> usize {
         .sum()
 }
 
-/// Punctuation that closes what is before it.
 fn closes(c: char) -> bool {
     matches!(
         c,
@@ -59,9 +47,6 @@ fn closes(c: char) -> bool {
     )
 }
 
-/// The words with the punctuation that closes a word kept on it: a
-/// transcript may time the comma after a word as part of the next one
-/// (`"divorce"`, `", but"`), and a line must not start with it.
 pub fn tidy<S: AsRef<str>>(words: &[(S, i64, i64)]) -> Vec<(String, i64, i64)> {
     let mut out: Vec<(String, i64, i64)> = Vec::with_capacity(words.len());
     for (text, start, end) in words {
@@ -78,7 +63,6 @@ pub fn tidy<S: AsRef<str>>(words: &[(S, i64, i64)]) -> Vec<(String, i64, i64)> {
     out
 }
 
-/// How good a place to stop the end of `word` is, by its punctuation.
 fn stop(word: &str) -> f64 {
     let tail: Vec<char> = word.trim_end().chars().rev().take_while(|c| !c.is_alphanumeric()).collect();
     if tail.iter().any(|c| matches!(c, '.' | '!' | '?' | '。' | '！' | '？')) {
@@ -92,10 +76,6 @@ fn stop(word: &str) -> f64 {
     }
 }
 
-/// The lines a sentence's timed words show as, each a range of them: the
-/// whole sentence when it is short, else cut where the speaker pauses or
-/// the punctuation allows, into lines of about even length. `words` are in
-/// the order they are said, each with what stands before it.
 pub fn lines<S: AsRef<str>>(words: &[(S, i64, i64)]) -> Vec<Range<usize>> {
     let widths: Vec<usize> = words.iter().map(|(text, ..)| width(text.as_ref())).collect();
     let mut out = Vec::new();
@@ -114,8 +94,6 @@ fn cut<S: AsRef<str>>(words: &[(S, i64, i64)], widths: &[usize], span: Range<usi
         out.push(span);
         return;
     }
-    // Stop after the word that scores best: punctuation and a pause count
-    // for it, lines of uneven length and a scrap of a line against it.
     let mut best = (f64::MIN, span.start);
     let mut left = 0;
     for at in span.start..span.end - 1 {
@@ -133,8 +111,6 @@ fn cut<S: AsRef<str>>(words: &[(S, i64, i64)], widths: &[usize], span: Range<usi
     cut(words, widths, best.1 + 1..span.end, out);
 }
 
-/// The line that shows while the word at `said` is being said: the first
-/// before any is.
 pub fn line_of(lines: &[Range<usize>], said: Option<usize>) -> usize {
     said.and_then(|said| lines.iter().position(|line| line.contains(&said))).unwrap_or(0)
 }
@@ -143,8 +119,6 @@ pub fn line_of(lines: &[Range<usize>], said: Option<usize>) -> usize {
 mod tests {
     use super::*;
 
-    /// Words a third of a second apart, with a pause after those that end
-    /// with `|`.
     fn timed(text: &str) -> Vec<(String, i64, i64)> {
         let mut at = 0;
         text.split(' ')

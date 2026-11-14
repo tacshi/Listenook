@@ -1,7 +1,3 @@
-//! Buttons: one press feedback, one focus ring and one disabled look for
-//! the whole app. A caller gives meaning (variant, size, label, icon) and
-//! layout; the look is here.
-
 use nsh_base::{ButtonElement, theme, tooltip};
 use nsh_core::prelude::*;
 
@@ -10,22 +6,15 @@ use super::{
     tokens::{self, motion},
 };
 
-/// What a button means where it stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
-    /// The default commit of a decision area.
     Primary,
-    /// An ordinary visible action.
     Default,
-    /// An action with a boundary and less weight.
     Outline,
-    /// A quiet toolbar or inline action.
     Ghost,
-    /// A quiet action over a picture (a video): light in either theme.
     Picture,
 }
 
-/// A control's size: height, padding, text and icon together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Size {
     Sm,
@@ -33,8 +22,6 @@ pub enum Size {
 }
 
 impl Size {
-    /// The control's height: a pointer's sizes on a computer, a finger's
-    /// on a phone or a tablet. Fields and selects of a size share it.
     pub(crate) fn height(self) -> f32 {
         match (self, crate::platform::is_phone()) {
             (Size::Sm, false) => 28.0,
@@ -44,7 +31,6 @@ impl Size {
         }
     }
 
-    /// The icon in the control: a step smaller than its text line.
     pub(crate) fn icon(self) -> f32 {
         match (self, crate::platform::is_phone()) {
             (Size::Sm, false) => 14.0,
@@ -113,12 +99,10 @@ fn label_text(label: impl IntoReactive<SharedString>, size: Size) -> Text {
     }
 }
 
-/// A button with a label. Chain `.on_press(..)`, `.disabled(..)` and layout.
 pub fn button(variant: Variant, size: Size, label: impl IntoReactive<SharedString>) -> ButtonElement {
     dressed(nsh_base::button(), variant, size, false).child(label_text(label, size))
 }
 
-/// A button with a leading icon and a label.
 pub fn icon_text_button(
     variant: Variant,
     size: Size,
@@ -128,13 +112,10 @@ pub fn icon_text_button(
     dressed(nsh_base::button(), variant, size, false).child(icon(glyph, size.icon())).child(label_text(label, size))
 }
 
-/// A square button showing only an icon. `name` is what screen readers say
-/// and what the tooltip shows.
 pub fn icon_button(glyph: Icon, name: impl Into<SharedString>, size: Size, on_press: impl Fn() + 'static) -> View {
     icon_button_as(Variant::Ghost, glyph, name, size, on_press)
 }
 
-/// An [`icon_button`] of another variant: [`Variant::Picture`] over a video.
 pub fn icon_button_as(
     variant: Variant,
     glyph: Icon,
@@ -151,9 +132,6 @@ pub fn icon_button_as(
     )
 }
 
-/// An icon button for the system's header on a phone or a tablet, where
-/// the system draws its own button and presses this one for it: the
-/// button alone, with no tooltip around it to take that press.
 pub fn header_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn() + 'static) -> ButtonElement {
     dressed(nsh_base::button(), Variant::Ghost, Size::Md, true)
         .accessibility_label(name.into())
@@ -161,8 +139,6 @@ pub fn header_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl 
         .child(icon(glyph, Size::Md.icon()))
 }
 
-/// A round button of a bar the app draws where the system's header would
-/// be, on a phone or a tablet: the size and the look of the system's own.
 pub fn bar_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn() + 'static) -> ButtonElement {
     nsh_base::button()
         .accessibility_label(name.into())
@@ -181,8 +157,6 @@ pub fn bar_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn(
         .child(icon(glyph, 24.0))
 }
 
-/// An icon button that turns something on and off (a side panel, repeat):
-/// tinted in the accent while on, and announced as selected.
 pub fn toggle_button(
     variant: Variant,
     glyph: Icon,
@@ -203,8 +177,6 @@ pub fn toggle_button(
     )
 }
 
-/// What opens a menu from a toolbar or a row: a square icon button that
-/// stays pressed while its menu is open. `open` is the menu's state.
 pub fn menu_trigger(glyph: Icon, name: impl Into<SharedString>, size: Size, open: Signal<bool>) -> View {
     let scale = tokens::press_scale(true);
     let side = size.height();
@@ -228,7 +200,6 @@ pub fn menu_trigger(glyph: Icon, name: impl Into<SharedString>, size: Size, open
         .child(icon(glyph, size.icon()))
 }
 
-/// An icon button whose glyph and name follow state (play / pause).
 pub fn toggle_icon_button(
     glyph: impl Fn() -> Icon + 'static,
     name: impl Fn() -> SharedString + Clone + 'static,
@@ -240,7 +211,6 @@ pub fn toggle_icon_button(
         .child(icon_of(glyph, size.icon()))
 }
 
-/// The app's tooltip: a small inverted label.
 pub fn tip(label: SharedString) -> nsh_base::TooltipElement {
     tooltip()
         .starting_class("opacity-0 transition-opacity duration-150")

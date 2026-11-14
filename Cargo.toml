@@ -1,11 +1,9 @@
 [package]
 name = "nsh-app-listenook"
-# Keep in step with nsh.json "version": the updater compares that one.
 version = "2.0.6"
 edition = "2024"
 publish = false
 
-# `cargo run` shows in the Dock and the task bar under this name.
 [[bin]]
 name = "Listenook"
 path = "src/main.rs"
@@ -14,7 +12,6 @@ path = "src/main.rs"
 members = ["crates/listenook-core"]
 exclude = ["vendor"]
 
-# NSH at the version of the stable CLI this app is built with (`nsh --version`).
 [dependencies]
 listenook-core = { path = "crates/listenook-core" }
 nsh-core = { version = "0.5.1" }
@@ -45,21 +42,12 @@ nsh-platform-windows = { version = "0.5.1", default-features = false, features =
 nsh-engine = { version = "0.5.1", default-features = false }
 nsh-testing = { version = "0.5.1", default-features = false }
 
-# The speech engine: Accelerate on Apple's platforms; elsewhere its BLAS
-# call is answered by `services/blas.rs`.
-# `vendor/qwen-asr` is the crate with two changes: it builds for iOS,
-# Android and Windows on Arm (`sdot_s32` in its `src/kernels/neon.rs`), and
-# for Windows at all (its mmap, `pread`, `posix_memalign` and `sched_yield`
-# have Windows paths, the mapping by `memmap2`). A
-# path, not a `[patch]`: `nsh package` builds this crate in a workspace of
-# its own, where a patch written here does not apply.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 qwen-asr = { path = "vendor/qwen-asr" }
 
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
 qwen-asr = { path = "vendor/qwen-asr", default-features = false, features = ["blas"] }
 
-# Speech and audio code is unusable unoptimized.
 [profile.dev.package.qwen-asr]
 opt-level = 3
 

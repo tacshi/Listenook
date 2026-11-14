@@ -1,6 +1,3 @@
-//! The app shell: the sidebar, the place or the open recording beside it,
-//! the podcast player that outlives pages, and the window's commands.
-
 use listenook_core::{format::clock, l10n::Lang};
 use nsh_base::{nav_page, nav_stack, theme};
 use nsh_core::{
@@ -30,14 +27,10 @@ use crate::{
     util,
 };
 
-/// The height of the band the window's controls sit in.
 const BAR: f32 = 44.0;
-/// The keystroke that plays or pauses from any app, when turned on.
 pub(crate) const GLOBAL_PLAY_PAUSE: &str = "ctrl+alt+space";
-/// The room between the window's own controls and what the bar shows.
 const CONTROLS_GAP: f32 = 12.0;
 
-/// The whole window.
 pub(crate) fn shell() -> impl IntoElement {
     let store = store();
     let mut bar = TitleBarOptions::default();
@@ -47,32 +40,22 @@ pub(crate) fn shell() -> impl IntoElement {
     attributes.title_bar = Some(bar);
     current_window().set(attributes);
 
-    // What the system asks (media keys, the menu-bar item) arrives on its
-    // own threads and is handed over here.
     let ticks = std::cell::Cell::new(0_u32);
     set_interval(std::time::Duration::from_millis(100), move || {
         media::pump();
-        // Twice a second: a hardware keyboard's keys reach the shortcuts.
         ticks.set(ticks.get().wrapping_add(1));
         if ticks.get().is_multiple_of(5) {
             crate::services::keep_keys();
         }
-        // And the files picked in the system's file browser on a phone.
         let picked = crate::services::take_picked();
         if !picked.is_empty() {
             util::import_picked(picked);
         }
     });
-    // The app can stay in the tray (the menu bar on a Mac): closing the
-    // window then hides it, and transcriptions, downloads and the watched
-    // folder go on.
     let in_tray = move || platform::has_tray() && store.tray_enabled();
-    // Opened at login (`--background`), the app starts in the tray with
-    // no window in the way, as long as there is a tray icon to open it by.
     if std::env::args().any(|argument| argument == "--background") && untracked(in_tray) {
         current_window().hide();
     }
-    // In the Dock or out of it, as set.
     effect(move || crate::services::set_dock_icon(store.dock_visible()));
     let show_window = move || {
         store.set_video_only(false);
@@ -83,7 +66,6 @@ pub(crate) fn shell() -> impl IntoElement {
         let stays = in_tray();
         if stays {
             let mut items = vec![MenuItem::new(tr("Open Listenook").to_string()).on_select(show_window)];
-            // Only with a folder to watch.
             if !store.monitor().folder_path.is_empty() {
                 let watching = if store.monitor().paused { "Resume watching" } else { "Pause watching" };
                 items.push(
@@ -111,17 +93,12 @@ pub(crate) fn shell() -> impl IntoElement {
         attributes.close_on_press = Some(!stays);
         current_window().set(attributes);
     });
-    // Files the system opens the app with (Open With, a double click, a
-    // drop on its icon): a video plays, other media goes to the Library.
     let launched = std::time::Instant::now();
     let open_media = move |paths: Vec<String>| match paths.iter().find(|path| pages::is_video(path)) {
         Some(video) => {
             store.open_video(video);
-            // Launched to play it: the player is all that shows.
             if launched.elapsed() < std::time::Duration::from_secs(2) && !platform::is_phone() {
                 store.set_video_only(true);
-                // Once the window is up: at the very start it is not
-                // there to hide yet, and would show after all.
                 spawn(async move {
                     for wait in [0, 60, 250] {
                         timer(std::time::Duration::from_millis(wait)).await;
@@ -138,8 +115,6 @@ pub(crate) fn shell() -> impl IntoElement {
         }
     };
     let open_paths = move |paths: Vec<String>| {
-        // On a phone or a tablet what another app hands over (its share
-        // sheet, "Open in") goes into the Library, kept with the app's own.
         if platform::is_phone() && paths.iter().any(|path| listenook_core::subtitles::is_media(path)) {
             let taken = util::import_opened(paths);
             if taken > 0 {
@@ -152,7 +127,6 @@ pub(crate) fn shell() -> impl IntoElement {
         }
         open_media(paths)
     };
-    // Opened with a video on the command line (Windows' "Open with").
     if let Some(video) =
         std::env::args().nth(1).filter(|path| pages::is_video(path) && std::path::Path::new(path).is_file())
     {
@@ -164,7 +138,6 @@ pub(crate) fn shell() -> impl IntoElement {
             open_paths(files.iter().filter_map(|path| path.to_str().map(str::to_owned)).collect());
         }
     });
-    // On Windows and Linux a second launch hands its arguments over.
     spawn(async move {
         loop {
             let launch = next_second_instance().await;
@@ -181,8 +154,6 @@ pub(crate) fn shell() -> impl IntoElement {
         }
     });
     current_window().on_focus_change(move |focused| store.set_focused(focused));
-    // A key that plays or pauses whichever app is in front, for those who
-    // turn it on.
     effect(move || {
         let on = store.setting(|s| s.extra.get("global_play_pause").and_then(|v| v.as_bool()).unwrap_or(false));
         if on {
@@ -197,13 +168,8 @@ pub(crate) fn shell() -> impl IntoElement {
         }
     });
 
-    // The watched folder is looked at every few seconds; a file is taken
-    // on the second look that finds it unchanged.
     set_interval(std::time::Duration::from_secs(5), move || store.scan_watched_folder());
-    // What a sync with another device brings is taken in as it arrives.
     set_interval(std::time::Duration::from_millis(250), move || store.sync.tick());
-    // On a computer the commands are the menu bar's, which carries their
-    // shortcuts; elsewhere a hardware keyboard reaches them directly.
     if is_desktop() {
         effect(move || {
             store.lang();
@@ -217,7 +183,6 @@ pub(crate) fn shell() -> impl IntoElement {
         on_key("mod+b", move |_| store.toggle_sidebar());
         on_key("mod+shift+o", |_| util::pick_video());
     }
-    // Going somewhere from the drawer puts it away.
     effect(move || {
         let _ = (store.place(), store.filter(), store.open_job_id());
         untracked(|| store.set_drawer(false));
@@ -239,11 +204,7 @@ pub(crate) fn shell() -> impl IntoElement {
                     stacked(lang).into_element()
                 } else {
                     dynamic(move || {
-                        // Built again in a new language: some labels are read
-                        // once, when their control is made.
-                        // In place, without the entrance a new page makes.
                         let translated = shown_in.replace(lang.get()) != lang.get();
-                        // The open recording covers the place it was opened from.
                         let (video, open, place) = (store.open_video_path(), store.open_job_id(), store.place());
                         untracked(|| match video {
                             Some(path) => pages::player(&path).into_element(),
@@ -263,11 +224,9 @@ pub(crate) fn shell() -> impl IntoElement {
                 .child(when(tab_bar_shown, tab_bar)),
         )
         .child(when(move || store.podcast.playing().is_some(), podcast_player))
-        // In a narrow window the sidebar comes out over the page.
         .child(when(
             move || platform::compact() && store.drawer() && !store.immersive(),
             move || {
-                // Escape puts it away, as a press beside it does.
                 on_key("escape", move |_| store.set_drawer(false));
                 view()
                     .absolute()
@@ -283,21 +242,15 @@ pub(crate) fn shell() -> impl IntoElement {
         .child(pages::sync_request_dialog())
 }
 
-/// What is pushed over a place on a phone or a tablet.
 #[derive(Debug, Clone, PartialEq)]
 enum Pushed {
-    /// A podcast, by its feed's address.
     Show(String),
     Reader(String),
     Video(String),
 }
 
-/// The pages of a phone or a tablet, in the system's own stack: the place
-/// at the bottom, the open recording pushed over it with the system's
-/// transition and taken off by its back swipe (or Android's back button).
 fn stacked(lang: Memo<Lang>) -> impl IntoElement {
     let store = store();
-    // Keyed by the language too: a page is made again in a new one.
     let pushed = computed(move || {
         let lang = lang.get();
         let mut pages = Vec::new();
@@ -312,7 +265,6 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
         }
         pages
     });
-    // Android's back button puts the drawer away before it leaves a page.
     on_back_press(move || {
         let open = store.drawer_now();
         if open {
@@ -320,7 +272,6 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
         }
         open
     });
-    // The header in the app's colors, its buttons in the accent.
     let colors = |s: nsh_core::element::StyleRefinement| {
         s.bg(|| theme().background).text_color(|| theme().foreground).tint_color(|| theme().primary)
     };
@@ -330,13 +281,8 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
             nav_page()
                 .title(move || tr(if store.place() == Place::Podcasts { "Podcasts" } else { "Library" }))
                 .header_style_with(colors)
-                // The system's own sidebar button on an iPhone or an iPad;
-                // elsewhere this one is what shows.
                 .header_left_symbol("sidebar.left")
                 .header_left(ui::header_button(Icon::Sidebar, tr("Sidebar"), move || store.toggle_sidebar()))
-                // The system draws this button whether or not it holds
-                // anything, so each place has something to add. As at the
-                // left, the system's own glyph shows on an iPhone or an iPad.
                 .header_right_symbol("plus")
                 .header_right(
                     view().child(
@@ -360,17 +306,10 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
             move || pushed.get(),
             |page: &(Lang, Pushed)| format!("{page:?}"),
             move |page, _| {
-                // In a wide window (a tablet's) the system's back swipe
-                // starts anywhere on the page, where the page has drags of
-                // its own (the panel's divider, the seek bar): the back
-                // button is the way back there. A phone keeps the swipe.
                 let screen = nav_page()
                     .hides_bottom_bar_when_pushed(true)
                     .pop_on_swipe(platform::compact)
                     .bg(|| theme().background);
-                // Beside the sidebar a pushed page keeps its button, next
-                // to the way back: or the sidebar could not be put away
-                // from here. A phone's page has the drawer's on the places.
                 let screen = if untracked(platform::compact) {
                     screen
                 } else {
@@ -381,7 +320,6 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
                     ))
                 };
                 match page.get_untracked().1 {
-                    // A show keeps the places' tab bar under it.
                     Pushed::Show(url) => screen
                         .hides_bottom_bar_when_pushed(false)
                         .title(move || {
@@ -396,14 +334,10 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
                             .title(move || {
                                 store.job(&job).map(|job| SharedString::from(job.title())).unwrap_or_default()
                             })
-                            // The reader draws its own bar: the system's
-                            // cannot be put away while its page shows, and a
-                            // video filling the screen has it to itself.
                             .header_visible(false)
                             .child(pages::reader(&id))
                             .on_dismiss(move || store.close_reader())
                     }
-                    // The player is a dark stage with a bar of its own.
                     Pushed::Video(path) => {
                         screen.header_visible(false).child(pages::player(&path)).on_dismiss(move || store.close_video())
                     }
@@ -412,14 +346,10 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
         ))
 }
 
-/// Whether the system draws the pages' header: the title, the way back and
-/// the sidebar's button are its own then, and a page's bar keeps the rest.
 pub(crate) fn system_header() -> bool {
     platform::is_phone()
 }
 
-/// Whether the system's tab bar is at the bottom: on a phone, or a tablet
-/// window as narrow as one, while no recording is open over the places.
 pub(crate) fn tab_bar_shown() -> bool {
     let store = store();
     platform::is_phone()
@@ -429,10 +359,8 @@ pub(crate) fn tab_bar_shown() -> bool {
         && !store.immersive()
 }
 
-/// The system's tab bar: the places, and Settings.
 fn tab_bar() -> impl IntoElement {
     let store = store();
-    // An SF Symbol on iOS, one of the system's drawables on Android.
     let symbol = |ios: &'static str, android: &'static str| if os() == Os::Ios { ios } else { android };
     nsh_core::mobile::tab_bar()
         .items(move || {
@@ -443,8 +371,6 @@ fn tab_bar() -> impl IntoElement {
                 TabBarItem::new(tr("Settings")).icon(symbol("gearshape", "android:ic_menu_preferences")),
             ]
         })
-        // Settings is a sheet over the place it was asked from: its tab is
-        // lit while the sheet is up.
         .selected_index(move || {
             if store.settings_open().get() {
                 2_u32
@@ -461,8 +387,6 @@ fn tab_bar() -> impl IntoElement {
         })
 }
 
-/// The menu bar: the app's commands with their shortcuts, and the
-/// system's own (editing, the window) under their usual names.
 fn application_menu() -> Vec<MenuItem> {
     let store = store();
     let named = |label: &'static str| tr(label).to_string();
@@ -471,7 +395,6 @@ fn application_menu() -> Vec<MenuItem> {
         MenuItem::new(named("Settings…")).shortcut("mod+,").on_select(move || store.settings_open().set(true));
     let updates = MenuItem::new(named("Check for updates…")).on_select(move || store.check_for_updates());
     let mut menus = Vec::new();
-    // A Mac's first menu is the app's own; elsewhere its items are in File.
     let mac = os() == Os::MacOs;
     if mac {
         menus.push(MenuItem::submenu(
@@ -528,7 +451,6 @@ fn application_menu() -> Vec<MenuItem> {
             role(MenuRole::ToggleFullScreen, "Enter or Leave Full Screen"),
         ],
     ));
-    // What a Mac calls zooming a window, Windows and Linux call maximizing it.
     let zoom = if mac { "Zoom" } else { "Maximize" };
     menus.push(MenuItem::submenu(named("Window"), [role(MenuRole::Minimize, "Minimize"), role(MenuRole::Zoom, zoom)]));
     menus
@@ -549,7 +471,6 @@ fn page(open: Option<String>, place: Place, enters: bool) -> AnyElement {
     }
 }
 
-/// What the naming dialog is naming.
 #[derive(Debug, Clone, PartialEq)]
 enum Named {
     NewGroup,
@@ -558,29 +479,21 @@ enum Named {
     Tag(String),
 }
 
-/// The height of a sidebar row under a finger, and the side of the small
-/// buttons beside one: the least a touch target may be.
 const TOUCH_ROW: f32 = 44.0;
 
-/// The size of the small buttons at the end of the sidebar's rows.
 fn trailing_size() -> Size {
     if platform::is_phone() { Size::Md } else { Size::Sm }
 }
 
-/// The small "more" menu at the end of a group's or a tag's row: it stays
-/// pressed while its menu is open.
 fn more(name: &'static str) -> ui::Menu {
     let open = signal(false);
     ui::menu_with(open, ui::menu_trigger(Icon::More, tr(name), trailing_size(), open))
 }
 
-/// The room a row without a "more" menu keeps at its end, so the counts
-/// of every row stand in one column.
 fn trailing_lane() -> View {
     view().w(px(trailing_size().height())).flex_shrink_0()
 }
 
-/// A row of the sidebar: a place or a filter of the Library.
 fn row(
     glyph: Icon,
     label: impl Fn() -> SharedString + 'static,
@@ -589,7 +502,6 @@ fn row(
     on_press: impl Fn() + 'static,
 ) -> nsh_base::ButtonElement {
     let (chosen, counted) = (selected.clone(), count.clone());
-    // Under a finger the rows are taller and their text is body text.
     let touch = platform::is_phone();
     let (height, slot, glyph_size) = if touch { (TOUCH_ROW, 24.0, 20.0) } else { (32.0, 20.0, 16.0) };
     let label = text(label).flex_1().number_of_lines(1).font_weight(FontWeight::MEDIUM);
@@ -622,7 +534,6 @@ fn row(
         ))
 }
 
-/// A section's heading in the sidebar, with the button that adds to it.
 fn heading(label: &'static str, add: &'static str, on_add: impl Fn() + 'static) -> impl IntoElement {
     let touch = platform::is_phone();
     let title = text(l(label));
@@ -640,25 +551,18 @@ fn heading(label: &'static str, add: &'static str, on_add: impl Fn() + 'static) 
         .child(icon_button(Icon::Plus, tr(add), trailing_size(), on_add))
 }
 
-/// The sidebar's width: wider under a finger.
 fn sidebar_width() -> f32 {
     if platform::is_phone() { 288.0 } else { 216.0 }
 }
 
-/// Whether the page beside the sidebar is as narrow as a phone's: a narrow
-/// window, or one the sidebar leaves little of (an iPad held upright).
 pub(crate) fn page_narrow() -> bool {
     page_width() < 700.0
 }
 
-/// Whether a page puts its panels one above another instead of side by
-/// side: where it is narrow, and on a tablet held upright, whose page is
-/// taller than it is wide however wide that is.
 pub(crate) fn page_stacks() -> bool {
     page_narrow() || (platform::is_phone() && window().height.0 > window().width.0)
 }
 
-/// The width of the page beside the sidebar.
 pub(crate) fn page_width() -> f32 {
     let store = store();
     let beside = if platform::compact() || store.sidebar_hidden() || store.immersive() { 0.0 } else { sidebar_width() };
@@ -668,7 +572,6 @@ pub(crate) fn page_width() -> f32 {
 fn sidebar() -> impl IntoElement {
     let store = store();
     let in_library = move |filter: Filter| store.place() == Place::Library && store.filter() == filter;
-    // The one dialog that names a group or a tag, new or existing.
     let (naming, named, name) = (signal(false), signal(Named::NewGroup), signal(String::new()));
     let ask = move |what: Named, current: String| {
         batch(|| {
@@ -690,20 +593,14 @@ fn sidebar() -> impl IntoElement {
     view()
         .w(px(sidebar_width()))
         .flex_shrink_0()
-        // A Mac's sidebar is the system's material, the desktop showing
-        // faintly through; elsewhere the theme's own color.
         .macos_backdrop(Some(tokens::sidebar_material()))
         .bg(|| if os() == Os::MacOs { theme().sidebar.opacity(0.0) } else { theme().sidebar })
         .border_r_1()
         .border_color(|| theme().sidebar_border)
-        // The window's controls sit over the top of the sidebar, with the
-        // button that puts it away at the other end.
         .child(if system_header() {
-            // The system's header has the one button for the sidebar.
             view().h(px(8.0))
         } else {
             view().h(px(BAR)).flex_row().items_center().justify_end().px_2().window_drag(true).child(
-                // The bar drags the window; its button must not.
                 view()
                     .window_drag(false)
                     .child(icon_button(Icon::Sidebar, tr("Hide sidebar"), Size::Sm, move || store.toggle_sidebar())),
@@ -888,14 +785,10 @@ fn sidebar() -> impl IntoElement {
         )))
 }
 
-/// The podcast player itself: it has no picture, and lives as long as an
-/// episode is loaded, whatever page shows.
 fn podcast_player() -> impl IntoElement {
     let store = store();
     let player = store.podcast;
     let element = element_ref();
-    // The media keys and Now Playing are the podcast's, unless a reader or
-    // the video player has claimed them.
     let controls = std::rc::Rc::new(media::claim(move |command| match command {
         media::Command::Play => player.set_paused(false),
         media::Command::Pause => player.set_paused(true),
@@ -904,7 +797,6 @@ fn podcast_player() -> impl IntoElement {
         media::Command::Previous => player.seek_to(player.position_ms() - 15_000),
         media::Command::Seek(position_ms) => player.seek_to(position_ms),
     }));
-    // Told again every few seconds of playback, and at once on a change.
     let beat = computed(move || player.position_ms() / 5000);
     effect(move || {
         beat.get();
@@ -923,7 +815,6 @@ fn podcast_player() -> impl IntoElement {
             element.seek(position_ms as f64 / 1000.0);
         }
     });
-    // A recording being read has the sound to itself.
     effect(move || {
         if store.open_job_id().is_some() || store.video_playing() {
             player.set_paused(true);
@@ -933,10 +824,8 @@ fn podcast_player() -> impl IntoElement {
         .element_ref(&element)
         .paused(move || player.paused())
         .rate(move || player.rate())
-        // Plays on with the screen locked or the app in the background.
         .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(500.0)
-        // An episode left part-way starts where it was left.
         .on_load(move |_: &VideoInfo| {
             let at = player.position_ms();
             if at > 0 {
@@ -952,8 +841,6 @@ fn podcast_player() -> impl IntoElement {
         .opacity(0.0)
 }
 
-/// The player's bar under the pages: what plays, where it is, and its
-/// transport.
 fn mini_player() -> impl IntoElement {
     let player = store().podcast;
     let entrance = motion().entering(MotionPreset::FadeInUp);
@@ -984,7 +871,6 @@ fn mini_player() -> impl IntoElement {
                 .w(px(220.0))
                 .flex_shrink(1.0)
                 .min_w(px(0.0))
-                // With no slider to take the room, the title does.
                 .style_when(platform::compact, |s| s.flex_grow(1.0))
                 .child(
                     text(move || player.playing().map(|p| SharedString::from(p.episode.title)).unwrap_or_default())
@@ -1001,8 +887,6 @@ fn mini_player() -> impl IntoElement {
                 ),
         )
         .child(time_text(move || dragging.get().map_or(player.position_ms(), |ms| ms as i64)))
-        // A window as narrow as a phone has no room for a slider: a dot
-        // parts the two times.
         .child(when(platform::compact, || view().size(px(3.0)).rounded_full().bg(|| theme().foreground)))
         .child(when(
             || !platform::compact(),
@@ -1032,13 +916,10 @@ fn mini_player() -> impl IntoElement {
         .child(icon_button(Icon::Close, tr("Close player"), Size::Md, move || player.stop()))
 }
 
-/// A time of playback, in figures that do not shift as they change.
 pub(crate) fn time_text(ms: impl Fn() -> i64 + 'static) -> Text {
     text(move || clock(ms())).text_xs().tabular_nums().text_color(|| theme().muted_foreground)
 }
 
-/// The speed menu of a player: the speeds, the current one checked.
-/// `variant` is the trigger's: [`Variant::Picture`] over a video.
 pub(crate) fn rate_menu(
     variant: Variant,
     rate: impl Fn() -> f32 + Copy + 'static,
@@ -1052,18 +933,11 @@ pub(crate) fn rate_menu(
     )
 }
 
-/// The band at the top of a page beside the sidebar: it drags the window,
-/// and its content starts clear of nothing (the window's controls are over
-/// the sidebar).
 pub(crate) fn top_bar() -> View {
     let store = store();
-    // Under the system's header, what is left of the bar is a row of the
-    // page's own controls.
     if system_header() {
         return view().flex_shrink_0().flex_row().items_center().gap_2().px(px(ui::PAGE_INSET)).py_2();
     }
-    // With the sidebar away the bar is under the window's controls: it
-    // starts past them, with the button that brings the sidebar back.
     let alone = move || (store.sidebar_hidden() || platform::compact()) && !store.immersive();
     view()
         .h(px(BAR))
@@ -1072,9 +946,6 @@ pub(crate) fn top_bar() -> View {
         .items_center()
         .gap_2()
         .style_with(move |s| {
-            // The window's own controls are over this bar's ends: at the
-            // left on a Mac, at the right on Windows. In full screen there
-            // are none.
             let controls = title_bar();
             let left = if alone() && controls.left.0 > 0.0 { controls.left.0 + CONTROLS_GAP } else { ui::PAGE_INSET };
             let right = if controls.right.0 > 0.0 { controls.right.0 + CONTROLS_GAP } else { ui::PAGE_INSET };

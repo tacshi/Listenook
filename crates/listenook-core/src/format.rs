@@ -1,19 +1,14 @@
-//! Small formatters shared by the UI and the exporters.
-
-/// `MM:SS`, or `HH:MM:SS` from an hour on.
 pub fn clock(ms: i64) -> String {
     let total = ms.max(0) / 1000;
     let (hours, minutes, seconds) = (total / 3600, total / 60 % 60, total % 60);
     if hours > 0 { format!("{hours:02}:{minutes:02}:{seconds:02}") } else { format!("{minutes:02}:{seconds:02}") }
 }
 
-/// `HH:MM:SS,mmm` for SRT, with `.` for WebVTT.
 pub fn cue_time(ms: i64, separator: char) -> String {
     let ms = ms.max(0);
     format!("{:02}:{:02}:{:02}{separator}{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
 }
 
-/// A length in words a person reads: `1 h 5 min`, `12 min`, `45 s`.
 pub fn duration_words(ms: i64) -> String {
     let total = ms.max(0) / 1000;
     let (hours, minutes) = (total / 3600, total / 60 % 60);
@@ -26,7 +21,6 @@ pub fn duration_words(ms: i64) -> String {
     }
 }
 
-/// A byte count: `3.4 MB`.
 pub fn bytes(size: i64) -> String {
     let size = size.max(0) as f64;
     if size >= 1e9 {
@@ -40,12 +34,10 @@ pub fn bytes(size: i64) -> String {
     }
 }
 
-/// The date part of an ISO timestamp (`2026-01-02`), or the text itself.
 pub fn date(iso: &str) -> String {
     iso.split('T').next().unwrap_or(iso).to_owned()
 }
 
-/// A name safe as a file name on every platform; `fallback` when nothing is left.
 pub fn safe_file_name(name: &str, fallback: &str) -> String {
     let cleaned: String =
         name.chars()

@@ -1,7 +1,3 @@
-//! A recording's audio as mono samples, decoded in the app (the Symphonia
-//! crate) so it works the same on every platform. What Symphonia cannot
-//! read, macOS's converter is asked for.
-
 use std::path::Path;
 
 use listenook_core::audio::Resampler;
@@ -32,9 +28,6 @@ fn decode_with_symphonia(path: &Path, rate: u32) -> Option<Vec<i16>> {
     let mut format = probed.format;
     let track = format.tracks().iter().find(|track| track.codec_params.codec != CODEC_TYPE_NULL)?;
     let track_id = track.id;
-    // An AAC stream begins with the encoder's priming samples. Where the
-    // file does not say how many, it is the 2112 every common encoder
-    // writes; left in, every word would be timed a tenth of a second late.
     let mut priming =
         if track.codec_params.codec == CODEC_TYPE_AAC && track.codec_params.delay.is_none() { 2112_usize } else { 0 };
     let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
@@ -47,7 +40,6 @@ fn decode_with_symphonia(path: &Path, rate: u32) -> Option<Vec<i16>> {
         }
         let decoded = match decoder.decode(&packet) {
             Ok(decoded) => decoded,
-            // A damaged packet: the rest may still play.
             Err(Error::DecodeError(_)) => continue,
             Err(_) => break,
         };
@@ -74,7 +66,6 @@ fn decode_with_symphonia(path: &Path, rate: u32) -> Option<Vec<i16>> {
 }
 
 #[cfg(target_os = "macos")]
-/// The samples of a 16-bit PCM WAV file's `data` chunk.
 fn wav_samples(bytes: &[u8]) -> Vec<i16> {
     let mut at = 12;
     while at + 8 <= bytes.len() {
@@ -108,13 +99,10 @@ fn decode_with_system(_: &Path, _: u32) -> Option<Vec<i16>> {
     None
 }
 
-/// The audio of a media file as mono 16-bit samples at `rate`, or none
-/// when nothing here can read it. Blocks: call it off the engine thread.
 pub(crate) fn decode(path: &Path, rate: u32) -> Option<Vec<i16>> {
     decode_with_symphonia(path, rate).or_else(|| decode_avi(path, rate)).or_else(|| decode_with_system(path, rate))
 }
 
-/// An AVI file's sound: its track is taken out, then decoded.
 fn decode_avi(path: &Path, rate: u32) -> Option<Vec<i16>> {
     if !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("avi")) {
         return None;

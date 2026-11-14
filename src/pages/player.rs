@@ -1,8 +1,3 @@
-//! The video player: a video watched with its own subtitles, without
-//! transcribing it or adding it to the Library. Subtitle files beside the
-//! video and text tracks built into it are listed in the subtitle menu;
-//! where it was left, and with which subtitles, is remembered per video.
-
 use std::{path::Path, rc::Rc};
 
 use listenook_core::{
@@ -31,18 +26,13 @@ use crate::{
     util::file_url,
 };
 
-/// Subtitles the video can be watched with.
 #[derive(Debug, Clone, PartialEq)]
 struct Track {
-    /// `file:<path>` or `embedded:<number>`: how the choice is remembered.
     id: String,
     label: SharedString,
     cues: Rc<Vec<Cue>>,
 }
 
-/// The subtitle files beside a video that carry its name, and the text
-/// tracks inside it. Reads the whole file for those: call it off the
-/// engine thread.
 fn find_tracks(video: &str) -> Vec<(String, String, Vec<Cue>)> {
     let mut found = Vec::new();
     let mut beside: Vec<String> = Path::new(video)
@@ -84,28 +74,18 @@ fn find_tracks(video: &str) -> Vec<(String, String, Vec<Cue>)> {
     found
 }
 
-/// The video types the player opens.
 pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "mkv", "webm", "avi"];
 
-/// Whether `path` is a video the player opens.
 pub(crate) fn is_video(path: &str) -> bool {
     VIDEO_EXTENSIONS.contains(&subtitles::extension(path).as_str())
 }
 
-/// Opens the video at `path` in a player window of its own: one per
-/// video, brought forward when it is open already. False where the app
-/// cannot open windows.
 pub(crate) fn open_player(path: &str) -> bool {
     let title = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_owned();
     let content = path.to_owned();
-    // No title bar of the system's: the picture fills the window, and
-    // the player draws its title over it.
     let mut bar = TitleBarOptions::default();
     bar.style = TitleBarStyle::Hidden;
     bar.height = Some(px(TITLE));
-    // A Mac's window buttons cannot be hidden with the title, and moving
-    // them while the window is dragged ends the drag: they are kept out
-    // of the window, and the player draws its own, which come and go.
     if cfg!(target_os = "macos") {
         bar.controls_offset = Some(point(px(-200.0), px(-200.0)));
     }
@@ -119,18 +99,13 @@ pub(crate) fn open_player(path: &str) -> bool {
             .default_size(size(px(960.0), px(600.0)))
             .content(move || player(&content).into_element()),
     )
-    // In front and taking the keys, also when the app was just launched
-    // for it and its main window stays away.
     .inspect(|player| player.focus())
     .is_some()
 }
 
-/// The player for the video at `path`: a window of its own on a computer,
-/// in place of the page on a phone.
 pub(crate) fn player(path: &str) -> impl IntoElement {
     let store = store();
     let path = path.to_owned();
-    // The window this renders in, kept: handlers find none around them.
     let frame = stored(current_window());
     let own_window = frame.with(|frame| !frame.is_main());
     if own_window {
@@ -147,7 +122,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     let dragging = signal(None::<f64>);
     let fullscreen = signal(false);
     let tracks = signal(Vec::<Track>::new());
-    // The subtitles chosen: none is a choice too, once the user makes it.
     let chosen = signal(remembered.as_ref().and_then(|entry| entry.subtitle_id.clone()));
     let repeating = signal(false);
 
@@ -155,7 +129,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         let id = chosen.get()?;
         tracks.with(|tracks| tracks.iter().find(|track| track.id == id).map(|track| track.cues.clone()))
     });
-    // The line on screen: the last one that has started and not yet ended.
     let current = computed(move || {
         let position = position_ms.get();
         cues.with(|cues| {
@@ -169,7 +142,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         position_ms.set(ms);
         media.seek(ms as f64 / 1000.0);
     };
-    // The line before or after where playback is; without subtitles, five seconds.
     let step = move |forward: bool| {
         let position = position_ms.get_untracked();
         let target = cues.with_untracked(|cues| {
@@ -177,14 +149,11 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             if forward {
                 cues.iter().find(|cue| cue.start_ms > position + 50).map(|cue| cue.start_ms)
             } else {
-                // More than a second in, the same line again; else the one before.
                 cues.iter().rev().find(|cue| cue.start_ms < position - 1000).map(|cue| cue.start_ms)
             }
         });
         seek(target.unwrap_or(position + if forward { 5000 } else { -5000 }));
     };
-    // Where things stand, kept outside the signals: when the page closes
-    // they are gone before the last save runs.
     let last = Rc::new(std::cell::RefCell::new((start_at, 0_i64, None::<String>, false)));
     {
         let last = last.clone();
@@ -197,15 +166,12 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         move || {
             if let Some(root) = store.data_root() {
                 let (position, duration, subtitles, _) = last.borrow().clone();
-                // Left at its end, a video starts over next time.
                 let position = if duration > 0 && position > duration - 2000 { 0 } else { position };
                 persist::remember_video(&root, &path, position, subtitles);
             }
         }
     };
 
-    // Subtitles are found off the engine thread: tracks inside a long film
-    // take a moment to read.
     {
         let video = path.clone();
         spawn(async move {
@@ -215,7 +181,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                 .map(|(id, label, cues)| Track { id, label: label.into(), cues: Rc::new(cues) })
                 .collect();
             batch(|| {
-                // Nothing remembered: the first subtitles there are.
                 if remembered.is_none() && chosen.get_untracked().is_none() {
                     chosen.set(found.first().map(|track| track.id.clone()));
                 }
@@ -224,7 +189,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         });
     }
 
-    // A file the system's player cannot open is made into one it can.
     let cache_id = format!("player-{:016x}", {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -257,8 +221,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                 }
             });
         }
-        // Going back, the state follows the window (below): it changes
-        // once the window has shrunk, not while it does.
         frame.with(|frame| frame.set_mode(if on { WindowMode::FullScreen } else { WindowMode::Normal }));
     };
     frame.with(|frame| {
@@ -321,7 +283,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                     frame.with(|frame| frame.set_mode(WindowMode::Normal));
                 }
             }
-            // Opened only to play this, with nothing else to come back to.
             if own_window && store.player_closed() {
                 nsh_core::element::desktop::quit();
             }
@@ -333,7 +294,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .element_ref(&media)
         .paused(move || paused.get())
         .rate(move || rate.get())
-        // Plays on with the screen locked or the app in the background.
         .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(100.0)
         .on_load(move |info: &VideoInfo| {
@@ -344,7 +304,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         })
         .on_progress(move |progress: &VideoProgress| {
             let position = (progress.current_time * 1000.0) as i64;
-            // Repeating a line: at its end, back to its start.
             let again = repeating.get_untracked().then(|| {
                 cues.with_untracked(|cues| {
                     let cues = cues.as_ref()?;
@@ -376,11 +335,8 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         }
     });
 
-    // Whether the controls show; the subtitles keep clear of them.
     let hud = signal(true);
     let subtitle_line = view()
-        // Read, not pressed: a drag that starts on the words moves the
-        // window like one that starts beside them.
         .pointer_events(nsh_core::PointerEvents::None)
         .absolute()
         .left(px(0.0))
@@ -410,7 +366,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             },
         ));
 
-    // An icon, lit while subtitles show; which ones is chosen in its menu.
     let subtitle_menu = menu(
         view()
             .size(px(32.0))
@@ -470,7 +425,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .child(time(Box::new(move || dragging.get().map_or(position_ms.get(), |ms| ms as i64))))
         .child(when(move || !crate::platform::compact(), position).otherwise(|| view().flex_1()))
         .child(time(Box::new(move || duration_ms.get())))
-        // Lit only while it is on.
         .child(stage_button(
             || Icon::Repeat,
             "Repeat this subtitle",
@@ -516,14 +470,10 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             .otherwise(move || stage_button(|| Icon::Maximize, "Full screen", || false, move || set_fullscreen(true))),
         );
 
-    // The title and the controls lie over the picture, and go away while
-    // it plays: moving the pointer brings them back for a while.
-    // The wait that puts them away; a new movement takes its place.
     let wait = std::rc::Rc::new(std::cell::RefCell::new(None::<Spawned<()>>));
     let wake = move || {
         hud.set(true);
         let later = set_timeout(std::time::Duration::from_millis(2500), move || {
-            // Not while paused: then they are what the user is looking for.
             if !paused.get_untracked() {
                 hud.try_set(false);
             }
@@ -545,19 +495,14 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .bg(tokens::stage)
         .on_mouse_move(move |_: &MouseEvent| wake())
         .style_with(move |s| if !hud.get() { s.cursor(Cursor::None) } else { s })
-        // The whole picture moves its window, as a player's does.
         .child(
             view()
                 .flex_1()
                 .min_h(px(0.0))
                 .child(video_view.flex_1())
-                // A sheet over the picture takes the drag: the video
-                // itself does not pass it on.
                 .child(view().absolute().inset_0().window_drag(own_window))
                 .child(subtitle_line),
         )
-        // The title, across the top where the window is dragged by. In
-        // full screen there is no window to name or to move.
         .child(when(
             move || !fullscreen.get(),
             move || {
@@ -574,7 +519,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                     .transition_opacity()
                     .duration(tokens::motion::BASE)
                     .style_with(shown)
-                    // The window's controls are at this end; in the page, the way back.
                     .child(
                         view().style_with(|s| s.w(px(title_bar().right.0.max(84.0)))).items_start().ps_3().child(
                             when(
@@ -589,7 +533,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                                 },
                             )
                             .otherwise(move || {
-                                // The window's buttons, where a Mac has them.
                                 when(
                                     || cfg!(target_os = "macos"),
                                     move || {
@@ -620,8 +563,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                             .flex_1()
                             .text_color(ink),
                     )
-                    // Clear of the window's own buttons where the system
-                    // draws them at this end (Windows), as wide as they are.
                     .child(view().style_with(|s| s.w(px(title_bar().right.0.max(84.0)))))
             },
         ))
@@ -634,34 +575,25 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                 .px_3()
                 .rounded(tokens::radius_lg)
                 .style_with(tokens::glass)
-                // The controls are pressed and dragged themselves. Nothing
-                // about what moves the window changes as they come and go:
-                // a change in the middle of a drag would end it.
                 .window_drag(false)
                 .transition_opacity()
                 .duration(tokens::motion::BASE)
                 .style_with(shown)
-                // In a narrow window the position has a row of its own.
                 .child(when(crate::platform::compact, move || view().flex_row().pt_3().child(position())))
                 .child(controls),
         )
 }
 
-/// The height of the strip the title lies in, over the top of the picture.
 const TITLE: f32 = 36.0;
 
-/// Text and icons over the picture: the light of the dark theme, in
-/// either theme, since what is under them is a video.
 fn ink() -> Hsla {
     theme().foreground.dark
 }
 
-/// A control that is on, over the picture.
 fn lit() -> Hsla {
     theme().primary.dark
 }
 
-/// A button of the player's bar: an icon over the picture.
 fn stage_button(
     glyph: impl Fn() -> Icon + 'static,
     name: &'static str,
@@ -684,8 +616,6 @@ fn stage_button(
     )
 }
 
-/// One of the player window's own buttons: the colored dot a Mac's
-/// window has for it.
 fn window_button(name: &'static str, color: fn() -> AdaptiveColor, on_press: impl Fn() + 'static) -> impl IntoElement {
     view().tooltip(ui::tip(tr(name))).child(
         nsh_base::button()

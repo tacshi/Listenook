@@ -1,36 +1,17 @@
-//! App updates from the repository's GitHub Releases (`nsh.json`
-//! `"updater"`), with NSH's updater: the manifest and the archive are
-//! verified before the app is replaced.
-//!
-//! Only a packaged app updates itself: `nsh package` puts the updater's
-//! configuration in the package's assets, and a development run has none.
-//!
-//! On phones and tablets the store updates the app, and nothing here runs.
-
 use nsh_core::prelude::*;
 
-/// Whether this build updates itself; a phone's or tablet's store does it there.
 pub(crate) const SELF_UPDATING: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
-/// What the About page shows of updates.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) enum UpdateState {
-    /// Nothing asked yet.
     #[default]
     Idle,
-    /// Asking the release page.
     Checking,
-    /// This is the newest version.
     UpToDate,
-    /// A newer version, by its number, that this app can install.
     Available(SharedString),
-    /// A newer version that has to be installed by hand: where to get it.
     Manual(SharedString, SharedString),
-    /// Downloading and installing it.
     Installing,
-    /// This run is not a packaged app, so there is nothing to replace.
     Unpackaged,
-    /// It failed: what happened.
     Failed(SharedString),
 }
 
@@ -44,9 +25,6 @@ mod desktop {
     use super::UpdateState;
 
     fn packaged() -> Option<(Config, Vec<u8>)> {
-        // Where `nsh package` puts it: the package's `nsh/assets`, which a
-        // Mac's bundle keeps in its resources and the others beside the
-        // executable.
         let executable = std::env::current_exe().ok()?;
         let beside = executable.parent()?;
         let resources =
@@ -73,11 +51,9 @@ mod desktop {
         Ok(available.map(|available| (config, bytes, available)))
     }
 
-    /// Asks the release page whether there is a newer version.
     pub(crate) fn check(state: Signal<UpdateState>) {
         state.set(UpdateState::Checking);
         crate::state::store().run(async move {
-            // Settings may have closed meanwhile, and the signal with it.
             state.try_set(match find().await {
                 Ok(None) => UpdateState::UpToDate,
                 Ok(Some((config, bytes, available))) => {
@@ -115,7 +91,6 @@ mod desktop {
         .map_err(|e| e.to_string())?
     }
 
-    /// Downloads the newer version, replaces the app and restarts it.
     pub(crate) fn install_and_restart(state: Signal<UpdateState>) {
         state.set(UpdateState::Installing);
         crate::state::store().run(async move {
@@ -130,10 +105,8 @@ mod desktop {
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 pub(crate) use desktop::{check, install_and_restart};
 
-/// The store updates the app here.
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub(crate) fn check(_: Signal<UpdateState>) {}
 
-/// The store updates the app here.
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub(crate) fn install_and_restart(_: Signal<UpdateState>) {}

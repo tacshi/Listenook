@@ -1,5 +1,3 @@
-//! What the app asks of the network and the machine.
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod apple;
 pub(crate) mod audio;
@@ -18,8 +16,6 @@ pub(crate) mod updater;
 
 use nsh_core::prelude::Spawned;
 
-/// A task that ends when this is dropped: for a helper running beside
-/// work that may itself be dropped, which a plain handle would outlive.
 pub(crate) struct Ends(Option<Spawned<()>>);
 
 impl Ends {
@@ -36,8 +32,6 @@ impl Drop for Ends {
     }
 }
 
-/// Requests that give up on a connection that has gone quiet, instead of
-/// waiting on it for ever.
 pub(crate) fn http() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(30))
@@ -45,7 +39,6 @@ pub(crate) fn http() -> ureq::Agent {
         .build()
 }
 
-/// Shows the app's Dock icon or hides it (a Mac's Dock only).
 pub(crate) fn set_dock_icon(visible: bool) {
     #[cfg(target_os = "macos")]
     apple::set_dock_icon(visible);
@@ -53,8 +46,6 @@ pub(crate) fn set_dock_icon(visible: bool) {
     let _ = visible;
 }
 
-/// Shows the system's file picker on an iPhone or iPad; false elsewhere,
-/// where there is none to show this way.
 pub(crate) fn pick_documents() -> bool {
     #[cfg(target_os = "ios")]
     {
@@ -65,9 +56,6 @@ pub(crate) fn pick_documents() -> bool {
     false
 }
 
-/// Copies a file another app handed the app to open: on an iPhone or iPad
-/// it may lie outside the app's storage, readable only with the system's
-/// leave.
 pub(crate) fn copy_opened(from: &str, to: &std::path::Path) -> bool {
     #[cfg(target_os = "ios")]
     return apple::copy_opened(from, to);
@@ -75,7 +63,6 @@ pub(crate) fn copy_opened(from: &str, to: &std::path::Path) -> bool {
     std::fs::copy(from, to).is_ok()
 }
 
-/// The files picked there since the last call.
 pub(crate) fn take_picked() -> Vec<String> {
     #[cfg(target_os = "ios")]
     return apple::take_picked();
@@ -83,8 +70,6 @@ pub(crate) fn take_picked() -> Vec<String> {
     Vec::new()
 }
 
-/// Keeps a hardware keyboard's keys coming to the app's shortcuts on an
-/// iPhone or iPad; nothing elsewhere.
 pub(crate) fn keep_keys() {
     #[cfg(target_os = "ios")]
     apple::keep_keys();

@@ -1,8 +1,3 @@
-//! Speech on this machine: the models on disk and their downloads, Qwen3
-//! and its word aligner run in the app (the `qwen-asr` crate), MOSS run by
-//! the Swift helper, and what a job asks of them — a transcript, and word
-//! timing for a transcript.
-
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
@@ -34,13 +29,8 @@ pub(crate) use listenook_core::local as catalog;
 use super::remote::Failure;
 use crate::state::{Store, persist, store};
 
-/// The longest recording the local models take.
 const MAX_DURATION_MS: i64 = 300 * 60 * 1000;
 
-// --- The worker -----------------------------------------------------------------
-
-/// The worker program: `LISTENOOK_SPEECH_WORKER`, else the app bundle's
-/// `Helpers/ListenookSpeechWorker`.
 fn worker_path() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("LISTENOOK_SPEECH_WORKER").map(PathBuf::from) {
         return path.is_file().then_some(path);
@@ -50,12 +40,10 @@ fn worker_path() -> Option<PathBuf> {
     bundled.is_file().then_some(bundled)
 }
 
-/// Whether this machine can run MOSS: the helper is here and the chip is Apple's.
 fn worker_supported() -> bool {
     cfg!(all(target_os = "macos", target_arch = "aarch64")) && worker_path().is_some()
 }
 
-/// Whether this build runs Qwen3 and word timing in the app: every one does.
 pub(crate) fn supported() -> bool {
     true
 }
@@ -67,8 +55,6 @@ thread_local! {
     static STOPS: RefCell<HashMap<&'static str, Arc<AtomicBool>>> = RefCell::new(HashMap::new());
 }
 
-/// The one worker lane: models are too large to run two at once. It is
-/// free again when this is dropped, which may be on another thread.
 pub(crate) struct Lane(&'static AtomicBool);
 
 impl Lane {
@@ -83,8 +69,6 @@ impl Lane {
         Self::of(&BUSY).await
     }
 
-    /// A recording's turn at being transcribed here, from decoding its
-    /// audio on: recordings waiting in line hold no audio in memory.
     pub(crate) async fn turn() -> Lane {
         Self::of(&TURN).await
     }
@@ -96,7 +80,6 @@ impl Drop for Lane {
     }
 }
 
-/// Stops the worker when the work that asked for it is dropped.
 struct Stop {
     pid: Arc<AtomicU32>,
     done: Arc<AtomicBool>,
@@ -193,8 +176,6 @@ fn run_worker(
     result
 }
 
-/// Runs the worker once and gives its result. `progress` hears how far it
-/// is, where the worker says. Dropping the future stops the worker.
 async fn worker(command: &'static str, mut request: Value, progress: impl Fn(f64) + 'static) -> Result<Value, Failure> {
     let program =
         worker_path().ok_or_else(|| Failure::new("local_worker_missing", "The speech worker is not installed."))?;
@@ -223,21 +204,14 @@ async fn worker(command: &'static str, mut request: Value, progress: impl Fn(f64
     result.unwrap_or_else(|_| Err(Failure::new("local_worker_failed", "The speech worker stopped.")))
 }
 
-// --- Models ---------------------------------------------------------------------
-
-/// Where a model stands on this machine.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ModelState {
     Missing,
-    /// Part of it is here from a download that stopped.
     Partial,
-    /// Downloading: how far, 0–1.
     Downloading(f64),
     Ready,
 }
 
-/// What the app shows of the models: downloads under way and what they
-/// last failed with. Reading it subscribes to every change on disk too.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Models {
     changes: u32,
@@ -266,7 +240,6 @@ fn installed(model: &Model) -> bool {
             .all(|file| std::fs::metadata(directory.join(file.path)).is_ok_and(|found| found.len() == file.size))
 }
 
-/// Where a model stands. Tracked: bindings rerun as downloads move.
 pub(crate) fn model_state(model: &'static Model) -> ModelState {
     if let Some(fraction) = global::<Models>().with(|models| models.downloading.get(model.id).copied()) {
         return ModelState::Downloading(fraction);
@@ -280,17 +253,14 @@ pub(crate) fn model_state(model: &'static Model) -> ModelState {
     }
 }
 
-/// The code a model's last download failed with.
 pub(crate) fn model_error(model: &'static Model) -> Option<String> {
     global::<Models>().with(|models| models.failed.get(model.id).cloned())
 }
 
-/// Whether a provider runs on this machine rather than in the cloud.
 pub(crate) fn is_local(provider: TranscriptionProvider) -> bool {
     matches!(provider, TranscriptionProvider::MossLocal | TranscriptionProvider::Qwen3Local)
 }
 
-/// Whether this build can offer a local provider at all.
 pub(crate) fn offered(provider: TranscriptionProvider) -> bool {
     match provider {
         TranscriptionProvider::MossLocal => worker_supported(),
@@ -299,8 +269,6 @@ pub(crate) fn offered(provider: TranscriptionProvider) -> bool {
     }
 }
 
-/// The Qwen3 model to transcribe with: the one settings name if it is
-/// here, else the one that is here, the smaller first.
 fn qwen3_model() -> &'static Model {
     let large = store().setting(|s| s.extra.get("qwen3_local_model").and_then(Value::as_str) == Some("1.7b"));
     match (installed(&local::QWEN3), installed(&local::QWEN3_LARGE)) {
@@ -310,7 +278,6 @@ fn qwen3_model() -> &'static Model {
     }
 }
 
-/// Whether a local provider has what it needs. Tracked, as `model_state`.
 pub(crate) fn provider_ready(provider: TranscriptionProvider) -> bool {
     global::<Models>().with(|_| ());
     offered(provider)
@@ -417,7 +384,6 @@ fn fetch_model(model: &Model, root: &Path, received: &AtomicU64, stop: &AtomicBo
     std::fs::write(target.join(".verified.json"), serde_json::to_vec_pretty(&verified).unwrap_or_default()).map_err(io)
 }
 
-/// Downloads a model, continuing what an earlier try left.
 pub(crate) fn download_model(store: Store, model: &'static Model) {
     let Some(root) = models_root() else {
         return;
@@ -466,7 +432,6 @@ pub(crate) fn download_model(store: Store, model: &'static Model) {
     });
 }
 
-/// Stops a model's download; what arrived stays for the next try.
 pub(crate) fn cancel_download(model: &'static Model) {
     STOPS.with(|stops| {
         if let Some(stop) = stops.borrow().get(model.id) {
@@ -475,7 +440,6 @@ pub(crate) fn cancel_download(model: &'static Model) {
     });
 }
 
-/// Deletes a model and anything a download left of it.
 pub(crate) fn remove_model(model: &'static Model) {
     cancel_download(model);
     if let Some(root) = models_root() {
@@ -488,9 +452,6 @@ pub(crate) fn remove_model(model: &'static Model) {
     });
 }
 
-// --- Audio ----------------------------------------------------------------------
-
-/// The recording as the models hear it: mono samples at 16 kHz.
 pub(crate) async fn prepare_audio(job: &Job) -> Result<Arc<Vec<i16>>, Failure> {
     let source = PathBuf::from(&job.source_path);
     if !source.exists() {
@@ -504,20 +465,14 @@ pub(crate) async fn prepare_audio(job: &Job) -> Result<Arc<Vec<i16>>, Failure> {
         .ok_or_else(|| Failure::new("unsupported_format", "The audio could not be decoded."))
 }
 
-/// How long prepared audio is, in milliseconds.
 pub(crate) fn duration_ms(samples: &[i16]) -> i64 {
     milliseconds(samples.len())
 }
 
-// --- The engine -----------------------------------------------------------------
-
 const RATE: usize = 16_000;
-/// The longest piece Qwen3 and the aligner take whole, and how far back
-/// from its end a quiet place to cut is looked for.
 const PIECE_SECONDS: usize = 28;
 const SEARCH_SECONDS: usize = 6;
 
-/// Tells engine work on another thread to stop when its asker is dropped.
 struct Halt(Arc<AtomicBool>);
 
 impl Drop for Halt {
@@ -535,16 +490,11 @@ fn load(model: &Model) -> Result<Arc<QwenModel>, Failure> {
     QwenModel::load(&directory).ok_or_else(|| Failure::new("local_stt_model_missing", "The model could not be loaded."))
 }
 
-/// How many pieces are worked on at once: half the cores, at most four.
-/// Each piece already keeps more than one core busy.
 fn workers(pieces: usize) -> usize {
     let cores = std::thread::available_parallelism().map_or(2, |count| count.get());
     (cores / 2).clamp(1, 4).min(pieces.max(1))
 }
 
-/// Does `work` for each of `count` pieces on several threads, each with a
-/// session of its own on the one loaded model, and gives the results in
-/// the pieces' order. `done` hears of every piece finished.
 fn in_parallel<T: Send>(
     model: &Arc<QwenModel>,
     count: usize,
@@ -592,9 +542,6 @@ fn milliseconds(samples: usize) -> i64 {
     (samples * 1000 / RATE) as i64
 }
 
-/// The aligner's words for `samples[from..to]`, in the recording's time.
-/// A word marked later than its sound begins — the first of a stretch, or
-/// one after a pause — is moved back to where the sound begins.
 fn timed_words(
     aligner: &mut QwenCtx,
     samples: &[i16],
@@ -611,9 +558,6 @@ fn timed_words(
         .collect();
     let position = |ms: i64| (ms.max(0) as usize * RATE / 1000).min(piece.len());
     for index in 0..words.len() {
-        // Nothing is said before the first word, so all the sound just
-        // before it is its own, across the dips inside a word; later words
-        // only reach back over unbroken sound.
         let (floor, bridge) = if index == 0 {
             ((words[0].start_ms - 1500).max(0), RATE / 5)
         } else {
@@ -632,9 +576,6 @@ fn timed_words(
     words
 }
 
-/// Runs engine work off the engine thread, one at a time, reporting how
-/// far it is. Dropping the future stops the work at its next piece, and
-/// the lane stays taken until it has stopped.
 async fn engine<T: Send + 'static>(
     progress: impl Fn(f64) + 'static,
     work: impl FnOnce(&AtomicBool, &AtomicU64) -> Result<T, Failure> + Send + 'static,
@@ -660,8 +601,6 @@ async fn engine<T: Send + 'static>(
     result.unwrap_or_else(|_| Err(Failure::new("local_worker_failed", "Transcription stopped.")))
 }
 
-/// Qwen3 on a recording: the text of each piece, then its words' times,
-/// which give the sentences theirs. Pieces are worked on side by side.
 fn run_qwen3(
     samples: &[i16],
     model: &'static Model,
@@ -681,8 +620,6 @@ fn run_qwen3(
     let hinted: Vec<&'static str> = hints.iter().filter_map(|hint| local::language_name(hint)).collect();
     let prompt = terms.join(", ");
 
-    // One hint is the language. Several say which it may be: the model
-    // listens for itself, and is held to the hints when it hears another.
     let asr = load(model)?;
     let prepare = |session: &mut QwenCtx| {
         if let [only] = hinted.as_slice() {
@@ -729,7 +666,6 @@ fn run_qwen3(
         }
         let (mut segments, tokens) = local::timed_sentences(text, words, milliseconds(*to), document.segments.len());
         if segments.is_empty() {
-            // Nothing could be timed: the piece is one sentence.
             segments.push(listenook_core::Segment {
                 id: format!("qwen3-{}", document.segments.len()),
                 start_ms: milliseconds(*from),
@@ -749,7 +685,6 @@ fn run_qwen3(
     Ok(document)
 }
 
-/// Word times for a transcript that has sentences already.
 fn run_alignment(
     samples: &[i16],
     document: &Document,
@@ -783,9 +718,6 @@ fn run_alignment(
     Ok(in_parallel(&aligner, plan.windows.len(), stop, &done, &|_| (), &time)?.into_iter().flatten().collect())
 }
 
-// --- Transcription --------------------------------------------------------------
-
-/// Transcribes prepared audio with a local provider.
 pub(crate) async fn transcribe(store: Store, job: &Job, samples: Arc<Vec<i16>>) -> Result<Document, Failure> {
     let duration_ms = duration_ms(&samples);
     let provider = job.transcription_provider;
@@ -806,7 +738,6 @@ pub(crate) async fn transcribe(store: Store, job: &Job, samples: Arc<Vec<i16>>) 
         let (hints, terms) = (job.options.language_hints.clone(), job.options.context_terms.clone());
         return engine(heard, move |stop, fraction| run_qwen3(&samples, model, &hints, &terms, stop, fraction)).await;
     }
-    // The helper reads a file.
     let wav = temporary().join(format!("{}-local.wav", job.id));
     let (target, audio) = (wav.clone(), samples.clone());
     blocking(move || std::fs::write(target, audio::wav(&audio, RATE as u32)))
@@ -825,9 +756,6 @@ pub(crate) async fn transcribe(store: Store, job: &Job, samples: Arc<Vec<i16>>) 
     Ok(local::moss_document(&result?, duration_ms))
 }
 
-// --- Word timing ----------------------------------------------------------------
-
-/// Whether a job's transcript can be given word timing here.
 pub(crate) fn can_align(job: &Job) -> bool {
     supported()
         && matches!(
@@ -838,9 +766,6 @@ pub(crate) fn can_align(job: &Job) -> bool {
         && installed(&local::ALIGNER)
 }
 
-/// Times the words of a job's transcript against prepared audio and
-/// returns the job's `forced_alignment` record. The words it could time
-/// are in the transcript when it returns.
 pub(crate) async fn align(store: Store, id: &str, samples: Arc<Vec<i16>>) -> Value {
     let unavailable = |code: &str| json!({"status": "unavailable", "warning_code": code});
     let Some(job) = store.job_now(id) else {

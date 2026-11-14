@@ -1,9 +1,5 @@
-//! The interface's two languages. English text is the key; a string
-//! without a Chinese entry shows in English.
-
 use crate::models::JobStatus;
 
-/// An interface language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Lang {
     #[default]
@@ -12,7 +8,6 @@ pub enum Lang {
 }
 
 impl Lang {
-    /// The app's name in this language.
     pub fn app_name(self) -> &'static str {
         match self {
             Lang::En => "Listenook",
@@ -20,7 +15,6 @@ impl Lang {
         }
     }
 
-    /// The exporters' locale code.
     pub fn code(self) -> &'static str {
         match self {
             Lang::En => "en",
@@ -28,7 +22,6 @@ impl Lang {
         }
     }
 
-    /// The language of a system locale such as `zh-Hans-CN`.
     pub fn of_locale(locale: &str) -> Lang {
         if locale.to_ascii_lowercase().starts_with("zh") { Lang::Zh } else { Lang::En }
     }
@@ -495,7 +488,6 @@ const ZH: &[(&str, &str)] = &[
         "Works while another app is in front. Off unless you turn it on: it takes the keystroke from every app.",
         "其他应用在前台时也有效。默认关闭：开启后它会占用所有应用中的这个按键。",
     ),
-    // The design review's fixes.
     ("Translate…", "翻译…"),
     ("Play from here", "从这里播放"),
     ("Copy sentence", "复制这句"),
@@ -549,7 +541,6 @@ const ZH: &[(&str, &str)] = &[
     ),
 ];
 
-/// `text` in `lang`.
 pub fn tr(lang: Lang, text: &'static str) -> &'static str {
     match lang {
         Lang::En => text,
@@ -557,7 +548,6 @@ pub fn tr(lang: Lang, text: &'static str) -> &'static str {
     }
 }
 
-/// A job status as the user reads it (English; pass through [`tr`]).
 pub fn status_label(status: JobStatus) -> &'static str {
     match status {
         JobStatus::Pending => "Pending",
@@ -579,7 +569,6 @@ pub fn status_label(status: JobStatus) -> &'static str {
     }
 }
 
-/// What to tell the user for an error code: what happened and what to do.
 pub fn error_message(lang: Lang, code: &str) -> String {
     let (en, zh) = match code {
         "missing_credentials" | "moss_missing_credentials" => {

@@ -1,6 +1,3 @@
-//! Repackaging real files: `MKV=<in.mkv> MP4=<out.mp4>` and/or
-//! `AVI=<in.avi> SOUND=<out without extension>`, with `-- --ignored`.
-
 use std::fs::File;
 
 use listenook_core::container;

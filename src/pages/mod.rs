@@ -1,6 +1,3 @@
-//! The app's pages: the Library, Podcasts, the reader that opens over
-//! either, and the Settings dialog.
-
 mod dialogs;
 mod library;
 mod player;

@@ -1,5 +1,3 @@
-//! Transcripts and briefs as TXT, Markdown, SRT and WebVTT.
-
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -12,7 +10,6 @@ use crate::{
 static NUMBERED_SPEAKER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Speaker (\d+)$").unwrap());
 
 impl ExportFormat {
-    /// The file extension.
     pub fn extension(self) -> &'static str {
         match self {
             ExportFormat::Txt => "txt",
@@ -22,7 +19,6 @@ impl ExportFormat {
         }
     }
 
-    /// The name shown in the export dialog.
     pub fn label(self) -> &'static str {
         match self {
             ExportFormat::Txt => "Plain text",
@@ -46,7 +42,6 @@ fn speaker_name(document: &Document, id: Option<&str>, options: &ExportOptions) 
     name
 }
 
-/// The job's transcript in the chosen format; empty without a transcript.
 pub fn export_transcript(job: &Job, options: &ExportOptions) -> String {
     let Some(document) = &job.document else {
         return String::new();
@@ -59,7 +54,6 @@ pub fn export_transcript(job: &Job, options: &ExportOptions) -> String {
     }
 }
 
-/// The file name an export is saved under.
 pub fn export_file_name(job: &Job, format: ExportFormat) -> String {
     format!("{}.{}", safe_file_name(&job.title(), "transcript"), format.extension())
 }
@@ -139,7 +133,6 @@ fn cues(document: &Document, options: &ExportOptions, vtt: bool) -> String {
     out.trim_end().to_owned()
 }
 
-/// A brief as Markdown, each item with the time of its first evidence.
 pub fn export_brief(job: &Job, brief: &AiBrief) -> String {
     let time_of = |ids: &[String]| -> String {
         job.document

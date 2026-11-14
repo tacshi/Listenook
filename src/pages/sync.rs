@@ -1,7 +1,3 @@
-//! Syncing the Library with another device on the local network: the
-//! dialog this device starts a sync from, and the question it asks when
-//! another device wants one.
-
 use listenook_core::format::bytes;
 use nsh_base::theme;
 use nsh_core::prelude::*;
@@ -19,8 +15,6 @@ use crate::{
     },
 };
 
-/// What a phase shows: the dialog is built again only when this changes,
-/// not with every byte copied.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Step {
     Choosing,
@@ -51,13 +45,11 @@ fn platform_name(platform: &str) -> &'static str {
     }
 }
 
-/// The Sync dialog. Placed once, in the shell.
 pub(crate) fn sync_dialog() -> impl IntoElement {
     let store = store();
     let sync = store.sync;
     let step = computed(move || step_of(&sync.phase()));
     let address = signal(String::new());
-    // Put away while a sync runs, it goes on: the toast tells its end.
     modal(
         sync.open,
         l("Sync with another device"),
@@ -94,8 +86,6 @@ pub(crate) fn sync_dialog() -> impl IntoElement {
     )
 }
 
-/// Choosing a device: whether this one can be found, those found, and an
-/// address for one that was not.
 fn choosing(address: Signal<String>) -> impl IntoElement {
     let store = store();
     let sync = store.sync;
@@ -186,7 +176,6 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
         ))
 }
 
-/// A device found: what it is, and the button that syncs with it.
 fn device_row(peer: ReadSignal<Peer>) -> impl IntoElement {
     let sync = store().sync;
     let entrance = motion().entering(MotionPreset::FadeInUp);
@@ -223,7 +212,6 @@ fn device_row(peer: ReadSignal<Peer>) -> impl IntoElement {
         .child(button(Variant::Primary, Size::Sm, l("Sync")).on_press(move || sync.start(peer.get_untracked())))
 }
 
-/// Waiting for the other device's answer, then copying.
 fn running() -> impl IntoElement {
     let sync = store().sync;
     let name = move || match sync.phase() {
@@ -251,7 +239,6 @@ fn running() -> impl IntoElement {
             if asking() || (copied.items_total == 0 && copied.bytes_total == 0) {
                 return None;
             }
-            // By bytes where media is copied, which is where the time goes.
             Some(if copied.bytes_total > 0 {
                 (copied.bytes as f32 / copied.bytes_total as f32).min(1.0)
             } else {
@@ -266,8 +253,6 @@ fn running() -> impl IntoElement {
             if copied.waiting {
                 return tr("Connection lost. Reconnecting…");
             }
-            // The other device drives the sync it asked for, and an older
-            // Listenook does not say how much there is: what went, then.
             if copied.items_total == 0 && copied.bytes_total == 0 {
                 return SharedString::from(bytes(copied.bytes as i64));
             }
@@ -279,7 +264,6 @@ fn running() -> impl IntoElement {
         }))
 }
 
-/// How the sync ended.
 fn ended() -> impl IntoElement {
     let sync = store().sync;
     let failed = move || matches!(sync.phase(), Phase::Failed(_));
@@ -317,7 +301,6 @@ fn ended() -> impl IntoElement {
         )
 }
 
-/// `text` with its first letter a capital.
 fn sentence(text: &str) -> String {
     let mut letters = text.chars();
     match letters.next() {
@@ -326,8 +309,6 @@ fn sentence(text: &str) -> String {
     }
 }
 
-/// Asks whether to accept another device's sync. Placed once, in the
-/// shell. Put away any other way, the answer is no.
 pub(crate) fn sync_request_dialog() -> impl IntoElement {
     let sync = store().sync;
     let open = signal(false);

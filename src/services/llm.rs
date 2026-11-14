@@ -1,6 +1,3 @@
-//! The AI provider: one OpenAI-compatible endpoint shared by translation
-//! and AI Briefs.
-
 use std::time::Duration;
 
 use listenook_core::{
@@ -34,7 +31,6 @@ fn failure_of(status: u16, body: &str) -> Failure {
     }
 }
 
-/// The endpoint and key to use, or why there is none.
 fn configured(settings: &LlmProviderSettings, needs_model: bool) -> Result<(String, Option<String>), Failure> {
     configured_with(settings, needs_model, secrets::read(Secret::Llm))
 }
@@ -64,8 +60,6 @@ fn with_key(request: HttpRequest, key: Option<&str>) -> HttpRequest {
     }
 }
 
-/// The models the endpoint offers, sorted. `key` is one being tried
-/// before it is saved; without it the saved key is used.
 pub(crate) async fn list_models(settings: &LlmProviderSettings, key: Option<String>) -> Result<Vec<String>, Failure> {
     let key = key.filter(|key| !key.trim().is_empty()).or_else(|| secrets::read(Secret::Llm));
     let (endpoint, key) = configured_with(settings, false, key)?;
@@ -90,9 +84,6 @@ pub(crate) async fn list_models(settings: &LlmProviderSettings, key: Option<Stri
     Ok(models)
 }
 
-/// One chat completion: the reply's text. Retried up to four times when the
-/// failure may pass; a JSON-mode request the endpoint refuses is sent again
-/// without it.
 pub(crate) async fn complete(
     settings: &LlmProviderSettings,
     system: &str,
@@ -137,15 +128,10 @@ fn recoded(failure: Failure, prefix: &str) -> String {
     failure.code.strip_prefix("llm_").map_or(failure.code.clone(), |rest| format!("{prefix}{rest}"))
 }
 
-// --- Translation --------------------------------------------------------------
-
-/// The key of a job's translation work, for [`Store::cancel_work`].
 pub(crate) fn translation_key(id: &str) -> String {
     format!("{id}:translate")
 }
 
-/// Translates a job's sentences into `target`: those without a translation,
-/// or just `only`. Progress and the result are the job's `translation_state`.
 pub(crate) fn start_translation(id: &str, target: &str, only: Option<Vec<String>>) {
     let store = store();
     let (id, target) = (id.to_owned(), target.to_owned());
@@ -218,7 +204,6 @@ pub(crate) fn start_translation(id: &str, target: &str, only: Option<Vec<String>
     });
 }
 
-/// Stops a job's translation; what was translated stays.
 pub(crate) fn cancel_translation(id: &str) {
     let store = store();
     if store.cancel_work(&translation_key(id)) {
@@ -232,9 +217,6 @@ pub(crate) fn cancel_translation(id: &str) {
     }
 }
 
-// --- AI Brief -----------------------------------------------------------------
-
-/// The key of a job's brief work, for [`Store::cancel_work`].
 pub(crate) fn brief_key(id: &str) -> String {
     format!("{id}:brief")
 }
@@ -287,8 +269,6 @@ async fn generate(store: Store, id: &str, request: &BriefRequest) -> Result<(), 
     Ok(())
 }
 
-/// Generates a job's AI Brief. Progress and failure are the job's
-/// `ai_generation_state`; the brief replaces the one it had.
 pub(crate) fn start_brief(id: &str, request: BriefRequest) {
     let store = store();
     let id = id.to_owned();
@@ -311,7 +291,6 @@ pub(crate) fn start_brief(id: &str, request: BriefRequest) {
     });
 }
 
-/// Stops generating a job's brief.
 pub(crate) fn cancel_brief(id: &str) {
     let store = store();
     if store.cancel_work(&brief_key(id)) {

@@ -1,18 +1,12 @@
-//! Text translation with an LLM: batching, the prompts and reading the
-//! numbered lines back. The network call is the app's.
-
 use std::sync::LazyLock;
 
 use regex::Regex;
 
 use crate::models::{Segment, language_name};
 
-/// The most sentences in one request.
 pub const BATCH_SEGMENTS: usize = 20;
-/// The most characters in one request.
 pub const BATCH_CHARACTERS: usize = 8000;
 
-/// The system prompt of every translation request.
 pub const SYSTEM_PROMPT: &str = "You are a professional subtitle translator. Translate faithfully and naturally. Preserve meaning, tone, names, and speaker intent. Return only the requested numbered lines without explanations.";
 
 static NUMBERED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+)[.)]\s*(.*)$").unwrap());
@@ -20,15 +14,12 @@ static LINGUISTIC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\p{L}\p{N}]"
 const REFUSALS: &[&str] =
     &["i can't translate", "i cannot translate", "unable to translate", "抱歉，我无法", "对不起，我不能"];
 
-/// One request's worth of sentences: their ids and texts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Batch {
     pub ids: Vec<String>,
     pub texts: Vec<String>,
 }
 
-/// The sentences to translate, cut into requests. With `only`, just those
-/// ids; otherwise every sentence that has text and no translation.
 pub fn batches(segments: &[Segment], only: Option<&[String]>) -> Vec<Batch> {
     let mut out: Vec<Batch> = Vec::new();
     let mut characters = 0;
@@ -56,7 +47,6 @@ pub fn batches(segments: &[Segment], only: Option<&[String]>) -> Vec<Batch> {
     out
 }
 
-/// The user prompt for a batch, or the error code of an unknown language.
 pub fn user_prompt(texts: &[String], target_language: &str) -> Result<String, &'static str> {
     let name = language_name(target_language).ok_or("translation_invalid_language")?;
     let lines: String =
@@ -67,8 +57,6 @@ pub fn user_prompt(texts: &[String], target_language: &str) -> Result<String, &'
     ))
 }
 
-/// The translations of a reply, by position: none for a line the model
-/// left out or refused.
 pub fn parse_reply(reply: &str, count: usize) -> Vec<Option<String>> {
     let mut out = vec![None; count];
     for line in reply.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -84,7 +72,6 @@ pub fn parse_reply(reply: &str, count: usize) -> Vec<Option<String>> {
     out
 }
 
-/// Whether a text has anything to translate (not only punctuation).
 pub fn is_linguistic(text: &str) -> bool {
     LINGUISTIC.is_match(text)
 }

@@ -1,8 +1,5 @@
 import Foundation
 
-/// Plans the fewest Core ML encoder chunks while still preferring quiet cuts.
-/// Every extra chunk pads and encodes another full 30-second Whisper window,
-/// so a short accidental tail has a disproportionate cost.
 func quietChunkBoundaries(
     sampleCount: Int,
     sampleRate: Int,
@@ -32,8 +29,6 @@ func quietChunkBoundaries(
         )
         let desired = start + min(maximum, balancedLength)
 
-        // These capacity constraints guarantee that the remaining samples fit
-        // in exactly the already-selected minimum number of chunks.
         let capacityLower = sampleCount - chunksAfterBoundary * maximum
         let capacityUpper = sampleCount - chunksAfterBoundary * minimum
         let lower = max(start + minimum, capacityLower, desired - search)

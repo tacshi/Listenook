@@ -29,14 +29,11 @@ while [[ $# -gt 0 ]]; do
     --no-launch) LAUNCH=false; shift ;;
     -h|--help) sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "Unknown option: $1 (use --help)" >&2; exit 2 ;;
-    # A bare argument is a device, as this script used to take it.
     *) REQUESTED+=("$1"); shift ;;
   esac
 done
 
 die() { echo "Error: $*" >&2; exit 1; }
-
-# --- Devices ----------------------------------------------------------------
 
 NAMES=()
 UDIDS=()
@@ -92,7 +89,6 @@ choose_reachable() {
   done
   (( ${#CHOSEN[@]} > 0 ))
 }
-# A device by its UDID, or by its name as the list shows it before " (".
 find_device() {
   local i
   for i in "${!UDIDS[@]}"; do
@@ -153,10 +149,6 @@ select_devices() {
   done
 }
 
-# --- Signing ----------------------------------------------------------------
-
-# The newest development profile on this Mac that covers the app, and its
-# team: "<path>\t<team id>".
 find_profile() {
   python3 - "$APP_ID" <<'PY'
 import datetime, glob, os, plistlib, subprocess, sys
@@ -175,12 +167,10 @@ for folder in folders:
         identifier = rights.get("application-identifier", "")
         team, _, covered = identifier.partition(".")
         fits = covered == app or covered == "*" or (covered.endswith("*") and app.startswith(covered[:-1]))
-        # A development profile lets a debugger attach, and lists devices.
         if not fits or not rights.get("get-task-allow") or "ProvisionedDevices" not in profile:
             continue
         if profile.get("ExpirationDate") and profile["ExpirationDate"] < datetime.datetime.now():
             continue
-        # One made for this app comes before one for any app.
         found.append((covered == app, profile.get("CreationDate"), path, team))
 if found:
     _, _, path, team = max(found)
@@ -205,7 +195,6 @@ with this bundle id and a device selected)."
     IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null |
       sed -n 's/^[^"]*"\(Apple Development:[^"]*\)".*/\1/p' |
       { if [[ -n "$team" ]]; then grep -F "($team)" || true; else cat; fi; } | head -n 1)"
-    # The identity's name carries the person's id, not always the team's.
     [[ -n "$IDENTITY" ]] || IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null |
       sed -n 's/^[^"]*"\(Apple Development:[^"]*\)".*/\1/p' | head -n 1)"
     [[ -n "$IDENTITY" ]] || die "no \"Apple Development\" signing identity is in the keychain.
@@ -214,8 +203,6 @@ Set LISTENOOK_IOS_DEV_SIGN_IDENTITY to one."
   echo "Signing as: $IDENTITY"
   echo "Profile: $(basename "$PROFILE")"
 }
-
-# --- Build, install, launch -------------------------------------------------
 
 select_devices
 resolve_signing

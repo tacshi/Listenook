@@ -1,12 +1,7 @@
-//! API keys, kept in the system's secure storage (the Keychain, the
-//! Credential Manager). Where there is none to use (Android, Linux) they
-//! are kept in a file only this app can read; tests keep them in memory.
-
 use std::{cell::RefCell, collections::HashMap};
 
 use super::persist;
 
-/// A key the app stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Secret {
     Soniox,
@@ -32,8 +27,6 @@ impl Secret {
     }
 }
 
-/// The keychain service, and the prefix of every account in it: where the
-/// Flutter app kept the same keys, so they are found as they are.
 const SERVICE: &str = "app.capyvibe.listenook";
 
 fn entry(secret: Secret) -> keyring::Result<keyring::Entry> {
@@ -48,15 +41,11 @@ fn in_memory() -> bool {
     persist::data_root().is_none() || std::env::var_os("LISTENOOK_MEMORY_SECRETS").is_some()
 }
 
-/// Whether keys go to the system's keychain, as against the app's own file.
-/// The iOS Simulator has no keychain an unsigned build may use: there the
-/// keys are in the app's own file, as where there is no keychain at all.
 pub(crate) fn uses_system_store() -> bool {
     cfg!(all(any(target_os = "macos", target_os = "ios", target_os = "windows"), not(target_abi = "sim")))
         && !in_memory()
 }
 
-/// The app's own file of keys, in its private folder.
 fn file() -> Option<std::path::PathBuf> {
     (!in_memory()).then(|| persist::data_root().map(|root| root.join("keys.json"))).flatten()
 }
@@ -86,7 +75,6 @@ fn write_file(secret: Secret, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The stored key, else the environment's; none when neither has one.
 pub(crate) fn read(secret: Secret) -> Option<String> {
     let stored = if uses_system_store() {
         entry(secret).and_then(|entry| entry.get_password()).ok()
@@ -101,7 +89,6 @@ pub(crate) fn read(secret: Secret) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Stores a key; an empty one removes it.
 pub(crate) fn write(secret: Secret, value: &str) -> Result<(), String> {
     let value = value.trim();
     if !uses_system_store() && !in_memory() {

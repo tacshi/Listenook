@@ -1,7 +1,3 @@
-//! Practice, in the reader's side panel: mimic each sentence a number of
-//! times before the next one plays, or type what you hear and have it
-//! checked. Playback itself stays on the reader's one transport.
-
 use listenook_core::{
     dictation::{self, DictationWord},
     format::clock,
@@ -18,7 +14,6 @@ use crate::{
     },
 };
 
-/// Starts a practice mode on the current sentence and shows its panel.
 pub(super) fn start(review: Review, practice: Practice) {
     let target = untracked(|| review.target()).or(Some(0));
     batch(|| {
@@ -39,7 +34,6 @@ pub(super) fn start(review: Review, practice: Practice) {
     }
 }
 
-/// Ends practice: the loop stops and playback pauses.
 pub(super) fn stop(review: Review) {
     batch(|| {
         review.practice.set(Practice::None);
@@ -48,7 +42,6 @@ pub(super) fn stop(review: Review) {
     });
 }
 
-/// The Practice panel.
 pub(super) fn practice_panel(review: Review) -> impl IntoElement {
     let heading = move || -> SharedString {
         match review.target().and_then(|index| review.segment(index).map(|segment| (index, segment))) {
@@ -81,8 +74,6 @@ pub(super) fn practice_panel(review: Review) -> impl IntoElement {
 fn dictation_panel(review: Review) -> impl IntoElement {
     let answer = signal(String::new());
     let result = signal(None::<Vec<DictationWord>>);
-    // The sentence being answered stays the one the answer was begun for:
-    // playback running on into the next sentence does not take it away.
     let pinned = signal(untracked(|| review.target()));
     let target = move || pinned.get().and_then(|index| review.segment(index));
     let supported = move || {
@@ -96,14 +87,10 @@ fn dictation_panel(review: Review) -> impl IntoElement {
             review.revealed.set(None);
         });
     };
-    // With nothing typed yet, the sentence follows playback.
     effect(move || {
         let live = review.target();
         untracked(|| {
             let untouched = answer.with(|a| a.trim().is_empty()) && result.with(Option::is_none);
-            // Not at the end of a sentence replayed by itself: playback
-            // stops there, on the edge of the next one, and the sentence
-            // just heard is the one to type.
             let replaying = review.stop_at.get().is_some();
             if untouched && !replaying && live != pinned.get() {
                 pinned.set(live);
@@ -120,8 +107,6 @@ fn dictation_panel(review: Review) -> impl IntoElement {
         let words = dictation::compare(&segment.text, &answer.get_untracked());
         batch(|| {
             review.paused.set(true);
-            // A right answer shows its sentence, hidden until now; a
-            // wrong one leaves it to be heard again.
             if dictation::is_correct(&words) {
                 review.revealed.set(Some(segment.id.clone()));
             }
@@ -135,9 +120,6 @@ fn dictation_panel(review: Review) -> impl IntoElement {
             review.replay_once(next);
         }
     };
-    // Return checks the answer; once it is right, Return goes on to the
-    // next sentence. An answer is one sentence: it has no use for a line
-    // break, and the buttons may be under the keyboard.
     let submit = move || {
         if result.with_untracked(|r| r.as_ref().is_some_and(|words| dictation::is_correct(words))) {
             next();
@@ -186,8 +168,6 @@ fn dictation_panel(review: Review) -> impl IntoElement {
         }))
 }
 
-/// The checked answer: right or not, and the answer word by word. Words the
-/// user missed show as gaps, never as the words themselves.
 fn verdict(words: &[DictationWord]) -> impl IntoElement {
     let correct = dictation::is_correct(words);
     let entrance = motion().entering(if correct { MotionPreset::FadeInUp } else { MotionPreset::Shake });
