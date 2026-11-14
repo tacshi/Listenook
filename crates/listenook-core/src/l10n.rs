@@ -69,6 +69,7 @@ const ZH: &[(&str, &str)] = &[
     ("Word checking supports English only.", "单词检查仅支持英语。"),
     ("Repeat sentence", "重复播放此句"),
     ("Stop repeating sentence", "停止重复此句"),
+    ("Repeat all", "循环播放全部"),
     ("Previous sentence", "上一句"),
     ("Next sentence", "下一句"),
     ("Search transcript", "搜索转写内容"),

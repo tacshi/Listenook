@@ -333,6 +333,8 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .element_ref(&media)
         .paused(move || paused.get())
         .rate(move || rate.get())
+        // Plays on with the screen locked or the app in the background.
+        .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(100.0)
         .on_load(move |info: &VideoInfo| {
             duration_ms.set((info.duration * 1000.0) as i64);
