@@ -123,6 +123,7 @@ With reduced motion, presses do not scale, entrances land at once
 | The played sentence changes | The highlight fill cross-fades between rows, `BASE`; the list scrolls it to a third of the way down | Jumps |
 | Hover on a sentence | Wash `INSTANT`; its commands fade in, `INSTANT` (they are also on its context menu and on E / R) | Instant |
 | Sentence menu opens (secondary click) | As a row menu | Instant |
+| Words selected in a sentence | The platform's selection; a Bold toggle fades in among the sentence's own commands, `INSTANT`, tinted while the selected words are bold. Highlighted words turn bold at once (also from the sentence menu and ⌘B) | Instant |
 | Full screen | The transport turns light on the picture; it fades out while playing and back on pointer movement, `BASE` | Instant |
 | Repeat on / off | The repeat button's tint cross-fades, `FAST` | Instant |
 | A side panel opens or changes | Its toolbar toggle's fill cross-fades, `FAST`; the panel takes its width at once | Instant |

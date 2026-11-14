@@ -122,7 +122,7 @@ named_enum!(
     } default KeyIdea
 );
 named_enum!(AiLanguageNoteKind { Vocabulary = "vocabulary", Expression = "expression", Grammar = "grammar" } default Vocabulary);
-named_enum!(AiLearningLevel { Beginner = "beginner", Intermediate = "intermediate", Advanced = "advanced" } default Intermediate);
+named_enum!(AiLearningLevel { Auto = "auto", Beginner = "beginner", Intermediate = "intermediate", Advanced = "advanced" } default Intermediate);
 named_enum!(ThemeMode { System = "system", Light = "light", Dark = "dark" } default System);
 named_enum!(LocaleMode { System = "system", English = "english", SimplifiedChinese = "simplifiedChinese" } default System);
 named_enum!(ExportFormat { Txt = "txt", Markdown = "markdown", Srt = "srt", WebVtt = "webVtt" } default Txt);
@@ -227,6 +227,14 @@ pub struct Segment {
     pub translated_text: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
     pub preserve_boundary_before: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub highlights: Vec<Highlight>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Highlight {
+    pub start: u32,
+    pub end: u32,
 }
 
 impl Segment {
@@ -453,6 +461,8 @@ pub struct AiInsight {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<String>,
     pub evidence_segment_ids: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub highlighted: bool,
     pub edited: bool,
 }
 
@@ -465,6 +475,16 @@ pub struct AiLanguageNote {
     pub explanation: String,
     pub source_excerpt: String,
     pub evidence_segment_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub usage: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub pitfalls: String,
     pub edited: bool,
 }
 
@@ -476,6 +496,10 @@ pub struct AiBrief {
     pub chapters: Vec<AiChapter>,
     pub insights: Vec<AiInsight>,
     pub language_notes: Vec<AiLanguageNote>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub learner_profile: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub highlights_seen: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub learning_language: Option<String>,
     pub learning_level: AiLearningLevel,

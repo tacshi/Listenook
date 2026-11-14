@@ -146,6 +146,7 @@ fn opened(id: &str) -> impl IntoElement {
         review.revealed.update(|revealed| *revealed = if revealed.is_some() { None } else { current });
     });
     on_key("mod+f", move |_| review.searching.set(true));
+    on_key("mod+b", move |_| review.toggle_highlight());
     on_key("mod+z", move |_| {
         review.undo();
     });

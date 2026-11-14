@@ -1,4 +1,7 @@
-use crate::models::{Document, Segment};
+use crate::{
+    highlights,
+    models::{Document, Segment},
+};
 
 fn join(left: &str, right: &str) -> String {
     let (left, right) = (left.trim_end(), right.trim_start());
@@ -17,7 +20,17 @@ pub fn merge_with_next(document: &mut Document, index: usize) -> bool {
     }
     let next = document.segments.remove(index + 1);
     let kept = &mut document.segments[index];
-    kept.text = join(&kept.text, &next.text);
+    let joined = join(&kept.text, &next.text);
+    let right = next.text.trim_start();
+    let lead = next.text.chars().count() - right.chars().count();
+    let prefix = joined.chars().count() - right.chars().count();
+    let kept_len = kept.text.trim_end().chars().count() as u32;
+    let mut marks = highlights::shifted(&kept.highlights, 0, kept_len, 0);
+    for moved in highlights::shifted(&next.highlights, lead as u32, u32::MAX, prefix as i64 - lead as i64) {
+        highlights::add(&mut marks, moved.start..moved.end);
+    }
+    kept.highlights = marks;
+    kept.text = joined;
     kept.translated_text = match (kept.translated_text.take(), next.translated_text) {
         (Some(a), Some(b)) => Some(join(&a, &b)),
         (a, b) => a.or(b),
@@ -54,6 +67,9 @@ pub fn split_at(document: &mut Document, index: usize, at: usize) -> bool {
     if first.is_empty() || second.is_empty() {
         return false;
     }
+    let tail_from = (total - second.chars().count()) as u32;
+    let head_marks = highlights::shifted(&segment.highlights, 0, first.chars().count() as u32, 0);
+    let tail_marks = highlights::shifted(&segment.highlights, tail_from, u32::MAX, -i64::from(tail_from));
     let share = at as f64 / total.max(1) as f64;
     let by_length = segment.start_ms + ((segment.end_ms - segment.start_ms) as f64 * share).round() as i64;
     let letters = |text: &str| text.chars().filter(|c| !c.is_whitespace()).count();
@@ -81,6 +97,7 @@ pub fn split_at(document: &mut Document, index: usize, at: usize) -> bool {
         end_ms: segment.end_ms,
         text: second.to_owned(),
         translated_text: None,
+        highlights: tail_marks,
         ..segment.clone()
     };
     for token in &mut document.tokens {
@@ -90,6 +107,7 @@ pub fn split_at(document: &mut Document, index: usize, at: usize) -> bool {
     }
     let head = &mut document.segments[index];
     head.text = first.to_owned();
+    head.highlights = head_marks;
     head.end_ms = cut_ms;
     document.segments.insert(index + 1, tail);
     true
@@ -187,6 +205,28 @@ mod tests {
         assert_eq!(tail.id, "a-2");
         assert_eq!(tail.translated_text, None);
         assert_eq!(document.segments.len(), 3);
+    }
+
+    #[test]
+    fn highlights_move_with_their_words_when_sentences_merge_or_split() {
+        use crate::models::Highlight;
+        let mut document = document();
+        document.segments[0].highlights = vec![Highlight { start: 6, end: 11 }];
+        document.segments[1].highlights = vec![Highlight { start: 3, end: 9 }];
+        assert!(merge_with_next(&mut document, 0));
+        let merged = &document.segments[0];
+        let marked: Vec<&str> = merged.highlights.iter().map(|h| highlights::slice(&merged.text, *h)).collect();
+        assert_eq!(marked, ["there", "friend"]);
+        assert!(split_at(&mut document, 0, 14));
+        let (head, tail) = (&document.segments[0], &document.segments[1]);
+        assert_eq!(head.text, "Hello there my");
+        assert_eq!(head.highlights, [Highlight { start: 6, end: 11 }]);
+        assert_eq!(highlights::slice(&tail.text, tail.highlights[0]), "friend");
+        let mut crossing = super::tests::document();
+        crossing.segments[0].highlights = vec![Highlight { start: 3, end: 9 }];
+        assert!(split_at(&mut crossing, 0, 5));
+        assert_eq!(highlights::slice(&crossing.segments[0].text, crossing.segments[0].highlights[0]), "lo");
+        assert_eq!(highlights::slice(&crossing.segments[1].text, crossing.segments[1].highlights[0]), "the");
     }
 
     #[test]

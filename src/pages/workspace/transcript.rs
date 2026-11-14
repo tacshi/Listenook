@@ -1,4 +1,4 @@
-use listenook_core::{ContentMode, Segment, format::clock};
+use listenook_core::{ContentMode, Segment, format::clock, highlights};
 use nsh_base::theme;
 use nsh_core::{element::Position, prelude::*};
 
@@ -85,6 +85,7 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
     let id = move || segment.with(|s| s.as_ref().map(|s| s.id.clone()));
     let is_current = move || index.get().is_some() && index.get() == review.scrubbed.get().or_else(|| review.target());
     let is_repeating = move || id().is_some() && id() == review.repeating.get();
+    let picked = move || review.picked_in(id().as_deref());
     let editing = move |translation: bool| {
         review.editing.with(|editing| {
             editing.as_ref().is_some_and(|e| Some(&e.segment_id) == id().as_ref() && e.translation == translation)
@@ -164,6 +165,7 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                                     .flex_row()
                                     .items_center()
                                     .gap_2()
+                                    .select_none()
                                     .child(when(
                                         move || store.setting(|s| s.show_timestamps),
                                         move || {
@@ -214,6 +216,26 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                                                     move || {
                                                         dynamic(move || {
                                                             let said = said.get();
+                                                            let marks = words.with(|words| {
+                                                                let parts: Vec<&str> = words
+                                                                    .iter()
+                                                                    .flatten()
+                                                                    .map(|(word, ..)| {
+                                                                        listenook_core::local::lead_and_word(word).1
+                                                                    })
+                                                                    .collect();
+                                                                segment.with(|s| {
+                                                                    s.as_ref()
+                                                                        .map(|s| {
+                                                                            highlights::word_marks(
+                                                                                &s.text,
+                                                                                &parts,
+                                                                                &s.highlights,
+                                                                            )
+                                                                        })
+                                                                        .unwrap_or_default()
+                                                                })
+                                                            });
                                                             untracked(|| {
                                                                 let spans = words.get_untracked().unwrap_or_default();
                                                                 text("")
@@ -229,6 +251,15 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                                                                             let word = text(SharedString::from(
                                                                                 word.to_owned(),
                                                                             ));
+                                                                            let word = if marks
+                                                                                .get(at)
+                                                                                .copied()
+                                                                                .unwrap_or(false)
+                                                                            {
+                                                                                word.font_weight(FontWeight::SEMIBOLD)
+                                                                            } else {
+                                                                                word
+                                                                            };
                                                                             [
                                                                                 text(SharedString::from(
                                                                                     if at == 0 {
@@ -254,22 +285,41 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                                                     },
                                                 )
                                                 .otherwise(move || {
-                                                    text(move || read(|s| s.text.clone().into()))
-                                                        .text_lg()
-                                                        .line_height(nsh_core::LineHeight::Multiple(1.5))
-                                                        .text_color(move || {
-                                                            if is_current() {
-                                                                tokens::highlight_foreground()
-                                                            } else {
-                                                                theme().foreground
-                                                            }
+                                                    dynamic(move || {
+                                                        let runs = segment.with(|s| {
+                                                            s.as_ref()
+                                                                .map(|s| highlights::runs(&s.text, &s.highlights))
+                                                                .unwrap_or_default()
+                                                        });
+                                                        untracked(|| {
+                                                            text("")
+                                                                .text_lg()
+                                                                .line_height(nsh_core::LineHeight::Multiple(1.5))
+                                                                .text_color(move || {
+                                                                    if is_current() {
+                                                                        tokens::highlight_foreground()
+                                                                    } else {
+                                                                        theme().foreground
+                                                                    }
+                                                                })
+                                                                .children(runs.into_iter().map(|(run, marked)| {
+                                                                    let run = text(SharedString::from(run));
+                                                                    if marked {
+                                                                        run.font_weight(FontWeight::SEMIBOLD)
+                                                                    } else {
+                                                                        run
+                                                                    }
+                                                                }))
+                                                                .into_element()
                                                         })
+                                                    })
                                                 })
                                             }))
                                             .child(when(shows_translation, move || {
                                                 text(move || {
                                                     read(|s| s.translated_text.clone().unwrap_or_default().into())
                                                 })
+                                                .select_none()
                                                 .line_height(nsh_core::LineHeight::Multiple(1.5))
                                                 .style_with(move |s| {
                                                     if mode() == ContentMode::Translated {
@@ -298,8 +348,19 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                         .gap_1()
                         .transition_opacity()
                         .duration(motion::INSTANT)
-                        .opacity(move || if is_current() || is_repeating() { 1.0_f32 } else { 0.0 })
+                        .opacity(move || if is_current() || is_repeating() || picked() { 1.0_f32 } else { 0.0 })
                         .group_hover(|s| s.opacity(1.0))
+                        .child(when(picked, move || {
+                            ui::toggle_button(
+                                Variant::Ghost,
+                                Icon::Bold,
+                                tr("Highlight"),
+                                Size::Sm,
+                                move || review.picked_marked(),
+                                move || review.toggle_highlight(),
+                            )
+                            .self_start()
+                        }))
                         .child(
                             ui::toggle_button(
                                 Variant::Ghost,
@@ -321,14 +382,32 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                         )),
                 ),
         );
+    let area = move || {
+        view().w_full().max_w(px(760.0)).selectable(true).on_text_selection_change(move |event: &TextSelectionEvent| {
+            if let Some(id) = segment.with_untracked(|s| s.as_ref().map(|s| s.id.clone())) {
+                review.pick(&id, event);
+            }
+        })
+    };
     if crate::platform::is_phone() {
-        return view().items_center().child(line).into_element();
+        return view().items_center().child(area().child(line)).into_element();
     }
     view()
         .items_center()
         .child(
-            view().w_full().max_w(px(760.0)).child(
+            area().child(
                 ui::context_menu(line)
+                    .child(when(picked, move || {
+                        ui::menu_action(
+                            Icon::Bold,
+                            move || if review.picked_marked() { tr("Remove highlight") } else { tr("Highlight") },
+                            move || review.toggle_highlight(),
+                        )
+                    }))
+                    .child(when(picked, move || {
+                        ui::menu_action(Icon::Copy, l("Copy selection"), move || review.copy_selection())
+                    }))
+                    .child(when(picked, ui::menu_divider))
                     .child(ui::menu_action(Icon::Play, l("Play from here"), press))
                     .child(ui::menu_action(Icon::Repeat, l("Repeat sentence"), toggle_repeat))
                     .child(ui::menu_divider())

@@ -426,6 +426,125 @@ fn an_ai_brief_is_generated_with_evidence_and_unsupported_items_dropped() {
     it.app.wait_for("Today we are talking about how people learn languages.").unwrap();
 }
 
+fn seed_highlight(root: &Path, segment: usize, words: &str) {
+    let path = manifest(root, "sample");
+    let mut job: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let entry = &mut job["document"]["segments"][segment];
+    let text = entry["text"].as_str().unwrap().to_owned();
+    let start = text.find(words).unwrap();
+    entry["highlights"] = json!([{"start": start, "end": start + words.len()}]);
+    std::fs::write(path, job.to_string()).unwrap();
+}
+
+fn open_brief(it: &mut App) {
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.press("label:AI Brief").unwrap();
+    it.app.press("role:button[Create AI Brief]").unwrap();
+}
+
+#[test]
+fn a_bolded_word_is_explained_as_the_expression_it_belongs_to() {
+    let reply = json!({
+        "learner_profile": "Around A2: you mark everyday phrases.",
+        "highlights": [{
+            "segment_id": "segment-5", "highlighted": "loud", "intent": "language", "kind": "expression",
+            "term": "out loud", "explanation": "so that others can hear", "usage": "after verbs like read or say",
+            "examples": ["Read it out loud."], "related": ["aloud"], "pitfalls": "", "source_excerpt": "out loud",
+        }],
+        "overview": "Daily listening helps.", "overview_evidence": ["segment-3"], "insights": [],
+        "language_notes": [{"kind": "vocabulary", "term": "episodes", "explanation": "parts of a show",
+            "source_excerpt": "episodes", "evidence": ["segment-5"]}],
+    });
+    let routes = llm_routes(&reply.to_string());
+    let mut it = start(
+        "highlight-learning",
+        |root| {
+            seed_transcript(root);
+            seed_highlight(root, 4, "loud");
+            let _ = llm(root, "");
+        },
+        routes,
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    assert!(
+        it.app.screen().in_selectable_view("Start with short episodes, and repeat each sentence out loud.").unwrap(),
+        "a sentence can be selected"
+    );
+    assert!(it.app.screen().span_style("text:loud").unwrap().font_weight >= 600, "the highlight is bold");
+    assert!(it.app.screen().span_style("text:Start").unwrap().font_weight < 600);
+    it.app.press("label:AI Brief").unwrap();
+    it.app.press("role:button[Create AI Brief]").unwrap();
+    it.app.wait_for("1 highlights · the AI decides whether each is a word to learn or a key point.").unwrap();
+    it.app.press("Language notes").unwrap();
+    it.app.press("role:button[Generate]").unwrap();
+    it.app.wait_for("From your highlights").unwrap();
+    assert!(it.app.shows("out loud"));
+    assert!(it.app.shows("You marked “loud”"));
+    assert!(it.app.shows("Read it out loud."));
+    assert!(it.app.shows("Around A2: you mark everyday phrases."));
+    assert!(it.app.shows("Also worth learning") && it.app.shows("parts of a show"));
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(saved.contains(r#""learning_level": "auto""#), "the level follows the highlights");
+}
+
+#[test]
+fn a_bolded_point_in_a_meeting_becomes_a_marked_key_idea() {
+    let reply = json!({
+        "learner_profile": "",
+        "highlights": [{"segment_id": "segment-3", "highlighted": "Listening every day matters more than studying hard once a week.",
+            "intent": "content", "point": "Daily practice beats weekly cramming."}],
+        "overview": "A talk about habits.", "overview_evidence": ["segment-2"], "insights": [], "language_notes": [],
+    });
+    let routes = llm_routes(&reply.to_string());
+    let mut it = start(
+        "highlight-meeting",
+        |root| {
+            seed_transcript(root);
+            seed_highlight(root, 2, "Listening every day matters more than studying hard once a week.");
+            let _ = llm(root, "");
+        },
+        routes,
+    );
+    open_brief(&mut it);
+    it.app.press("role:button[Generate]").unwrap();
+    it.app.wait_for("Daily practice beats weekly cramming.").unwrap();
+    assert!(it.app.screen().matches("label:You marked this").unwrap());
+    assert!(!it.app.shows("From your highlights"), "a point is not a language note");
+    assert!(!it.app.shows("new highlights since this brief"));
+}
+
+#[test]
+fn a_highlight_follows_its_words_when_sentences_merge() {
+    let mut it = start(
+        "highlight-merge",
+        |root| {
+            seed_transcript(root);
+            seed_highlight(root, 1, "learn languages");
+        },
+        Vec::new(),
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.press("role:button[Bilingual]").unwrap();
+    it.app.press("Original").unwrap();
+    it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.press("role:button[Merge with next]").unwrap();
+    it.app.wait_for("Welcome back to the show. Today we are talking about how people learn languages.").unwrap();
+    assert!(it.app.screen().span_style("text:learn languages").unwrap().font_weight >= 600);
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(manifest(&it.root, "sample")).unwrap()).unwrap();
+    let merged = &saved["document"]["segments"][0];
+    let text = merged["text"].as_str().unwrap();
+    let (start, end) =
+        (merged["highlights"][0]["start"].as_u64().unwrap(), merged["highlights"][0]["end"].as_u64().unwrap());
+    assert_eq!(&text[start as usize..end as usize], "learn languages");
+}
+
 #[test]
 fn a_recording_is_filed_under_a_tag_and_found_from_the_sidebar() {
     let mut it = start(
