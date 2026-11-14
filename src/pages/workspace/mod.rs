@@ -257,6 +257,8 @@ fn opened(id: &str) -> impl IntoElement {
         .element_ref(&review.player)
         .paused(move || review.paused.get())
         .rate(move || review.rate.get())
+        // Plays on with the screen locked or the app in the background.
+        .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(50.0)
         .on_load(move |info: &VideoInfo| {
             review.duration_ms.set((info.duration * 1000.0) as i64);

@@ -951,6 +951,8 @@ fn podcast_player() -> impl IntoElement {
         .element_ref(&element)
         .paused(move || player.paused())
         .rate(move || player.rate())
+        // Plays on with the screen locked or the app in the background.
+        .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(500.0)
         // An episode left part-way starts where it was left.
         .on_load(move |_: &VideoInfo| {
