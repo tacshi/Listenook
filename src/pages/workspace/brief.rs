@@ -1,23 +1,17 @@
 use listenook_core::{
     AiBrief, AiBriefSection, AiGenerationStatus, AiInsightType, AiLanguageNote, AiLanguageNoteKind, AiLearningLevel,
-    BriefAnchor, TRANSLATION_LANGUAGES,
-    brief::BriefRequest,
-    export,
-    format::{clock, safe_file_name},
-    highlights,
+    BriefAnchor, TRANSLATION_LANGUAGES, brief::BriefRequest, export, format::clock, highlights,
 };
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
 use super::review::{BriefPart, Review, Side};
 use crate::{
-    pages::dialogs::save_text,
     services::llm,
     state::{error_text, l, tr},
     ui::{
         Icon, Size, Tone, Variant, button, card, checkbox, empty_state, field, hint, icon, icon_button,
-        icon_text_button, menu, menu_action, modal, modal_actions, progress_bar, section, select, text_area,
-        text_field, toast,
+        icon_text_button, modal, modal_actions, progress_bar, section, select, text_area, text_field, toast,
         tokens::{self, motion},
     },
 };
@@ -211,39 +205,19 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                 .items_center()
                                 .gap_2()
                                 .child(hint(l("AI-generated draft · verify against evidence")).w_full())
-                                .child(button(Variant::Ghost, Size::Sm, l("Copy")).on_press(move || {
-                                    if let (Some(job), Some(brief)) = (store.job_now(&review.id()), brief.get_untracked()) {
-                                        set_clipboard(export::export_brief(&job, &brief));
-                                        toast(Tone::Success, tr("AI Brief copied"));
-                                    }
-                                }))
                                 .child(
-                                    menu(button(Variant::Ghost, Size::Sm, l("Export…")))
-                                        .child(menu_action(Icon::Export, l("AI Brief (Markdown)…"), move || {
+                                    icon_text_button(Variant::Outline, Size::Sm, Icon::Copy, l("Copy")).on_press(
+                                        move || {
                                             if let (Some(job), Some(brief)) =
                                                 (store.job_now(&review.id()), brief.get_untracked())
                                             {
-                                                let name =
-                                                    format!("{} - brief.md", safe_file_name(&job.title(), "transcript"));
-                                                save_text(name, export::export_brief(&job, &brief));
+                                                set_clipboard(export::export_brief(&job, &brief));
+                                                toast(Tone::Success, tr("AI Brief copied"));
                                             }
-                                        }))
-                                        .child(when(
-                                            move || brief.with(|b| b.as_ref().is_some_and(|b| !b.language_notes.is_empty())),
-                                            move || {
-                                                menu_action(Icon::Export, l("Flashcards (CSV)…"), move || {
-                                                    if let (Some(job), Some(brief)) =
-                                                        (store.job_now(&review.id()), brief.get_untracked())
-                                                    {
-                                                        save_text(
-                                                            export::flashcards_file_name(&job),
-                                                            export::export_flashcards(&job, &brief),
-                                                        );
-                                                    }
-                                                })
-                                            },
-                                        )),
+                                        },
+                                    ),
                                 )
+                                .child(view().flex_1())
                                 .child(
                                     icon_text_button(Variant::Outline, Size::Sm, Icon::Refresh, l("Refresh AI Brief"))
                                         .on_press(move || dialog.set(true)),
