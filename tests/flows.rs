@@ -127,6 +127,50 @@ fn home_resumes_what_was_played_last_and_lists_what_was_added() {
 }
 
 #[test]
+fn a_card_comes_off_continue_and_recently_added_until_it_is_opened_again() {
+    let mut it = start(
+        "home-remove",
+        |root| {
+            seed_transcript(root);
+            let settings = json!({
+                "playback_positions_ms": {"sample": 6000},
+                "playback_played_at": {"sample": "2026-11-15T10:00:00.000Z"},
+            });
+            std::fs::write(root.join("settings.json"), settings.to_string()).unwrap();
+        },
+        Vec::new(),
+    );
+    it.app.press("role:button[Home]").unwrap();
+    it.app.wait_for("label:Resume Learning languages").unwrap();
+
+    it.app.long_press("label:Resume Learning languages").unwrap();
+    it.app.press("Remove from Continue").unwrap();
+    it.app.wait_for_gone("label:Resume Learning languages", GONE).unwrap();
+    it.app.press("role:button[Undo]").unwrap();
+    it.app.wait_for("label:Resume Learning languages").unwrap();
+
+    it.app.long_press("label:Resume Learning languages").unwrap();
+    it.app.press("Remove from Continue").unwrap();
+    it.app.wait_for_gone("label:Resume Learning languages", GONE).unwrap();
+    assert!(it.app.shows("Recently added"), "the recording itself stays");
+    let settings = std::fs::read_to_string(it.root.join("settings.json")).unwrap();
+    assert!(settings.contains("continue_hidden"), "the removal is kept");
+
+    it.app.long_press("Learning languages").unwrap();
+    it.app.press("Remove from Recently added").unwrap();
+    it.app.wait_for_gone("Recently added", GONE).unwrap();
+    assert!(manifest(&it.root, "sample").exists(), "nothing is deleted");
+
+    it.app.press("Library").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.press("label:Back").unwrap();
+    it.app.press("role:button[Home]").unwrap();
+    it.app.wait_for("label:Resume Learning languages").unwrap();
+    assert!(!it.app.shows("Recently added"), "only Continue comes back");
+}
+
+#[test]
 fn an_empty_library_invites_media_and_the_language_changes_at_once() {
     let mut it = start("empty", |_| {}, Vec::new());
     it.app.wait_for("Drop audio or video here").unwrap();

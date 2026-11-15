@@ -203,6 +203,7 @@ impl PodcastState {
         batch(|| {
             if !self.playing.with_untracked(|p| p.as_ref().is_some_and(|p| p.episode.id == episode.id)) {
                 self.remember();
+                super::store().shelve(super::Shelf::Continue, &episode.id, true);
                 self.position_ms.set(self.left_at(&episode.id).unwrap_or(0));
                 self.duration_ms.set(episode.duration_ms.unwrap_or(0));
                 self.playing.set(Some(Playing { episode, show_title, source }));
