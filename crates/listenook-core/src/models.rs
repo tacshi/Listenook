@@ -764,6 +764,13 @@ pub struct TranslationPreferences {
     pub auto_translate: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BriefAnchor {
+    pub part: String,
+    pub offset: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -782,6 +789,8 @@ pub struct Settings {
     pub default_transcription_provider: TranscriptionProvider,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub playback_positions_ms: BTreeMap<String, i64>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub brief_anchors: BTreeMap<String, BriefAnchor>,
     #[serde(default = "truthy")]
     pub auto_align_transcripts: bool,
     #[serde(flatten)]
@@ -805,6 +814,7 @@ impl Default for Settings {
             soniox_translation: SonioxTranslationOptions::default(),
             default_transcription_provider: TranscriptionProvider::Soniox,
             playback_positions_ms: BTreeMap::new(),
+            brief_anchors: BTreeMap::new(),
             auto_align_transcripts: true,
             extra: Map::new(),
         }
