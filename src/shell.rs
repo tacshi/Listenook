@@ -181,11 +181,21 @@ pub(crate) fn shell() -> impl IntoElement {
     let owner = Owner::current();
     let ticker = stored(None::<Spawned<()>>);
     let busy = computed(move || store.sync.busy());
+    let visible = computed(move || store.sync_visible());
     effect(move || {
-        let period = std::time::Duration::from_millis(if busy.get() { 250 } else { 1000 });
-        let next = untracked(|| owner.run(|| set_interval(period, move || store.sync.tick())));
-        if let Some(previous) = ticker.replace(Some(next)) {
+        let period = match (busy.get(), visible.get()) {
+            (true, _) => Some(250),
+            (false, true) => Some(1000),
+            (false, false) => None,
+        };
+        let next = untracked(|| {
+            period.map(|ms| owner.run(|| set_interval(std::time::Duration::from_millis(ms), move || store.sync.tick())))
+        });
+        if let Some(previous) = ticker.replace(next) {
             previous.cancel();
+        }
+        if period.is_none() {
+            untracked(|| store.sync.tick());
         }
     });
     if is_desktop() {
