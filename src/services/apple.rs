@@ -448,6 +448,77 @@ unsafe fn root_view(view: Id, depth: u8) -> Id {
 }
 
 #[cfg(target_os = "ios")]
+extern "C" fn refuses(_: Id, _: Sel, _: Id) -> bool {
+    false
+}
+
+#[cfg(target_os = "ios")]
+static SCROLL_TO_TOP_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "ios")]
+pub(super) fn keep_scroll_on_status_bar_taps() {
+    if SCROLL_TO_TOP_REFUSED.load(Ordering::Acquire) {
+        return;
+    }
+    on_main(|| unsafe {
+        if SCROLL_TO_TOP_REFUSED.load(Ordering::Acquire) {
+            return;
+        }
+        let count: unsafe extern "C" fn(Id, Sel) -> usize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let asks: unsafe extern "C" fn(Id, Sel, Sel) -> bool =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let app = send(class(c"UIApplication"), c"sharedApplication");
+        let scenes = send(send(app, c"connectedScenes"), c"allObjects");
+        for index in 0..count(scenes, sel(c"count")) {
+            let scene = send_usize(scenes, c"objectAtIndex:", index);
+            if !asks(scene, sel(c"respondsToSelector:"), sel(c"windows")) {
+                continue;
+            }
+            let windows = send(scene, c"windows");
+            for at in 0..count(windows, sel(c"count")) {
+                let delegate = scroll_delegate(send_usize(windows, c"objectAtIndex:", at), class(c"UIScrollView"), 0);
+                if delegate.is_null() {
+                    continue;
+                }
+                let target = object_getClass(delegate);
+                class_addMethod(
+                    target,
+                    sel(c"scrollViewShouldScrollToTop:"),
+                    std::mem::transmute(refuses as extern "C" fn(Id, Sel, Id) -> bool),
+                    c"B@:@".as_ptr(),
+                );
+                SCROLL_TO_TOP_REFUSED.store(true, Ordering::Release);
+                return;
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "ios")]
+unsafe fn scroll_delegate(view: Id, scroll: Id, depth: u8) -> Id {
+    unsafe {
+        if view.is_null() || depth > 64 {
+            return std::ptr::null_mut();
+        }
+        if object_getClass(view) == scroll {
+            let delegate = send(view, c"delegate");
+            if !delegate.is_null() {
+                return delegate;
+            }
+        }
+        let count: unsafe extern "C" fn(Id, Sel) -> usize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let children = send(view, c"subviews");
+        for index in 0..count(children, sel(c"count")) {
+            let found = scroll_delegate(send_usize(children, c"objectAtIndex:", index), scroll, depth + 1);
+            if !found.is_null() {
+                return found;
+            }
+        }
+        std::ptr::null_mut()
+    }
+}
+
+#[cfg(target_os = "ios")]
 pub(super) fn keep_keys() {
     static READY: Once = Once::new();
     on_main(|| unsafe {

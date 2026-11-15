@@ -70,6 +70,11 @@ pub(crate) fn take_picked() -> Vec<String> {
     Vec::new()
 }
 
+pub(crate) fn keep_scroll_on_status_bar_taps() {
+    #[cfg(target_os = "ios")]
+    apple::keep_scroll_on_status_bar_taps();
+}
+
 pub(crate) fn keep_keys() {
     #[cfg(target_os = "ios")]
     apple::keep_keys();
