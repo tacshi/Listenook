@@ -23,6 +23,7 @@ thread_local! {
 
 pub enum Menu {
     Native(MenuElement),
+    Context(nsh_base::ContextMenuElement),
     Anchored(nsh_base::PopoverElement),
 }
 
@@ -30,6 +31,7 @@ impl Menu {
     pub fn child(self, item: impl IntoElements) -> Self {
         match self {
             Menu::Native(menu) => Menu::Native(menu.children(item.into_elements())),
+            Menu::Context(menu) => Menu::Context(menu.children(item.into_elements())),
             Menu::Anchored(menu) => Menu::Anchored(menu.children(item.into_elements())),
         }
     }
@@ -44,6 +46,7 @@ impl IntoElement for Menu {
     fn into_element(self) -> AnyElement {
         match self {
             Menu::Native(menu) => menu.into_element(),
+            Menu::Context(menu) => menu.into_element(),
             Menu::Anchored(menu) => menu.into_element(),
         }
     }
@@ -53,31 +56,32 @@ pub fn menu(trigger: impl IntoElement) -> Menu {
     menu_with(signal(false), trigger)
 }
 
+fn anchored_popover(open: Signal<bool>) -> nsh_base::PopoverElement {
+    let chosen = CHOSEN.with(|chosen| *chosen);
+    let first = std::cell::Cell::new(true);
+    effect(move || {
+        chosen.get();
+        if !first.replace(false) {
+            open.set(false);
+        }
+    });
+    nsh_base::popover()
+        .open(move || Some(open.get()))
+        .on_open_change(move |event: &nsh_base::PopoverEvent| {
+            if let nsh_base::PopoverEvent::OpenChange(next, _) = event {
+                open.set(*next);
+            }
+        })
+        .offset(px(6.0))
+        .margin(px(8.0))
+        .popup_style(|s| tokens::popup_surface(s).min_w(px(240.0)).p_2())
+        .popup_starting_class(tokens::POPUP_STARTING)
+        .popup_ending_class(tokens::POPUP_ENDING)
+}
+
 pub fn menu_with(open: Signal<bool>, trigger: impl IntoElement) -> Menu {
     if anchored() {
-        let chosen = CHOSEN.with(|chosen| *chosen);
-        let first = std::cell::Cell::new(true);
-        effect(move || {
-            chosen.get();
-            if !first.replace(false) {
-                open.set(false);
-            }
-        });
-        return Menu::Anchored(
-            nsh_base::popover()
-                .open(move || Some(open.get()))
-                .on_open_change(move |event: &nsh_base::PopoverEvent| {
-                    if let nsh_base::PopoverEvent::OpenChange(next, _) = event {
-                        open.set(*next);
-                    }
-                })
-                .offset(px(6.0))
-                .margin(px(8.0))
-                .popup_style(|s| tokens::popup_surface(s).min_w(px(240.0)).p_2())
-                .popup_starting_class(tokens::POPUP_STARTING)
-                .popup_ending_class(tokens::POPUP_ENDING)
-                .trigger(trigger),
-        );
+        return Menu::Anchored(anchored_popover(open).trigger(trigger));
     }
     Menu::Native(
         nsh_base::menu()
@@ -97,14 +101,28 @@ pub fn menu_with(open: Signal<bool>, trigger: impl IntoElement) -> Menu {
     )
 }
 
-pub fn context_menu(target: impl IntoElement) -> nsh_base::ContextMenuElement {
-    nsh_base::context_menu()
-        .offset(px(4.0))
-        .margin(px(8.0))
-        .popup_style(tokens::popup_surface)
-        .popup_starting_class(tokens::POPUP_STARTING)
-        .popup_ending_class(tokens::POPUP_ENDING)
-        .trigger(target)
+pub fn context_menu(target: impl IntoElement) -> Menu {
+    if anchored() {
+        let open = signal(false);
+        let held = nsh_base::context_menu()
+            .open(|| Some(false))
+            .on_open_change(move |event: &nsh_base::MenuEvent| {
+                if let nsh_base::MenuEvent::OpenChange(true, _) = event {
+                    open.set(true);
+                }
+            })
+            .trigger(target);
+        return Menu::Anchored(anchored_popover(open).align(Align::Start).trigger(held));
+    }
+    Menu::Context(
+        nsh_base::context_menu()
+            .offset(px(4.0))
+            .margin(px(8.0))
+            .popup_style(tokens::popup_surface)
+            .popup_starting_class(tokens::POPUP_STARTING)
+            .popup_ending_class(tokens::POPUP_ENDING)
+            .trigger(target),
+    )
 }
 
 pub fn popover(trigger: impl IntoElement, content: impl Fn() -> AnyElement + 'static) -> nsh_base::PopoverElement {
