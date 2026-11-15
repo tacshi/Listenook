@@ -25,8 +25,8 @@ use crate::{
         tr,
     },
     ui::{
-        self, Icon, Size, Variant, confirm_destructive, field, icon, icon_button, menu, menu_action, menu_danger,
-        modal, modal_actions, slider, text_field_with, toggle_icon_button,
+        self, Icon, Size, Variant, confirm_destructive, field, icon, icon_button, icon_of, menu, menu_action,
+        menu_danger, modal, modal_actions, slider, text_field_with,
         tokens::{self, motion},
     },
     util,
@@ -954,15 +954,7 @@ fn mini_player() -> impl IntoElement {
         .border_t_1()
         .border_color(|| theme().border)
         .bg(|| theme().card)
-        .child(
-            toggle_icon_button(
-                move || if player.paused() { Icon::Play } else { Icon::Pause },
-                move || if player.paused() { tr("Play") } else { tr("Pause") },
-                Variant::Ghost,
-                Size::Md,
-            )
-            .on_press(move || player.set_paused(!player.paused())),
-        )
+        .child(artwork_toggle())
         .child(
             view()
                 .w(px(220.0))
@@ -1011,6 +1003,38 @@ fn mini_player() -> impl IntoElement {
             },
         ))
         .child(icon_button(Icon::Close, tr("Close player"), Size::Md, move || player.stop()))
+}
+
+fn artwork_toggle() -> impl IntoElement {
+    const SIZE: f32 = 44.0;
+    let player = store().podcast;
+    let artwork = computed(move || player.playing().map(|p| p.artwork).unwrap_or_default());
+    let scrim = move || if artwork.with(String::is_empty) { 0.0 } else { 0.35 };
+    nsh_base::button()
+        .accessibility_label(move || Some(if player.paused() { tr("Play") } else { tr("Pause") }))
+        .on_press(move || player.set_paused(!player.paused()))
+        .size(px(SIZE))
+        .flex_shrink_0()
+        .rounded(tokens::radius)
+        .overflow_hidden()
+        .items_center()
+        .justify_center()
+        .bg(|| theme().muted)
+        .focus_visible(tokens::focus_ring)
+        .child(image(move || artwork.get()).absolute().inset_0().size(px(SIZE)).object_fit(ResizeMode::Cover))
+        .child(
+            view()
+                .absolute()
+                .inset_0()
+                .transition_colors()
+                .duration(motion::INSTANT)
+                .bg(move || theme().background.dark.opacity(scrim()))
+                .hover(move |s| s.bg(move || theme().background.dark.opacity(scrim() + 0.15))),
+        )
+        .text_color(
+            move || if artwork.with(String::is_empty) { theme().foreground } else { theme().foreground.dark.into() },
+        )
+        .child(icon_of(move || if player.paused() { Icon::Play } else { Icon::Pause }, 20.0))
 }
 
 pub(crate) fn time_text(ms: impl Fn() -> i64 + 'static) -> Text {

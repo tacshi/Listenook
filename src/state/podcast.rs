@@ -11,6 +11,7 @@ pub(crate) struct Playing {
     pub(crate) episode: Episode,
     pub(crate) show_title: SharedString,
     pub(crate) source: String,
+    pub(crate) artwork: String,
 }
 
 #[derive(Clone, Copy)]
@@ -206,10 +207,24 @@ impl PodcastState {
                 super::store().shelve(super::Shelf::Continue, &episode.id, true);
                 self.position_ms.set(self.left_at(&episode.id).unwrap_or(0));
                 self.duration_ms.set(episode.duration_ms.unwrap_or(0));
-                self.playing.set(Some(Playing { episode, show_title, source }));
+                let artwork = self.artwork_of(&episode);
+                self.playing.set(Some(Playing { episode, show_title, source, artwork }));
             }
             self.paused.set(false);
         });
+    }
+
+    fn artwork_of(&self, episode: &Episode) -> String {
+        episode.artwork_url.clone().filter(|url| !url.is_empty()).unwrap_or_else(|| {
+            self.catalog.with_untracked(|catalog| {
+                catalog
+                    .feeds
+                    .iter()
+                    .find(|feed| feed.episodes.iter().any(|e| e.id == episode.id))
+                    .and_then(|feed| feed.artwork_url.clone())
+                    .unwrap_or_default()
+            })
+        })
     }
 
     pub(crate) fn set_paused(&self, paused: bool) {
