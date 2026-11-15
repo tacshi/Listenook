@@ -4,6 +4,11 @@ pub fn clock(ms: i64) -> String {
     if hours > 0 { format!("{hours:02}:{minutes:02}:{seconds:02}") } else { format!("{minutes:02}:{seconds:02}") }
 }
 
+pub fn track_position(position_ms: i64, duration_ms: i64) -> i64 {
+    let step = (duration_ms / 1000).max(250);
+    position_ms.max(0) / step * step
+}
+
 pub fn cue_time(ms: i64, separator: char) -> String {
     let ms = ms.max(0);
     format!("{:02}:{:02}:{:02}{separator}{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
@@ -63,6 +68,19 @@ mod tests {
         assert_eq!(clock(3_725_000), "01:02:05");
         assert_eq!(cue_time(3_725_042, ','), "01:02:05,042");
         assert_eq!(duration_words(3_900_000), "1 h 5 min");
+    }
+
+    #[test]
+    fn a_track_moves_a_thousandth_of_its_length_at_a_time() {
+        let half_hour = 1_800_000;
+        assert_eq!(track_position(0, half_hour), 0);
+        assert_eq!(track_position(1_799, half_hour), 0);
+        assert_eq!(track_position(1_800, half_hour), 1_800);
+        assert_eq!(track_position(900_050, half_hour), 900_000);
+        assert_eq!(track_position(-40, half_hour), 0);
+        assert_eq!(track_position(249, 30_000), 0);
+        assert_eq!(track_position(260, 30_000), 250);
+        assert_eq!(track_position(1_234, 0), 1_000);
     }
 
     #[test]
