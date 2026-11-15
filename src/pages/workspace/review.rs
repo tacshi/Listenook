@@ -26,7 +26,66 @@ pub(super) enum Practice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Editing {
     pub(super) segment_id: String,
+    pub(super) original: bool,
     pub(super) translation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Span {
+    pub(super) first: String,
+    pub(super) last: String,
+}
+
+impl Span {
+    fn one(id: String) -> Span {
+        Span { first: id.clone(), last: id }
+    }
+}
+
+#[derive(Default)]
+struct Drag {
+    zones: Vec<(usize, f32, f32)>,
+    finger: Option<f32>,
+    viewport: Option<(f32, f32)>,
+}
+
+#[derive(Default)]
+struct ListScroll {
+    offset: f32,
+    content: f32,
+    viewport: f32,
+}
+
+fn chain(found: &std::collections::BTreeMap<usize, (f32, f32)>, anchor: usize) -> Vec<(usize, f32, f32)> {
+    const SLACK: f32 = 2.0;
+    let Some(&(top, bottom)) = found.get(&anchor) else {
+        return Vec::new();
+    };
+    let mut zones = std::collections::VecDeque::from([(anchor, top, bottom)]);
+    let mut index = anchor;
+    while let Some(&(top, bottom)) = found.get(&(index + 1)) {
+        if (top - zones.back().map_or(top, |z| z.2)).abs() > SLACK {
+            break;
+        }
+        index += 1;
+        zones.push_back((index, top, bottom));
+    }
+    let mut index = anchor;
+    while let Some(&(top, bottom)) = index.checked_sub(1).and_then(|above| found.get(&above)) {
+        if (bottom - zones.front().map_or(bottom, |z| z.1)).abs() > SLACK {
+            break;
+        }
+        index -= 1;
+        zones.push_front((index, top, bottom));
+    }
+    zones.into()
+}
+
+#[derive(Clone, Copy)]
+struct Row {
+    token: u64,
+    index: Memo<Option<usize>>,
+    view: ElementRef,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,11 +112,19 @@ pub(super) struct Review {
     pub(super) mode: Signal<ContentMode>,
     pub(super) searching: Signal<bool>,
     pub(super) query: Signal<String>,
-    pub(super) repeating: Signal<Option<String>>,
+    pub(super) repeating: Signal<Option<Span>>,
+    pub(super) handle_at: Signal<Option<String>>,
+    pub(super) handle_cell: Signal<Option<u64>>,
+    rows: Stored<Vec<Row>>,
+    row_count: Stored<u64>,
+    drag: Stored<Drag>,
+    drag_task: Stored<Option<Spawned<()>>>,
+    scroll: Stored<ListScroll>,
     pub(super) looping: Signal<bool>,
     pub(super) revealed: Signal<Option<String>>,
     pub(super) editing: Signal<Option<Editing>>,
     pub(super) draft: Signal<String>,
+    pub(super) translation_draft: Signal<String>,
     pub(super) caret: Signal<u32>,
     pub(super) side_width: Signal<f32>,
     pub(super) brief_editing: Signal<Option<BriefPart>>,
@@ -176,10 +243,18 @@ impl Review {
             searching,
             query,
             repeating: signal(None),
+            handle_at: signal(None),
+            handle_cell: signal(None),
+            rows: stored(Vec::new()),
+            row_count: stored(0),
+            drag: stored(Drag::default()),
+            drag_task: stored(None),
+            scroll: stored(ListScroll::default()),
             looping: signal(false),
             revealed: signal(None),
             editing: signal(None),
             draft: signal(String::new()),
+            translation_draft: signal(String::new()),
             caret: signal(0),
             brief_editing: signal(None),
             brief_items: stored(Vec::new()),
@@ -289,9 +364,25 @@ impl Review {
         self.store.setting(|s| s.blind_listening_enabled)
     }
 
+    pub(super) fn repeat_range(&self) -> Option<(usize, usize)> {
+        let span = self.repeating.get()?;
+        self.job.with(|job| {
+            let segments = &job.as_ref()?.document.as_ref()?.segments;
+            let first = segments.iter().position(|segment| segment.id == span.first)?;
+            let last = segments.iter().position(|segment| segment.id == span.last)?;
+            Some((first.min(last), first.max(last)))
+        })
+    }
+
+    pub(super) fn repeats(&self, index: usize) -> bool {
+        self.repeat_range().is_some_and(|(first, last)| (first..=last).contains(&index))
+    }
+
     pub(super) fn target(&self) -> Option<usize> {
-        match self.repeating.get() {
-            Some(id) => self.index_of(&id),
+        match self.repeat_range() {
+            Some((first, last)) => {
+                Some(self.current.get().filter(|current| (first..=last).contains(current)).unwrap_or(first))
+            }
             None => self.current.get(),
         }
     }
@@ -326,10 +417,11 @@ impl Review {
             return;
         };
         self.cancel_wait();
+        let inside = untracked(|| self.repeats(index));
         batch(|| {
             self.stop_at.set(None);
-            if self.repeating.get_untracked().is_some() {
-                self.repeating.set(Some(segment.id.clone()));
+            if self.repeating.get_untracked().is_some() && !inside {
+                self.repeating.set(Some(Span::one(segment.id.clone())));
                 self.reps.set(0);
             }
             self.revealed.set(None);
@@ -349,17 +441,196 @@ impl Review {
             return;
         };
         self.cancel_wait();
-        if self.repeating.get_untracked().as_deref() == Some(segment.id.as_str()) {
+        if untracked(|| self.repeats(index)) {
             self.repeating.set(None);
             return;
         }
         batch(|| {
-            self.repeating.set(Some(segment.id.clone()));
+            self.repeating.set(Some(Span::one(segment.id.clone())));
             self.reps.set(0);
             self.stop_at.set(None);
         });
         self.seek(self.play_start(index));
         self.paused.set(false);
+    }
+
+    pub(super) fn repeat_through(&self, index: usize) {
+        let Some((first, last)) = untracked(|| self.repeat_range()) else {
+            self.toggle_repeat(index);
+            return;
+        };
+        self.set_repeat(first.min(index), last.max(index));
+    }
+
+    pub(super) fn move_repeat_end(&self, by: isize) {
+        if let Some((first, last)) = untracked(|| self.repeat_range()) {
+            let last = (last as isize + by).clamp(first as isize, self.count().saturating_sub(1) as isize);
+            self.set_repeat(first, last as usize);
+        }
+    }
+
+    pub(super) fn repeat_one(&self, index: usize) {
+        if let Some(segment) = self.segment_now(index) {
+            self.repeating.set(Some(Span::one(segment.id)));
+        }
+    }
+
+    fn set_repeat(&self, first: usize, last: usize) {
+        if let (Some(first), Some(last)) = (self.segment_now(first), self.segment_now(last)) {
+            self.repeating.set(Some(Span { first: first.id, last: last.id }));
+        }
+    }
+
+    pub(super) fn track_row(&self, index: Memo<Option<usize>>, row: ElementRef) -> u64 {
+        let token = self.row_count.with(|count| {
+            *count += 1;
+            *count
+        });
+        self.rows.with(|rows| rows.push(Row { token, index, view: row }));
+        let rows = self.rows;
+        cleanup(move || {
+            rows.try_with(|rows| rows.retain(|row| row.token != token));
+        });
+        token
+    }
+
+    pub(super) fn scrolled(&self, event: &ScrollEvent) {
+        self.scroll.with(|scroll| {
+            scroll.offset = event.offset.y.0;
+            scroll.content = event.content_size.height.0;
+            scroll.viewport = event.size.height.0;
+        });
+    }
+
+    pub(super) fn dragging(&self) -> bool {
+        self.handle_at.with(Option::is_some)
+    }
+
+    pub(super) fn begin_end_drag(&self, cell: u64) {
+        let Some((_, last)) = untracked(|| self.repeat_range()) else {
+            return;
+        };
+        let Some(segment) = self.segment_now(last) else {
+            return;
+        };
+        batch(|| {
+            self.handle_at.set(Some(segment.id));
+            self.handle_cell.set(Some(cell));
+        });
+        self.drag.with(|drag| *drag = Drag::default());
+        let (list, drag) = (self.list, self.drag);
+        spawn(async move {
+            if let Some(measure) = list.measure().await {
+                let top = measure.page.y.0;
+                drag.try_with(|drag| drag.viewport = Some((top, top + measure.frame.size.height.0)));
+            }
+        });
+        self.measure_rows();
+        let review = *self;
+        let mover = spawn(async move {
+            let mut tick = 0u32;
+            loop {
+                timer(Duration::from_millis(16)).await;
+                if !review.dragging() {
+                    return;
+                }
+                tick += 1;
+                if review.auto_scroll() && tick.is_multiple_of(4) {
+                    review.measure_rows();
+                }
+            }
+        });
+        if let Some(old) = self.drag_task.replace(Some(mover)) {
+            old.cancel();
+        }
+    }
+
+    fn auto_scroll(&self) -> bool {
+        const EDGE: f32 = 64.0;
+        const FASTEST: f32 = 18.0;
+        let Some((finger, (top, bottom))) = self.drag.with(|drag| drag.finger.zip(drag.viewport)) else {
+            return false;
+        };
+        let push = if finger > bottom - EDGE {
+            ((finger - (bottom - EDGE)) / EDGE).min(1.0)
+        } else if finger < top + EDGE {
+            -((top + EDGE - finger) / EDGE).min(1.0)
+        } else {
+            return false;
+        };
+        let (offset, content, viewport) = self.scroll.with(|s| (s.offset, s.content, s.viewport));
+        let to = (offset + push * FASTEST).clamp(0.0, (content - viewport).max(0.0));
+        if (to - offset).abs() < 0.5 {
+            return false;
+        }
+        self.scroll.with(|s| s.offset = to);
+        self.list.scroll_to_offset(px(to), false);
+        self.drag_end_to(finger);
+        true
+    }
+
+    fn measure_rows(&self) {
+        let Some((_, last)) = untracked(|| self.repeat_range()) else {
+            return;
+        };
+        let rows = self.rows.with(|rows| rows.clone());
+        let (drag, scroll) = (self.drag, self.scroll);
+        let review = *self;
+        spawn(async move {
+            let offset = scroll.with(|s| s.offset);
+            let measures: Vec<_> =
+                rows.into_iter().filter_map(|row| Some((row.index.get_untracked()?, row.view.measure()))).collect();
+            let mut found = std::collections::BTreeMap::new();
+            for (index, measure) in measures {
+                if let Some(measure) = measure.await {
+                    let top = measure.page.y.0 + offset;
+                    found.insert(index, (top, top + measure.frame.size.height.0));
+                }
+            }
+            let zones = chain(&found, last);
+            if zones.is_empty() {
+                return;
+            }
+            drag.try_with(|drag| drag.zones = zones);
+            if let Some(finger) = drag.try_with(|drag| drag.finger).flatten() {
+                review.drag_end_to(finger);
+            }
+        });
+    }
+
+    pub(super) fn drag_end_to(&self, y: f32) {
+        if !self.dragging() {
+            return;
+        }
+        self.drag.with(|drag| drag.finger = Some(y));
+        let Some((first, _)) = untracked(|| self.repeat_range()) else {
+            return;
+        };
+        let at = y + self.scroll.with(|s| s.offset);
+        let under = self.drag.with(|drag| {
+            let (low, high) = (drag.zones.first()?, drag.zones.last()?);
+            if at < low.1 {
+                return Some(low.0);
+            }
+            if at >= high.2 {
+                return Some(high.0);
+            }
+            drag.zones.iter().find(|(_, top, bottom)| (*top..*bottom).contains(&at)).map(|(index, ..)| *index)
+        });
+        if let Some(under) = under {
+            self.set_repeat(first, under.max(first));
+        }
+    }
+
+    pub(super) fn finish_end_drag(&self) {
+        if let Some(task) = self.drag_task.replace(None) {
+            task.cancel();
+        }
+        batch(|| {
+            self.handle_at.set(None);
+            self.handle_cell.set(None);
+        });
+        self.drag.with(|drag| *drag = Drag::default());
     }
 
     pub(super) fn hold_repeat(&self, index: usize) {
@@ -368,14 +639,14 @@ impl Review {
         };
         self.cancel_wait();
         batch(|| {
-            self.repeating.set(Some(segment.id));
+            self.repeating.set(Some(Span::one(segment.id)));
             self.reps.set(0);
             self.stop_at.set(None);
             self.paused.set(false);
         });
     }
 
-    pub(super) fn end_hold(&self, before: Option<String>) {
+    pub(super) fn end_hold(&self, before: Option<Span>) {
         batch(|| {
             self.repeating.set(before);
             self.reps.set(0);
@@ -414,17 +685,19 @@ impl Review {
             });
             return;
         }
-        let Some(index) = self.repeating.get_untracked().and_then(|id| self.index_of(&id)) else {
+        let Some((index, last)) = untracked(|| self.repeat_range()) else {
             return;
         };
+        if self.practice.get_untracked() != Practice::Mimic {
+            if self.segment_now(last).is_some_and(|segment| position_ms >= segment.end_ms) {
+                self.seek(self.play_start(index));
+            }
+            return;
+        }
         let Some(segment) = self.segment_now(index) else {
             return;
         };
         if position_ms < segment.end_ms {
-            return;
-        }
-        if self.practice.get_untracked() != Practice::Mimic {
-            self.seek(self.play_start(index));
             return;
         }
         let goal = self.store.settings().mimic_rep_goal;
@@ -516,17 +789,18 @@ impl Review {
         }
     }
 
-    pub(super) fn edit(&self, index: usize, translation: bool) {
+    pub(super) fn edit(&self, index: usize) {
         let Some(segment) = self.segment_now(index) else {
             return;
         };
+        let mode = self.mode.get_untracked();
+        let translated = segment.has_translation();
+        let original = mode != ContentMode::Translated || !translated;
+        let translation = mode != ContentMode::Original;
         batch(|| {
-            self.draft.set(if translation {
-                segment.translated_text.clone().unwrap_or_default()
-            } else {
-                segment.text.clone()
-            });
-            self.editing.set(Some(Editing { segment_id: segment.id, translation }));
+            self.draft.set(segment.text.clone());
+            self.translation_draft.set(segment.translated_text.clone().unwrap_or_default());
+            self.editing.set(Some(Editing { segment_id: segment.id, original, translation }));
         });
     }
 
@@ -557,28 +831,27 @@ impl Review {
             return;
         };
         let text = self.draft.get_untracked().trim().to_owned();
-        if text.is_empty() && !editing.translation {
+        if text.is_empty() && editing.original {
             self.remove_editing(&editing.segment_id);
             return;
         }
+        let translation = self.translation_draft.get_untracked().trim().to_owned();
         self.change("Sentence updated", |document| {
             let Some(segment) = document.segments.iter_mut().find(|s| s.id == editing.segment_id) else {
                 return false;
             };
-            let current =
-                if editing.translation { segment.translated_text.clone() } else { Some(segment.text.clone()) };
-            let wanted = (!text.is_empty()).then_some(text);
-            if current == wanted {
-                return false;
-            }
-            if editing.translation {
-                segment.translated_text = wanted;
-            } else {
-                let text = wanted.unwrap_or_default();
+            let mut changed = false;
+            if editing.original && segment.text != text {
                 segment.highlights = highlights::reanchor(&segment.text, &text, &segment.highlights);
                 segment.text = text;
+                changed = true;
             }
-            true
+            let wanted = (!translation.is_empty()).then_some(translation);
+            if editing.translation && segment.translated_text != wanted {
+                segment.translated_text = wanted;
+                changed = true;
+            }
+            changed
         });
         self.editing.set(None);
     }
@@ -596,7 +869,7 @@ impl Review {
         self.change("Sentence deleted", |document| listenook_core::structure::remove(document, index));
         batch(|| {
             self.editing.set(None);
-            if self.repeating.get_untracked().as_deref() == Some(segment_id) {
+            if self.repeating.get_untracked().is_some_and(|span| span.first == segment_id || span.last == segment_id) {
                 self.repeating.set(None);
             }
             if self.revealed.get_untracked().as_deref() == Some(segment_id) {
@@ -606,16 +879,20 @@ impl Review {
     }
 
     pub(super) fn split_editing(&self) {
-        let Some(editing) = self.editing.get_untracked().filter(|editing| !editing.translation) else {
+        let Some(editing) = self.editing.get_untracked().filter(|editing| editing.original) else {
             return;
         };
         let (text, caret) = (self.draft.get_untracked(), self.caret.get_untracked() as usize);
+        let translation = editing.translation.then(|| self.translation_draft.get_untracked().trim().to_owned());
         let Some(index) = self.index_of(&editing.segment_id) else {
             return;
         };
         let split = self.change("Sentence split", |document| {
             let mut trial = document.clone();
             trial.segments[index].text = text.clone();
+            if let Some(translation) = &translation {
+                trial.segments[index].translated_text = (!translation.is_empty()).then(|| translation.clone());
+            }
             let split = listenook_core::structure::split_at(&mut trial, index, caret);
             if split {
                 *document = trial;
@@ -691,4 +968,29 @@ fn undo_change(generation: Option<u64>) -> bool {
         document.speakers = before.speakers;
     });
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::chain;
+
+    #[test]
+    fn spare_rows_off_screen_are_left_out_of_the_drop_zones() {
+        let mut found: BTreeMap<usize, (f32, f32)> =
+            (0..16).map(|i| (i, (56.0 + 88.0 * i as f32, 144.0 + 88.0 * i as f32))).collect();
+        for spare in 16..22 {
+            found.insert(spare, (44.0, 132.0));
+        }
+        let zones = chain(&found, 3);
+        assert_eq!(zones.first().map(|z| z.0), Some(0));
+        assert_eq!(zones.last().map(|z| z.0), Some(15));
+    }
+
+    #[test]
+    fn rows_measured_after_a_gap_are_left_out() {
+        let found = BTreeMap::from([(4, (0.0, 80.0)), (5, (80.0, 160.0)), (6, (400.0, 480.0)), (3, (-300.0, -220.0))]);
+        assert_eq!(chain(&found, 5).iter().map(|z| z.0).collect::<Vec<_>>(), vec![4, 5]);
+    }
 }
