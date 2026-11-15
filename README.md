@@ -26,6 +26,9 @@ takes files of up to 5 hours.
 
 ## Features
 
+- **Pick up where you left off:** Home shows what you played last, what is
+  being transcribed, what you added recently, and new episodes from the
+  podcasts you follow.
 - **Listen and read:** synchronized audio/video playback, timestamp seeking,
   transcript search, sentence repetition, and blind listening.
 - **Practice:** type what you hear and compare your answer with the transcript,
@@ -66,9 +69,9 @@ takes files of up to 5 hours.
   Timestamped evidence links back to the source recording.
 - **Organize and export:** edit transcripts and speaker names, relink missing
   media, and export TXT, Markdown, SRT, or WebVTT. Briefs export as Markdown.
-- **Sync between devices:** copy the Library to and from another device
-  running Listenook on the same local network. The other device asks before
-  anything is copied.
+- **Sync between devices:** copy the Library, the podcasts you follow, and
+  where you left each episode to and from another device running Listenook
+  on the same local network. The other device asks before anything is copied.
 - **Monitor a folder:** new media in a watched folder is added to the Library,
   ready to transcribe. Listenook can stay in the macOS menu bar or the Windows
   tray to keep watching, and launch at login.
@@ -115,8 +118,9 @@ the provider's models to choose from.
 Listenook has no application backend. Cloud transcription sends media directly
 to the selected Soniox or MOSI provider when you start the job. Local
 transcription and subtitle import do not upload media. Folder monitoring
-discovers files without uploading them. Syncing sends the Library only to the
-device you choose on your local network.
+discovers files without uploading them. Syncing sends the Library, the
+podcasts you follow, and where you left each episode only to the device you
+choose on your local network.
 
 Manual or automatic LLM translation and user-requested AI Briefs send
 transcript text to your configured AI endpoint.

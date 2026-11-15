@@ -20,7 +20,9 @@ use crate::{
     state::{
         Filter, Place, l,
         podcast::{RATES, rate_label},
-        store, tr,
+        store,
+        sync::Phase,
+        tr,
     },
     ui::{
         self, Icon, Size, Variant, confirm_destructive, field, icon, icon_button, menu, menu_action, menu_danger,
@@ -204,8 +206,9 @@ pub(crate) fn shell() -> impl IntoElement {
             set_application_menu(application_menu());
         });
     } else {
-        on_key("mod+1", move |_| store.show(Filter::All));
-        on_key("mod+2", move |_| store.go(Place::Podcasts));
+        on_key("mod+1", move |_| store.go(Place::Home));
+        on_key("mod+2", move |_| store.show(Filter::All));
+        on_key("mod+3", move |_| store.go(Place::Podcasts));
         on_key("mod+,", move |_| store.settings_open().set(true));
         on_key("mod+o", |_| util::pick_media());
         on_key("mod+b", move |_| store.toggle_sidebar());
@@ -307,22 +310,34 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
         .flex_1()
         .child(
             nav_page()
-                .title(move || tr(if store.place() == Place::Podcasts { "Podcasts" } else { "Library" }))
+                .title(move || {
+                    tr(match store.place() {
+                        Place::Home => "Home",
+                        Place::Library => "Library",
+                        Place::Podcasts => "Podcasts",
+                    })
+                })
                 .header_style_with(colors)
                 .header_left_symbol("sidebar.left")
                 .header_left(ui::header_button(Icon::Sidebar, tr("Sidebar"), move || store.toggle_sidebar()))
-                .header_right_symbol("plus")
-                .header_right(
-                    view().child(
-                        when(
-                            move || store.place() == Place::Library,
-                            || ui::header_button(Icon::Plus, tr("Add media"), util::pick_media),
-                        )
-                        .otherwise(move || {
+                .header_right_symbol(move || SharedString::from(if store.place() == Place::Home { "" } else { "plus" }))
+                .header_right(view().child(dynamic(move || {
+                    match store.place() {
+                        Place::Home => view()
+                            .flex_row()
+                            .gap_2()
+                            .child(ui::header_button(Icon::Search, tr("Search"), move || store.home_search().set(true)))
+                            .child(ui::header_button(Icon::Plus, tr("Add media"), util::pick_media))
+                            .into_element(),
+                        Place::Library => {
+                            ui::header_button(Icon::Plus, tr("Add media"), util::pick_media).into_element()
+                        }
+                        Place::Podcasts => {
                             ui::header_button(Icon::Plus, tr("Add by URL"), move || store.podcast.adding.set(true))
-                        }),
-                    ),
-                )
+                                .into_element()
+                        }
+                    }
+                })))
                 .bg(|| theme().background)
                 .child(dynamic(move || {
                     lang.get();
@@ -406,6 +421,7 @@ fn tab_bar() -> impl IntoElement {
     nsh_core::mobile::tab_bar()
         .items(move || {
             vec![
+                TabBarItem::new(tr("Home")).icon(symbol("house", "android:ic_menu_compass")),
                 TabBarItem::new(tr("Library")).icon(symbol("books.vertical", "android:ic_menu_agenda")),
                 TabBarItem::new(tr("Podcasts"))
                     .icon(symbol("antenna.radiowaves.left.and.right", "android:ic_menu_slideshow")),
@@ -414,16 +430,19 @@ fn tab_bar() -> impl IntoElement {
         })
         .selected_index(move || {
             if store.settings_open().get() {
-                2_u32
-            } else if store.place() == Place::Podcasts {
-                1
+                3_u32
             } else {
-                0
+                match store.place() {
+                    Place::Home => 0,
+                    Place::Library => 1,
+                    Place::Podcasts => 2,
+                }
             }
         })
         .on_change(move |index: &u32| match index {
-            0 => store.show(Filter::All),
-            1 => store.go(Place::Podcasts),
+            0 => store.go(Place::Home),
+            1 => store.show(Filter::All),
+            2 => store.go(Place::Podcasts),
             _ => store.settings_open().set(true),
         })
 }
@@ -485,8 +504,9 @@ fn application_menu() -> Vec<MenuItem> {
     menus.push(MenuItem::submenu(
         named("View"),
         [
-            MenuItem::new(named("Library")).shortcut("mod+1").on_select(move || store.show(Filter::All)),
-            MenuItem::new(named("Podcasts")).shortcut("mod+2").on_select(move || store.go(Place::Podcasts)),
+            MenuItem::new(named("Home")).shortcut("mod+1").on_select(move || store.go(Place::Home)),
+            MenuItem::new(named("Library")).shortcut("mod+2").on_select(move || store.show(Filter::All)),
+            MenuItem::new(named("Podcasts")).shortcut("mod+3").on_select(move || store.go(Place::Podcasts)),
             MenuItem::separator(),
             MenuItem::new(named("Show or Hide Sidebar")).shortcut("mod+b").on_select(move || store.toggle_sidebar()),
             role(MenuRole::ToggleFullScreen, "Enter or Leave Full Screen"),
@@ -500,6 +520,7 @@ fn application_menu() -> Vec<MenuItem> {
 fn page(open: Option<String>, place: Place, enters: bool) -> AnyElement {
     let content = match (open, place) {
         (Some(id), _) => pages::reader(&id).into_element(),
+        (None, Place::Home) => pages::home().into_element(),
         (None, Place::Library) => pages::library().into_element(),
         (None, Place::Podcasts) => pages::podcasts().into_element(),
     };
@@ -592,6 +613,29 @@ fn heading(label: &'static str, add: &'static str, on_add: impl Fn() + 'static) 
         .child(icon_button(Icon::Plus, tr(add), trailing_size(), on_add))
 }
 
+fn sync_status() -> SharedString {
+    let sync = store().sync;
+    match sync.phase() {
+        Phase::Asking(_) | Phase::Running(_) | Phase::Serving(_) => tr("Syncing…"),
+        Phase::Done(..) => tr("Synced"),
+        Phase::Failed(_) => tr("Not synced"),
+        Phase::Choosing => SharedString::default(),
+    }
+}
+
+fn sidebar_title() -> View {
+    let tablet = window().width.0.min(window().height.0) >= TABLET_MIN_SIDE;
+    view().h(px(if tablet { 50.0 } else { 44.0 })).mb_1().flex_row().items_center().px(px(20.0)).child(
+        text("Listenook")
+            .text_xl()
+            .font_weight(FontWeight::BOLD)
+            .text_color(|| theme().foreground)
+            .role(AccessibilityRole::Header),
+    )
+}
+
+const TABLET_MIN_SIDE: f32 = 700.0;
+
 fn sidebar_width() -> f32 {
     if platform::is_phone() { 288.0 } else { 216.0 }
 }
@@ -640,7 +684,7 @@ fn sidebar() -> impl IntoElement {
         .border_color(|| theme().sidebar_border)
         .style_when(stack_reaches_top, |s| s.pt_safe_area())
         .child(if system_header() {
-            view().h(px(8.0))
+            sidebar_title()
         } else {
             view().h(px(BAR)).flex_row().items_center().justify_end().px_2().window_drag(true).child(
                 view()
@@ -660,11 +704,11 @@ fn sidebar() -> impl IntoElement {
                             .items_center()
                             .child(
                                 row(
-                                    Icon::Library,
-                                    l("Library"),
-                                    move || Some(store.count(&Filter::All)),
-                                    move || in_library(Filter::All),
-                                    move || store.show(Filter::All),
+                                    Icon::Home,
+                                    l("Home"),
+                                    || None,
+                                    move || store.place() == Place::Home && store.open_job_id().is_none(),
+                                    move || store.go(Place::Home),
                                 )
                                 .flex_1(),
                             )
@@ -676,11 +720,11 @@ fn sidebar() -> impl IntoElement {
                             .items_center()
                             .child(
                                 row(
-                                    Icon::Clock,
-                                    l("In progress"),
-                                    move || Some(store.count(&Filter::InProgress)),
-                                    move || in_library(Filter::InProgress),
-                                    move || store.show(Filter::InProgress),
+                                    Icon::Library,
+                                    l("Library"),
+                                    move || Some(store.count(&Filter::All)),
+                                    move || in_library(Filter::All),
+                                    move || store.show(Filter::All),
                                 )
                                 .flex_1(),
                             )
@@ -818,13 +862,22 @@ fn sidebar() -> impl IntoElement {
                 modal_actions(naming, l("Cancel"), label, move || !name.with(|n| n.trim().is_empty()), commit)
             },
         ))
-        .child(view().p_2().child(row(
-            Icon::Settings,
-            l("Settings"),
-            || None,
-            move || store.settings_open().get(),
-            move || store.settings_open().set(true),
-        )))
+        .child(
+            view()
+                .p_2()
+                .gap(px(2.0))
+                .child(
+                    row(Icon::Devices, l("Sync"), || None, move || store.sync.open.get(), move || store.sync.show())
+                        .child(text(sync_status).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground)),
+                )
+                .child(row(
+                    Icon::Settings,
+                    l("Settings"),
+                    || None,
+                    move || store.settings_open().get(),
+                    move || store.settings_open().set(true),
+                )),
+        )
 }
 
 fn podcast_player() -> impl IntoElement {

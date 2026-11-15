@@ -683,8 +683,9 @@ fn shortcuts() -> impl IntoElement {
         .child(group(
             "Application",
             vec![
-                ("mod+1", "Library"),
-                ("mod+2", "Podcasts"),
+                ("mod+1", "Home"),
+                ("mod+2", "Library"),
+                ("mod+3", "Podcasts"),
                 ("mod+,", "Settings"),
                 ("mod+b", "Show or hide the sidebar"),
                 ("mod+o", "Add media"),

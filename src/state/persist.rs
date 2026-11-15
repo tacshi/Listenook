@@ -125,12 +125,12 @@ pub(crate) fn load_catalog(root: &Path) -> Catalog {
     read_json(&root.join("podcast_catalog.json")).unwrap_or_default()
 }
 
-pub(crate) fn save_catalog(root: &Path, catalog: &Catalog) -> io::Result<()> {
-    let mut trimmed = catalog.clone();
-    for feed in &mut trimmed.feeds {
-        feed.episodes.truncate(50);
-    }
-    write_json(&root.join("podcast_catalog.json"), &trimmed)
+pub(crate) fn save_catalog(
+    root: &Path,
+    catalog: &Catalog,
+    heard: &[listenook_core::podcast::ListenProgress],
+) -> io::Result<()> {
+    write_json(&root.join("podcast_catalog.json"), &catalog.trimmed(heard))
 }
 
 pub(crate) fn load_listening(root: &Path) -> Vec<listenook_core::podcast::ListenProgress> {

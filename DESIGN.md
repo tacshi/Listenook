@@ -5,17 +5,25 @@ product; everything else gets out of its way.
 
 ## Structure
 
-A recording lives in one place. The Library lists every recording whatever
-its state (not transcribed, transcribing, ready); "In progress", groups and
-tags are filters in the sidebar, not other lists. Opening a recording covers
-the list with the reader, and Back returns. Podcasts is for finding and
-following shows; an episode sent to the Library is a recording like any
-other.
+The app opens on Home, which gathers what to do next: Continue (what was
+played last, recordings and podcast episodes together, each resuming where
+it stopped), Processing (while something transcribes or waits), Recently
+added, and New episodes from the shows followed. A section with nothing to
+show is not drawn; with nothing at all, Home is one empty state.
 
-The Library syncs with another device on the same network from its top bar:
-one dialog chooses the device and follows the sync, and the other device
-asks its user before anything is copied. Both Libraries end as their union;
-whether this device can be found is set in that dialog, where it matters.
+A recording lives in one place. The Library lists every recording whatever
+its state (not transcribed, transcribing, ready); groups and tags are
+filters in the sidebar, not other lists. Opening a recording covers the list
+with the reader, and Back returns. Podcasts is for finding and following
+shows; an episode sent to the Library is a recording like any other.
+
+Sync with another device on the same network sits at the foot of the
+sidebar, above Settings, and says when a sync runs or how the last one
+ended: one dialog chooses the device and follows the sync, and the other
+device asks its user before anything is copied. Both Libraries end as their
+union, and so do the podcasts followed (an unfollow made after a follow
+wins) and the place left in each episode (the one saved last wins); whether
+this device can be found is set in that dialog, where it matters.
 
 The reader has one transport and one side panel showing one thing at a time:
 Practice (mimic or dictation), the AI Brief, or the video. A setting is made
@@ -105,6 +113,17 @@ With reduced motion, presses do not scale, entrances land at once
 | Podcast starts playing | The mini player rises in from the bottom edge | Appears |
 | Play ↔ pause | Glyph swap on the button; the button presses to 0.94 | No scale |
 | A toast arrives / leaves | Rises 16pt and fades in, `BASE`; fades and shrinks out | Instant |
+| A sync runs or ends | The status beside Sync in the sidebar changes in place | Same |
+
+### Home
+
+| Change | Motion | Reduced |
+| --- | --- | --- |
+| Hover / press on a card or row | Wash `INSTANT`; deeper on press | Instant |
+| Work runs | The progress bar's fill glides between values, `BASE` | Static bar |
+| Search opens | The search bar appears under the header without motion | Same |
+| A section gains or loses everything it shows | It appears or leaves without motion | Same |
+| Nothing to show | The empty state fades in | Appears |
 
 ### Library
 

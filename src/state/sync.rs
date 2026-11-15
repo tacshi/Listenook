@@ -193,6 +193,7 @@ impl SyncState {
             match incoming {
                 Incoming::Removed(removed) => store.adopt_removals(&removed),
                 Incoming::Catalog(catalog) => drop(self.map.replace(store.adopt_catalog(&catalog))),
+                Incoming::Podcasts(podcasts) => store.podcast.adopt(&podcasts),
                 Incoming::Job(job) => self.map.with(|map| store.adopt_job(*job, map)),
                 Incoming::Media { id, path } => store.adopt_media(&id, &path),
                 Incoming::Name { id, name } => store.adopt_name(&id, &name),

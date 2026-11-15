@@ -99,9 +99,6 @@ pub(crate) fn library() -> impl IntoElement {
                             || !crate::shell::system_header(),
                             || ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, util::pick_media),
                         ))
-                        .child(ui::icon_button(Icon::Devices, tr("Sync with another device…"), Size::Sm, move || {
-                            store.sync.show()
-                        }))
                         .child(ui::icon_button(Icon::Export, tr("Export shown as ZIP…"), Size::Sm, move || {
                             super::dialogs::export_zip(shown.get_untracked())
                         })),
@@ -167,7 +164,7 @@ fn status_of(job: &Job) -> Status {
     }
 }
 
-fn kind_icon(job: &Job) -> Icon {
+pub(super) fn kind_icon(job: &Job) -> Icon {
     if matches!(job.status, JobStatus::Failed | JobStatus::MissingSource | JobStatus::Empty) {
         Icon::Alert
     } else if job.source_origin == JobSourceOrigin::Podcast {
@@ -181,7 +178,7 @@ fn kind_icon(job: &Job) -> Icon {
     }
 }
 
-fn detail(job: &Job) -> SharedString {
+pub(super) fn detail(job: &Job) -> SharedString {
     if let Some(code) = job.error_code.as_deref().filter(|_| !job.status.is_active() && !job.has_transcript()) {
         return error_text(code);
     }
