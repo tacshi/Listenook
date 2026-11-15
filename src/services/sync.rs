@@ -33,6 +33,7 @@ const ANNOUNCE_WITHIN: Duration = Duration::from_millis(500);
 const PEER_KEPT: Duration = Duration::from_secs(45);
 const LISTEN_WAKES: Duration = Duration::from_secs(5);
 const BIND_WITHIN: Duration = Duration::from_secs(6);
+const REOPEN_AFTER: Duration = Duration::from_secs(1);
 const MANIFEST_LIMIT: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,27 +332,37 @@ fn bind_for<T>(turn: u64, what: &str, bind: impl Fn() -> io::Result<T>) -> Optio
 }
 
 fn listen(turn: u64) {
-    let Some(socket) = bind_for(turn, "the discovery port", || UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT))) else {
-        return;
-    };
-    let _ = socket.join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED);
-    let _ = socket.set_read_timeout(Some(LISTEN_WAKES));
-    let _ = socket.set_write_timeout(Some(ANNOUNCE_WITHIN));
-    if let Ok(announcer) = socket.try_clone() {
-        state().announcer = Some(announcer);
+    while let Some(socket) = bind_for(turn, "the discovery port", || UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT))) {
+        let _ = socket.join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED);
+        let _ = socket.set_read_timeout(Some(LISTEN_WAKES));
+        let _ = socket.set_write_timeout(Some(ANNOUNCE_WITHIN));
+        if let Ok(announcer) = socket.try_clone() {
+            state().announcer = Some(announcer);
+        }
+        announce(true);
+        let Err(error) = hear(turn, &socket) else {
+            return;
+        };
+        log::debug!("sync: the discovery port stopped working, opening it again: {error}");
+        drop(socket);
+        thread::sleep(REOPEN_AFTER);
     }
-    announce(true);
+}
+
+fn hear(turn: u64, socket: &UdpSocket) -> io::Result<()> {
     let mut buffer = [0_u8; 2048];
     loop {
         let me = {
             let state = state();
             if state.turn != turn {
-                return;
+                return Ok(());
             }
             state.me.clone()
         };
-        let Ok((length, from)) = socket.recv_from(&mut buffer) else {
-            continue;
+        let (length, from) = match socket.recv_from(&mut buffer) {
+            Ok(received) => received,
+            Err(error) if waited(&error) => continue,
+            Err(error) => return Err(error),
         };
         let Ok(heard) = serde_json::from_slice::<Announcement>(&buffer[..length]) else {
             continue;
@@ -365,6 +376,10 @@ fn listen(turn: u64) {
             let _ = socket.send_to(&reply, from);
         }
     }
+}
+
+fn waited(error: &io::Error) -> bool {
+    matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted)
 }
 
 fn announce(asking: bool) {
@@ -477,34 +492,42 @@ fn is_local(address: IpAddr) -> bool {
 
 fn serve(turn: u64) {
     let what = format!("port {}", port());
-    let Some(listener) = bind_for(turn, &what, || TcpListener::bind((Ipv4Addr::UNSPECIFIED, port()))) else {
-        return;
-    };
-    {
-        let mut state = state();
-        if state.turn != turn {
-            return;
+    while let Some(listener) = bind_for(turn, &what, || TcpListener::bind((Ipv4Addr::UNSPECIFIED, port()))) {
+        {
+            let mut state = state();
+            if state.turn != turn {
+                return;
+            }
+            state.serving_on = listener.local_addr().ok().map(|address| address.port());
         }
-        state.serving_on = listener.local_addr().ok().map(|address| address.port());
+        let Err(error) = accept_from(turn, &listener) else {
+            return;
+        };
+        log::debug!("sync: {what} stopped working, opening it again: {error}");
+        drop(listener);
+        thread::sleep(REOPEN_AFTER);
     }
+}
+
+fn accept_from(turn: u64, listener: &TcpListener) -> io::Result<()> {
     loop {
         if state().turn != turn {
-            return;
+            return Ok(());
         }
-        match listener.accept() {
-            Ok((stream, from)) => {
-                if state().turn != turn {
-                    return;
+        let (stream, from) = match listener.accept() {
+            Ok(accepted) => accepted,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if state().turn != turn {
+            return Ok(());
+        }
+        if is_local(from.ip()) {
+            thread::spawn(move || {
+                if let Err(error) = handle(stream) {
+                    log::debug!("sync: {error}");
                 }
-                if is_local(from.ip()) {
-                    thread::spawn(move || {
-                        if let Err(error) = handle(stream) {
-                            log::debug!("sync: {error}");
-                        }
-                    });
-                }
-            }
-            Err(_) => thread::sleep(Duration::from_millis(80)),
+            });
         }
     }
 }
