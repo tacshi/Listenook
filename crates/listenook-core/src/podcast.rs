@@ -103,6 +103,54 @@ impl Default for Catalog {
     }
 }
 
+pub const EPISODES_SAVED: usize = 50;
+pub const UNFOLLOWED_FEEDS_CACHED: usize = 10;
+
+impl Feed {
+    fn keep_newest_and_heard(&mut self, newest: usize, heard: &[ListenProgress]) {
+        let mut seen = 0;
+        self.episodes.retain(|episode| {
+            seen += 1;
+            seen <= newest || heard.iter().any(|entry| entry.episode_id == episode.id)
+        });
+    }
+}
+
+impl Catalog {
+    pub fn trimmed(&self, heard: &[ListenProgress]) -> Catalog {
+        let mut trimmed = self.clone();
+        for feed in &mut trimmed.feeds {
+            feed.keep_newest_and_heard(EPISODES_SAVED, heard);
+        }
+        trimmed
+    }
+
+    pub fn cache(&mut self, feed: Feed, heard: &[ListenProgress]) {
+        self.feeds.retain(|known| known.feed_url != feed.feed_url);
+        self.feeds.insert(0, feed);
+        let followed: Vec<&str> = self.followed.iter().map(|followed| followed.feed_url.as_str()).collect();
+        let mut unfollowed = 0;
+        self.feeds.retain_mut(|feed| {
+            if followed.contains(&feed.feed_url.as_str()) {
+                return true;
+            }
+            unfollowed += 1;
+            if unfollowed <= UNFOLLOWED_FEEDS_CACHED {
+                return true;
+            }
+            feed.keep_newest_and_heard(0, heard);
+            feed.fetched_at = None;
+            !feed.episodes.is_empty()
+        });
+    }
+}
+
+pub fn moved_to(before: &[ListenProgress], after: &[ListenProgress], episode_id: &str) -> Option<i64> {
+    let entry = |entries: &[ListenProgress]| entries.iter().find(|entry| entry.episode_id == episode_id).cloned();
+    let now = entry(after)?;
+    (entry(before).as_ref() != Some(&now)).then_some(now.position_ms)
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ListenProgress {
@@ -525,5 +573,58 @@ mod tests {
         assert!(!at(1000).is_continuable());
         assert!(at(30_000).is_continuable());
         assert!(!at(58_000).is_continuable());
+    }
+
+    fn show(url: &str, episodes: usize) -> Feed {
+        Feed {
+            feed_url: url.into(),
+            fetched_at: Some("2026-01-01T00:00:00.000Z".into()),
+            episodes: (0..episodes)
+                .map(|index| Episode { id: format!("{url}-{index}"), feed_url: url.into(), ..Default::default() })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn heard(id: &str, position_ms: i64) -> ListenProgress {
+        ListenProgress { episode_id: id.into(), position_ms, ..Default::default() }
+    }
+
+    #[test]
+    fn a_saved_feed_keeps_its_newest_episodes_and_the_ones_played() {
+        let catalog = Catalog { feeds: vec![show("a", 80)], ..Default::default() };
+        let saved = catalog.trimmed(&[heard("a-70", 9000)]);
+        let ids: Vec<&str> = saved.feeds[0].episodes.iter().map(|episode| episode.id.as_str()).collect();
+        assert_eq!(ids.len(), EPISODES_SAVED + 1);
+        assert!(ids.contains(&"a-49") && ids.contains(&"a-70") && !ids.contains(&"a-50"), "{ids:?}");
+    }
+
+    #[test]
+    fn a_feed_pushed_out_of_the_cache_keeps_only_what_was_played() {
+        let mut catalog = Catalog {
+            followed: vec![Followed { feed_url: "mine".into(), ..Default::default() }],
+            feeds: vec![show("mine", 3), show("played", 5), show("browsed", 5)],
+            ..Default::default()
+        };
+        let heard = [heard("played-4", 9000)];
+        for index in 0..UNFOLLOWED_FEEDS_CACHED {
+            catalog.cache(show(&format!("new{index}"), 2), &heard);
+        }
+        let feed = |url: &str| catalog.feeds.iter().find(|feed| feed.feed_url == url);
+        assert_eq!(feed("mine").map(|feed| feed.episodes.len()), Some(3));
+        assert!(feed("browsed").is_none());
+        let played = feed("played").expect("a feed with a played episode stays");
+        assert_eq!(played.episodes.iter().map(|episode| episode.id.as_str()).collect::<Vec<_>>(), ["played-4"]);
+        assert!(played.fetched_at.is_none(), "what is left is no longer the whole feed");
+        assert_eq!(catalog.feeds.len(), 1 + UNFOLLOWED_FEEDS_CACHED + 1);
+    }
+
+    #[test]
+    fn an_episode_moves_only_when_its_place_changed() {
+        let before = [heard("e1", 5000), heard("e2", 7000)];
+        assert_eq!(moved_to(&before, &[heard("e1", 30_000), heard("e2", 7000)], "e1"), Some(30_000));
+        assert_eq!(moved_to(&before, &[heard("e1", 30_000), heard("e2", 7000)], "e2"), None);
+        assert_eq!(moved_to(&before, &before, "e3"), None);
+        assert_eq!(moved_to(&[], &[heard("e3", 9000)], "e3"), Some(9000));
     }
 }

@@ -733,6 +733,9 @@ fn another_devices_sync_is_accepted_and_its_recording_arrives() {
             "podcasts": {
                 "followed": [{"feed_url": "https://example.com/studio.xml", "title": "Studio Show", "followed_at": "2026-11-12T08:00:00.000Z"}],
                 "listened": [{"episode_id": "studio-1", "position_ms": 42000, "duration_ms": 600000, "updated_at": "2026-11-12T08:30:00.000Z"}],
+                "played": [{"feed_url": "https://example.com/other.xml", "title": "Other Show", "episodes": [
+                    {"id": "studio-1", "feed_url": "https://example.com/other.xml", "title": "Left halfway", "enclosure_url": "https://example.com/a.mp3", "media_extension": "mp3"},
+                ]}],
             },
         });
         let mut welcome = None;
@@ -782,6 +785,32 @@ fn another_devices_sync_is_accepted_and_its_recording_arrives() {
     it.app.press("role:button[Done]").unwrap();
     it.app.press("role:button[Podcasts]").unwrap();
     it.app.wait_for("Studio Show").unwrap();
+    it.app.press("role:button[Home]").unwrap();
+    it.app.wait_for("Left halfway").unwrap();
+    let shows = std::fs::read_to_string(it.root.join("podcast_catalog.json")).unwrap();
+    assert!(shows.contains("Left halfway"), "the episode it left is saved with its details");
+}
+
+#[test]
+fn home_continues_an_episode_of_a_show_not_followed() {
+    let mut it = start(
+        "home-episode",
+        |root| {
+            let catalog = json!({"version": 1, "feeds": [{"feed_url": "https://example.com/other.xml", "title": "Other Show", "episodes": [
+                {"id": "left-1", "feed_url": "https://example.com/other.xml", "title": "Left halfway", "enclosure_url": "https://example.com/a.mp3", "media_extension": "mp3"},
+            ]}]});
+            std::fs::write(root.join("podcast_catalog.json"), catalog.to_string()).unwrap();
+            let playback = json!({"version": 1, "entries": [
+                {"episode_id": "left-1", "position_ms": 42000, "duration_ms": 600000, "updated_at": "2026-11-12T08:30:00.000Z"},
+            ]});
+            std::fs::write(root.join("podcast_playback.json"), playback.to_string()).unwrap();
+        },
+        Vec::new(),
+    );
+    it.app.press("role:button[Home]").unwrap();
+    it.app.wait_for("Continue").unwrap();
+    assert!(it.app.shows("Left halfway"));
+    assert!(!it.app.shows("Start your library"));
 }
 
 #[test]

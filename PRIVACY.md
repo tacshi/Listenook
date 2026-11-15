@@ -44,8 +44,9 @@ visible there, it answers on TCP and UDP port 47823 with its name, platform
 and a random installation ID, and looks for other copies of Listenook on the
 same network (a multicast announcement and a query of the local /24). A sync
 copies recordings' manifests (transcripts, translations, AI Briefs, groups and
-tags) and media files directly between the two devices, over unencrypted HTTP,
-and only after the person at the receiving device accepts the request. API
+tags), media files, which podcasts you follow or have unfollowed, and where
+you left each episode directly between the two devices, over unencrypted
+HTTP, and only after the person at the receiving device accepts the request. API
 keys and settings are never sent. Turning visibility off closes the port.
 
 On iPhone and iPad there is no folder monitoring. Files you import or open in

@@ -231,7 +231,9 @@ pub(crate) fn home() -> impl IntoElement {
     on_key("mod+f", move |_| open.set(true));
     on_key("escape", move |_| open.set(false));
     let searching = move || query.with(|q| !q.trim().is_empty());
-    let bare = move || store.jobs().is_empty() && store.podcast.followed().is_empty();
+    let bare = move || {
+        store.jobs().is_empty() && store.podcast.followed().is_empty() && continued.with(|items| items.is_empty())
+    };
     view()
         .flex_1()
         .child(when(

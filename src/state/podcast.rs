@@ -55,7 +55,8 @@ impl PodcastState {
 
     fn save(&self) {
         if let Some(root) = persist::data_root()
-            && let Err(error) = persist::save_catalog(&root, &self.catalog.get_untracked())
+            && let Err(error) =
+                persist::save_catalog(&root, &self.catalog.get_untracked(), &self.listened.get_untracked())
         {
             log::error!("saving the podcast catalog: {error}");
         }
@@ -74,18 +75,8 @@ impl PodcastState {
     }
 
     pub(crate) fn cache_feed(&self, feed: Feed) {
-        self.catalog.update(|catalog| {
-            catalog.feeds.retain(|f| f.feed_url != feed.feed_url);
-            catalog.feeds.insert(0, feed);
-            let followed: Vec<String> = catalog.followed.iter().map(|f| f.feed_url.clone()).collect();
-            let mut unfollowed = 0;
-            catalog.feeds.retain(|f| {
-                followed.contains(&f.feed_url) || {
-                    unfollowed += 1;
-                    unfollowed <= 10
-                }
-            });
-        });
+        let heard = self.listened.get_untracked();
+        self.catalog.update(|catalog| catalog.cache(feed, &heard));
         self.save();
     }
 
@@ -129,9 +120,17 @@ impl PodcastState {
             })
             .map(|followed| followed.feed_url.clone())
             .collect();
+        let moved = self
+            .playing
+            .with_untracked(|playing| playing.as_ref().map(|playing| playing.episode.id.clone()))
+            .filter(|_| self.paused.get_untracked())
+            .and_then(|id| listenook_core::podcast::moved_to(&self.listened.get_untracked(), &listened, &id));
         batch(|| {
             self.catalog.set(catalog);
             self.listened.set(listened);
+            if let Some(position_ms) = moved {
+                self.seek_to(position_ms);
+            }
         });
         self.save();
         if let Some(root) = persist::data_root()
@@ -183,7 +182,9 @@ impl PodcastState {
             duration_ms: self.duration_ms.get_untracked(),
             updated_at: Some(now_iso()),
         };
+        let mut first_time = false;
         self.listened.update(|entries| {
+            first_time = !entries.iter().any(|other| other.episode_id == entry.episode_id);
             entries.retain(|other| other.episode_id != entry.episode_id);
             entries.insert(0, entry);
             entries.truncate(200);
@@ -192,6 +193,9 @@ impl PodcastState {
             && let Err(error) = persist::save_listening(&root, &self.listened.get_untracked())
         {
             log::error!("saving listening progress: {error}");
+        }
+        if first_time {
+            self.save();
         }
     }
 

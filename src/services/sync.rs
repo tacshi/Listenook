@@ -1293,7 +1293,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        persist::save_catalog(&there, &shows).unwrap();
+        persist::save_catalog(&there, &shows, &[]).unwrap();
         let heard = listenook_core::podcast::ListenProgress {
             episode_id: "heard-here".into(),
             position_ms: 42_000,
