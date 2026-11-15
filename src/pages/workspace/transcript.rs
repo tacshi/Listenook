@@ -17,6 +17,7 @@ use crate::{
 
 pub(super) fn transcript(review: Review) -> impl IntoElement {
     let speaker = signal(None::<String>);
+    let viewable = signal(None::<(usize, usize)>);
     let reveal = move |segment: usize, animated: bool| {
         if review.editing.get_untracked().is_some() {
             return;
@@ -41,6 +42,28 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
             untracked(|| reveal(segment, false));
         }
     });
+    {
+        let first = std::cell::Cell::new(true);
+        effect(move || {
+            let _ = (review.side.get(), review.video_on_top.get(), review.fullscreen.get());
+            if !first.replace(false) {
+                spawn(async move {
+                    timer(std::time::Duration::from_millis(250)).await;
+                    let Some(segment) = review.scrubbed.get_untracked().or_else(|| review.current.get_untracked())
+                    else {
+                        return;
+                    };
+                    let row = review.shown.with_untracked(|shown| shown.iter().position(|index| *index == segment));
+                    if !row
+                        .zip(viewable.get_untracked())
+                        .is_some_and(|(row, (first, last))| (first..=last).contains(&row))
+                    {
+                        reveal(segment, false);
+                    }
+                });
+            }
+        });
+    }
     let open = std::rc::Rc::new(std::cell::Cell::new(true));
     {
         let open = open.clone();
@@ -72,6 +95,8 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
                         .text_color(|| theme().muted_foreground),
                 )
                 .element_ref(&review.list)
+                .viewability(Viewability { item_visible_threshold: Some(percentage(1.0)), ..Default::default() })
+                .on_viewable_items_change(move |items: &ViewableItems| viewable.set(items.viewable))
                 .flex_1(),
         )
         .child(speaker_dialog(review, speaker))

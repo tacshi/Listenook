@@ -49,6 +49,7 @@ pub(crate) fn shell() -> impl IntoElement {
         ticks.set(ticks.get().wrapping_add(1));
         if ticks.get().is_multiple_of(5) {
             crate::services::keep_keys();
+            crate::services::keep_scroll_on_status_bar_taps();
         }
         let picked = crate::services::take_picked();
         if !picked.is_empty() {
