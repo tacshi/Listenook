@@ -14,10 +14,10 @@ use crate::{
     platform,
     services::{podcasts, transcribe},
     shell::{page_narrow, system_header, top_bar},
-    state::{Filter, Place, l, store, tr},
+    state::{Filter, Place, Shelf, l, store, tr},
     ui::{
-        self, Icon, Size, Variant, card, empty_state, focused_search_field, icon, icon_text_button, list_row,
-        progress_bar, toggle_icon_button,
+        self, Icon, Size, Tone, Variant, card, empty_state, focused_search_field, icon, icon_text_button, list_row,
+        progress_bar, toast_with_action, toggle_icon_button,
         tokens::{self, motion},
     },
     util::{self, file_url},
@@ -36,6 +36,13 @@ enum Resume {
 }
 
 impl Resume {
+    fn id(&self) -> &str {
+        match self {
+            Resume::Recording { id, .. } => id,
+            Resume::Episode { episode, .. } => &episode.id,
+        }
+    }
+
     fn at(&self) -> &str {
         match self {
             Resume::Recording { at, .. } | Resume::Episode { at, .. } => at,
@@ -98,6 +105,7 @@ fn resumable() -> Vec<Resume> {
     let mut items: Vec<Resume> = store
         .played()
         .into_iter()
+        .filter(|(id, ..)| store.shelved(Shelf::Continue, id))
         .filter_map(|(id, at, position)| {
             let job = jobs.iter().find(|job| job.id == id && job.has_transcript())?;
             Some(Resume::Recording {
@@ -111,19 +119,26 @@ fn resumable() -> Vec<Resume> {
         })
         .collect();
     let feeds = store.podcast.feeds();
-    items.extend(store.podcast.listening().into_iter().filter(|entry| entry.is_continuable()).filter_map(|entry| {
-        let (feed, episode) = feeds
-            .iter()
-            .find_map(|feed| feed.episodes.iter().find(|e| e.id == entry.episode_id).map(|episode| (feed, episode)))?;
-        Some(Resume::Episode {
-            artwork: episode.artwork_url.clone().or_else(|| feed.artwork_url.clone()).unwrap_or_default(),
-            episode: Box::new(episode.clone()),
-            show: feed.title.clone(),
-            position: entry.position_ms,
-            duration: entry.duration_ms.max(episode.duration_ms.unwrap_or(0)),
-            at: entry.updated_at.unwrap_or_default(),
-        })
-    }));
+    items.extend(
+        store
+            .podcast
+            .listening()
+            .into_iter()
+            .filter(|entry| entry.is_continuable() && store.shelved(Shelf::Continue, &entry.episode_id))
+            .filter_map(|entry| {
+                let (feed, episode) = feeds.iter().find_map(|feed| {
+                    feed.episodes.iter().find(|e| e.id == entry.episode_id).map(|episode| (feed, episode))
+                })?;
+                Some(Resume::Episode {
+                    artwork: episode.artwork_url.clone().or_else(|| feed.artwork_url.clone()).unwrap_or_default(),
+                    episode: Box::new(episode.clone()),
+                    show: feed.title.clone(),
+                    position: entry.position_ms,
+                    duration: entry.duration_ms.max(episode.duration_ms.unwrap_or(0)),
+                    at: entry.updated_at.unwrap_or_default(),
+                })
+            }),
+    );
     items.sort_by(|a, b| b.at().cmp(a.at()));
     items.truncate(CONTINUED);
     items
@@ -201,7 +216,8 @@ pub(crate) fn home() -> impl IntoElement {
     refresh_followed();
     let continued = computed(resumable);
     let recent = computed(move || {
-        let mut jobs = store.jobs();
+        let mut jobs: Vec<Rc<Job>> =
+            store.jobs().into_iter().filter(|job| store.shelved(Shelf::Recent, &job.id)).collect();
         jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         jobs.truncate(RECENT);
         jobs
@@ -344,6 +360,24 @@ fn section(title: &'static str, link: Option<Link>, content: impl IntoElement) -
     view().gap_3().child(header).child(content)
 }
 
+fn take_off(shelf: Shelf, id: String) {
+    let store = store();
+    store.shelve(shelf, &id, false);
+    let done = match shelf {
+        Shelf::Continue => "Removed from Continue",
+        Shelf::Recent => "Removed from Recently added",
+    };
+    toast_with_action(Tone::Info, tr(done), tr("Undo"), move || store.shelve(shelf, &id, true));
+}
+
+fn removable(shelf: Shelf, id: String, target: impl IntoElement) -> impl IntoElement {
+    let label = match shelf {
+        Shelf::Continue => "Remove from Continue",
+        Shelf::Recent => "Remove from Recently added",
+    };
+    ui::context_menu(target).child(ui::menu_action(Icon::Close, l(label), move || take_off(shelf, id.clone())))
+}
+
 fn tile_icon(glyph: Icon, artwork: String, size: f32) -> View {
     let tile = view()
         .size(px(size))
@@ -405,8 +439,9 @@ fn lead_card(item: Resume) -> impl IntoElement {
     let (glyph, artwork) = resume_glyph(&item);
     let (title, meta, fraction) = (item.title(), item.meta(), item.fraction());
     let label = format!("{} {}", tr("Resume"), title);
+    let id = item.id().to_owned();
     let pressed = item.clone();
-    card().child(
+    let lead = card().child(
         pressable()
             .on_press(move || pressed.resume())
             .accessibility_label(label)
@@ -447,47 +482,48 @@ fn lead_card(item: Resume) -> impl IntoElement {
                     .text_color(|| theme().primary_foreground)
                     .child(icon(Icon::Play, 20.0)),
             ),
-    )
+    );
+    removable(Shelf::Continue, id, lead)
 }
 
 fn small_card(item: Resume) -> impl IntoElement {
     let (glyph, artwork) = resume_glyph(&item);
     let (title, meta, fraction) = (item.title(), item.meta(), item.fraction());
     let label = format!("{} {}", tr("Resume"), title);
-    view().flex_1().min_w(px(0.0)).child(
-        card().child(
-            pressable()
-                .on_press(move || item.resume())
-                .accessibility_label(label)
-                .flex_row()
-                .items_center()
-                .gap_3()
-                .p_3()
-                .child(tile_icon(glyph, artwork, 40.0))
-                .child(
-                    view()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .gap_0p5()
-                        .child(
-                            text(SharedString::from(title))
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .number_of_lines(1)
-                                .text_color(|| theme().foreground),
-                        )
-                        .child(
-                            text(SharedString::from(meta))
-                                .text_xs()
-                                .tabular_nums()
-                                .number_of_lines(1)
-                                .text_color(|| theme().muted_foreground),
-                        )
-                        .child(progress_bar(move || fraction).mt_1()),
-                )
-                .child(view().text_color(|| theme().muted_foreground).child(icon(Icon::Play, 16.0))),
-        ),
-    )
+    let id = item.id().to_owned();
+    let small = card().child(
+        pressable()
+            .on_press(move || item.resume())
+            .accessibility_label(label)
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .p_3()
+            .child(tile_icon(glyph, artwork, 40.0))
+            .child(
+                view()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .gap_0p5()
+                    .child(
+                        text(SharedString::from(title))
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .number_of_lines(1)
+                            .text_color(|| theme().foreground),
+                    )
+                    .child(
+                        text(SharedString::from(meta))
+                            .text_xs()
+                            .tabular_nums()
+                            .number_of_lines(1)
+                            .text_color(|| theme().muted_foreground),
+                    )
+                    .child(progress_bar(move || fraction).mt_1()),
+            )
+            .child(view().text_color(|| theme().muted_foreground).child(icon(Icon::Play, 16.0))),
+    );
+    view().flex_1().min_w(px(0.0)).child(removable(Shelf::Continue, id, small))
 }
 
 fn processing_section(processing: Memo<Vec<Rc<Job>>>, waiting: Memo<usize>) -> impl IntoElement {
@@ -557,9 +593,10 @@ fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
         move |job, _| {
             let id = job.with_untracked(|job| job.id.clone());
             let readable = job.with_untracked(|job| job.has_transcript());
-            card().child(
+            let opened = id.clone();
+            let tile = card().flex_1().child(
                 pressable()
-                    .on_press(move || if readable { store.open_transcript(&id) } else { store.show(Filter::All) })
+                    .on_press(move || if readable { store.open_transcript(&opened) } else { store.show(Filter::All) })
                     .gap_3()
                     .p_3()
                     .child(tile_icon(job.with_untracked(|job| kind_icon(job)), String::new(), 36.0))
@@ -590,7 +627,8 @@ fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
                                 .text_color(|| theme().muted_foreground),
                             ),
                     ),
-            )
+            );
+            removable(Shelf::Recent, id, tile)
         },
     ))
 }

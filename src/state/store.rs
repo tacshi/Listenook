@@ -45,6 +45,28 @@ impl Filter {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shelf {
+    Continue,
+    Recent,
+}
+
+impl Shelf {
+    fn hidden(self, settings: &Settings) -> &std::collections::BTreeSet<String> {
+        match self {
+            Shelf::Continue => &settings.continue_hidden,
+            Shelf::Recent => &settings.recent_hidden,
+        }
+    }
+
+    fn hidden_mut(self, settings: &mut Settings) -> &mut std::collections::BTreeSet<String> {
+        match self {
+            Shelf::Continue => &mut settings.continue_hidden,
+            Shelf::Recent => &mut settings.recent_hidden,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct Store {
     owner: Owner,
@@ -255,6 +277,7 @@ impl Store {
     }
 
     pub(crate) fn open_transcript(&self, id: &str) {
+        self.shelve(Shelf::Continue, id, true);
         batch(|| {
             self.open_video.set(None);
             self.open_job.set(Some(id.to_owned()));
@@ -425,6 +448,24 @@ impl Store {
                     .collect()
             })
         })
+    }
+
+    pub(crate) fn shelved(&self, shelf: Shelf, id: &str) -> bool {
+        self.settings.with(|settings| !shelf.hidden(settings).contains(id))
+    }
+
+    pub(crate) fn shelve(&self, shelf: Shelf, id: &str, shown: bool) {
+        if self.settings.with_untracked(|settings| shelf.hidden(settings).contains(id) != shown) {
+            return;
+        }
+        self.update_settings(|settings| {
+            let hidden = shelf.hidden_mut(settings);
+            if shown {
+                hidden.remove(id);
+            } else {
+                hidden.insert(id.to_owned());
+            }
+        });
     }
 
     fn save_settings(&self) {
@@ -643,6 +684,8 @@ impl Store {
     }
 
     fn erase_job(&self, id: &str) {
+        self.shelve(Shelf::Continue, id, true);
+        self.shelve(Shelf::Recent, id, true);
         for key in [id.to_owned(), format!("{id}:translate"), format!("{id}:brief")] {
             self.cancel_work(&key);
         }

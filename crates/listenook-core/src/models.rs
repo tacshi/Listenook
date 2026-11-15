@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -791,6 +791,10 @@ pub struct Settings {
     pub playback_positions_ms: BTreeMap<String, i64>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub playback_played_at: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub continue_hidden: BTreeSet<String>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub recent_hidden: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub brief_anchors: BTreeMap<String, BriefAnchor>,
     #[serde(default = "truthy")]
@@ -817,6 +821,8 @@ impl Default for Settings {
             default_transcription_provider: TranscriptionProvider::Soniox,
             playback_positions_ms: BTreeMap::new(),
             playback_played_at: BTreeMap::new(),
+            continue_hidden: BTreeSet::new(),
+            recent_hidden: BTreeSet::new(),
             brief_anchors: BTreeMap::new(),
             auto_align_transcripts: true,
             extra: Map::new(),

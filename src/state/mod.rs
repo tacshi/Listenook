@@ -7,7 +7,7 @@ pub(crate) mod sync;
 
 use listenook_core::l10n;
 use nsh_core::prelude::*;
-pub(crate) use store::{Filter, Place, Store, store};
+pub(crate) use store::{Filter, Place, Shelf, Store, store};
 
 pub(crate) fn l(text: &'static str) -> impl Fn() -> SharedString + Copy + 'static {
     move || SharedString::from(l10n::tr(store().lang(), text))

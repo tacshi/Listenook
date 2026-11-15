@@ -9,7 +9,10 @@ The app opens on Home, which gathers what to do next: Continue (what was
 played last, recordings and podcast episodes together, each resuming where
 it stopped), Processing (while something transcribes or waits), Recently
 added, and New episodes from the shows followed. A section with nothing to
-show is not drawn; with nothing at all, Home is one empty state.
+show is not drawn; with nothing at all, Home is one empty state. A card's
+context menu (a secondary click, or a finger held on it) takes it off
+Continue or Recently added, with Undo in the toast; nothing is deleted, and
+an item taken off Continue returns once it is opened or played again.
 
 A recording lives in one place. The Library lists every recording whatever
 its state (not transcribed, transcribing, ready); groups and tags are
