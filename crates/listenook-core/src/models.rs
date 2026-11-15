@@ -529,6 +529,9 @@ pub struct AiGenerationState {
     pub total_chunks: u32,
     pub output_language: String,
     pub model: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub selected_sections: Vec<AiBriefSection>,
+    pub learning_level: AiLearningLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

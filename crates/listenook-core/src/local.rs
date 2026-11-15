@@ -600,6 +600,82 @@ pub fn whole_words(pieces: &[(String, i64, i64)]) -> Vec<(String, i64, i64)> {
     words
 }
 
+pub fn retimed(text: &str, pieces: &[(String, i64, i64)]) -> Option<Vec<(String, i64, i64)>> {
+    let fold = |c: char| c.to_lowercase().next().unwrap_or(c);
+    let mut said: Vec<(char, i64, i64)> = Vec::new();
+    for (piece, start, end) in pieces {
+        let chars: Vec<char> = piece.chars().filter(|c| !c.is_whitespace()).collect();
+        let span = (end - start).max(0);
+        let count = chars.len() as i64;
+        for (at, c) in chars.into_iter().enumerate() {
+            let at = at as i64;
+            said.push((fold(c), start + span * at / count, start + span * (at + 1) / count));
+        }
+    }
+    let mut units: Vec<String> = Vec::new();
+    let mut written: Vec<(char, usize)> = Vec::new();
+    for c in text.chars() {
+        let content = units.last().and_then(|unit| unit.chars().rev().find(|c| !c.is_whitespace()));
+        if units.is_empty()
+            || content.is_some_and(|last| c.is_whitespace() || is_cjk(c) || (is_cjk(last) && c.is_alphanumeric()))
+        {
+            units.push(String::new());
+        }
+        if let Some(unit) = units.last_mut() {
+            unit.push(c);
+        }
+        if !c.is_whitespace() {
+            written.push((fold(c), units.len() - 1));
+        }
+    }
+    let (n, m) = (said.len(), written.len());
+    if n == 0 || m == 0 || n * m > 4_000_000 {
+        return None;
+    }
+    let mut table = vec![0_u16; (n + 1) * (m + 1)];
+    let cell = |i: usize, j: usize| i * (m + 1) + j;
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            table[cell(i, j)] = if said[i].0 == written[j].0 {
+                table[cell(i + 1, j + 1)] + 1
+            } else {
+                table[cell(i + 1, j)].max(table[cell(i, j + 1)])
+            };
+        }
+    }
+    if (table[cell(0, 0)] as usize) * 2 < m {
+        return None;
+    }
+    let mut times: Vec<Option<(i64, i64)>> = vec![None; units.len()];
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if said[i].0 == written[j].0 {
+            let slot = &mut times[written[j].1];
+            *slot =
+                Some(slot.map_or((said[i].1, said[i].2), |(start, end)| (start.min(said[i].1), end.max(said[i].2))));
+            i += 1;
+            j += 1;
+        } else if table[cell(i + 1, j)] >= table[cell(i, j + 1)] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    let first = said[0].1;
+    let mut out: Vec<(String, i64, i64)> = Vec::with_capacity(units.len());
+    for (at, unit) in units.into_iter().enumerate() {
+        let after = out.last().map_or(first, |(_, _, end)| *end);
+        let (start, end) = times[at].unwrap_or_else(|| {
+            let next = times[at + 1..].iter().flatten().next().map_or(after, |(start, _)| *start).max(after);
+            let waiting = times[at..].iter().take_while(|t| t.is_none()).count().max(1) as i64;
+            (after, after + (next - after) / waiting)
+        });
+        let floor = out.last().map_or(start, |(_, start, _)| *start);
+        out.push((unit, start.max(floor), end.max(start.max(floor))));
+    }
+    Some(out)
+}
+
 pub fn word_at(words: &[(String, i64, i64)], position_ms: i64) -> Option<usize> {
     words.partition_point(|(_, start, _)| *start <= position_ms).checked_sub(1)
 }
@@ -749,6 +825,46 @@ mod tests {
         assert_eq!((words[3].1, words[3].2), (400, 720));
         let chinese = whole_words(&[piece("你", 0, 100), piece("好", 100, 200), piece("。", 200, 210)]);
         assert_eq!(chinese.iter().map(|w| w.0.as_str()).collect::<Vec<_>>(), ["你", "好。"]);
+    }
+
+    #[test]
+    fn an_edited_sentence_keeps_its_word_timings() {
+        let piece = |text: &str, start, end| (text.to_owned(), start, end);
+        let pieces = [
+            piece(" where", 0, 100),
+            piece(" you", 100, 200),
+            piece(" are", 200, 300),
+            piece("right", 300, 400),
+            piece(" now,", 400, 500),
+            piece(" ok.", 500, 600),
+        ];
+        let split = retimed(" where you are right now, ok.", &pieces).unwrap();
+        let texts: Vec<&str> = split.iter().map(|w| w.0.as_str()).collect();
+        assert_eq!(texts, [" where", " you", " are", " right", " now,", " ok."]);
+        assert_eq!((split[2].1, split[2].2), (200, 300));
+        assert_eq!((split[3].1, split[3].2), (300, 400));
+        assert_eq!(texts.concat(), " where you are right now, ok.");
+
+        let glued = retimed("where youare right now, OK.", &pieces).unwrap();
+        assert_eq!(
+            glued.iter().map(|w| w.0.as_str()).collect::<Vec<_>>(),
+            ["where", " youare", " right", " now,", " OK."]
+        );
+        assert_eq!((glued[1].1, glued[1].2), (100, 300));
+
+        let one = retimed("Areright", &[piece(" areright", 1000, 1800)]).unwrap();
+        assert_eq!(one, [piece("Areright", 1000, 1800)]);
+        let halves = retimed("are right", &[piece(" areright", 1000, 1800)]).unwrap();
+        assert_eq!((halves[0].1, halves[1].1), (1000, 1300));
+
+        let fixed = retimed(" where you were right now, ok.", &pieces).unwrap();
+        assert!(fixed.windows(2).all(|w| w[0].1 <= w[1].1));
+        assert_eq!(fixed[2].0, " were");
+
+        assert_eq!(retimed("Something else entirely.", &pieces), None);
+        let chinese =
+            retimed("你好，世界。", &[piece("你", 0, 100), piece("好", 100, 200), piece("世界", 300, 500)]).unwrap();
+        assert_eq!(chinese.iter().map(|w| w.0.as_str()).collect::<Vec<_>>(), ["你", "好，", "世", "界。"]);
     }
 
     #[test]

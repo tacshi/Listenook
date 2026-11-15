@@ -144,6 +144,7 @@ const ZH: &[(&str, &str)] = &[
     ("Transcript copied", "已复制转写"),
     ("Export complete", "导出完成"),
     ("Something went wrong. Try again.", "出了点问题，请重试。"),
+    ("The new brief wasn’t made. This is the previous one.", "新简报未能生成，下面是之前的简报。"),
     ("Provider", "服务商"),
     ("API key", "API 密钥"),
     ("Base URL", "Base URL"),
@@ -595,7 +596,22 @@ pub fn status_label(status: JobStatus) -> &'static str {
 }
 
 pub fn error_message(lang: Lang, code: &str) -> String {
-    let (en, zh) = match code {
+    let (en, zh) = known_error(code)
+        .or_else(|| {
+            ["llm_", "translation_", "ai_brief_", "moss_"]
+                .iter()
+                .find_map(|prefix| code.strip_prefix(prefix))
+                .and_then(known_error)
+        })
+        .unwrap_or(("Something went wrong. Try again.", "出了点问题，请重试。"));
+    match lang {
+        Lang::En => en.to_owned(),
+        Lang::Zh => zh.to_owned(),
+    }
+}
+
+fn known_error(code: &str) -> Option<(&'static str, &'static str)> {
+    Some(match code {
         "missing_credentials" | "moss_missing_credentials" => {
             ("Add an API key for this provider in Settings.", "请先在设置中添加该服务商的 API 密钥。")
         }
@@ -689,12 +705,25 @@ pub fn error_message(lang: Lang, code: &str) -> String {
         "network_error" | "llm_network_error" | "translation_network_error" => {
             ("Couldn’t connect. Check your connection and try again.", "无法连接，请检查网络后重试。")
         }
-        _ => ("Something went wrong. Try again.", "出了点问题，请重试。"),
-    };
-    match lang {
-        Lang::En => en.to_owned(),
-        Lang::Zh => zh.to_owned(),
-    }
+        "timeout" => (
+            "The model took too long to answer. Try again, or choose a faster model in Settings.",
+            "模型响应时间过长。请重试，或在设置中选择更快的模型。",
+        ),
+        "endpoint_or_model_not_found" => (
+            "The provider doesn’t have this model. Check the base URL and model in Settings.",
+            "服务商找不到该模型，请在设置中检查 Base URL 和模型。",
+        ),
+        "request_failed" => (
+            "The provider refused the request. Check the model in Settings or try another one.",
+            "服务商拒绝了请求，请在设置中检查模型或更换模型。",
+        ),
+        "invalid_response" => (
+            "The model returned nothing usable. Try again or choose another model.",
+            "模型未返回可用内容，请重试或更换模型。",
+        ),
+        "ai_brief_no_sections" => ("Choose at least one section.", "请至少选择一个部分。"),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -708,5 +737,15 @@ mod tests {
         assert_eq!(tr(Lang::En, "Inbox"), "Inbox");
         assert_eq!(Lang::of_locale("zh-Hans-CN"), Lang::Zh);
         assert_eq!(tr(Lang::Zh, status_label(JobStatus::Processing)), "转写中");
+    }
+
+    #[test]
+    fn provider_codes_share_one_message_whatever_the_feature() {
+        let network = error_message(Lang::En, "network_error");
+        assert_eq!(error_message(Lang::En, "ai_brief_network_error"), network);
+        assert_eq!(error_message(Lang::En, "llm_network_error"), network);
+        assert_eq!(error_message(Lang::En, "ai_brief_timeout"), error_message(Lang::En, "translation_timeout"));
+        assert_eq!(error_message(Lang::En, "ai_brief_server_failure"), error_message(Lang::En, "server_failure"));
+        assert_eq!(error_message(Lang::Zh, "nonsense"), "出了点问题，请重试。");
     }
 }

@@ -169,7 +169,14 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                 ),
                         )
                         .child(when(move || error().is_some(), move || {
-                            text(move || error().unwrap_or_default()).text_sm().text_color(|| theme().destructive)
+                            view()
+                                .gap_1()
+                                .child(
+                                    text(move || error().unwrap_or_default())
+                                        .text_sm()
+                                        .text_color(|| theme().destructive),
+                                )
+                                .child(hint(l("The new brief wasn’t made. This is the previous one.")))
                         }))
                         .child(when(move || unseen() > 0, move || {
                             card()
@@ -535,6 +542,35 @@ pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoEl
             return;
         }
         untracked(|| {
+            let last = review.job.with(|job| {
+                let job = job.as_ref()?;
+                let state = &job.ai_generation_state;
+                if !state.selected_sections.is_empty() {
+                    return Some((
+                        state.selected_sections.clone(),
+                        state.output_language.clone(),
+                        state.learning_level,
+                    ));
+                }
+                job.ai_brief
+                    .as_ref()
+                    .filter(|brief| !brief.selected_sections.is_empty())
+                    .map(|brief| (brief.selected_sections.clone(), brief.output_language.clone(), brief.learning_level))
+            });
+            if let Some((chosen, language, learning_level)) = last {
+                batch(|| {
+                    sections.set(chosen);
+                    if !language.is_empty() {
+                        output.set(language.into());
+                    }
+                    level.set(if marked() == 0 && learning_level == AiLearningLevel::Auto {
+                        AiLearningLevel::Intermediate
+                    } else {
+                        learning_level
+                    });
+                });
+                return;
+            }
             let learning = review.job.with(|job| {
                 job.as_ref()
                     .and_then(|job| job.document.as_ref())

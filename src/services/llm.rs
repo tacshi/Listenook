@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use listenook_core::{
     AiGenerationState, AiGenerationStatus, LlmProviderSettings, TranslationState, TranslationStatus,
@@ -10,6 +10,37 @@ use serde_json::{Value, json};
 
 use super::remote::Failure;
 use crate::state::{Store, secrets, secrets::Secret, store};
+
+const SILENCE_LIMIT: Duration = Duration::from_secs(55);
+
+fn reply_text(body: &[u8]) -> Result<String, Failure> {
+    let raw = String::from_utf8_lossy(body);
+    let events: Vec<Value> = raw
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim)
+        .filter(|data| *data != "[DONE]")
+        .filter_map(|data| serde_json::from_str(data).ok())
+        .collect();
+    if let Some(error) = events.iter().find_map(|event| event.get("error")) {
+        return Err(Failure {
+            code: "llm_server_failure".into(),
+            message: error.to_string().chars().take(300).collect(),
+            retryable: true,
+        });
+    }
+    let text = if events.is_empty() {
+        serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(|body| body["choices"][0]["message"]["content"].as_str().map(str::to_owned))
+            .unwrap_or_default()
+    } else {
+        events.iter().filter_map(|event| event["choices"][0]["delta"]["content"].as_str()).collect()
+    };
+    Some(text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| Failure::new("llm_invalid_response", "The reply had no text."))
+}
 
 fn failure_of(status: u16, body: &str) -> Failure {
     let lower = body.to_lowercase();
@@ -92,6 +123,7 @@ pub(crate) async fn complete(
 ) -> Result<String, Failure> {
     let (endpoint, key) = configured(settings, true)?;
     let mut json_mode = json_mode;
+    let mut stream = true;
     let mut attempt = 0_u32;
     loop {
         let mut body = json!({
@@ -101,19 +133,29 @@ pub(crate) async fn complete(
         if json_mode {
             body["response_format"] = json!({"type": "json_object"});
         }
+        if stream {
+            body["stream"] = json!(true);
+        }
         let request = HttpRequest::post(format!("{endpoint}/chat/completions"), body.to_string())
             .header("Content-Type", "application/json");
+        let started = Instant::now();
         let result = match fetch(with_key(request, key.as_deref())).await {
+            Err(message) if started.elapsed() >= SILENCE_LIMIT => {
+                Err(Failure { code: "llm_timeout".into(), message, retryable: true })
+            }
             Err(message) => Err(Failure { code: "llm_network_error".into(), message, retryable: true }),
             Ok(response) if !response.ok() => Err(failure_of(response.status(), &response.text())),
-            Ok(response) => serde_json::from_slice::<Value>(&response.body)
-                .ok()
-                .and_then(|body| body["choices"][0]["message"]["content"].as_str().map(|text| text.trim().to_owned()))
-                .filter(|text| !text.is_empty())
-                .ok_or_else(|| Failure::new("llm_invalid_response", "The reply had no text.")),
+            Ok(response) => reply_text(&response.body),
         };
         match result {
             Ok(text) => return Ok(text),
+            Err(failure)
+                if stream
+                    && failure.code == "llm_request_failed"
+                    && (!json_mode || failure.message.to_lowercase().contains("stream")) =>
+            {
+                stream = false
+            }
             Err(failure) if json_mode && failure.code == "llm_request_failed" => json_mode = false,
             Err(failure) if failure.retryable && attempt < 3 => {
                 timer(Duration::from_secs(1 << attempt)).await;
@@ -293,6 +335,8 @@ pub(crate) fn start_brief(id: &str, request: BriefRequest) {
             stage: if request.highlights.is_empty() { "analyzing" } else { "studying" }.into(),
             output_language: request.output_language.clone(),
             model: request.model.clone(),
+            selected_sections: request.sections.clone(),
+            learning_level: request.learning_level,
             ..AiGenerationState::default()
         };
     });
@@ -310,5 +354,26 @@ pub(crate) fn cancel_brief(id: &str) {
     let store = store();
     if store.cancel_work(&brief_key(id)) {
         store.update_job(id, |job| job.ai_generation_state.status = AiGenerationStatus::Cancelled);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streamed_and_whole_replies_give_the_same_text() {
+        let streamed = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n: keep-alive\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"{\\\"a\\\":\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" 1}\"}}]}\n\ndata: [DONE]\n";
+        assert_eq!(reply_text(streamed.as_bytes()).unwrap(), "{\"a\": 1}");
+        let whole = r#"{"choices":[{"message":{"content":" {\"a\": 1} "}}]}"#;
+        assert_eq!(reply_text(whole.as_bytes()).unwrap(), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn a_stream_that_reports_an_error_or_nothing_fails() {
+        let broken = "data: {\"error\":{\"message\":\"overloaded\"}}\n\n";
+        assert_eq!(reply_text(broken.as_bytes()).unwrap_err().code, "llm_server_failure");
+        assert_eq!(reply_text(b"data: [DONE]\n").unwrap_err().code, "llm_invalid_response");
+        assert_eq!(reply_text(b"").unwrap_err().code, "llm_invalid_response");
     }
 }

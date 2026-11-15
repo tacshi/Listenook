@@ -245,19 +245,25 @@ impl Review {
                 .filter(|token| token.segment_id.as_deref() == Some(segment.id.as_str()))
                 .map(|token| (token.text.clone(), token.start_ms, token.end_ms))
                 .collect();
+            let shared = |spans: Vec<(String, i64, i64)>| {
+                spans.into_iter().map(|(text, start, end)| (text.into(), start, end)).collect()
+            };
             if timed.len() > 1 {
                 return listenook_core::local::spans(&segment.text, &timed)
-                    .map(|spans| spans.into_iter().map(|(text, start, end)| (text.into(), start, end)).collect());
+                    .or_else(|| listenook_core::local::retimed(&segment.text, &timed))
+                    .map(shared);
+            }
+            if words.len() < 2 {
+                return None;
             }
             let joined: String = words.iter().map(|token| token.text.as_str()).collect();
             let pieces: Vec<(String, i64, i64)> =
                 words.iter().map(|token| (token.text.clone(), token.start_ms, token.end_ms)).collect();
-            (words.len() > 1 && joined.trim() == segment.text.trim()).then(|| {
-                listenook_core::local::whole_words(&pieces)
-                    .into_iter()
-                    .map(|(text, start, end)| (text.into(), start, end))
-                    .collect()
-            })
+            if joined.trim() == segment.text.trim() {
+                Some(shared(listenook_core::local::whole_words(&pieces)))
+            } else {
+                listenook_core::local::retimed(&segment.text, &pieces).map(shared)
+            }
         })
     }
 
