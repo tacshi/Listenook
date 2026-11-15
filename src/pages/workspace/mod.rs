@@ -243,7 +243,12 @@ fn opened(id: &str) -> impl IntoElement {
         .paused(move || review.paused.get())
         .rate(move || review.rate.get())
         .audio_session(|| nsh_core::AudioSession::Playback)
-        .progress_interval(50.0)
+        .progress_interval(move || {
+            let exact = lifecycle() != nsh_core::element::Lifecycle::Background
+                || review.repeating.with(Option::is_some)
+                || review.stop_at.with(Option::is_some);
+            if exact { 50.0_f32 } else { 500.0 }
+        })
         .on_load(move |info: &VideoInfo| {
             review.duration_ms.set((info.duration * 1000.0) as i64);
             if start_at > 0 {
