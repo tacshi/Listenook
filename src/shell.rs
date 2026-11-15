@@ -1,4 +1,7 @@
-use listenook_core::{format::clock, l10n::Lang};
+use listenook_core::{
+    format::{clock, track_position},
+    l10n::Lang,
+};
 use nsh_base::{nav_page, nav_stack, theme};
 use nsh_core::{
     desktop::{MenuRole, TitleBarOptions, TitleBarStyle, WindowAttributes},
@@ -859,6 +862,8 @@ fn mini_player() -> impl IntoElement {
     let player = store().podcast;
     let entrance = motion().entering(MotionPreset::FadeInUp);
     let dragging = signal(None::<f64>);
+    let on_track = computed(move || track_position(player.position_ms(), player.duration_ms()));
+    let second = computed(move || player.position_ms() / 1000 * 1000);
     on_key("space", move |_| player.set_paused(!player.paused()));
     view()
         .bind_motion(&entrance)
@@ -900,14 +905,14 @@ fn mini_player() -> impl IntoElement {
                         .text_color(|| theme().muted_foreground),
                 ),
         )
-        .child(time_text(move || dragging.get().map_or(player.position_ms(), |ms| ms as i64)))
+        .child(time_text(move || dragging.get().map_or_else(|| second.get(), |ms| ms as i64)))
         .child(when(platform::compact, || view().size(px(3.0)).rounded_full().bg(|| theme().foreground)))
         .child(when(
             || !platform::compact(),
             move || {
                 slider(
                     "Position",
-                    move || dragging.get().unwrap_or(player.position_ms() as f64),
+                    move || dragging.get().unwrap_or_else(|| on_track.get() as f64),
                     move || player.duration_ms() as f64,
                     move |value| dragging.set(Some(value)),
                     move |value| {

@@ -2,7 +2,7 @@ use std::{path::Path, rc::Rc};
 
 use listenook_core::{
     container,
-    format::clock,
+    format::{clock, track_position},
     subtitles::{self, Cue},
 };
 use nsh_base::theme;
@@ -394,10 +394,12 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         },
     ));
 
+    let on_track = computed(move || track_position(position_ms.get(), duration_ms.get()));
+    let second = computed(move || position_ms.get() / 1000 * 1000);
     let position = move || {
         ui::slider_on_picture(
             "Position",
-            move || dragging.get().unwrap_or(position_ms.get() as f64),
+            move || dragging.get().unwrap_or_else(|| on_track.get() as f64),
             move || duration_ms.get() as f64,
             move |value| dragging.set(Some(value)),
             move |value| {
@@ -422,7 +424,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             move || paused.set(!paused.get_untracked()),
         ))
         .child(stage_button(|| Icon::SkipForward, "Next subtitle", || false, move || step(true)))
-        .child(time(Box::new(move || dragging.get().map_or(position_ms.get(), |ms| ms as i64))))
+        .child(time(Box::new(move || dragging.get().map_or_else(|| second.get(), |ms| ms as i64))))
         .child(when(move || !crate::platform::compact(), position).otherwise(|| view().flex_1()))
         .child(time(Box::new(move || duration_ms.get())))
         .child(stage_button(

@@ -93,6 +93,9 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
     };
     let words = computed(move || if is_current() { index.get().and_then(|index| review.words(index)) } else { None });
     let said = computed(move || {
+        if words.with(Option::is_none) {
+            return None;
+        }
         let position = review.position_ms.get();
         words.with(|words| {
             let words = words.as_ref()?;

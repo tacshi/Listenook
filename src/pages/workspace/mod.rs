@@ -3,7 +3,10 @@ mod practice;
 mod review;
 mod transcript;
 
-use listenook_core::{ContentMode, ExportOptions, Segment, TRANSLATION_LANGUAGES, TranslationStatus, caption, export};
+use listenook_core::{
+    ContentMode, ExportOptions, Segment, TRANSLATION_LANGUAGES, TranslationStatus, caption, export,
+    format::track_position,
+};
 use nsh_base::theme;
 use nsh_core::{desktop::WindowMode, element::desktop::current_window, prelude::*};
 use review::{Practice, Review, Side};
@@ -699,10 +702,12 @@ fn translation_strip(review: Review) -> impl IntoElement {
 fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let active = move || !review.paused.get() || review.waiting.get();
     let variant = move |picture: bool| if picture { Variant::Picture } else { Variant::Ghost };
+    let on_track = computed(move || track_position(review.position_ms.get(), review.duration_ms.get()));
+    let second = computed(move || review.position_ms.get() / 1000 * 1000);
     let position = move |picture: bool| {
         (if picture { ui::slider_on_picture } else { ui::slider })(
             "Position",
-            move || review.scrub.get().unwrap_or(review.position_ms.get()) as f64,
+            move || review.scrub.get().unwrap_or_else(|| on_track.get()) as f64,
             move || review.duration_ms.get() as f64,
             move |value| review.scrub.set(Some(value as i64)),
             move |value| {
@@ -736,9 +741,8 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let on_picture = |time: Text, picture: bool| {
         if picture { time.text_color(|| theme().foreground.dark.opacity(0.8)) } else { time }
     };
-    let at = move |picture: bool| {
-        on_picture(time_text(move || review.scrub.get().unwrap_or(review.position_ms.get())), picture)
-    };
+    let at =
+        move |picture: bool| on_picture(time_text(move || review.scrub.get().unwrap_or_else(|| second.get())), picture);
     let length = move |picture: bool| on_picture(time_text(move || review.duration_ms.get()), picture);
     let repeat = move |picture: bool| {
         ui::toggle_button(
@@ -895,6 +899,9 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
     });
     let lines = computed(move || words.with(|words| words.as_deref().map(caption::lines).unwrap_or_default()));
     let said = computed(move || {
+        if words.with(Option::is_none) {
+            return None;
+        }
         let position = review.position_ms.get();
         words.with(|words| words.as_ref()?.partition_point(|(_, start, _)| *start <= position).checked_sub(1))
     });
