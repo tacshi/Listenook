@@ -21,7 +21,7 @@ pub const STUDY_SYSTEM_PROMPT: &str = "You help a person who bolded words or pas
 
 const STUDY_SHAPE: &str = r#"{"learner_profile":"... or empty string","highlights":[{"segment_id":"segment-id","highlighted":"the highlighted text","intent":"language|content","point":"...","kind":"vocabulary|expression|grammar","term":"...","explanation":"...","usage":"...","examples":["..."],"related":["..."],"pitfalls":"...","source_excerpt":"..."}]}"#;
 
-pub const STUDY_BATCH: usize = 20;
+pub const STUDY_BATCH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BriefRequest {
