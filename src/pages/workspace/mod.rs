@@ -448,6 +448,9 @@ fn video_toggle(review: Review) -> impl IntoElement {
         move || {
             let showing = untracked(on);
             review.video_wanted.set(!showing);
+            review.store.update_settings(|s| {
+                s.extra.insert("reader_video_wanted".into(), (!showing).into());
+            });
             let side = review.side.get_untracked();
             let next = match (showing, side) {
                 (true, Side::Video) => Side::None,

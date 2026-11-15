@@ -1,6 +1,6 @@
 use listenook_core::{
     AiBrief, AiBriefSection, AiGenerationStatus, AiInsightType, AiLanguageNote, AiLanguageNoteKind, AiLearningLevel,
-    TRANSLATION_LANGUAGES,
+    BriefAnchor, TRANSLATION_LANGUAGES,
     brief::BriefRequest,
     export,
     format::{clock, safe_file_name},
@@ -117,12 +117,93 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                 )
                 .into_element();
             }
+            let job_id = review.id();
+            let pane = element_ref();
+            let column = element_ref();
+            let anchor = stored(store.setting(|s| s.brief_anchors.get(&job_id).cloned()));
+            let moving = stored(false);
+            let restore = move || {
+                let Some(held) = anchor.with(|anchor| anchor.clone()).filter(|_| !moving.get()) else {
+                    return;
+                };
+                let target = review.brief_items.with(|items| {
+                    items.iter().find(|(part, _)| *part == held.part).map(|(_, target)| *target)
+                });
+                spawn(async move {
+                    let (top, origin) = (pane.measure(), column.measure());
+                    let at = target.map(|target| target.measure());
+                    let (Some(top), Some(origin)) = (top.await, origin.await) else {
+                        return;
+                    };
+                    let start = match at {
+                        Some(at) => match at.await {
+                            Some(at) => at.page.y.0 - origin.page.y.0,
+                            None => return,
+                        },
+                        None if held.part.is_empty() => 0.0,
+                        None => return,
+                    };
+                    let y = (start + held.offset).max(0.0);
+                    if !moving.get() && (top.page.y.0 - origin.page.y.0 - y).abs() > 0.5 {
+                        pane.scroll_to(Point { x: px(0.0), y: px(y) }, false);
+                    }
+                });
+            };
+            let remember = move || {
+                let items = review.brief_items.with(|items| items.clone());
+                let job_id = job_id.clone();
+                spawn(async move {
+                    let (top, origin) = (pane.measure(), column.measure());
+                    let measures: Vec<_> = items.into_iter().map(|(part, target)| (part, target.measure())).collect();
+                    let (Some(top), Some(origin)) = (top.await, origin.await) else {
+                        return;
+                    };
+                    let scrolled = top.page.y.0 - origin.page.y.0;
+                    let mut found = BriefAnchor { part: String::new(), offset: scrolled };
+                    for (part, at) in measures {
+                        if let Some(at) = at.await {
+                            let start = at.page.y.0 - origin.page.y.0;
+                            if start <= scrolled + 1.0 && scrolled - start < found.offset {
+                                found = BriefAnchor { part, offset: scrolled - start };
+                            }
+                        }
+                    }
+                    if moving.get() {
+                        return;
+                    }
+                    let found = (scrolled > 1.0).then_some(found);
+                    anchor.replace(found.clone());
+                    if store.setting(|s| s.brief_anchors.get(&job_id) == found.as_ref()) {
+                        return;
+                    }
+                    store.update_settings(|settings| match found {
+                        Some(found) => {
+                            settings.brief_anchors.insert(job_id, found);
+                        }
+                        None => {
+                            settings.brief_anchors.remove(&job_id);
+                        }
+                    });
+                });
+            };
             scroll()
                 .flex_1()
+                .element_ref(&pane)
+                .on_layout(move |_: &Bounds<Points>| restore())
+                .on_scroll_drag_start(move |_: &Point<Points>| {
+                    moving.replace(true);
+                })
+                .on_scroll_end(move |_: &Point<Points>| {
+                    if moving.replace(false) {
+                        remember();
+                    }
+                })
                 .child(
                     view()
                         .p_4()
                         .gap_6()
+                        .element_ref(&column)
+                        .on_layout(move |_: &Bounds<Points>| restore())
                         .child(
                             view()
                                 .flex_row()
@@ -243,8 +324,20 @@ fn evidence(review: Review, ids: &[String]) -> impl IntoElement {
     }))
 }
 
+fn part_key(part: &BriefPart) -> String {
+    match part {
+        BriefPart::Overview => "overview".into(),
+        BriefPart::Chapter(id) => format!("chapter:{id}"),
+        BriefPart::Insight(id) => format!("insight:{id}"),
+        BriefPart::Note(id) => format!("note:{id}"),
+    }
+}
+
 fn item(review: Review, part: BriefPart, body: impl IntoElement, ids: &[String]) -> View {
+    let anchor = element_ref();
+    review.brief_items.with(|items| items.push((part_key(&part), anchor)));
     card()
+        .element_ref(&anchor)
         .p_3()
         .gap_2()
         .child(view().flex_row().items_start().gap_2().child(view().flex_1().min_w(px(0.0)).child(body)).child(
@@ -399,6 +492,7 @@ fn language_note(review: Review, note: &AiLanguageNote) -> View {
 }
 
 fn content(review: Review, brief: &AiBrief) -> impl IntoElement {
+    review.brief_items.with(Vec::clear);
     let mut sections: Vec<AnyElement> = Vec::new();
     if !brief.overview.trim().is_empty() {
         sections.push(

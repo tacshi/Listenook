@@ -61,6 +61,7 @@ pub(super) struct Review {
     pub(super) caret: Signal<u32>,
     pub(super) side_width: Signal<f32>,
     pub(super) brief_editing: Signal<Option<BriefPart>>,
+    pub(super) brief_items: Stored<Vec<(String, ElementRef)>>,
     pub(super) selection: Signal<Option<Picked>>,
     pub(super) video_on_top: Signal<bool>,
     pub(super) video_height: Signal<f32>,
@@ -115,6 +116,10 @@ impl Review {
                 }
             })
         });
+        let video_wanted = has_video
+            && store
+                .setting(|s| s.extra.get("reader_video_wanted").and_then(serde_json::Value::as_bool))
+                .unwrap_or(true);
         let query = signal(String::new());
         let searching = signal(false);
         let current = computed(move || {
@@ -157,8 +162,8 @@ impl Review {
             paused: signal(true),
             rate: signal(store.saved_rate("playback_rate")),
             has_video,
-            side: signal(if has_video { Side::Video } else { Side::None }),
-            video_wanted: signal(has_video),
+            side: signal(if video_wanted { Side::Video } else { Side::None }),
+            video_wanted: signal(video_wanted),
             mode: signal(if has_translation { ContentMode::Bilingual } else { ContentMode::Original }),
             searching,
             query,
@@ -169,6 +174,7 @@ impl Review {
             draft: signal(String::new()),
             caret: signal(0),
             brief_editing: signal(None),
+            brief_items: stored(Vec::new()),
             selection: signal(None),
             side_width: signal(
                 store
