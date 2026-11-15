@@ -70,7 +70,7 @@ done
 export BUILD_NAME="${ARGS[0]}"
 export BUILD_NUMBER="${ARGS[1]}"
 
-for tool in asc git nsh python3 unzip plutil security codesign; do
+for tool in asc git nsh python3 unzip plutil security codesign xcodebuild xcrun ditto sw_vers; do
   require_command "${tool}"
 done
 
@@ -183,6 +183,26 @@ resolve_signing() {
   log "Signing as $(printf '%s' "${found}" | cut -f3) with $(basename "${PROFILE}")."
 }
 
+add_build_details() {
+  local plist="$1" sdk sdk_build xcode xcode_build major minor patch
+  sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+  sdk_build="$(xcrun --sdk iphoneos --show-sdk-build-version)"
+  xcode="$(xcodebuild -version | awk '/^Xcode / { print $2 }')"
+  xcode_build="$(xcodebuild -version | awk '/^Build version / { print $3 }')"
+  [[ -n "${sdk}" && -n "${sdk_build}" && -n "${xcode}" && -n "${xcode_build}" ]] ||
+    die "Could not read the Xcode and iOS SDK versions."
+  IFS=. read -r major minor patch <<<"${xcode}"
+  plutil -replace BuildMachineOSBuild -string "$(sw_vers -buildVersion)" "${plist}"
+  plutil -replace DTCompiler -string com.apple.compilers.llvm.clang.1_0 "${plist}"
+  plutil -replace DTPlatformBuild -string "${sdk_build}" "${plist}"
+  plutil -replace DTPlatformName -string iphoneos "${plist}"
+  plutil -replace DTPlatformVersion -string "${sdk}" "${plist}"
+  plutil -replace DTSDKBuild -string "${sdk_build}" "${plist}"
+  plutil -replace DTSDKName -string "iphoneos${sdk}" "${plist}"
+  plutil -replace DTXcode -string "$(printf '%02d%d%d' "${major}" "${minor:-0}" "${patch:-0}")" "${plist}"
+  plutil -replace DTXcodeBuild -string "${xcode_build}" "${plist}"
+}
+
 info_value() {
   plutil -extract "$1" raw -o - "${APP_DIR}/Info.plist" 2>/dev/null || true
 }
@@ -239,7 +259,16 @@ resolve_signing
 log "Building ${APP_NAME} ${VERSION} (${BUILD_NUMBER})..."
 start_log ios-testflight
 nsh_package ios "${PACKAGE}" --sign "${IDENTITY}" --profile "${PROFILE}"
-cp "${PACKAGE}/${APP_NAME}.ipa" "${IPA}"
+STAGED="${WORK_DIR}/stage/Payload/${APP_NAME}.app"
+mkdir -p "$(dirname "${STAGED}")"
+ditto "${PACKAGE}/${APP_NAME}.app" "${STAGED}"
+add_build_details "${STAGED}/Info.plist"
+EXECUTABLE="$(plutil -extract CFBundleExecutable raw -o - "${STAGED}/Info.plist")"
+[[ -f "${PACKAGE}/${EXECUTABLE}.entitlements" ]] || die "nsh left no ${EXECUTABLE}.entitlements in ${PACKAGE}."
+codesign --force --sign "${IDENTITY}" --entitlements "${PACKAGE}/${EXECUTABLE}.entitlements" "${STAGED}" >"${WORK_DIR}/resign.txt" 2>&1 ||
+  die "Signing ${APP_NAME}.app again failed: $(cat "${WORK_DIR}/resign.txt")"
+rm -f "${IPA}"
+ditto -c -k --norsrc --keepParent "${WORK_DIR}/stage/Payload" "${IPA}"
 
 unzip -q "${IPA}" -d "${WORK_DIR}/ipa"
 APPS=("${WORK_DIR}"/ipa/Payload/*.app)
@@ -254,6 +283,10 @@ APP_DIR="${APPS[0]}"
   die "The IPA's build is $(info_value CFBundleVersion), not ${BUILD_NUMBER}."
 [[ "$(info_value ITSAppUsesNonExemptEncryption)" == "false" ]] ||
   die "The IPA must say ITSAppUsesNonExemptEncryption = false (nsh.json ios.infoPlist)."
+[[ "$(info_value UIRequiredDeviceCapabilities.0)" == "arm64" ]] ||
+  die "The IPA must require arm64 in UIRequiredDeviceCapabilities (nsh.json ios.infoPlist)."
+[[ "$(info_value DTPlatformName)" == "iphoneos" && "$(info_value DTSDKName)" == "iphoneos$(xcrun --sdk iphoneos --show-sdk-version)" && -n "$(info_value DTXcode)" ]] ||
+  die "The IPA's Info.plist lacks the Xcode and SDK it was built with (DTPlatformName, DTSDKName, DTXcode)."
 for key in "CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName" "CFBundleIcons~ipad.CFBundlePrimaryIcon.CFBundleIconName"; do
   [[ "$(info_value "${key}")" == "AppIcon" ]] ||
     die "The IPA's Info.plist names no AppIcon at ${key}."
