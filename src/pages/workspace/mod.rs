@@ -165,9 +165,7 @@ fn opened(id: &str) -> impl IntoElement {
     });
     on_key("e", move |_| {
         if let Some(index) = untracked(|| review.target_or_first()) {
-            let translation = review.mode.get_untracked() == ContentMode::Translated
-                && review.segment(index).is_some_and(|segment| segment.has_translation());
-            review.edit(index, translation);
+            review.edit(index);
         }
     });
     on_key("escape", move |_| {
@@ -893,7 +891,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
 }
 
 struct Hold {
-    before: Option<String>,
+    before: Option<review::Span>,
     last: std::time::Instant,
     repeated: bool,
 }

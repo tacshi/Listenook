@@ -24,6 +24,8 @@ pub(super) fn start(review: Review, practice: Practice) {
         (Practice::Mimic, Some(index)) => {
             if review.repeating.get_untracked().is_none() {
                 review.toggle_repeat(index);
+            } else {
+                review.repeat_one(index);
             }
         }
         (Practice::Dictation, Some(index)) => {

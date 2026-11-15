@@ -5,7 +5,10 @@ use std::{
 };
 
 use listenook_core::podcast;
-use nsh_engine::{EngineConfig, Points, Root, Size};
+use nsh_engine::{
+    EngineConfig, Points, Root, Size,
+    geometry::{point, px},
+};
 use nsh_testing::{DialogAnswer, Headless, StubNetwork, StubResponse};
 use serde_json::json;
 
@@ -142,6 +145,107 @@ fn an_edited_sentence_is_saved_to_the_manifest() {
     it.app.wait_for("Welcome to the programme.").unwrap();
     let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
     assert!(saved.contains("Welcome to the programme."));
+}
+
+#[test]
+fn one_edit_changes_the_sentence_and_its_translation() {
+    let mut it = open_sample("edit-both");
+    it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.wait_for("id:translation-editor").unwrap();
+    it.app.clear("id:segment-editor").unwrap();
+    it.app.type_text("id:segment-editor", "Welcome to the programme.").unwrap();
+    it.app.clear("id:translation-editor").unwrap();
+    it.app.type_text("id:translation-editor", "欢迎收听节目。").unwrap();
+    it.app.press("role:button[Save]").unwrap();
+    it.app.wait_for("欢迎收听节目。").unwrap();
+    assert!(it.app.shows("Welcome to the programme."));
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(saved.contains("Welcome to the programme."));
+    assert!(saved.contains("欢迎收听节目。"));
+}
+
+#[test]
+fn a_repeat_stretches_over_several_sentences_and_shrinks_back() {
+    let mut it = open_sample("repeat-range");
+    let rails = |it: &App| it.app.screen().count("id:repeat-rail").unwrap();
+    it.app.press("label:Repeat sentence >> nth=1").unwrap();
+    it.app.wait_for("label:Repeat one more sentence").unwrap();
+    assert_eq!(rails(&it), 1);
+    assert!(!it.app.screen().enabled("label:Repeat one sentence less").unwrap(), "one sentence cannot shrink");
+    it.app.press("label:Repeat one more sentence").unwrap();
+    it.app.press("label:Repeat one more sentence").unwrap();
+    assert_eq!(rails(&it), 3);
+    assert!(it.app.shows("3"));
+    it.app.press("label:Repeat one sentence less").unwrap();
+    assert_eq!(rails(&it), 2);
+    it.app.press("label:Repeat sentence >> nth=2").unwrap();
+    it.app.wait_for_gone("id:repeat-rail", GONE).unwrap();
+}
+
+#[test]
+fn dragging_the_handle_moves_the_end_of_the_repeat_with_the_finger() {
+    let mut it = open_sample("repeat-drag");
+    let rails = |it: &App| it.app.screen().count("id:repeat-rail").unwrap();
+    it.app.press("label:Repeat sentence >> nth=0").unwrap();
+    it.app.wait_for("id:repeat-handle").unwrap();
+    it.app.drag_and_hold("id:repeat-handle", point(px(0.0), px(160.0))).unwrap();
+    let held = rails(&it);
+    assert!(held > 1, "the repeat grows while the finger is still down: {held}");
+    assert_eq!(it.app.screen().count("id:repeat-handle").unwrap(), 1);
+    it.app.drop_held().unwrap();
+    assert_eq!(rails(&it), held, "lifting the finger keeps the repeat");
+    it.app.drag("id:repeat-handle", point(px(0.0), px(-1000.0))).unwrap();
+    assert_eq!(rails(&it), 1, "dragged above its start, the repeat is one sentence again");
+}
+
+fn seed_long_transcript(root: &Path) {
+    let segments: Vec<_> = (0..60)
+        .map(|index| {
+            json!({
+                "id": format!("segment-{}", index + 1), "start_ms": index * 3000, "end_ms": index * 3000 + 2800,
+                "text": format!("Sentence {} says something about learning.", index + 1),
+                "translated_text": format!("第{}句。", index + 1), "speaker": "1", "language": "en",
+            })
+        })
+        .collect();
+    let job = json!({
+        "manifest_version": 15, "id": "sample", "source_path": "/nowhere/Learning languages.m4a",
+        "created_at": "2026-11-10T08:00:00.000Z", "status": "completed",
+        "document": {"segments": segments, "speakers": [{"id": "1", "name": "Host"}], "updated_at": "2026-11-10T08:00:00.000Z"},
+    });
+    std::fs::create_dir_all(root.join("jobs/sample")).unwrap();
+    std::fs::write(manifest(root, "sample"), job.to_string()).unwrap();
+}
+
+#[test]
+fn a_short_drag_after_scrolling_moves_the_end_by_a_sentence_or_two() {
+    let mut it = start("repeat-scrolled", seed_long_transcript, Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Sentence 1 says something about learning.").unwrap();
+    it.app.drag("Sentence 3 says something about learning.", point(px(0.0), px(-700.0))).unwrap();
+    it.app.drag("Sentence 12 says something about learning.", point(px(0.0), px(300.0))).unwrap();
+    it.app.press("label:Repeat sentence >> nth=8").unwrap();
+    it.app.wait_for("id:repeat-handle").unwrap();
+    it.app.drag("id:repeat-handle", point(px(0.0), px(90.0))).unwrap();
+    let rails = it.app.screen().count("id:repeat-rail").unwrap();
+    assert!((2..=3).contains(&rails), "a short drag adds a sentence or two: {rails}");
+}
+
+#[test]
+fn holding_the_handle_near_the_bottom_edge_scrolls_and_keeps_stretching_the_repeat() {
+    let mut it = start("repeat-autoscroll", seed_long_transcript, Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Sentence 1 says something about learning.").unwrap();
+    it.app.press("label:Repeat sentence >> nth=0").unwrap();
+    it.app.wait_for("id:repeat-handle").unwrap();
+    it.app.drag_and_hold("id:repeat-handle", point(px(0.0), px(620.0))).unwrap();
+    it.app.wait(Duration::from_millis(1500)).unwrap();
+    it.app.drop_held().unwrap();
+    let count = it.app.screen().texts().iter().filter_map(|t| t.trim().parse::<usize>().ok()).max().unwrap_or(0);
+    assert!(count > 12, "the list scrolled on and the repeat reached sentences that were below the fold: {count}");
+    assert!(!it.app.shows("Sentence 1 says something about learning."), "the list scrolled");
 }
 
 #[test]

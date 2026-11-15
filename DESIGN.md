@@ -126,6 +126,9 @@ With reduced motion, presses do not scale, entrances land at once
 | Words selected in a sentence | The platform's selection; a Bold toggle fades in among the sentence's own commands, `INSTANT`, tinted while the selected words are bold. Highlighted words turn bold at once (also from the sentence menu and ⌘B) | Instant |
 | Full screen | The transport turns light on the picture; it fades out while playing and back on pointer movement, `BASE` | Instant |
 | Repeat on / off | The repeat button's tint cross-fades, `FAST` | Instant |
+| A repeat stretches or shrinks | A `primary` rail runs down the left of the repeated sentences and changes by a row at once; the last one carries the handle (one less, the count, one more) | Same |
+| The handle is dragged | The rail's end follows the finger sentence by sentence; the handle stays where it was picked up, its fill deepened, and moves to the new last sentence when the finger lifts | Same |
+| The handle is held near the list's top or bottom edge | The list scrolls on, faster the closer the finger is to the edge, and the repeat keeps following the finger; playback stops moving the list meanwhile | Same |
 | A side panel opens or changes | Its toolbar toggle's fill cross-fades, `FAST`; the panel takes its width at once | Instant |
 | Position | No motion: the slider follows playback 10 times a second and the thumb 1:1 while dragged | — |
 | Search opens | The search bar drops in from the header | Appears |
