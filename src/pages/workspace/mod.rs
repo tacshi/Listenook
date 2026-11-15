@@ -321,7 +321,9 @@ fn opened(id: &str) -> impl IntoElement {
                         .bg(move || if review.fullscreen.get() { tokens::stage() } else { theme().muted })
                         .style_with(move |s| match (has_video, side(), review.fullscreen.get()) {
                             (true, Side::Video, _) | (true, _, true) => s.flex_1(),
-                            (true, _, false) if narrow() || typing() => s.h(px(1.0)).opacity(0.0),
+                            (true, _, false) if narrow() || typing() || !review.video_wanted.get() => {
+                                s.h(px(1.0)).opacity(0.0)
+                            }
                             (true, _, false) => s.h(px(review.side_width.get() * 9.0 / 16.0)),
                             (false, ..) => s.h(px(1.0)).opacity(0.0),
                         })
@@ -431,18 +433,43 @@ fn has_translation(review: Review) -> bool {
     })
 }
 
+fn video_toggle(review: Review) -> impl IntoElement {
+    let on = move || match review.side.get() {
+        Side::Video => true,
+        Side::None => false,
+        Side::Practice | Side::Brief => review.video_wanted.get() && !crate::shell::page_stacks(),
+    };
+    view().window_drag(false).child(ui::toggle_button(
+        Variant::Ghost,
+        Icon::Film,
+        tr("Video"),
+        Size::Sm,
+        on,
+        move || {
+            let showing = untracked(on);
+            review.video_wanted.set(!showing);
+            let side = review.side.get_untracked();
+            let next = match (showing, side) {
+                (true, Side::Video) => Side::None,
+                (false, _) if side == Side::None || crate::shell::page_stacks() => Side::Video,
+                _ => return,
+            };
+            if side == Side::Practice {
+                practice::stop(review);
+            }
+            review.side.set(next);
+        },
+    ))
+}
+
 fn side_toggle(review: Review, side: Side, glyph: Icon, name: &'static str) -> impl IntoElement {
     let on = move || review.side.get() == side;
     view().window_drag(false).child(ui::toggle_button(Variant::Ghost, glyph, tr(name), Size::Sm, on, move || {
         let closing = untracked(on);
-        if side == Side::Video {
-            review.video_wanted.set(!closing);
-        }
-        let next = match (closing, side) {
-            (false, _) => side,
-            (true, Side::Video) => Side::None,
-            (true, _) if review.has_video && review.video_wanted.get_untracked() => Side::Video,
-            (true, _) => Side::None,
+        let next = match closing {
+            false => side,
+            true if review.has_video && review.video_wanted.get_untracked() => Side::Video,
+            true => Side::None,
         };
         match next {
             Side::Practice => practice::start(review, Practice::Mimic),
@@ -527,7 +554,7 @@ fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signa
         )))
         .child(side_toggle(review, Side::Practice, Icon::Practice, "Practice"))
         .child(side_toggle(review, Side::Brief, Icon::Sparkles, "AI Brief"))
-        .child(when(move || review.has_video, move || side_toggle(review, Side::Video, Icon::Film, "Video")))
+        .child(when(move || review.has_video, move || video_toggle(review)))
         .child(when(
             move || review.has_video && review.side.get() == Side::Video && !crate::shell::page_stacks(),
             move || {
