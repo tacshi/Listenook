@@ -1,9 +1,15 @@
 use listenook_core::{ContentMode, ExportFormat, export};
 use nsh_core::prelude::*;
 
+use nsh_base::theme;
+
 use crate::{
     state::{l, store, tr},
-    ui::{Tone, checkbox, field, hint, modal, modal_actions, select, text_field, text_field_with, toast},
+    ui::{
+        Icon, Tone, card, checkbox, field, hint, icon, modal, modal_actions, select, text_field, text_field_with,
+        toast,
+        tokens::{self, motion},
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -34,14 +40,89 @@ pub(crate) fn save_text(file_name: String, contents: String) {
         let Some(path) = crate::util::save_target(file_name).await else {
             return;
         };
-        match blocking(move || std::fs::write(path, contents)).await {
-            Ok(Ok(())) => toast(Tone::Success, crate::util::saved_text()),
-            _ => toast(Tone::Error, tr("Couldn’t save the file. Choose another folder and try again.")),
-        }
+        saved(blocking(move || std::fs::write(path, contents)).await);
     });
 }
 
-pub(crate) fn export_dialog(dialog: JobDialog) -> impl IntoElement {
+fn saved<E>(written: Result<std::io::Result<()>, E>) {
+    match written {
+        Ok(Ok(())) => toast(Tone::Success, crate::util::saved_text()),
+        _ => toast(Tone::Error, tr("Couldn’t save the file. Choose another folder and try again.")),
+    }
+}
+
+fn save_files(bundle: String, mut files: Vec<(String, String)>) {
+    if files.len() <= 1 {
+        if let Some((name, contents)) = files.pop() {
+            save_text(name, contents);
+        }
+        return;
+    }
+    if !crate::platform::is_phone() {
+        save_zip(bundle, files);
+        return;
+    }
+    store().run(async move {
+        saved(
+            blocking(move || {
+                files.into_iter().try_for_each(|(name, contents)| {
+                    let path =
+                        crate::platform::export_path(&name).ok_or_else(|| std::io::Error::other("no export folder"))?;
+                    std::fs::write(path, contents)
+                })
+            })
+            .await,
+        );
+    });
+}
+
+fn save_zip(name: String, files: Vec<(String, String)>) {
+    store().run(async move {
+        let Some(path) = crate::util::save_target(name).await else {
+            return;
+        };
+        saved(
+            blocking(move || -> std::io::Result<()> {
+                use std::io::Write;
+                let mut archive = zip::ZipWriter::new(std::fs::File::create(path)?);
+                for (name, contents) in files {
+                    archive
+                        .start_file(name, zip::write::SimpleFileOptions::default())
+                        .map_err(std::io::Error::other)?;
+                    archive.write_all(contents.as_bytes())?;
+                }
+                archive.finish().map_err(std::io::Error::other)?;
+                Ok(())
+            })
+            .await,
+        );
+    });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+struct Parts {
+    transcript: bool,
+    brief: bool,
+    flashcards: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ExportDialog {
+    dialog: JobDialog,
+    parts: Signal<Parts>,
+}
+
+impl ExportDialog {
+    pub(crate) fn new() -> Self {
+        Self { dialog: JobDialog::new(), parts: signal(Parts { transcript: true, ..Parts::default() }) }
+    }
+
+    pub(crate) fn show(&self, id: &str) {
+        self.dialog.show(id);
+    }
+}
+
+fn transcript_options(dialog: JobDialog) -> View {
     let store = store();
     let options = move || store.setting(|s| s.export_options.clone());
     let cues = move || matches!(options().format, ExportFormat::Srt | ExportFormat::WebVtt);
@@ -52,75 +133,219 @@ pub(crate) fn export_dialog(dialog: JobDialog) -> impl IntoElement {
                 .and_then(|job| job.document.as_ref().map(|d| d.segments.iter().any(|s| !s.has_translation())))
                 .unwrap_or(false)
     };
+    view()
+        .gap_4()
+        .child(field(
+            l("Format"),
+            select(
+                "Format",
+                ExportFormat::ALL.iter().map(|f| (f.as_str().into(), f.label().into())).collect(),
+                move || SharedString::from(options().format.as_str()),
+                move |value| store.update_settings(|s| s.export_options.format = ExportFormat::parse(&value)),
+            ),
+        ))
+        .child(
+            field(
+                l("Content"),
+                select(
+                    "Content",
+                    vec![
+                        ("original".into(), tr("Original")),
+                        ("translated".into(), tr("Translated")),
+                        ("bilingual".into(), tr("Bilingual")),
+                    ],
+                    move || SharedString::from(options().content_mode.as_str()),
+                    move |value| store.update_settings(|s| s.export_options.content_mode = ContentMode::parse(&value)),
+                ),
+            )
+            .child(when(untranslated, || {
+                hint(l("Some sentences are not translated; they are exported in the original."))
+            })),
+        )
+        .child(checkbox(
+            l("Speaker labels"),
+            move || options().show_speakers,
+            move |on| store.update_settings(|s| s.export_options.show_speakers = on),
+        ))
+        .child(
+            checkbox(
+                l("Timestamps"),
+                move || options().show_timestamps || cues(),
+                move |on| store.update_settings(|s| s.export_options.show_timestamps = on),
+            )
+            .disabled(cues),
+        )
+        .child(when(cues, || hint(l("Subtitle formats always include timestamps."))))
+}
+
+fn part_card(
+    glyph: Icon,
+    title: &'static str,
+    detail: &'static str,
+    on: impl Fn() -> bool + Copy + 'static,
+    set: impl Fn(bool) + 'static,
+) -> View {
+    card().border_color(move || if on() { theme().primary } else { theme().border }).overflow_hidden().child(
+        nsh_base::checkbox()
+            .checked(on)
+            .on_change(move |next: &bool| set(*next))
+            .accessibility_label(tr(title))
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2p5()
+            .transition_colors()
+            .duration(motion::INSTANT)
+            .hover(|s| s.bg(tokens::hover_wash))
+            .focus_visible(tokens::focus_ring)
+            .indicator_style(|s| {
+                s.size(px(18.0))
+                    .items_center()
+                    .justify_center()
+                    .rounded(tokens::radius_sm)
+                    .border_1()
+                    .border_color(tokens::control_border)
+                    .text_color(|| theme().primary_foreground)
+                    .checked(|s| s.bg(|| theme().primary).border_color(|| theme().primary))
+            })
+            .indicator(when(on, || icon(Icon::Check, 12.0)))
+            .child(
+                view()
+                    .size(px(32.0))
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .rounded(tokens::radius)
+                    .bg(|| theme().muted)
+                    .text_color(|| theme().primary)
+                    .child(icon(glyph, 16.0)),
+            )
+            .child(
+                view()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .gap_0p5()
+                    .child(text(l(title)).text_sm().font_weight(FontWeight::MEDIUM).text_color(|| theme().foreground))
+                    .child(hint(l(detail))),
+            ),
+    )
+}
+
+pub(crate) fn export_dialog(export: ExportDialog) -> impl IntoElement {
+    let store = store();
+    let (dialog, parts) = (export.dialog, export.parts);
+    let brief = move || store.job(&dialog.job.get()).and_then(|job| job.ai_brief.clone());
+    let briefed = move || brief().is_some();
+    let carded = move || brief().is_some_and(|brief| !brief.language_notes.is_empty());
+    let chosen = move || {
+        let picked = parts.get();
+        if !briefed() {
+            return Parts { transcript: true, ..Parts::default() };
+        }
+        Parts { flashcards: picked.flashcards && carded(), ..picked }
+    };
+    let count = move || {
+        let chosen = chosen();
+        [chosen.transcript, chosen.brief, chosen.flashcards].into_iter().filter(|on| *on).count()
+    };
     modal(
         dialog.open,
-        l("Export transcript"),
-        420.0,
+        move || if briefed() { tr("Export") } else { tr("Export transcript") },
+        460.0,
         move || {
-            view()
-                .gap_4()
-                .child(field(
-                    l("Format"),
-                    select(
-                        "Format",
-                        ExportFormat::ALL.iter().map(|f| (f.as_str().into(), f.label().into())).collect(),
-                        move || SharedString::from(options().format.as_str()),
-                        move |value| store.update_settings(|s| s.export_options.format = ExportFormat::parse(&value)),
-                    ),
-                ))
-                .child(
-                    field(
-                        l("Content"),
-                        select(
-                            "Content",
-                            vec![
-                                ("original".into(), tr("Original")),
-                                ("translated".into(), tr("Translated")),
-                                ("bilingual".into(), tr("Bilingual")),
-                            ],
-                            move || SharedString::from(options().content_mode.as_str()),
-                            move |value| {
-                                store.update_settings(|s| s.export_options.content_mode = ContentMode::parse(&value))
+            dynamic(move || {
+                if !briefed() {
+                    return untracked(|| transcript_options(dialog).into_element());
+                }
+                untracked(|| {
+                    view()
+                        .gap_4()
+                        .child(field(
+                            l("Include"),
+                            view()
+                                .gap_2()
+                                .child(
+                                    part_card(
+                                        Icon::Captions,
+                                        "Transcript",
+                                        "Text, Markdown, or subtitles",
+                                        move || chosen().transcript,
+                                        move |on| parts.update(|p| p.transcript = on),
+                                    )
+                                    .child(when(
+                                        move || chosen().transcript,
+                                        move || {
+                                            transcript_options(dialog)
+                                                .p_3()
+                                                .border_t_1()
+                                                .border_color(|| theme().border)
+                                        },
+                                    )),
+                                )
+                                .child(part_card(
+                                    Icon::Sparkles,
+                                    "AI Brief",
+                                    "Markdown, with the times behind each point",
+                                    move || chosen().brief,
+                                    move |on| parts.update(|p| p.brief = on),
+                                ))
+                                .child(when(carded, move || {
+                                    part_card(
+                                        Icon::Practice,
+                                        "Flashcards",
+                                        "CSV, for Anki and other flashcard apps",
+                                        move || chosen().flashcards,
+                                        move |on| parts.update(|p| p.flashcards = on),
+                                    )
+                                })),
+                        ))
+                        .child(when(move || count() == 0, || hint(l("Choose at least one to export."))))
+                        .child(when(
+                            move || count() > 1,
+                            || {
+                                hint(if crate::platform::is_phone() {
+                                    l("Each is saved as its own file in the Listenook folder in Files, under Exports.")
+                                } else {
+                                    l("Saved together in one .zip file.")
+                                })
                             },
-                        ),
-                    )
-                    .child(when(untranslated, || {
-                        hint(l("Some sentences are not translated; they are exported in the original."))
-                    })),
-                )
-                .child(checkbox(
-                    l("Speaker labels"),
-                    move || options().show_speakers,
-                    move |on| store.update_settings(|s| s.export_options.show_speakers = on),
-                ))
-                .child(
-                    checkbox(
-                        l("Timestamps"),
-                        move || options().show_timestamps || cues(),
-                        move |on| store.update_settings(|s| s.export_options.show_timestamps = on),
-                    )
-                    .disabled(cues),
-                )
-                .child(when(cues, || hint(l("Subtitle formats always include timestamps."))))
-                .into_element()
+                        ))
+                        .into_element()
+                })
+            })
+            .into_element()
         },
         move || {
             modal_actions(
                 dialog.open,
                 l("Cancel"),
                 l("Export"),
-                || true,
+                move || count() > 0,
                 move || {
                     let Some(job) = store.job_now(&dialog.id()) else {
                         return;
                     };
-                    let mut options = store.settings().export_options;
-                    options.locale_code = store.lang().code().to_owned();
+                    let chosen = chosen();
+                    let mut files = Vec::new();
+                    if chosen.transcript {
+                        let mut options = store.settings().export_options;
+                        options.locale_code = store.lang().code().to_owned();
+                        files.push((
+                            export::export_file_name(&job, options.format),
+                            export::export_transcript(&job, &options),
+                        ));
+                    }
+                    if let Some(brief) = &job.ai_brief {
+                        if chosen.brief {
+                            files.push((export::brief_file_name(&job), export::export_brief(&job, brief)));
+                        }
+                        if chosen.flashcards {
+                            files.push((export::flashcards_file_name(&job), export::export_flashcards(&job, brief)));
+                        }
+                    }
                     dialog.open.set(false);
-                    save_text(
-                        export::export_file_name(&job, options.format),
-                        export::export_transcript(&job, &options),
-                    );
+                    save_files(export::bundle_file_name(&job), files);
                 },
             )
         },
@@ -292,26 +517,7 @@ pub(crate) fn export_zip(jobs: Vec<std::rc::Rc<listenook_core::Job>>) {
         toast(Tone::Info, tr("There is no transcript to export yet."));
         return;
     }
-    store.run(async move {
-        let Some(path) = crate::util::save_target("Listenook-transcripts.zip".to_owned()).await else {
-            return;
-        };
-        let written = blocking(move || -> std::io::Result<()> {
-            use std::io::Write;
-            let mut archive = zip::ZipWriter::new(std::fs::File::create(path)?);
-            for (name, contents) in files {
-                archive.start_file(name, zip::write::SimpleFileOptions::default()).map_err(std::io::Error::other)?;
-                archive.write_all(contents.as_bytes())?;
-            }
-            archive.finish().map_err(std::io::Error::other)?;
-            Ok(())
-        })
-        .await;
-        match written {
-            Ok(Ok(())) => toast(Tone::Success, tr("Export complete")),
-            _ => toast(Tone::Error, tr("Couldn’t save the file. Choose another folder and try again.")),
-        }
-    });
+    save_zip("Listenook-transcripts.zip".to_owned(), files);
 }
 
 pub(crate) fn subtitle_choice_dialog() -> impl IntoElement {

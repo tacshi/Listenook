@@ -259,6 +259,14 @@ pub fn flashcards_file_name(job: &Job) -> String {
     format!("{} - flashcards.csv", safe_file_name(&job.title(), "transcript"))
 }
 
+pub fn brief_file_name(job: &Job) -> String {
+    format!("{} - brief.md", safe_file_name(&job.title(), "transcript"))
+}
+
+pub fn bundle_file_name(job: &Job) -> String {
+    format!("{}.zip", safe_file_name(&job.title(), "transcript"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

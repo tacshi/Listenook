@@ -11,7 +11,7 @@ use nsh_base::theme;
 use nsh_core::{desktop::WindowMode, element::desktop::current_window, prelude::*};
 use review::{Practice, Review, Side};
 
-use super::dialogs::{JobDialog, export_dialog, rename_dialog};
+use super::dialogs::{ExportDialog, JobDialog, export_dialog, rename_dialog};
 use crate::{
     services::{llm, media, playable},
     shell::{rate_menu, time_text, top_bar},
@@ -56,7 +56,7 @@ fn opened(id: &str) -> impl IntoElement {
             }
         });
     });
-    let (export, rename) = (JobDialog::new(), JobDialog::new());
+    let (export, rename) = (ExportDialog::new(), JobDialog::new());
     let translate = signal(false);
     let brief_dialog = signal(false);
     let has_video = review.has_video;
@@ -497,7 +497,7 @@ fn side_toggle(review: Review, side: Side, glyph: Icon, name: &'static str) -> i
     }))
 }
 
-fn header(review: Review, export: JobDialog, rename: JobDialog, translate: Signal<bool>) -> AnyElement {
+fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Signal<bool>) -> AnyElement {
     let store = review.store;
     let title =
         move || review.job.with(|job| job.as_ref().map(|job| SharedString::from(job.title())).unwrap_or_default());

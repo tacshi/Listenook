@@ -8,7 +8,7 @@ use listenook_core::{
 use nsh_base::theme;
 use nsh_core::{element::Position, prelude::*};
 
-use super::dialogs::{JobDialog, export_dialog, group_dialog, rename_dialog, tags_dialog};
+use super::dialogs::{ExportDialog, JobDialog, export_dialog, group_dialog, rename_dialog, tags_dialog};
 use crate::{
     platform,
     services::{llm, local, podcasts, transcribe},
@@ -25,7 +25,7 @@ use crate::{
 
 #[derive(Clone, Copy)]
 struct Dialogs {
-    export: JobDialog,
+    export: ExportDialog,
     rename: JobDialog,
     group: JobDialog,
     tags: JobDialog,
@@ -34,8 +34,12 @@ struct Dialogs {
 pub(crate) fn library() -> impl IntoElement {
     let store = store();
     let query = signal(String::new());
-    let dialogs =
-        Dialogs { export: JobDialog::new(), rename: JobDialog::new(), group: JobDialog::new(), tags: JobDialog::new() };
+    let dialogs = Dialogs {
+        export: ExportDialog::new(),
+        rename: JobDialog::new(),
+        group: JobDialog::new(),
+        tags: JobDialog::new(),
+    };
     let shown = computed(move || {
         let needle = query.with(|q| q.trim().to_lowercase());
         store
