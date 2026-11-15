@@ -46,6 +46,16 @@ const PRACTICE_HEIGHT: f32 = 340.0;
 fn opened(id: &str) -> impl IntoElement {
     let review = Review::new(id);
     let store = review.store;
+    effect(move || {
+        let open = review.side.get() == Side::Brief;
+        untracked(|| {
+            if store.setting(|s| s.extra.get("reader_brief_open").and_then(serde_json::Value::as_bool)) != Some(open) {
+                store.update_settings(|s| {
+                    s.extra.insert("reader_brief_open".into(), open.into());
+                });
+            }
+        });
+    });
     let (export, rename) = (JobDialog::new(), JobDialog::new());
     let translate = signal(false);
     let brief_dialog = signal(false);
