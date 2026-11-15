@@ -195,3 +195,9 @@ are listed by `scripts/publish.sh --help`. Build Windows first, with
 `scripts\build-windows.ps1 release -Version <version>`, and copy the
 installer, its `.build.json` and the updater's `.zip` into `build/`.
 Licenses of what the packages carry are in [packaging/notices](packaging/notices).
+
+`scripts/publish-testflight.sh <version> <build>` builds the iOS app for the
+App Store and publishes it to its internal TestFlight group, with
+[asc](https://asccli.sh) signed in to App Store Connect; `--help` explains
+what it needs. It builds `main` at the commit `origin` has, or another
+pushed branch with `--allow-branch`.
