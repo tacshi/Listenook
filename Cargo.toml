@@ -27,6 +27,7 @@ symphonia = { version = "0.5", default-features = false, features = ["aac", "ala
 zip = { version = "2", default-features = false, features = ["deflate"] }
 nsh-updater = { version = "0.5.1" }
 uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", default-features = false, features = ["sync"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -217,13 +217,7 @@ fn opened(id: &str) -> impl IntoElement {
     }
     let remember = move |job_id: &str, position: i64, duration: i64| {
         let resume = position > 3000 && (duration <= 0 || position < duration - 3000);
-        store.update_settings(|settings| {
-            if resume {
-                settings.playback_positions_ms.insert(job_id.to_owned(), position);
-            } else {
-                settings.playback_positions_ms.remove(job_id);
-            }
-        });
+        store.remember_position(job_id, resume.then_some(position));
     };
     {
         let (job_id, pulse) = (id.to_owned(), computed(move || review.position_ms.get() / 15_000));

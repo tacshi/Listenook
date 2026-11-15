@@ -445,6 +445,27 @@ pub fn toast_host() -> impl IntoElement {
             manager.with(|m| m.visible(3).map(|(id, data, status)| (*id, data.clone(), status)).collect::<Vec<_>>()),
         )
     };
+    let owner = Owner::current();
+    let ticking = stored(false);
+    let tick = move || {
+        if ticking.replace(true) {
+            return;
+        }
+        drop(owner.run(|| {
+            spawn(async move {
+                loop {
+                    timer(Duration::from_millis(100)).await;
+                    if manager.with(|m| m.advance(now(), state.is_expanded()).changed) {
+                        sync();
+                    }
+                    if manager.with(|m| m.is_empty()) {
+                        ticking.replace(false);
+                        return;
+                    }
+                }
+            })
+        }));
+    };
     effect(move || {
         let waiting = global::<Pending>().with(|pending| pending.waiting.clone());
         if waiting.is_empty() {
@@ -457,12 +478,8 @@ pub fn toast_host() -> impl IntoElement {
                 manager.with(|m| m.push(id, data, ToastOptions::timeout(Some(Duration::from_secs(seconds))), now()));
             }
             sync();
+            tick();
         });
-    });
-    set_interval(Duration::from_millis(100), move || {
-        if manager.with(|m| !m.is_empty() && m.advance(now(), state.is_expanded()).changed) {
-            sync();
-        }
     });
     toast_stack()
         .placement(Anchor::BottomCenter)
