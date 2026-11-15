@@ -43,6 +43,7 @@ fn push(command: Command) {
     if let Ok(mut queue) = QUEUE.lock() {
         queue.push(command);
     }
+    super::wake();
 }
 
 #[cfg(target_os = "macos")]
@@ -318,6 +319,7 @@ extern "C" fn documents_picked(_: Id, _: Sel, _picker: Id, urls: Id) {
         if let Ok(mut picked) = PICKED.lock() {
             picked.extend(paths);
         }
+        super::wake();
     }
 }
 

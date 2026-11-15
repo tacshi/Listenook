@@ -50,6 +50,7 @@ pub(crate) struct Store {
     root: Stored<Option<PathBuf>>,
     jobs: Signal<Vec<Rc<Job>>>,
     settings: Signal<Settings>,
+    positions: Stored<BTreeMap<String, i64>>,
     catalog: Signal<LibraryCatalog>,
     monitor: Signal<MonitorFile>,
     last_scan: Stored<BTreeMap<String, Seen>>,
@@ -123,7 +124,7 @@ impl Store {
         let library_catalog = root.as_deref().map(persist::load_library_catalog).unwrap_or_default();
         let root_listened = root.as_deref().map(persist::load_listening).unwrap_or_default();
         let root_monitor = root.as_deref().map(persist::load_monitor).unwrap_or_default();
-        let (jobs, settings, catalog) = match &root {
+        let (jobs, mut settings, catalog) = match &root {
             Some(root) => (
                 persist::load_jobs(root)
                     .into_iter()
@@ -136,11 +137,13 @@ impl Store {
             ),
             None => (Vec::new(), Settings::default(), Default::default()),
         };
+        let positions = std::mem::take(&mut settings.playback_positions_ms);
         let store = Store {
             owner: Owner::current(),
             root: stored(root),
             jobs: signal(jobs),
             settings: signal(settings),
+            positions: stored(positions),
             catalog: signal(library_catalog),
             monitor: signal(root_monitor),
             last_scan: stored(BTreeMap::new()),
@@ -370,8 +373,27 @@ impl Store {
 
     pub(crate) fn update_settings(&self, change: impl FnOnce(&mut Settings)) {
         self.settings.update(change);
+        self.save_settings();
+    }
+
+    pub(crate) fn playback_position(&self, job_id: &str) -> Option<i64> {
+        self.positions.with(|positions| positions.get(job_id).copied())
+    }
+
+    pub(crate) fn remember_position(&self, job_id: &str, position: Option<i64>) {
+        let changed = self.positions.with(|positions| match position {
+            Some(position) => positions.insert(job_id.to_owned(), position) != Some(position),
+            None => positions.remove(job_id).is_some(),
+        });
+        if changed {
+            self.save_settings();
+        }
+    }
+
+    fn save_settings(&self) {
         if let Some(root) = self.data_root() {
-            let settings = self.settings.get_untracked();
+            let mut settings = self.settings.get_untracked();
+            settings.playback_positions_ms = self.positions.get();
             if let Err(error) = persist::save_settings(&root, &settings) {
                 log::error!("saving settings: {error}");
             }

@@ -31,6 +31,8 @@ const RETRY_FOR: Duration = Duration::from_secs(300);
 const RESUME_WITHIN: Duration = Duration::from_secs(600);
 const ANNOUNCE_WITHIN: Duration = Duration::from_millis(500);
 const PEER_KEPT: Duration = Duration::from_secs(45);
+const LISTEN_WAKES: Duration = Duration::from_secs(5);
+const BIND_WITHIN: Duration = Duration::from_secs(6);
 const MANIFEST_LIMIT: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -135,6 +137,7 @@ struct State {
     incoming: Vec<Incoming>,
     events: Vec<Event>,
     announcer: Option<UdpSocket>,
+    serving_on: Option<u16>,
 }
 
 fn state() -> MutexGuard<'static, State> {
@@ -200,6 +203,8 @@ pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible
     if !changed {
         return;
     }
+    let was_visible = state.visible;
+    let serving_on = state.serving_on.take();
     state.visible = visible;
     state.turn += 1;
     state.announcer = None;
@@ -207,6 +212,9 @@ pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible
     state.session = None;
     let turn = state.turn;
     drop(state);
+    if was_visible {
+        thread::spawn(move || wake(serving_on));
+    }
     if visible {
         thread::spawn(move || serve(turn));
         thread::spawn(move || listen(turn));
@@ -296,12 +304,38 @@ struct Announcement {
     asking: bool,
 }
 
+fn wake(serving_on: Option<u16>) {
+    if let Some(port) = serving_on {
+        let _ = TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), Duration::from_millis(500));
+    }
+    if let Ok(socket) = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)) {
+        let _ = socket.send_to(&[], (Ipv4Addr::LOCALHOST, PORT));
+    }
+}
+
+fn bind_for<T>(turn: u64, what: &str, bind: impl Fn() -> io::Result<T>) -> Option<T> {
+    let started = Instant::now();
+    loop {
+        if state().turn != turn {
+            return None;
+        }
+        match bind() {
+            Ok(bound) => return Some(bound),
+            Err(error) if started.elapsed() > BIND_WITHIN => {
+                log::warn!("sync: {what} is not free: {error}");
+                return None;
+            }
+            Err(_) => thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
 fn listen(turn: u64) {
-    let Ok(socket) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT)) else {
+    let Some(socket) = bind_for(turn, "the discovery port", || UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT))) else {
         return;
     };
     let _ = socket.join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED);
-    let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = socket.set_read_timeout(Some(LISTEN_WAKES));
     let _ = socket.set_write_timeout(Some(ANNOUNCE_WITHIN));
     if let Ok(announcer) = socket.try_clone() {
         state().announcer = Some(announcer);
@@ -442,23 +476,28 @@ fn is_local(address: IpAddr) -> bool {
 }
 
 fn serve(turn: u64) {
-    let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, port())) {
-        Ok(listener) => listener,
-        Err(error) => {
-            log::warn!("sync: port {} is not free: {error}", port());
+    let what = format!("port {}", port());
+    let Some(listener) = bind_for(turn, &what, || TcpListener::bind((Ipv4Addr::UNSPECIFIED, port()))) else {
+        return;
+    };
+    {
+        let mut state = state();
+        if state.turn != turn {
             return;
         }
-    };
-    let _ = listener.set_nonblocking(true);
+        state.serving_on = listener.local_addr().ok().map(|address| address.port());
+    }
     loop {
         if state().turn != turn {
             return;
         }
         match listener.accept() {
             Ok((stream, from)) => {
+                if state().turn != turn {
+                    return;
+                }
                 if is_local(from.ip()) {
                     thread::spawn(move || {
-                        let _ = stream.set_nonblocking(false);
                         if let Err(error) = handle(stream) {
                             log::debug!("sync: {error}");
                         }
@@ -1320,5 +1359,26 @@ mod tests {
         assert!(is_local("fe80::1".parse().unwrap()));
         assert!(!is_local("8.8.8.8".parse().unwrap()));
         assert!(!is_local("2001:4860:4860::8888".parse().unwrap()));
+    }
+
+    #[test]
+    fn turning_sync_off_frees_its_port_at_once() {
+        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        unsafe { std::env::set_var("LISTENOOK_SYNC_PORT", "47941") };
+        let root = library("off");
+        configure(Some(root.clone()), "device-off".into(), "Off".into(), true);
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, 47941));
+        let found = (0..50).find_map(|_| {
+            thread::sleep(Duration::from_millis(50));
+            ask(address)
+        });
+        assert!(found.is_some());
+        configure(None, String::new(), String::new(), false);
+        let freed = (0..20).any(|_| {
+            thread::sleep(Duration::from_millis(50));
+            TcpListener::bind((Ipv4Addr::UNSPECIFIED, 47941)).is_ok()
+        });
+        assert!(freed);
+        let _ = fs::remove_dir_all(root);
     }
 }

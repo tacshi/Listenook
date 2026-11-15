@@ -80,6 +80,13 @@ impl SyncState {
         self.request.get()
     }
 
+    pub(crate) fn busy(&self) -> bool {
+        self.open.get()
+            || self.connecting.get()
+            || self.request.with(Option::is_some)
+            || self.phase.with(|phase| matches!(phase, Phase::Asking(_) | Phase::Running(_) | Phase::Serving(_)))
+    }
+
     pub(crate) fn show(&self) {
         let store = store();
         if !store.sync_decided() {

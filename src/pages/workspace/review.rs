@@ -97,7 +97,7 @@ impl Review {
         let store = store();
         let owned = id.to_owned();
         let job = computed(move || store.job(&owned));
-        let position_ms = signal(store.setting(|s| s.playback_positions_ms.get(id).copied()).unwrap_or(0));
+        let position_ms = signal(store.playback_position(id).unwrap_or(0));
         let has_translation = job.with_untracked(|job| {
             job.as_ref()
                 .and_then(|job| job.document.as_ref())

@@ -63,6 +63,17 @@ pub(crate) fn copy_opened(from: &str, to: &std::path::Path) -> bool {
     std::fs::copy(from, to).is_ok()
 }
 
+static WOKEN: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+pub(crate) fn wake() {
+    WOKEN.notify_one();
+}
+
+pub(crate) async fn woken() {
+    WOKEN.notified().await;
+}
+
 pub(crate) fn take_picked() -> Vec<String> {
     #[cfg(target_os = "ios")]
     return apple::take_picked();

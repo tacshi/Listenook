@@ -43,19 +43,24 @@ pub(crate) fn shell() -> impl IntoElement {
     attributes.title_bar = Some(bar);
     current_window().set(attributes);
 
-    let ticks = std::cell::Cell::new(0_u32);
-    set_interval(std::time::Duration::from_millis(100), move || {
-        media::pump();
-        ticks.set(ticks.get().wrapping_add(1));
-        if ticks.get().is_multiple_of(5) {
-            crate::services::keep_keys();
-            crate::services::keep_scroll_on_status_bar_taps();
-        }
-        let picked = crate::services::take_picked();
-        if !picked.is_empty() {
-            util::import_picked(picked);
+    spawn(async move {
+        loop {
+            crate::services::woken().await;
+            media::pump();
+            let picked = crate::services::take_picked();
+            if !picked.is_empty() {
+                util::import_picked(picked);
+            }
         }
     });
+    if cfg!(target_os = "ios") {
+        set_interval(std::time::Duration::from_millis(500), move || {
+            if store.focused() {
+                crate::services::keep_keys();
+                crate::services::keep_scroll_on_status_bar_taps();
+            }
+        });
+    }
     let in_tray = move || platform::has_tray() && store.tray_enabled();
     if std::env::args().any(|argument| argument == "--background") && untracked(in_tray) {
         current_window().hide();
@@ -173,7 +178,16 @@ pub(crate) fn shell() -> impl IntoElement {
     });
 
     set_interval(std::time::Duration::from_secs(5), move || store.scan_watched_folder());
-    set_interval(std::time::Duration::from_millis(250), move || store.sync.tick());
+    let owner = Owner::current();
+    let ticker = stored(None::<Spawned<()>>);
+    let busy = computed(move || store.sync.busy());
+    effect(move || {
+        let period = std::time::Duration::from_millis(if busy.get() { 250 } else { 1000 });
+        let next = untracked(|| owner.run(|| set_interval(period, move || store.sync.tick())));
+        if let Some(previous) = ticker.replace(Some(next)) {
+            previous.cancel();
+        }
+    });
     if is_desktop() {
         effect(move || {
             store.lang();
