@@ -14,7 +14,9 @@ use std::{
 
 use listenook_core::{
     Job, LibraryCatalog,
-    sync::{Device, Entry, Index, PROTOCOL, Transfer, is_sync_name, media_extension, media_file_name, plan_with},
+    sync::{
+        Device, Entry, Index, PROTOCOL, Podcasts, Transfer, is_sync_name, media_extension, media_file_name, plan_with,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +48,7 @@ pub(crate) struct Peer {
 pub(crate) enum Incoming {
     Removed(listenook_core::sync::Removed),
     Catalog(LibraryCatalog),
+    Podcasts(Box<Podcasts>),
     Job(Box<Job>),
     Media { id: String, path: PathBuf },
     Name { id: String, name: String },
@@ -630,6 +633,7 @@ struct Hello {
     names: HashMap<String, String>,
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     removed: listenook_core::sync::Removed,
+    podcasts: Podcasts,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -830,6 +834,7 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello) -> io::Re
 fn open_session(state: &mut State, hello: &Hello, token: &str, busy: HashSet<String>, (received, sent): (u32, u32)) {
     state.incoming.push(Incoming::Removed(hello.removed.clone()));
     state.incoming.push(Incoming::Catalog(hello.catalog.clone()));
+    state.incoming.push(Incoming::Podcasts(Box::new(hello.podcasts.clone())));
     state.incoming.extend(hello.names.iter().map(|(id, name)| Incoming::Name { id: id.clone(), name: name.clone() }));
     state.resumable = None;
     state.session = Some(Session {
@@ -905,7 +910,12 @@ fn index_of(root: &Path, busy: &HashSet<String>) -> Index {
             Entry { busy: busy.contains(&job.id), ..Entry::of(job, size) }
         })
         .collect();
-    Index { entries, catalog: persist::load_library_catalog(root), removed: persist::load_removed(root) }
+    Index {
+        entries,
+        catalog: persist::load_library_catalog(root),
+        removed: persist::load_removed(root),
+        podcasts: Podcasts::of(&persist::load_catalog(root), &persist::load_listening(root)),
+    }
 }
 
 fn copy(from: &mut impl Read, to: &mut impl Write, length: u64, mut alive: impl FnMut(u64) -> bool) -> io::Result<()> {
@@ -1050,6 +1060,7 @@ fn exchange(
         resume,
         names: names(&local.entries).collect(),
         removed: local.removed.clone(),
+        podcasts: local.podcasts.clone(),
     };
     let welcome: Welcome = agent(ANSWER_WITHIN + Duration::from_secs(10))
         .post(&format!("{base}/sync"))
@@ -1072,6 +1083,7 @@ fn exchange(
         let mut state = state();
         state.incoming.push(Incoming::Removed(welcome.index.removed.clone()));
         state.incoming.push(Incoming::Catalog(welcome.index.catalog.clone()));
+        state.incoming.push(Incoming::Podcasts(Box::new(welcome.index.podcasts.clone())));
         state.incoming.extend(names(&welcome.index.entries).map(|(id, name)| Incoming::Name { id, name }));
     }
 
@@ -1273,6 +1285,22 @@ mod tests {
         let catalog =
             LibraryCatalog { tags: vec![Named { id: "t1".into(), name: "todo".into() }], ..Default::default() };
         persist::save_library_catalog(&there, &catalog).unwrap();
+        let shows = listenook_core::podcast::Catalog {
+            followed: vec![listenook_core::podcast::Followed {
+                feed_url: "https://example.com/there.xml".into(),
+                followed_at: "2026-01-01T00:00:00.000Z".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        persist::save_catalog(&there, &shows).unwrap();
+        let heard = listenook_core::podcast::ListenProgress {
+            episode_id: "heard-here".into(),
+            position_ms: 42_000,
+            updated_at: Some("2026-01-01T00:00:00.000Z".into()),
+            ..Default::default()
+        };
+        persist::save_listening(&here, &[heard]).unwrap();
 
         configure(Some(there.clone()), "device-there".into(), "There".into(), true);
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, 47931));
@@ -1327,6 +1355,14 @@ mod tests {
         assert_eq!(fs::read(there.join("media/sync-both.mp3")).unwrap(), b"local media");
         assert!(incoming.iter().any(|incoming| matches!(incoming, Incoming::Media { id, .. } if id == "both")));
         assert!(incoming.iter().any(|incoming| matches!(incoming, Incoming::Catalog(c) if c.tags.len() == 1)));
+        let shows_arrive = incoming.iter().any(|incoming| {
+            matches!(incoming, Incoming::Podcasts(p) if p.followed.iter().any(|f| f.feed_url.ends_with("there.xml")))
+        });
+        assert!(shows_arrive, "the shows followed there come here");
+        let places_go = incoming.iter().any(|incoming| {
+            matches!(incoming, Incoming::Podcasts(p) if p.listened.iter().any(|e| e.episode_id == "heard-here"))
+        });
+        assert!(places_go, "where an episode was left here goes there");
         assert!(!titles.iter().any(|title| title.contains("gone-")), "{titles:?}");
         assert!(!here.join("media/sync-gone-here.mp3").exists() && !there.join("media/sync-gone-there.mp3").exists());
         for id in ["gone-here", "gone-there"] {

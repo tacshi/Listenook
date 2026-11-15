@@ -20,6 +20,7 @@ use super::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub(crate) enum Place {
     #[default]
+    Home,
     Library,
     Podcasts,
 }
@@ -51,16 +52,19 @@ pub(crate) struct Store {
     jobs: Signal<Vec<Rc<Job>>>,
     settings: Signal<Settings>,
     positions: Stored<BTreeMap<String, i64>>,
+    played: Signal<BTreeMap<String, String>>,
     catalog: Signal<LibraryCatalog>,
     monitor: Signal<MonitorFile>,
     last_scan: Stored<BTreeMap<String, Seen>>,
     place: Signal<Place>,
     filter: Signal<Filter>,
     open_job: Signal<Option<String>>,
+    play_on_open: Stored<Option<String>>,
     open_video: Signal<Option<String>>,
     players: Signal<usize>,
     video_only: Signal<bool>,
     settings_open: Signal<bool>,
+    home_search: Signal<bool>,
     update_check: Signal<bool>,
     immersive: Signal<bool>,
     sidebar_hidden: Signal<bool>,
@@ -138,18 +142,21 @@ impl Store {
             None => (Vec::new(), Settings::default(), Default::default()),
         };
         let positions = std::mem::take(&mut settings.playback_positions_ms);
+        let played = std::mem::take(&mut settings.playback_played_at);
         let store = Store {
             owner: Owner::current(),
             root: stored(root),
             jobs: signal(jobs),
             settings: signal(settings),
             positions: stored(positions),
+            played: signal(played),
             catalog: signal(library_catalog),
             monitor: signal(root_monitor),
             last_scan: stored(BTreeMap::new()),
             place: signal(Place::default()),
             filter: signal(Filter::default()),
             settings_open: signal(false),
+            home_search: signal(false),
             update_check: signal(false),
             immersive: signal(false),
             sidebar_hidden: signal(false),
@@ -157,6 +164,7 @@ impl Store {
             drawer: signal(false),
             subtitle_choices: signal(Vec::new()),
             open_job: signal(None),
+            play_on_open: stored(None),
             open_video: signal(None),
             players: signal(0),
             video_only: signal(false),
@@ -224,6 +232,7 @@ impl Store {
         batch(|| {
             self.open_job.set(None);
             self.open_video.set(None);
+            self.home_search.set(false);
             self.place.set(place);
         });
     }
@@ -250,6 +259,15 @@ impl Store {
             self.open_video.set(None);
             self.open_job.set(Some(id.to_owned()));
         });
+    }
+
+    pub(crate) fn resume(&self, id: &str) {
+        self.play_on_open.with(|wanted| *wanted = Some(id.to_owned()));
+        self.open_transcript(id);
+    }
+
+    pub(crate) fn take_play_on_open(&self, id: &str) -> bool {
+        self.play_on_open.with(|wanted| wanted.take_if(|wanted| wanted == id).is_some())
     }
 
     pub(crate) fn open_video_path(&self) -> Option<String> {
@@ -350,6 +368,10 @@ impl Store {
         self.immersive.set(on);
     }
 
+    pub(crate) fn home_search(&self) -> Signal<bool> {
+        self.home_search
+    }
+
     pub(crate) fn settings_open(&self) -> Signal<bool> {
         self.settings_open
     }
@@ -386,14 +408,30 @@ impl Store {
             None => positions.remove(job_id).is_some(),
         });
         if changed {
+            self.played.update(|played| match position {
+                Some(_) => drop(played.insert(job_id.to_owned(), listenook_core::now_iso())),
+                None => drop(played.remove(job_id)),
+            });
             self.save_settings();
         }
+    }
+
+    pub(crate) fn played(&self) -> Vec<(String, String, i64)> {
+        self.played.with(|played| {
+            self.positions.with(|positions| {
+                positions
+                    .iter()
+                    .map(|(id, position)| (id.clone(), played.get(id).cloned().unwrap_or_default(), *position))
+                    .collect()
+            })
+        })
     }
 
     fn save_settings(&self) {
         if let Some(root) = self.data_root() {
             let mut settings = self.settings.get_untracked();
             settings.playback_positions_ms = self.positions.get();
+            settings.playback_played_at = self.played.get_untracked();
             if let Err(error) = persist::save_settings(&root, &settings) {
                 log::error!("saving settings: {error}");
             }

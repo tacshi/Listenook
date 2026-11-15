@@ -48,6 +48,9 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
         ..EngineConfig::new(Root::of::<nsh_app_listenook::App>())
     })
     .unwrap();
+    let mut app = app;
+    app.wait_for("Library").unwrap();
+    app.press("Library").unwrap();
     App { app, root, _turn: turn }
 }
 
@@ -95,6 +98,32 @@ fn open_sample(name: &str) -> App {
     it.app.press("Learning languages").unwrap();
     it.app.wait_for("Welcome back to the show.").unwrap();
     it
+}
+
+#[test]
+fn home_resumes_what_was_played_last_and_lists_what_was_added() {
+    let mut it = start(
+        "home",
+        |root| {
+            seed_transcript(root);
+            let settings = json!({
+                "playback_positions_ms": {"sample": 6000},
+                "playback_played_at": {"sample": "2026-11-15T10:00:00.000Z"},
+            });
+            std::fs::write(root.join("settings.json"), settings.to_string()).unwrap();
+        },
+        Vec::new(),
+    );
+    it.app.press("role:button[Home]").unwrap();
+    it.app.wait_for("Continue").unwrap();
+    assert!(it.app.shows("Recently added"));
+    it.app.press("label:Search").unwrap();
+    it.app.type_text("text:Search your library", "nothing like this").unwrap();
+    it.app.wait_for("No recordings match your search.").unwrap();
+    it.app.press("role:button[Cancel]").unwrap();
+    it.app.wait_for("Recently added").unwrap();
+    it.app.press("label:Resume Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
 }
 
 #[test]
@@ -671,8 +700,8 @@ fn a_recording_is_filed_under_a_tag_and_found_from_the_sidebar() {
     it.app.press("role:button[shadowing 1]").unwrap();
     it.app.wait_for_gone("Budget review", GONE).unwrap();
     assert!(it.app.shows("Learning languages"));
-    it.app.press("role:button[In progress 1]").unwrap();
-    it.app.wait_for("Budget review").unwrap();
+    it.app.press("role:button[Home]").unwrap();
+    it.app.wait_for("1 waiting to be transcribed").unwrap();
     let saved = std::fs::read_to_string(it.root.join("library_catalog.json")).unwrap();
     assert!(saved.contains("shadowing"));
 }
@@ -693,7 +722,7 @@ fn two_sentences_are_merged_from_the_editor() {
 fn another_devices_sync_is_accepted_and_its_recording_arrives() {
     let mut it = start("sync", on_port(47941), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
-    it.app.press("label:Sync with another device…").unwrap();
+    it.app.press("Sync").unwrap();
     it.app.wait_for("Nearby devices").unwrap();
 
     let other = std::thread::spawn(|| -> Result<serde_json::Value, String> {
@@ -701,6 +730,10 @@ fn another_devices_sync_is_accepted_and_its_recording_arrives() {
         let hello = json!({
             "device": {"app": "listenook", "protocol": 1, "id": "other", "name": "Studio Mac", "platform": "macos", "port": 47941},
             "catalog": {"version": 1, "groups": [], "tags": [{"id": "t9", "name": "shared"}]},
+            "podcasts": {
+                "followed": [{"feed_url": "https://example.com/studio.xml", "title": "Studio Show", "followed_at": "2026-11-12T08:00:00.000Z"}],
+                "listened": [{"episode_id": "studio-1", "position_ms": 42000, "duration_ms": 600000, "updated_at": "2026-11-12T08:30:00.000Z"}],
+            },
         });
         let mut welcome = None;
         for _ in 0..50 {
@@ -744,13 +777,18 @@ fn another_devices_sync_is_accepted_and_its_recording_arrives() {
     assert!(arrived.contains("2026-11-12T09:00:00.000Z"), "its time of change stays the other device's");
     let catalog = std::fs::read_to_string(it.root.join("library_catalog.json")).unwrap();
     assert!(catalog.contains("shared"), "its tag came with it");
+    let played = std::fs::read_to_string(it.root.join("podcast_playback.json")).unwrap();
+    assert!(played.contains("studio-1"), "where it left an episode came with it");
+    it.app.press("role:button[Done]").unwrap();
+    it.app.press("role:button[Podcasts]").unwrap();
+    it.app.wait_for("Studio Show").unwrap();
 }
 
 #[test]
 fn a_recording_removed_on_the_other_device_is_removed_here() {
     let mut it = start("sync-removed", on_port(47943), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
-    it.app.press("label:Sync with another device…").unwrap();
+    it.app.press("Sync").unwrap();
     it.app.wait_for("Nearby devices").unwrap();
     let old = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
 
@@ -799,7 +837,7 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
     use std::io::Write;
     let mut it = start("sync-served", on_port(47942), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
-    it.app.press("label:Sync with another device…").unwrap();
+    it.app.press("Sync").unwrap();
     it.app.wait_for("Nearby devices").unwrap();
 
     let base = "http://127.0.0.1:47942/listenook";
@@ -839,7 +877,7 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
     it.app.press("role:button[Close]").unwrap();
     it.app.wait_for_gone("Syncing with Studio Mac…", GONE).unwrap();
     it.app.wait_for("Sent from the studio").unwrap();
-    it.app.press("label:Sync with another device…").unwrap();
+    it.app.press("Sync").unwrap();
     it.app.wait_for("Syncing with Studio Mac…").unwrap();
 
     let mut broken = std::net::TcpStream::connect("127.0.0.1:47942").unwrap();
@@ -961,7 +999,7 @@ fn a_lost_connection_is_taken_up_again_where_it_broke_off() {
         asked
     });
 
-    it.app.press("label:Sync with another device…").unwrap();
+    it.app.press("Sync").unwrap();
     it.app.wait_for("Nearby devices").unwrap();
     it.app.type_text("text:IP address, such as 192.168.1.20", &format!("127.0.0.1:{port}")).unwrap();
     it.app.press("role:button[Connect]").unwrap();

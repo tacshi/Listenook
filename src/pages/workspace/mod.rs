@@ -76,6 +76,7 @@ fn opened(id: &str) -> impl IntoElement {
         });
     }
     let start_at = review.position_ms.get_untracked();
+    let plays_on_load = store.take_play_on_open(id);
     let restore = move || {
         if review.fullscreen.get_untracked() {
             batch(|| {
@@ -251,6 +252,9 @@ fn opened(id: &str) -> impl IntoElement {
             review.duration_ms.set((info.duration * 1000.0) as i64);
             if start_at > 0 {
                 review.player.seek(start_at as f64 / 1000.0);
+            }
+            if plays_on_load {
+                review.paused.set(false);
             }
         })
         .on_progress(move |progress: &VideoProgress| {

@@ -790,6 +790,8 @@ pub struct Settings {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub playback_positions_ms: BTreeMap<String, i64>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub playback_played_at: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub brief_anchors: BTreeMap<String, BriefAnchor>,
     #[serde(default = "truthy")]
     pub auto_align_transcripts: bool,
@@ -814,6 +816,7 @@ impl Default for Settings {
             soniox_translation: SonioxTranslationOptions::default(),
             default_transcription_provider: TranscriptionProvider::Soniox,
             playback_positions_ms: BTreeMap::new(),
+            playback_played_at: BTreeMap::new(),
             brief_anchors: BTreeMap::new(),
             auto_align_transcripts: true,
             extra: Map::new(),

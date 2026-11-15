@@ -85,13 +85,21 @@ pub struct Catalog {
     pub version: u32,
     pub followed: Vec<Followed>,
     pub feeds: Vec<Feed>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub unfollowed: std::collections::BTreeMap<String, String>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for Catalog {
     fn default() -> Self {
-        Self { version: 1, followed: Vec::new(), feeds: Vec::new(), extra: serde_json::Map::new() }
+        Self {
+            version: 1,
+            followed: Vec::new(),
+            feeds: Vec::new(),
+            unfollowed: std::collections::BTreeMap::new(),
+            extra: serde_json::Map::new(),
+        }
     }
 }
 

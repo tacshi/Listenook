@@ -93,7 +93,7 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
     view()
         .gap_4()
         .child(hint(l(
-            "Both Libraries end up with every recording, transcript, group and tag. Where both have a recording, the one edited last is kept. Nothing is deleted.",
+            "Both devices end up with every recording, transcript, group and tag, and with the podcasts you follow and where you left each episode. Where both have a recording, the one edited last is kept. Nothing is deleted.",
         )))
         .child(
             view()
@@ -335,7 +335,7 @@ pub(crate) fn sync_request_dialog() -> impl IntoElement {
                         .text_color(|| theme().foreground),
                 )
                 .child(hint(l(
-                    "Both Libraries end up with every recording, transcript, group and tag. Where both have a recording, the one edited last is kept. Nothing is deleted.",
+                    "Both devices end up with every recording, transcript, group and tag, and with the podcasts you follow and where you left each episode. Where both have a recording, the one edited last is kept. Nothing is deleted.",
                 )))
                 .into_element()
         },

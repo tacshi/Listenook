@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::{Job, LibraryCatalog, Named};
+use crate::{
+    models::{Job, LibraryCatalog, Named},
+    podcast::{Catalog, Feed, Followed, ListenProgress},
+};
 
 pub const PROTOCOL: u32 = 1;
 
@@ -57,6 +60,90 @@ pub struct Index {
     pub catalog: LibraryCatalog,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub removed: Removed,
+    pub podcasts: Podcasts,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Podcasts {
+    pub followed: Vec<Followed>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub unfollowed: Removed,
+    pub listened: Vec<ListenProgress>,
+    pub played: Vec<Feed>,
+}
+
+pub const LISTENED_KEPT: usize = 200;
+
+impl Podcasts {
+    pub fn of(catalog: &Catalog, listened: &[ListenProgress]) -> Podcasts {
+        let listened: Vec<ListenProgress> = listened.iter().take(LISTENED_KEPT).cloned().collect();
+        let played = catalog
+            .feeds
+            .iter()
+            .filter_map(|feed| {
+                let episodes: Vec<_> = feed
+                    .episodes
+                    .iter()
+                    .filter(|episode| listened.iter().any(|entry| entry.episode_id == episode.id))
+                    .cloned()
+                    .collect();
+                (!episodes.is_empty()).then(|| Feed { episodes, ..feed.clone() })
+            })
+            .collect();
+        Podcasts { followed: catalog.followed.clone(), unfollowed: catalog.unfollowed.clone(), listened, played }
+    }
+}
+
+fn later(a: &str, b: &str) -> bool {
+    millis(a) > millis(b)
+}
+
+pub fn merge_podcasts(catalog: &mut Catalog, listened: &mut Vec<ListenProgress>, remote: &Podcasts) -> bool {
+    let before = (catalog.clone(), listened.clone());
+    for (url, at) in &remote.unfollowed {
+        if catalog.unfollowed.get(url).is_none_or(|mine| later(at, mine)) {
+            catalog.unfollowed.insert(url.clone(), at.clone());
+        }
+    }
+    for other in &remote.followed {
+        match catalog.followed.iter_mut().find(|mine| mine.feed_url == other.feed_url) {
+            Some(mine) if later(&other.followed_at, &mine.followed_at) => *mine = other.clone(),
+            Some(_) => {}
+            None => catalog.followed.push(other.clone()),
+        }
+    }
+    let unfollowed = catalog.unfollowed.clone();
+    catalog
+        .followed
+        .retain(|followed| unfollowed.get(&followed.feed_url).is_none_or(|at| later(&followed.followed_at, at)));
+    catalog.followed.sort_by_key(|followed| std::cmp::Reverse(millis(&followed.followed_at)));
+
+    let at = |entry: &ListenProgress| entry.updated_at.as_deref().map_or(i64::MIN, millis);
+    for other in &remote.listened {
+        match listened.iter_mut().find(|mine| mine.episode_id == other.episode_id) {
+            Some(mine) if at(other) > at(mine) => *mine = other.clone(),
+            Some(_) => {}
+            None => listened.push(other.clone()),
+        }
+    }
+    listened.sort_by_key(|entry| std::cmp::Reverse(at(entry)));
+    listened.truncate(LISTENED_KEPT);
+
+    for feed in &remote.played {
+        match catalog.feeds.iter_mut().find(|mine| mine.feed_url == feed.feed_url) {
+            Some(mine) => {
+                for episode in &feed.episodes {
+                    if !mine.episodes.iter().any(|known| known.id == episode.id) {
+                        mine.episodes.push(episode.clone());
+                    }
+                }
+                mine.episodes.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+            }
+            None => catalog.feeds.push(Feed { fetched_at: None, ..feed.clone() }),
+        }
+    }
+    (catalog.clone(), listened.clone()) != before
 }
 
 pub type Removed = BTreeMap<String, String>;
@@ -302,6 +389,62 @@ mod tests {
         let mut job = Job { tag_ids: vec!["t8".into(), "t7".into(), "t1".into()], ..Job::default() };
         rehome(&mut job, &map);
         assert_eq!(job.tag_ids, ["t1", "t8"]);
+    }
+
+    fn followed(url: &str, at: &str) -> Followed {
+        Followed { feed_url: url.into(), title: url.into(), followed_at: at.into(), ..Followed::default() }
+    }
+
+    fn heard(id: &str, position_ms: i64, at: &str) -> ListenProgress {
+        ListenProgress {
+            episode_id: id.into(),
+            position_ms,
+            duration_ms: 600_000,
+            updated_at: Some(at.into()),
+            ..ListenProgress::default()
+        }
+    }
+
+    #[test]
+    fn follows_merge_and_a_later_unfollow_wins() {
+        let mut catalog = Catalog {
+            followed: vec![followed("a", EARLY), followed("kept", EARLY)],
+            unfollowed: [("b".to_owned(), LATE.to_owned())].into(),
+            ..Catalog::default()
+        };
+        let remote = Podcasts {
+            followed: vec![followed("b", EARLY), followed("c", EARLY), followed("kept", EARLY)],
+            unfollowed: [("a".to_owned(), LATE.to_owned())].into(),
+            ..Podcasts::default()
+        };
+        let mut listened = Vec::new();
+        assert!(merge_podcasts(&mut catalog, &mut listened, &remote));
+        let urls: Vec<&str> = catalog.followed.iter().map(|f| f.feed_url.as_str()).collect();
+        assert!(urls.contains(&"c") && urls.contains(&"kept"), "{urls:?}");
+        assert!(!urls.contains(&"a") && !urls.contains(&"b"), "{urls:?}");
+        let refollowed = Podcasts { followed: vec![followed("b", "2026-03-01T00:00:00.000Z")], ..Podcasts::default() };
+        merge_podcasts(&mut catalog, &mut listened, &refollowed);
+        assert!(catalog.followed.iter().any(|f| f.feed_url == "b"), "following again after the unfollow counts");
+        assert!(!merge_podcasts(&mut catalog, &mut listened, &refollowed), "a second merge changes nothing");
+    }
+
+    #[test]
+    fn the_later_place_in_an_episode_wins_and_its_episode_comes_along() {
+        let episode = |id: &str| crate::podcast::Episode { id: id.into(), feed_url: "f".into(), ..Default::default() };
+        let mut catalog = Catalog::default();
+        let mut listened = vec![heard("e1", 60_000, LATE), heard("e2", 10_000, EARLY)];
+        let remote = Podcasts {
+            listened: vec![heard("e1", 5_000, EARLY), heard("e2", 90_000, LATE), heard("e3", 30_000, LATE)],
+            played: vec![Feed { feed_url: "f".into(), episodes: vec![episode("e3")], ..Feed::default() }],
+            ..Podcasts::default()
+        };
+        assert!(merge_podcasts(&mut catalog, &mut listened, &remote));
+        let place = |id: &str| listened.iter().find(|e| e.episode_id == id).map(|e| e.position_ms);
+        assert_eq!((place("e1"), place("e2"), place("e3")), (Some(60_000), Some(90_000), Some(30_000)));
+        assert_eq!(catalog.feeds[0].episodes[0].id, "e3");
+        let sent = Podcasts::of(&catalog, &listened);
+        assert_eq!(sent.played.len(), 1);
+        assert_eq!(sent.listened.len(), 3);
     }
 
     #[test]

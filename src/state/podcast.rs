@@ -93,6 +93,11 @@ impl PodcastState {
         self.catalog.update(|catalog| {
             catalog.followed.retain(|f| f.feed_url != feed.feed_url);
             if followed {
+                catalog.unfollowed.remove(&feed.feed_url);
+            } else {
+                catalog.unfollowed.insert(feed.feed_url.clone(), now_iso());
+            }
+            if followed {
                 catalog.followed.insert(
                     0,
                     Followed {
@@ -109,6 +114,44 @@ impl PodcastState {
             }
         });
         self.save();
+    }
+
+    pub(crate) fn adopt(&self, remote: &listenook_core::sync::Podcasts) {
+        let (mut catalog, mut listened) = (self.catalog.get_untracked(), self.listened.get_untracked());
+        if !listenook_core::sync::merge_podcasts(&mut catalog, &mut listened, remote) {
+            return;
+        }
+        let missing: Vec<String> = catalog
+            .followed
+            .iter()
+            .filter(|followed| {
+                !catalog.feeds.iter().any(|feed| feed.feed_url == followed.feed_url && feed.fetched_at.is_some())
+            })
+            .map(|followed| followed.feed_url.clone())
+            .collect();
+        batch(|| {
+            self.catalog.set(catalog);
+            self.listened.set(listened);
+        });
+        self.save();
+        if let Some(root) = persist::data_root()
+            && let Err(error) = persist::save_listening(&root, &self.listened.get_untracked())
+        {
+            log::error!("saving listening progress: {error}");
+        }
+        for url in missing {
+            spawn(async move {
+                let _ = crate::services::podcasts::load_feed(&url).await;
+            });
+        }
+    }
+
+    pub(crate) fn feeds(&self) -> Vec<Feed> {
+        self.catalog.with(|catalog| catalog.feeds.clone())
+    }
+
+    pub(crate) fn listening(&self) -> Vec<ListenProgress> {
+        self.listened.get()
     }
 
     pub(crate) fn playing(&self) -> Option<Playing> {

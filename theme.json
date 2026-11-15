@@ -7,7 +7,7 @@
       "radius-lg": "0.75rem"
     },
     "light": {
-      "background": "#FAFAFA",
+      "background": "#FFFFFF",
       "foreground": "#1B1B1B",
       "card": "#FFFFFF",
       "card-foreground": "#1B1B1B",
@@ -45,7 +45,7 @@
       "chart-3": "#00838F",
       "chart-4": "#2E7D32",
       "chart-5": "#C62828",
-      "sidebar": "#FAFAFA",
+      "sidebar": "#FFFFFF",
       "sidebar-foreground": "#1B1B1B",
       "sidebar-primary": "#6D45C4",
       "sidebar-primary-foreground": "#FFFFFF",
