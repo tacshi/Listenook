@@ -120,6 +120,8 @@ impl Review {
             && store
                 .setting(|s| s.extra.get("reader_video_wanted").and_then(serde_json::Value::as_bool))
                 .unwrap_or(true);
+        let brief_open =
+            store.setting(|s| s.extra.get("reader_brief_open").and_then(serde_json::Value::as_bool)).unwrap_or(false);
         let query = signal(String::new());
         let searching = signal(false);
         let current = computed(move || {
@@ -162,7 +164,13 @@ impl Review {
             paused: signal(true),
             rate: signal(store.saved_rate("playback_rate")),
             has_video,
-            side: signal(if video_wanted { Side::Video } else { Side::None }),
+            side: signal(if brief_open {
+                Side::Brief
+            } else if video_wanted {
+                Side::Video
+            } else {
+                Side::None
+            }),
             video_wanted: signal(video_wanted),
             mode: signal(if has_translation { ContentMode::Bilingual } else { ContentMode::Original }),
             searching,
