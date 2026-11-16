@@ -54,6 +54,8 @@ enum Edge {
     Loop(usize),
     /// A Mimic pass over this sentence: pause for the learner to say it.
     Mimic(usize),
+    /// Skipped sentences come next: on to this one past them.
+    Skip(usize),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -265,7 +267,12 @@ impl Review {
                     .segments
                     .iter()
                     .enumerate()
-                    .filter(|(_, segment)| {
+                    .filter(|(index, segment)| {
+                        if segment.skipped {
+                            // One row for each skipped run, and none while searching.
+                            return needle.is_empty()
+                                && index.checked_sub(1).is_none_or(|before| !document.segments[before].skipped);
+                        }
                         needle.is_empty()
                             || segment.text.to_lowercase().contains(&needle)
                             || segment.translated_text.as_ref().is_some_and(|t| t.to_lowercase().contains(&needle))
@@ -387,6 +394,67 @@ impl Review {
             .with_untracked(|job| job.as_ref().and_then(|job| job.document.as_ref()).map_or(0, |d| d.segments.len()))
     }
 
+    fn document_now<T>(&self, f: impl FnOnce(&Document) -> Option<T>) -> Option<T> {
+        self.job.with_untracked(|job| f(job.as_ref()?.document.as_ref()?))
+    }
+
+    /// The first sentence at or after `index` that is not skipped.
+    pub(super) fn next_kept(&self, index: usize) -> Option<usize> {
+        self.document_now(|document| document.next_kept(index))
+    }
+
+    /// `index`, or when it is skipped, the nearest sentence that is not,
+    /// looking `forward` first.
+    fn kept_near(&self, index: usize, forward: bool) -> Option<usize> {
+        self.document_now(|document| {
+            if forward {
+                document.next_kept(index).or_else(|| document.prev_kept(index))
+            } else {
+                document.prev_kept(index).or_else(|| document.next_kept(index))
+            }
+        })
+    }
+
+    fn is_skipped(&self, index: usize) -> bool {
+        self.document_now(|document| Some(document.segments.get(index)?.skipped)).unwrap_or(false)
+    }
+
+    /// The skipped run sentence `index` is in, first and last.
+    pub(super) fn skipped_run(&self, index: usize) -> Option<(usize, usize)> {
+        self.job.with(|job| job.as_ref()?.document.as_ref()?.skipped_run(index))
+    }
+
+    /// Marks sentences `first` through `last` skipped, or brings them back.
+    pub(super) fn set_skipped(&self, first: usize, last: usize, skipped: bool) {
+        let done = if skipped { "Skipped" } else { "Brought back" };
+        let changed =
+            self.change(done, |document| listenook_core::ads::set_skipped(document, &[(first, last)], skipped));
+        if changed && skipped {
+            batch(|| {
+                if untracked(|| self.repeat_range()).is_some_and(|(a, b)| first <= a && b <= last) {
+                    self.repeating.set(None);
+                }
+                if self.editing.get_untracked().is_some() {
+                    self.editing.set(None);
+                }
+            });
+        }
+    }
+
+    /// Skips what the AI took for ads, and forgets the findings.
+    pub(super) fn skip_found(&self) {
+        let found = self.job.with_untracked(|job| job.as_ref().map(|job| job.ad_scan.found.clone()));
+        let Some(found) = found.filter(|found| !found.is_empty()) else {
+            return;
+        };
+        self.change("Ads skipped", |document| listenook_core::ads::skip_found(document, &found));
+        self.forget_found();
+    }
+
+    pub(super) fn forget_found(&self) {
+        self.store.update_job(&self.id(), |job| job.ad_scan = Default::default());
+    }
+
     pub(super) fn words(&self, index: usize) -> Option<Vec<(SharedString, i64, i64)>> {
         self.job.with(|job| {
             let document = job.as_ref()?.document.as_ref()?;
@@ -450,12 +518,16 @@ impl Review {
     }
 
     pub(super) fn target(&self) -> Option<usize> {
-        match self.repeat_range() {
+        let target = match self.repeat_range() {
             Some((first, last)) => {
                 Some(self.current.get().filter(|current| (first..=last).contains(current)).unwrap_or(first))
             }
             None => self.current.get(),
-        }
+        }?;
+        self.job.with(|job| {
+            let document = job.as_ref()?.document.as_ref()?;
+            document.next_kept(target).or_else(|| document.prev_kept(target))
+        })
     }
 
     pub(super) fn target_or_first(&self) -> Option<usize> {
@@ -532,6 +604,9 @@ impl Review {
     }
 
     fn go_to(&self, index: usize, play: bool) {
+        let Some(index) = self.kept_near(index, true) else {
+            return;
+        };
         let Some(segment) = self.segment_now(index) else {
             return;
         };
@@ -552,7 +627,9 @@ impl Review {
     pub(super) fn step(&self, by: isize) {
         let from = untracked(|| self.target()).map_or(0, |index| index as isize);
         let next = (from + by).clamp(0, self.count().saturating_sub(1) as isize) as usize;
-        self.play_from(next);
+        if let Some(next) = self.kept_near(next, by >= 0) {
+            self.play_from(next);
+        }
     }
 
     pub(super) fn toggle_repeat(&self, index: usize) {
@@ -583,8 +660,9 @@ impl Review {
 
     pub(super) fn move_repeat_end(&self, by: isize) {
         if let Some((first, last)) = untracked(|| self.repeat_range()) {
-            let last = (last as isize + by).clamp(first as isize, self.count().saturating_sub(1) as isize);
-            self.set_repeat(first, last as usize);
+            let last = (last as isize + by).clamp(first as isize, self.count().saturating_sub(1) as isize) as usize;
+            let last = self.kept_near(last, by >= 0).filter(|last| *last >= first).unwrap_or(first);
+            self.set_repeat(first, last);
         }
     }
 
@@ -807,6 +885,9 @@ impl Review {
         self.position_ms.set(position_ms);
         self.last_tick.with(|last| *last = Some((Instant::now(), position_ms)));
         self.disarm();
+        if self.out_of_skipped(position_ms) {
+            return;
+        }
         let Some((end, edge)) = self.edge() else {
             return;
         };
@@ -818,16 +899,63 @@ impl Review {
         }
     }
 
+    /// Playing in a skipped run (after a seek, or from where it was left):
+    /// on to the sentence after it, or stop when there is none. Whether it
+    /// was there.
+    fn out_of_skipped(&self, position_ms: i64) -> bool {
+        let loudness = self.loudness.with_untracked(Option::clone);
+        let after = self.document_now(|document| {
+            let at = document.segment_at(position_ms, loudness.as_deref())?;
+            document.segments[at].skipped.then(|| document.next_kept(at))
+        });
+        match after {
+            None => false,
+            Some(Some(next)) => {
+                self.jump(self.play_start(next), true);
+                true
+            }
+            Some(None) => {
+                self.paused.set(true);
+                true
+            }
+        }
+    }
+
     /// Where what is playing ends, and what happens there.
     fn edge(&self) -> Option<(i64, Edge)> {
         if let Some(end) = self.stop_at.get_untracked() {
             return Some((end, Edge::Stop));
         }
-        let (first, last) = untracked(|| self.repeat_range())?;
-        if self.practice.get_untracked() == Practice::Mimic {
+        let range = untracked(|| self.repeat_range());
+        if let Some((first, _)) = range
+            && self.practice.get_untracked() == Practice::Mimic
+        {
             return Some((self.play_end(first)?, Edge::Mimic(first)));
         }
-        Some((self.play_end(last)?, Edge::Loop(first)))
+        if let Some(skip) = self.skip_edge(range) {
+            return Some(skip);
+        }
+        let (first, last) = range?;
+        Some((self.play_end(last)?, Edge::Loop(self.next_kept(first).unwrap_or(first))))
+    }
+
+    /// The end of the sentence playing when skipped ones come after it: on
+    /// past them, back to the start of a repeat they end, or stop when
+    /// nothing is left.
+    fn skip_edge(&self, range: Option<(usize, usize)>) -> Option<(i64, Edge)> {
+        let current = self.current.get_untracked()?;
+        if self.is_skipped(current) {
+            return None;
+        }
+        let after = self.document_now(|document| document.after_skip(current))?;
+        let edge = match (range, after) {
+            (Some((first, last)), _) if current < first || current >= last => return None,
+            (Some((_, last)), Some(next)) if next <= last => Edge::Skip(next),
+            (Some((first, _)), _) => Edge::Loop(self.next_kept(first).unwrap_or(first)),
+            (None, Some(next)) => Edge::Skip(next),
+            (None, None) => Edge::Stop,
+        };
+        Some((self.play_end(current)?, edge))
     }
 
     /// Acts on `edge` when playback gets there, `wait` from now, unless a
@@ -866,7 +994,7 @@ impl Review {
                 self.stop_at.set(None);
                 self.paused.set(true);
             }),
-            Edge::Loop(first) => self.jump(self.play_start(first), true),
+            Edge::Loop(first) | Edge::Skip(first) => self.jump(self.play_start(first), true),
             Edge::Mimic(index) => self.end_mimic_pass(index),
         }
     }
@@ -909,8 +1037,8 @@ impl Review {
             if reps < goal {
                 review.jump(review.play_start(index), true);
                 review.paused.set(false);
-            } else if index + 1 < review.count() {
-                review.play_from(index + 1);
+            } else if let Some(next) = review.next_kept(index + 1) {
+                review.play_from(next);
             } else {
                 review.repeating.set(None);
             }
@@ -1043,6 +1171,27 @@ impl Review {
             changed
         });
         self.editing.set(None);
+    }
+
+    pub(super) fn skip_editing(&self) {
+        if let Some(index) = self.editing.get_untracked().and_then(|editing| self.index_of(&editing.segment_id)) {
+            self.set_skipped(index, index, true);
+        }
+    }
+
+    /// Whether the AI took sentence `index` for part of an ad, and nobody
+    /// has acted on that yet.
+    pub(super) fn found_ad(&self, index: usize) -> bool {
+        self.job
+            .with(|job| {
+                let job = job.as_ref()?;
+                let document = job.document.as_ref()?;
+                Some(job.ad_scan.found.iter().any(|finding| {
+                    listenook_core::ads::locate(finding, document)
+                        .is_some_and(|(first, last)| (first..=last).contains(&index))
+                }))
+            })
+            .unwrap_or(false)
     }
 
     pub(super) fn delete_editing(&self) {

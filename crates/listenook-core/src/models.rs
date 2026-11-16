@@ -231,6 +231,10 @@ pub struct Segment {
     pub preserve_boundary_before: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub highlights: Vec<Highlight>,
+    /// Left out of playback and the transcript, as an ad is. The media keeps
+    /// it: bringing it back undoes nothing but this.
+    #[serde(skip_serializing_if = "is_false")]
+    pub skipped: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -339,6 +343,60 @@ impl Document {
             None => start - PAUSE_REACH_MS,
         };
         loudness.pause_between(from.max(0), start + PAUSE_INTO_NEXT_MS)
+    }
+
+    /// The first sentence at or after `index` that is not skipped.
+    pub fn next_kept(&self, index: usize) -> Option<usize> {
+        (index..self.segments.len()).find(|&at| !self.segments[at].skipped)
+    }
+
+    /// The last sentence at or before `index` that is not skipped.
+    pub fn prev_kept(&self, index: usize) -> Option<usize> {
+        let last = index.min(self.segments.len().checked_sub(1)?);
+        (0..=last).rev().find(|&at| !self.segments[at].skipped)
+    }
+
+    /// Where to play on after sentence `index` when the one after it is
+    /// skipped: the next sentence that is not, or `Some(None)` when none is.
+    /// `None` when the next sentence is not skipped.
+    pub fn after_skip(&self, index: usize) -> Option<Option<usize>> {
+        if !self.segments.get(index + 1)?.skipped {
+            return None;
+        }
+        Some(self.next_kept(index + 1))
+    }
+
+    /// Each stretch of skipped sentences, first and last index.
+    pub fn skipped_runs(&self) -> Vec<(usize, usize)> {
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (at, segment) in self.segments.iter().enumerate() {
+            if !segment.skipped {
+                continue;
+            }
+            match runs.last_mut() {
+                Some(run) if run.1 + 1 == at => run.1 = at,
+                _ => runs.push((at, at)),
+            }
+        }
+        runs
+    }
+
+    /// The skipped run that sentence `index` is in.
+    pub fn skipped_run(&self, index: usize) -> Option<(usize, usize)> {
+        if !self.segments.get(index)?.skipped {
+            return None;
+        }
+        let first = (0..index).rev().take_while(|&at| self.segments[at].skipped).last().unwrap_or(index);
+        let last = (index + 1..self.segments.len()).take_while(|&at| self.segments[at].skipped).last().unwrap_or(index);
+        Some((first, last))
+    }
+
+    /// How long sentences `first` through `last` take.
+    pub fn span_ms(&self, first: usize, last: usize) -> i64 {
+        match (self.segments.get(first), self.segments.get(last)) {
+            (Some(first), Some(last)) => (last.end_ms - first.start_ms).max(0),
+            _ => 0,
+        }
     }
 
     pub fn segment_at(&self, position_ms: i64, loudness: Option<&Loudness>) -> Option<usize> {
@@ -602,6 +660,35 @@ pub struct AiGenerationState {
     pub extra: Map<String, Value>,
 }
 
+/// A stretch the AI took for an ad: sentences `first_id` through `last_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AdFinding {
+    pub first_id: String,
+    pub last_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+}
+
+/// A search for ads: running, or what it found and nobody has acted on yet.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AdScan {
+    pub status: AiGenerationStatus,
+    pub completed_chunks: u32,
+    pub total_chunks: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub found: Vec<AdFinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+impl AdScan {
+    pub fn is_idle(&self) -> bool {
+        self.status == AiGenerationStatus::Idle && self.found.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Job {
@@ -633,6 +720,8 @@ pub struct Job {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_brief: Option<AiBrief>,
     pub ai_generation_state: AiGenerationState,
+    #[serde(skip_serializing_if = "AdScan::is_idle")]
+    pub ad_scan: AdScan,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_title: Option<String>,
     pub source_origin: JobSourceOrigin,
@@ -673,6 +762,7 @@ impl Default for Job {
             translation_state: TranslationState::default(),
             ai_brief: None,
             ai_generation_state: AiGenerationState::default(),
+            ad_scan: AdScan::default(),
             display_title: None,
             source_origin: JobSourceOrigin::Manual,
             group_id: None,
@@ -722,6 +812,7 @@ impl Job {
         self.status.is_active()
             || self.translation_state.status == TranslationStatus::Translating
             || self.ai_generation_state.status == AiGenerationStatus::Generating
+            || self.ad_scan.status == AiGenerationStatus::Generating
     }
 
     pub fn has_transcript(&self) -> bool {
@@ -946,6 +1037,47 @@ pub fn language_name(code: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn skipping(skipped: &[bool]) -> Document {
+        let segments = skipped
+            .iter()
+            .enumerate()
+            .map(|(at, &skipped)| Segment {
+                id: format!("s{at}"),
+                start_ms: at as i64 * 1000,
+                end_ms: at as i64 * 1000 + 900,
+                skipped,
+                ..Default::default()
+            })
+            .collect();
+        Document { segments, ..Default::default() }
+    }
+
+    #[test]
+    fn skipped_sentences_are_found_in_runs_and_stepped_over() {
+        let document = skipping(&[false, true, true, false, true]);
+        assert_eq!(document.skipped_runs(), vec![(1, 2), (4, 4)]);
+        assert_eq!(document.skipped_run(2), Some((1, 2)));
+        assert_eq!(document.skipped_run(3), None);
+        assert_eq!(document.next_kept(1), Some(3));
+        assert_eq!(document.next_kept(4), None);
+        assert_eq!(document.prev_kept(2), Some(0));
+        assert_eq!(document.prev_kept(9), Some(3));
+        assert_eq!(document.after_skip(0), Some(Some(3)), "on past the run");
+        assert_eq!(document.after_skip(3), Some(None), "nothing kept after it");
+        assert_eq!(document.after_skip(2), None, "the next one plays");
+        assert_eq!(document.span_ms(1, 2), 1900);
+    }
+
+    #[test]
+    fn a_sentence_is_kept_unless_marked_and_the_mark_is_left_out_when_off() {
+        let segment: Segment = serde_json::from_str(r#"{"id":"a","start_ms":0,"end_ms":1,"text":"Hi"}"#).unwrap();
+        assert!(!segment.skipped);
+        assert!(!serde_json::to_string(&segment).unwrap().contains("skipped"));
+        let job: Job = serde_json::from_str(r#"{"id":"a"}"#).unwrap();
+        assert!(job.ad_scan.is_idle());
+        assert!(!serde_json::to_string(&job).unwrap().contains("ad_scan"));
+    }
 
     #[test]
     fn a_manifest_of_the_flutter_app_reads_and_keeps_unknown_keys() {

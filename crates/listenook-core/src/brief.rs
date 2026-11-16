@@ -258,7 +258,7 @@ pub fn study_from_json(replies: &[Value], request: &BriefRequest, document: &Doc
 
 pub fn chunks(document: &Document) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for segment in document.segments.iter().filter(|s| !s.text.trim().is_empty()) {
+    for segment in document.segments.iter().filter(|s| !s.skipped && !s.text.trim().is_empty()) {
         let mut line = format!("[id={}][{}]", segment.id, clock(segment.start_ms));
         let speaker = document.speaker_name(segment.speaker.as_deref());
         if !speaker.is_empty() {

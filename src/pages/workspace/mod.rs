@@ -4,7 +4,7 @@ mod review;
 mod transcript;
 
 use listenook_core::{
-    ContentMode, ExportOptions, Segment, TRANSLATION_LANGUAGES, TranslationStatus, caption, export,
+    AiGenerationStatus, ContentMode, ExportOptions, Segment, TRANSLATION_LANGUAGES, TranslationStatus, caption, export,
     format::track_position,
 };
 use nsh_base::theme;
@@ -417,6 +417,7 @@ fn opened(id: &str) -> impl IntoElement {
         .style_with(move |s| if review.fullscreen.get() && !hud.get() { s.cursor(Cursor::None) } else { s })
         .child(when(move || !review.fullscreen.get(), move || header(review, export, rename, translate)))
         .child(when(move || !review.fullscreen.get(), move || translation_strip(review)))
+        .child(when(move || !review.fullscreen.get(), move || ad_strip(review)))
         .child(
             view()
                 .flex_1()
@@ -627,6 +628,14 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                 ))
                 .child(menu_divider())
                 .child(menu_action(Icon::Languages, l("Translate…"), move || translate.set(true)))
+                .child(menu_action(Icon::Scissors, l("Find ads"), move || {
+                    if store.setting(|s| s.llm_provider_settings.validate().is_none()) {
+                        llm::start_ad_scan(&review.id());
+                    } else {
+                        toast(Tone::Info, tr("Set up AI in Settings to find ads."));
+                        store.settings_open().set(true);
+                    }
+                }))
                 .child(menu_action(Icon::Copy, l("Copy transcript"), move || {
                     if let Some(job) = store.job_now(&review.id()) {
                         let settings = store.settings();
@@ -750,6 +759,99 @@ fn translation_strip(review: Review) -> impl IntoElement {
                             });
                         },
                     ))
+                }),
+            )
+    })
+}
+
+/// The search for ads: while it runs, and what it found, to skip or not.
+fn ad_strip(review: Review) -> impl IntoElement {
+    let scan = move || review.job.with(|job| job.as_ref().map(|job| job.ad_scan.clone()).unwrap_or_default());
+    let visible = move || !scan().is_idle();
+    when(visible, move || {
+        let running = move || scan().status == AiGenerationStatus::Generating;
+        let found = move || scan().found.len();
+        let length = move || {
+            let scan = scan();
+            review.job.with(|job| {
+                let document = job.as_ref()?.document.as_ref()?;
+                Some(
+                    scan.found
+                        .iter()
+                        .filter_map(|finding| listenook_core::ads::locate(finding, document))
+                        .map(|(first, last)| document.span_ms(first, last))
+                        .sum::<i64>(),
+                )
+            })
+        };
+        view()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_3()
+            .px(px(ui::PAGE_INSET))
+            .py_2()
+            .border_b_1()
+            .border_color(|| theme().border)
+            .bg(|| theme().muted)
+            .test_id("ad-strip")
+            .child(ui::icon(Icon::Scissors, 14.0).text_color(|| theme().muted_foreground))
+            .child(
+                text(move || -> SharedString {
+                    let scan = scan();
+                    match scan.status {
+                        AiGenerationStatus::Generating if scan.total_chunks > 1 => {
+                            format!("{} {}/{}", tr("Looking for ads…"), scan.completed_chunks, scan.total_chunks).into()
+                        }
+                        AiGenerationStatus::Generating => tr("Looking for ads…"),
+                        AiGenerationStatus::Failed => {
+                            scan.error_code.as_deref().map(error_text).unwrap_or_else(|| tr("Something went wrong."))
+                        }
+                        _ if scan.found.is_empty() => tr("No ads found."),
+                        _ => format!(
+                            "{} {} · {}",
+                            tr("Ads found:"),
+                            scan.found.len(),
+                            listenook_core::format::clock(length().unwrap_or_default())
+                        )
+                        .into(),
+                    }
+                })
+                .text_sm()
+                .text_color(|| theme().foreground),
+            )
+            .child(when(running, move || {
+                progress_bar(move || {
+                    let scan = scan();
+                    (scan.total_chunks > 1).then(|| scan.completed_chunks as f32 / scan.total_chunks as f32)
+                })
+                .flex_1()
+            }))
+            .child(view().flex_1())
+            .child(
+                when(running, move || {
+                    button(Variant::Ghost, Size::Sm, l("Cancel")).on_press(move || llm::cancel_ad_scan(&review.id()))
+                })
+                .otherwise(move || {
+                    view()
+                        .flex_row()
+                        .gap_2()
+                        .child(when(
+                            move || found() > 0,
+                            move || {
+                                button(Variant::Primary, Size::Sm, l("Skip them")).on_press(move || review.skip_found())
+                            },
+                        ))
+                        .child(
+                            button(
+                                Variant::Ghost,
+                                Size::Sm,
+                                move || {
+                                    if found() > 0 { tr("Keep them") } else { tr("Dismiss") }
+                                },
+                            )
+                            .on_press(move || review.forget_found()),
+                        )
                 }),
             )
     })

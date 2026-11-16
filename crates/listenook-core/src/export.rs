@@ -47,6 +47,17 @@ pub fn export_transcript(job: &Job, options: &ExportOptions) -> String {
     let Some(document) = &job.document else {
         return String::new();
     };
+    // What was skipped stays out; the rest keeps the media's own times.
+    let kept;
+    let document = if document.segments.iter().any(|segment| segment.skipped) {
+        kept = Document {
+            segments: document.segments.iter().filter(|segment| !segment.skipped).cloned().collect(),
+            ..document.clone()
+        };
+        &kept
+    } else {
+        document
+    };
     match options.format {
         ExportFormat::Txt => txt(document, options),
         ExportFormat::Markdown => markdown(job, document, options),
@@ -300,6 +311,14 @@ mod tests {
             }),
             ..Job::default()
         }
+    }
+
+    #[test]
+    fn skipped_sentences_are_left_out() {
+        let mut job = job();
+        job.document.as_mut().unwrap().segments[0].skipped = true;
+        let options = ExportOptions { format: ExportFormat::Srt, ..Default::default() };
+        assert_eq!(export_transcript(&job, &options), "1\n00:00:02,000 --> 00:00:03,250\nBye.");
     }
 
     #[test]

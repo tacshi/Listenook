@@ -405,6 +405,76 @@ fn the_delete_button_removes_a_sentence_and_the_undo_key_brings_it_back() {
 }
 
 #[test]
+fn a_skipped_sentence_folds_away_and_comes_back() {
+    let mut it = open_sample("skip");
+    it.app.press("role:button[Bilingual]").unwrap();
+    it.app.press("Original").unwrap();
+    it.app.press("label:Edit >> nth=1").unwrap();
+    it.app.wait_for("role:button[Save]").unwrap();
+    it.app.press("label:Skip this sentence").unwrap();
+    it.app.wait_for_gone("Today we are talking about how people learn languages.", GONE).unwrap();
+    it.app.wait_for("Skipped · 00:02").unwrap();
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(saved.contains(r#""skipped": true"#), "the skip is saved");
+    it.app.press("role:button[Bring back]").unwrap();
+    it.app.wait_for("Today we are talking about how people learn languages.").unwrap();
+    assert!(!it.app.shows("Skipped · 00:02"));
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(!saved.contains(r#""skipped""#), "bringing it back leaves no trace");
+}
+
+fn seed_with_skipped(root: &Path) {
+    seed_transcript(root);
+    let path = manifest(root, "sample");
+    let mut job: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    job["document"]["segments"][1]["skipped"] = json!(true);
+    std::fs::write(path, job.to_string()).unwrap();
+}
+
+#[test]
+fn the_arrow_keys_step_over_a_skipped_sentence() {
+    let mut it = start("arrows-skip", seed_with_skipped, Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.press_key("right").unwrap();
+    it.app.wait_for("00:05").unwrap();
+    assert!(!it.app.shows("00:02"), "the skipped sentence is not a stop");
+    it.app.press_key("left").unwrap();
+    it.app.wait_for_gone("00:05", GONE).unwrap();
+    assert!(!it.app.shows("00:02"));
+}
+
+#[test]
+fn the_ai_finds_ads_and_they_are_skipped_on_one_tap() {
+    let reply = json!({"ads": [{"first": "segment-2", "last": "segment-3", "reason": "sponsor read"}]});
+    let routes = llm_routes(&reply.to_string());
+    let mut it = start(
+        "find-ads",
+        |root| {
+            seed_transcript(root);
+            let _ = llm(root, "");
+        },
+        routes,
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.press("label:More actions").unwrap();
+    it.app.press("Find ads").unwrap();
+    it.app.wait_for("Ads found: 1 · 00:05").unwrap();
+    assert!(it.app.shows("Today we are talking about how people learn languages."), "nothing is skipped yet");
+    it.app.press("role:button[Skip them]").unwrap();
+    it.app.wait_for_gone("Today we are talking about how people learn languages.", GONE).unwrap();
+    assert!(!it.app.shows("Listening every day matters more than studying hard once a week."));
+    it.app.wait_for("Skipped · 00:05").unwrap();
+    assert!(!it.app.shows("Ads found: 1 · 00:05"), "the findings are done with");
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert_eq!(saved.matches(r#""skipped": true"#).count(), 2);
+    assert!(!saved.contains("ad_scan"), "nothing is left waiting");
+}
+
+#[test]
 fn the_arrow_keys_move_between_sentences() {
     let mut it = open_sample("arrows");
     it.app.press_key("right").unwrap();

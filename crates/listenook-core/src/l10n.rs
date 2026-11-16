@@ -495,6 +495,20 @@ const ZH: &[(&str, &str)] = &[
     ("Undo the last sentence change", "撤销上一次句子修改"),
     ("Sentence updated", "句子已更新"),
     ("Sentence deleted", "句子已删除"),
+    ("Skipped", "已跳过"),
+    ("Brought back", "已恢复"),
+    ("Ads skipped", "已跳过广告"),
+    ("Bring back", "恢复"),
+    ("Skip this sentence", "跳过这一句"),
+    ("Skip the repeated sentences", "跳过重复播放的句子"),
+    ("Find ads", "查找广告"),
+    ("Set up AI in Settings to find ads.", "请先在设置中配置 AI，才能查找广告。"),
+    ("Looking for ads…", "正在查找广告…"),
+    ("No ads found.", "没有找到广告。"),
+    ("Ads found:", "找到广告："),
+    ("Skip them", "跳过它们"),
+    ("Keep them", "保留"),
+    ("Something went wrong.", "出了点问题。"),
     ("Sentence split", "句子已拆分"),
     ("Sentences merged", "句子已合并"),
     ("Speaker renamed", "说话人已重命名"),
@@ -677,7 +691,7 @@ pub fn status_label(status: JobStatus) -> &'static str {
 pub fn error_message(lang: Lang, code: &str) -> String {
     let (en, zh) = known_error(code)
         .or_else(|| {
-            ["llm_", "translation_", "ai_brief_", "moss_"]
+            ["llm_", "translation_", "ai_brief_", "ad_scan_", "moss_"]
                 .iter()
                 .find_map(|prefix| code.strip_prefix(prefix))
                 .and_then(known_error)
@@ -815,6 +829,7 @@ fn known_error(code: &str) -> Option<(&'static str, &'static str)> {
             "模型未返回可用内容，请重试或更换模型。",
         ),
         "ai_brief_no_sections" => ("Choose at least one section.", "请至少选择一个部分。"),
+        "ad_scan_empty_transcript" => ("There is no transcript to look through yet.", "还没有可查找的文字稿。"),
         _ => return None,
     })
 }
