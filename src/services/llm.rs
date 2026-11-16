@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use listenook_core::{
-    AiGenerationState, AiGenerationStatus, LlmProviderSettings, TranslationState, TranslationStatus,
+    AdScan, AiGenerationState, AiGenerationStatus, LlmProviderSettings, TranslationState, TranslationStatus, ads,
     brief::{self, BriefRequest},
     translate,
 };
@@ -232,7 +232,8 @@ pub(crate) fn start_translation(id: &str, target: &str, only: Option<Vec<String>
         }
         store.update_job(&id, |job| {
             let state = &mut job.translation_state;
-            let untranslated = job.document.as_ref().is_some_and(|d| d.segments.iter().any(|s| !s.has_translation()));
+            let untranslated =
+                job.document.as_ref().is_some_and(|d| d.segments.iter().any(|s| !s.skipped && !s.has_translation()));
             state.status = match (&error, done) {
                 (Some(_), 0) => TranslationStatus::Failed,
                 (Some(_), _) => TranslationStatus::Partial,
@@ -354,6 +355,83 @@ pub(crate) fn cancel_brief(id: &str) {
     let store = store();
     if store.cancel_work(&brief_key(id)) {
         store.update_job(id, |job| job.ai_generation_state.status = AiGenerationStatus::Cancelled);
+    }
+}
+
+pub(crate) fn ad_scan_key(id: &str) -> String {
+    format!("{id}:ads")
+}
+
+async fn ad_json(settings: &LlmProviderSettings, prompt: &str) -> Result<Value, Failure> {
+    let reply = complete(settings, ads::SYSTEM_PROMPT, prompt, true).await?;
+    if let Some(value) = ads::decode_reply(&reply) {
+        return Ok(value);
+    }
+    let again = format!(
+        "{prompt}\nYour previous response was not valid JSON. Return only one valid JSON object matching the requested shape."
+    );
+    let reply = complete(settings, ads::SYSTEM_PROMPT, &again, true).await?;
+    ads::decode_reply(&reply).ok_or_else(|| Failure::new("ad_scan_invalid_response", "The reply was not JSON."))
+}
+
+async fn scan_for_ads(store: Store, id: &str) -> Result<(), String> {
+    let settings = store.settings().llm_provider_settings;
+    let document = store.job_now(id).and_then(|job| job.document.clone()).ok_or("ad_scan_empty_transcript")?;
+    let chunks = ads::chunks(&document);
+    if chunks.is_empty() {
+        return Err("ad_scan_empty_transcript".into());
+    }
+    let total = chunks.len();
+    let title = store.job_now(id).map(|job| job.title()).unwrap_or_default();
+    let mut replies = Vec::with_capacity(total);
+    for (index, chunk) in chunks.iter().enumerate() {
+        store.update_job(id, |job| {
+            job.ad_scan.completed_chunks = index as u32;
+            job.ad_scan.total_chunks = total as u32;
+        });
+        let prompt = ads::prompt(&title, chunk, index, total);
+        replies.push(ad_json(&settings, &prompt).await.map_err(|failure| recoded(failure, "ad_scan_"))?);
+    }
+    // Read again: the transcript may have changed while the model thought.
+    let document = store.job_now(id).and_then(|job| job.document.clone()).unwrap_or(document);
+    let found = ads::findings(&replies, &document);
+    store.update_job(id, |job| {
+        job.ad_scan = AdScan {
+            status: AiGenerationStatus::Completed,
+            completed_chunks: total as u32,
+            total_chunks: total as u32,
+            found,
+            error_code: None,
+        };
+    });
+    Ok(())
+}
+
+/// Asks the AI where the ads are. What it finds waits in the job's
+/// `ad_scan` until someone skips it or says no.
+pub(crate) fn start_ad_scan(id: &str) {
+    let store = store();
+    let id = id.to_owned();
+    if store.job_now(&id).is_some_and(|job| job.ad_scan.status == AiGenerationStatus::Generating) {
+        return;
+    }
+    store.update_job(&id, |job| {
+        job.ad_scan = AdScan { status: AiGenerationStatus::Generating, ..AdScan::default() };
+    });
+    store.run_for(&ad_scan_key(&id), async move {
+        if let Err(code) = scan_for_ads(store, &id).await {
+            store.update_job(&id, |job| {
+                job.ad_scan =
+                    AdScan { status: AiGenerationStatus::Failed, error_code: Some(code), ..AdScan::default() };
+            });
+        }
+    });
+}
+
+pub(crate) fn cancel_ad_scan(id: &str) {
+    let store = store();
+    if store.cancel_work(&ad_scan_key(id)) {
+        store.update_job(id, |job| job.ad_scan = AdScan::default());
     }
 }
 

@@ -138,6 +138,10 @@ fn recovered(mut job: Job) -> Job {
     if job.ai_generation_state.status == AiGenerationStatus::Generating {
         job.ai_generation_state.status = AiGenerationStatus::Interrupted;
     }
+    if job.ad_scan.status == AiGenerationStatus::Generating {
+        // A search cut short finds nothing: tapping Find ads starts it again.
+        job.ad_scan = Default::default();
+    }
     job
 }
 

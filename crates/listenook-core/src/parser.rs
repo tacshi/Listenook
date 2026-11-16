@@ -61,6 +61,7 @@ fn segment_of(tokens: &[&Token]) -> Option<Segment> {
         translated_text: None,
         preserve_boundary_before: false,
         highlights: Vec::new(),
+        skipped: false,
     })
 }
 

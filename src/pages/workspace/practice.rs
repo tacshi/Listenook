@@ -116,8 +116,8 @@ fn dictation_panel(review: Review) -> impl IntoElement {
         });
     };
     let next = move || {
-        let next = pinned.get_untracked().map_or(0, |index| index + 1);
-        if review.segment(next).is_some() {
+        let next = review.next_kept(pinned.get_untracked().map_or(0, |index| index + 1));
+        if let Some(next) = next {
             begin(next);
             review.replay_once(next);
         }

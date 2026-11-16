@@ -36,6 +36,7 @@ pub fn merge_with_next(document: &mut Document, index: usize) -> bool {
         (a, b) => a.or(b),
     };
     kept.end_ms = kept.end_ms.max(next.end_ms);
+    kept.skipped &= next.skipped;
     if kept.language.is_none() {
         kept.language = next.language;
     }
@@ -166,6 +167,18 @@ mod tests {
             ],
             ..Document::default()
         }
+    }
+
+    #[test]
+    fn a_skip_survives_a_split_and_a_merge_keeps_only_a_shared_one() {
+        let mut document = document();
+        document.segments[0].skipped = true;
+        assert!(split_at(&mut document, 0, 6));
+        assert!(document.segments[0].skipped && document.segments[1].skipped);
+        assert!(merge_with_next(&mut document, 0));
+        assert!(document.segments[0].skipped, "both halves were skipped");
+        assert!(merge_with_next(&mut document, 0));
+        assert!(!document.segments[0].skipped, "merged with a sentence that plays");
     }
 
     #[test]

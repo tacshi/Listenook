@@ -26,7 +26,7 @@ pub fn batches(segments: &[Segment], only: Option<&[String]>) -> Vec<Batch> {
     for segment in segments {
         let wanted = match only {
             Some(ids) => ids.contains(&segment.id),
-            None => !segment.has_translation(),
+            None => !segment.skipped && !segment.has_translation(),
         };
         let text = segment.text.trim();
         if !wanted || text.is_empty() {

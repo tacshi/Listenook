@@ -104,6 +104,53 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
 }
 
 fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> impl IntoElement {
+    let run = computed(move || {
+        let index = review.shown.with(|shown| shown.get(at.index()).copied())?;
+        review.skipped_run(index)
+    });
+    when(move || run.with(Option::is_some), move || skipped_bar(review, run))
+        .otherwise(move || sentence(review, at, speaker_dialog))
+}
+
+/// One row for a skipped run: how long it is, and a way to bring it back.
+fn skipped_bar(review: Review, run: Memo<Option<(usize, usize)>>) -> impl IntoElement {
+    let length = move || {
+        let (first, last) = run.get()?;
+        review.job.with(|job| Some(job.as_ref()?.document.as_ref()?.span_ms(first, last)))
+    };
+    let bring_back = move || {
+        if let Some((first, last)) = run.get_untracked() {
+            review.set_skipped(first, last, false);
+        }
+    };
+    view().items_center().child(
+        view()
+            .w_full()
+            .max_w(px(760.0))
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .rounded(tokens::radius)
+            .bg(|| theme().muted)
+            .test_id("skipped-run")
+            .child(ui::icon(Icon::Scissors, 14.0).text_color(|| theme().muted_foreground))
+            .child(
+                text(move || -> SharedString {
+                    format!("{} · {}", tr("Skipped"), clock(length().unwrap_or_default())).into()
+                })
+                .text_sm()
+                .tabular_nums()
+                .select_none()
+                .flex_1()
+                .text_color(|| theme().muted_foreground),
+            )
+            .child(button(Variant::Ghost, Size::Sm, l("Bring back")).on_press(bring_back)),
+    )
+}
+
+fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> impl IntoElement {
     let store = review.store;
     let index = computed(move || review.shown.with(|shown| shown.get(at.index()).copied()));
     let segment = computed(move || index.get().and_then(|index| review.segment(index)));
@@ -170,6 +217,25 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
             review.edit(index);
         }
     };
+    let skip = move || {
+        if let Some(index) = index.get_untracked() {
+            review.set_skipped(index, index, true);
+        }
+    };
+    let skip_from = move || {
+        if let Some(index) = index.get_untracked() {
+            review.begin_skip(index);
+        }
+    };
+    let tap = move || {
+        if let Some(index) = index.get_untracked()
+            && !review.finish_skip(index)
+        {
+            review.jump_to(index);
+        }
+    };
+    let found_ad = move || index.get().is_some_and(|index| review.found_ad(index));
+    let starts_skip = move || index.get().is_some() && index.get() == review.skip_start();
     let line = view()
         .element_ref(&row_ref)
         .w_full()
@@ -177,7 +243,17 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
         .rounded(tokens::radius)
         .transition_colors()
         .duration(motion::BASE)
-        .bg(move || if is_current() { tokens::highlight() } else { theme().background })
+        .bg(move || {
+            if starts_skip() {
+                theme().primary.opacity(0.16)
+            } else if is_current() {
+                tokens::highlight()
+            } else if found_ad() {
+                theme().muted
+            } else {
+                theme().background
+            }
+        })
         .child(when(is_repeating, move || {
             view()
                 .absolute()
@@ -252,7 +328,7 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                         ))
                         .child(when(editing, move || editor(review)).otherwise(move || {
                             nsh_base::button()
-                                .on_press(press)
+                                .on_press(tap)
                                 .rounded(tokens::radius_sm)
                                 .focus_visible(tokens::focus_ring)
                                 .child(ui::veil(hidden, move || {
@@ -459,6 +535,9 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
                         move || ui::menu_action(Icon::Repeat, l("Repeat through here"), repeat_through),
                     ))
                     .child(ui::menu_divider())
+                    .child(ui::menu_action(Icon::Scissors, l("Skip this sentence"), skip))
+                    .child(ui::menu_action(Icon::Scissors, l("Skip from here…"), skip_from))
+                    .child(ui::menu_divider())
                     .child(ui::menu_action(Icon::Pencil, l("Edit"), edit))
                     .child(ui::menu_action(Icon::Copy, l("Copy sentence"), move || {
                         let shown = segment.with_untracked(|s| {
@@ -595,13 +674,25 @@ fn editor(review: Review) -> impl IntoElement {
                     },
                 ))
                 .child(when(original, move || {
-                    view().flex_1().flex_row().justify_end().child(ui::icon_button_as(
-                        Variant::Danger,
-                        Icon::Trash,
-                        tr("Delete sentence"),
-                        Size::Sm,
-                        move || review.delete_editing(),
-                    ))
+                    view()
+                        .flex_1()
+                        .flex_row()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            button(Variant::Ghost, Size::Sm, l("Skip from here…"))
+                                .on_press(move || review.skip_editing_onward()),
+                        )
+                        .child(ui::icon_button(Icon::Scissors, tr("Skip this sentence"), Size::Sm, move || {
+                            review.skip_editing()
+                        }))
+                        .child(ui::icon_button_as(
+                            Variant::Danger,
+                            Icon::Trash,
+                            tr("Delete sentence"),
+                            Size::Sm,
+                            move || review.delete_editing(),
+                        ))
                 })),
         )
 }
