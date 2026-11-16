@@ -29,6 +29,7 @@ nsh-updater = { version = "0.5.1" }
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", default-features = false, features = ["sync"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+ring = "0.17"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = { version = "0.5.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }

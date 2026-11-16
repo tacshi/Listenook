@@ -39,6 +39,11 @@ pub fn bytes(size: i64) -> String {
     }
 }
 
+pub fn minutes_since(iso: &str) -> Option<i64> {
+    let then = chrono::DateTime::parse_from_rfc3339(iso).ok()?;
+    Some((chrono::Utc::now() - then.with_timezone(&chrono::Utc)).num_minutes().max(0))
+}
+
 pub fn date(iso: &str) -> String {
     iso.split('T').next().unwrap_or(iso).to_owned()
 }

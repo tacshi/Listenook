@@ -109,7 +109,23 @@ const ZH: &[(&str, &str)] = &[
     ("Export", "导出"),
     ("Export…", "导出…"),
     ("Copy", "复制"),
-    ("Remove", "移除"),
+    ("Unpair", "取消配对"),
+    ("Paired devices", "已配对的设备"),
+    ("Unpair this device", "取消此设备的配对"),
+    ("Unpair this device?", "要取消此设备的配对吗？"),
+    (
+        "It stops syncing with all your devices, and they forget it. What is already here stays.",
+        "它将不再与你的任何设备同步，这些设备也会忘记它。此设备上已有的内容会保留。",
+    ),
+    (
+        "This device syncs on its own with these devices whenever both are open on the same network. Recordings over 500 MB are copied only when you sync yourself.",
+        "只要两台设备都在同一网络中打开，此设备就会自动与这些设备同步。超过 500 MB 的录音只在你手动同步时复制。",
+    ),
+    (
+        "This device is not paired with any other. Open Sync to pair one with a code.",
+        "此设备尚未与其他设备配对。打开“同步”，用验证码配对一台设备。",
+    ),
+    ("Open Sync", "打开同步"),
     ("Retry", "重试"),
     ("Open", "打开"),
     ("Rename…", "重命名…"),
@@ -563,11 +579,6 @@ const ZH: &[(&str, &str)] = &[
         "还没有录音带这个标签。在录音的菜单里选“标签…”来添加。",
     ),
     ("Sync with another device…", "与其他设备同步…"),
-    ("Sync with another device", "与其他设备同步"),
-    (
-        "Both devices end up with every recording, transcript, group and tag, and with the podcasts you follow and where you left each episode. Where both have a recording, the one edited last is kept. Nothing is deleted.",
-        "同步后，两台设备都会拥有全部录音、转写、分组和标签，以及你关注的播客和每集的收听进度。两边都有的录音保留最后编辑的版本。不会删除任何内容。",
-    ),
     ("Visible to devices on this network", "允许本网络中的设备发现此设备"),
     ("This device’s name", "此设备的名称"),
     ("Nearby devices", "附近的设备"),
@@ -579,7 +590,6 @@ const ZH: &[(&str, &str)] = &[
     ("Sync", "同步"),
     ("Waiting for", "正在等待"),
     ("Syncing with", "正在同步："),
-    ("Accept the sync on the other device.", "请在另一台设备上接受同步。"),
     ("recordings", "条录音"),
     ("Synced with", "已同步："),
     ("Connection lost. Reconnecting…", "连接已中断，正在重新连接…"),
@@ -589,10 +599,46 @@ const ZH: &[(&str, &str)] = &[
     ("nothing to copy, the Libraries already match.", "无需复制，两边的资料库已一致。"),
     ("received", "条已接收"),
     ("sent", "条已发送"),
-    ("Sync request", "同步请求"),
-    ("wants to sync its Library with this one.", "想与此设备同步资料库。"),
-    ("Decline", "拒绝"),
-    ("Accept", "接受"),
+    ("Sync with your devices", "与你的设备同步"),
+    (
+        "Pair your devices once with a code. After that they sync on their own whenever they are open on the same network, and every one ends up with every recording, transcript, group and tag, and with the podcasts you follow and where you left each episode. Where two have a recording, the one edited last is kept.",
+        "用验证码配对一次后，你的设备只要在同一网络中打开，就会自动同步：每台设备都会拥有全部录音、转写、分组和标签，以及你关注的播客和每集的收听进度。两台设备都有的录音保留最后编辑的版本。",
+    ),
+    ("My devices", "我的设备"),
+    ("Sync now", "立即同步"),
+    ("Add a device", "添加设备"),
+    ("Pair", "配对"),
+    ("Pairing…", "正在配对…"),
+    ("Pair a device", "配对设备"),
+    ("Paired with", "已配对："),
+    ("Remove", "移除"),
+    (
+        "It stops syncing with your devices. Pair it again to bring it back.",
+        "它将不再与你的设备同步。重新配对即可恢复。",
+    ),
+    ("Nearby", "在附近"),
+    ("Not synced yet", "尚未同步"),
+    ("Synced just now", "刚刚同步"),
+    ("Last synced", "上次同步"),
+    ("min ago", "分钟前"),
+    ("h ago", "小时前"),
+    ("Enter the code shown on", "请输入显示在以下设备上的验证码："),
+    ("6-digit code", "6 位验证码"),
+    (
+        "That code is not right. Check it on the other device and try again.",
+        "验证码不正确，请在另一台设备上核对后重试。",
+    ),
+    (
+        "Once paired, the two devices sync on their own whenever both are open on the same network.",
+        "配对后，两台设备只要都在同一网络中打开，就会自动同步。",
+    ),
+    ("Enter this code on", "请在"),
+    ("to pair it with this device.", "上输入此验证码，与此设备配对。"),
+    ("Keep Listenook open on the other device.", "请让另一台设备保持打开聆页。"),
+    (
+        "None of your devices answered. Open Listenook on them, on this network.",
+        "你的设备都没有响应。请在这些设备上打开聆页，并连接到同一网络。",
+    ),
     ("Try again", "重试"),
     (
         "No Listenook answered at that address. Open Sync on the other device and check the address.",
@@ -717,7 +763,21 @@ fn known_error(code: &str) -> Option<(&'static str, &'static str)> {
         "podcast_transcript_missing" | "podcast_transcript_failed" | "podcast_transcript_untimed" => {
             ("The publisher’s captions could not be used.", "无法使用发布方提供的字幕。")
         }
-        "sync_declined" => ("The other device declined the sync.", "另一台设备拒绝了同步。"),
+        "sync_unpaired" => {
+            ("The other device does not know this one. Pair them again.", "另一台设备不认识此设备，请重新配对。")
+        }
+        "sync_removed" => (
+            "This device was removed from your devices. Pair it again to sync.",
+            "此设备已从你的设备中移除。重新配对后即可同步。",
+        ),
+        "sync_wrong_code" => (
+            "That code is not right. Check it on the other device and try again.",
+            "验证码不正确，请在另一台设备上核对后重试。",
+        ),
+        "sync_code_expired" => (
+            "The code is no longer valid. Start pairing again to get a new one.",
+            "验证码已失效，请重新开始配对以获取新的验证码。",
+        ),
         "sync_peer_busy" => {
             ("One of the devices is already syncing. Try again when it is done.", "其中一台设备正在同步，请稍后重试。")
         }

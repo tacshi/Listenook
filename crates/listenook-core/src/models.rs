@@ -796,6 +796,8 @@ pub struct Settings {
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub recent_hidden: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub shelf_marks: BTreeMap<String, crate::sync::Mark>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub brief_anchors: BTreeMap<String, BriefAnchor>,
     #[serde(default = "truthy")]
     pub auto_align_transcripts: bool,
@@ -823,6 +825,7 @@ impl Default for Settings {
             playback_played_at: BTreeMap::new(),
             continue_hidden: BTreeSet::new(),
             recent_hidden: BTreeSet::new(),
+            shelf_marks: BTreeMap::new(),
             brief_anchors: BTreeMap::new(),
             auto_align_transcripts: true,
             extra: Map::new(),
