@@ -1330,6 +1330,60 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
 }
 
 #[test]
+fn a_path_sent_by_the_other_device_never_names_a_file_here() {
+    let mut it = start("sync-path", paired_on_port(47948), Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    let private = std::env::temp_dir().join(format!("listenook-flow-private-{}.m4a", std::process::id()));
+    std::fs::write(&private, "not for the other device").unwrap();
+    it.app.press("Sync").unwrap();
+    it.app.wait_for("My devices").unwrap();
+
+    let base = "http://127.0.0.1:47948/listenook";
+    let hello = json!({"device": other_device(47948), "catalog": {"version": 1, "groups": [], "tags": []}});
+    let (welcome, _) = hello_to(base, &circle_key(), hello).unwrap();
+    let token = welcome["token"].as_str().unwrap().to_owned();
+    it.app.wait_for("Syncing with Studio Mac…").unwrap();
+    let job = json!({
+        "manifest_version": 15, "id": "probe", "source_path": private.to_str().unwrap(),
+        "created_at": "2026-11-12T08:00:00.000Z", "updated_at": "2026-11-12T09:00:00.000Z",
+        "status": "completed", "display_title": "Probe from the studio",
+    });
+    ureq::put(&format!("{base}/manifest/probe"))
+        .set("X-Listenook-Token", &token)
+        .send_string(&job.to_string())
+        .unwrap();
+    it.app.press("role:button[Close]").unwrap();
+    it.app.wait_for("Probe from the studio").unwrap();
+
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest(&it.root, "probe")).unwrap()).unwrap();
+    let kept = it.root.join("media/sync-probe.m4a");
+    assert_eq!(saved["source_path"].as_str(), kept.to_str(), "the recording waits for its media in the app's folder");
+    let served = ureq::get(&format!("{base}/media/probe")).set("X-Listenook-Token", &token).call();
+    assert!(matches!(served, Err(ureq::Error::Status(404, _))), "the file the path named is not sent");
+    let _ = std::fs::remove_file(private);
+
+    let put = |id: &str, updated_at: &str, title: &str| {
+        let job = json!({
+            "manifest_version": 15, "id": id, "source_path": "/elsewhere/talk.m4a",
+            "created_at": "2026-11-12T08:00:00.000Z", "updated_at": updated_at,
+            "status": "completed", "display_title": title,
+        });
+        ureq::put(&format!("{base}/manifest/{id}"))
+            .set("X-Listenook-Token", &token)
+            .send_string(&job.to_string())
+            .unwrap();
+    };
+    put("probe", "2026-11-12T08:30:00.000Z", "An older probe");
+    put("after", "2026-11-12T09:00:00.000Z", "Sent after the older probe");
+    it.app.wait_for("Sent after the older probe").unwrap();
+    assert!(it.app.shows("Probe from the studio") && !it.app.shows("An older probe"), "the newer recording here stays");
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest(&it.root, "probe")).unwrap()).unwrap();
+    assert_eq!(saved["display_title"], "Probe from the studio");
+}
+
+#[test]
 fn a_lost_connection_is_taken_up_again_where_it_broke_off() {
     use std::io::{BufRead, BufReader, Read, Write};
     let mut it = start("sync-lost", paired_on_port(47943), Vec::new());

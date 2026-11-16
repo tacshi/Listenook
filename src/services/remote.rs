@@ -119,8 +119,11 @@ impl Provider {
         self.send(request, key).await
     }
 
-    async fn delete(self, path: &str, key: &str) {
-        let _ = self.send(HttpRequest::new("DELETE", format!("{}{path}", self.base())), key).await;
+    /// Whether the file or job is gone from the provider: deleted now, or already gone.
+    async fn delete(self, path: &str, key: &str) -> bool {
+        let request = HttpRequest::new("DELETE", format!("{}{path}", self.base()))
+            .header("Authorization", format!("Bearer {key}"));
+        fetch(request).await.is_ok_and(|response| response.ok() || response.status() == 404)
     }
 
     fn id_of(self, body: &Value, keys: &[&str]) -> Result<String, Failure> {
@@ -251,13 +254,16 @@ impl Provider {
         }
     }
 
-    pub(crate) async fn cleanup(self, transcription_id: Option<&str>, file_id: Option<&str>, key: &str) {
+    /// Deletes what the job left with the provider; whether all of it is gone.
+    pub(crate) async fn cleanup(self, transcription_id: Option<&str>, file_id: Option<&str>, key: &str) -> bool {
+        let mut gone = true;
         if let (Provider::Soniox, Some(id)) = (self, transcription_id) {
-            self.delete(&format!("/transcriptions/{id}"), key).await;
+            gone &= self.delete(&format!("/transcriptions/{id}"), key).await;
         }
         if let Some(id) = file_id {
-            self.delete(&format!("/files/{id}"), key).await;
+            gone &= self.delete(&format!("/files/{id}"), key).await;
         }
+        gone
     }
 }
 

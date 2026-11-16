@@ -19,8 +19,23 @@ fn cache(id: &str, extension: &str) -> Option<PathBuf> {
 
 const KINDS: [&str; 3] = ["mp4", "mp3", "wav"];
 
-thread_local! {
-    static MAKING: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+/// Recordings being made playable. An id is marked for as long as the work on it runs, not
+/// for as long as someone waits for it: a page left mid-way drops its wait, but the work goes
+/// on writing the file, and a second one must not start beside it.
+static MAKING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn making() -> std::sync::MutexGuard<'static, std::collections::HashSet<String>> {
+    MAKING.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Marks a recording as being made until it is dropped, when the work ends however it ends.
+struct Making(String);
+
+impl Drop for Making {
+    fn drop(&mut self) {
+        making().remove(&self.0);
+    }
 }
 
 pub(crate) fn forget(id: &str) {
@@ -81,15 +96,21 @@ fn make(id: &str, source: &Path) -> Option<PathBuf> {
 }
 
 pub(crate) async fn prepare(id: String, source: String) -> Option<PathBuf> {
-    while MAKING.with_borrow(|making| making.contains(&id)) {
+    loop {
+        if let Some(path) = made(&id) {
+            return Some(path);
+        }
+        if making().insert(id.clone()) {
+            break;
+        }
         timer(std::time::Duration::from_millis(200)).await;
     }
-    if let Some(path) = made(&id) {
-        return Some(path);
-    }
-    MAKING.with_borrow_mut(|making| making.insert(id.clone()));
-    let (work, done) = (id.clone(), id);
-    let path = blocking(move || make(&work, Path::new(&source))).await.ok().flatten();
-    MAKING.with_borrow_mut(|making| making.remove(&done));
-    path
+    let mark = Making(id.clone());
+    blocking(move || {
+        let _mark = mark;
+        make(&id, Path::new(&source))
+    })
+    .await
+    .ok()
+    .flatten()
 }

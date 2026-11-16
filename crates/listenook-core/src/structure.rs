@@ -1,12 +1,13 @@
 use crate::{
     highlights,
     models::{Document, Segment},
+    parser::is_spaced_letter,
 };
 
 fn join(left: &str, right: &str) -> String {
     let (left, right) = (left.trim_end(), right.trim_start());
-    let spaced = left.chars().last().is_some_and(|c| !c.is_whitespace() && c.is_ascii())
-        && right.chars().next().is_some_and(|c| c.is_ascii_alphanumeric());
+    let spaced = left.chars().last().is_some_and(|c| !c.is_whitespace() && (c.is_ascii() || is_spaced_letter(c)))
+        && right.chars().next().is_some_and(is_spaced_letter);
     if spaced { format!("{left} {right}") } else { format!("{left}{right}") }
 }
 
@@ -179,6 +180,16 @@ mod tests {
         assert!(document.segments[0].skipped, "both halves were skipped");
         assert!(merge_with_next(&mut document, 0));
         assert!(!document.segments[0].skipped, "merged with a sentence that plays");
+    }
+
+    #[test]
+    fn joined_words_are_spaced_in_every_script_that_spaces_them() {
+        assert_eq!(join("Он сказал", "привет."), "Он сказал привет.");
+        assert_eq!(join("c'était", "ça"), "c'était ça");
+        assert_eq!(join("안녕하세요", "여러분"), "안녕하세요 여러분");
+        assert_eq!(join("你好，", "世界"), "你好，世界");
+        assert_eq!(join("こんにちは", "世界"), "こんにちは世界");
+        assert_eq!(join("Hello.", "World"), "Hello. World");
     }
 
     #[test]

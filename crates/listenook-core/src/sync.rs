@@ -352,6 +352,11 @@ pub fn is_code(text: &str) -> bool {
 
 pub type Removed = BTreeMap<String, String>;
 
+/// Whether `here` was saved after `there`: an edit made on this device while a sync ran stays.
+pub fn edited_after(here: &str, there: &str) -> bool {
+    millis(here) > millis(there)
+}
+
 pub fn removal_stands(removed_at: &str, updated_at: &str) -> bool {
     millis(removed_at) >= millis(updated_at)
 }
@@ -504,6 +509,14 @@ pub fn keep_title(job: &mut Job, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_edit_saved_later_is_newer_and_a_missing_time_is_oldest() {
+        assert!(edited_after("2026-11-12T09:00:00.000Z", "2026-11-12T08:59:59.999Z"));
+        assert!(!edited_after("2026-11-12T09:00:00.000Z", "2026-11-12T09:00:00.000Z"));
+        assert!(!edited_after("", "2026-11-12T09:00:00.000Z"));
+        assert!(edited_after("2026-11-12T09:00:00+08:00", "2026-11-12T00:59:00Z"));
+    }
 
     #[test]
     fn a_synced_recording_keeps_the_name_of_its_file() {

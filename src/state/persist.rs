@@ -54,16 +54,56 @@ fn write_library(path: &Path, value: &impl serde::Serialize) -> io::Result<()> {
 }
 
 pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
+    write_durably(path, contents, false)
+}
+
+/// Writes `contents` to a file beside `path` and renames it over `path`, flushing both to the
+/// disk first: after a crash or power loss the file holds the old contents or the new ones,
+/// never a part. `private` makes the file readable by this user only, from its first byte.
+pub(crate) fn write_durably(path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
+    use io::Write;
+    let parent = path.parent();
+    if let Some(parent) = parent {
         fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, contents)?;
-    fs::rename(tmp, path)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+    let mut file = options.open(&tmp)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp, path)?;
+    #[cfg(unix)]
+    if let Some(parent) = parent.and_then(|parent| fs::File::open(parent).ok()) {
+        let _ = parent.sync_all();
+    }
+    Ok(())
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    serde_json::from_slice(&fs::read(path).ok()?).ok()
+/// Reads a JSON file, or `None` when it is missing or can't be read. A file that is there but
+/// doesn't parse (cut short by a crash, or written by a newer version) is copied beside itself
+/// as `.unreadable` first, since the next save replaces it with what the app has now.
+pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    let bytes = fs::read(path).ok()?;
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            let kept = path.with_extension("json.unreadable");
+            log::error!("{} can't be read ({error}); a copy is kept as {}", path.display(), kept.display());
+            if !bytes.is_empty() && !kept.exists() {
+                let _ = fs::write(&kept, &bytes);
+            }
+            None
+        }
+    }
 }
 
 fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> io::Result<()> {
@@ -189,6 +229,35 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_does_not_parse_is_copied_before_it_is_saved_over() {
+        let root = temp("unreadable");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("settings.json"), r#"{"theme_mode": "dark", "#).unwrap();
+        let settings = load_settings(&root);
+        assert_eq!(settings, Settings::default().sanitized());
+        save_settings(&root, &settings).unwrap();
+        let kept = fs::read_to_string(root.join("settings.json.unreadable")).unwrap();
+        assert_eq!(kept, r#"{"theme_mode": "dark", "#, "what was there is kept");
+        fs::write(root.join("settings.json"), "").unwrap();
+        let _ = load_settings(&root);
+        assert_eq!(fs::read_to_string(root.join("settings.json.unreadable")).unwrap(), kept, "the first copy stays");
+        assert!(load_jobs(&root).is_empty() && !root.join("removed.json.unreadable").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_private_file_is_never_readable_by_others() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp("private");
+        let path = root.join("keys.json");
+        write_durably(&path, b"{}", true).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(!root.join("keys.json.tmp").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn jobs_round_trip_newest_first_and_delete() {
         let root = temp("jobs");
         let job = |id: &str, created: &str| Job {
@@ -267,8 +336,14 @@ pub(crate) fn remember_video(root: &Path, path: &str, position_ms: i64, subtitle
     }
 }
 
+/// Whether `path` steps up a folder (`..`): such a path can name a file outside the folder it
+/// seems to be in.
+pub(crate) fn climbs(path: &Path) -> bool {
+    path.components().any(|part| part == std::path::Component::ParentDir)
+}
+
 pub(crate) fn rehomed(path: &str, root: &Path, exists: impl Fn(&Path) -> bool) -> Option<String> {
-    if path.is_empty() || exists(Path::new(path)) {
+    if path.is_empty() || climbs(Path::new(path)) || exists(Path::new(path)) {
         return None;
     }
     let container = root.parent().and_then(Path::parent);
@@ -306,5 +381,15 @@ mod rehomed_tests {
         assert_eq!(rehomed(good, root, there), None);
         assert_eq!(rehomed("/somewhere/else.mp3", root, there), None);
         assert_eq!(rehomed(old, root, |_| false), None);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "iOS container paths")]
+    fn a_path_that_steps_up_a_folder_is_not_moved() {
+        let root = Path::new("/var/mobile/Containers/Data/Application/NEW/Library/Application Support");
+        let escape = "/x/Library/Application Support/../../../../etc/hosts";
+        assert!(climbs(Path::new(escape)));
+        assert_eq!(rehomed(escape, root, |_| true), None);
+        assert!(!climbs(Path::new("/x/Library/Application Support/media/a..b.m4a")));
     }
 }

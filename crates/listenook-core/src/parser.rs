@@ -198,10 +198,25 @@ pub fn parse_moss(payload: &Value) -> Document {
     document
 }
 
+/// Whether `c` is a letter or digit of a script that puts spaces between words (Latin with its
+/// accents, Cyrillic, Greek, Hangul, Arabic and the like), not of one written without them
+/// (Chinese, Japanese, Thai, Lao, Khmer, Myanmar).
+pub(crate) fn is_spaced_letter(c: char) -> bool {
+    c.is_alphanumeric()
+        && !matches!(c as u32,
+            0x0E00..=0x0EFF // Thai, Lao
+            | 0x1000..=0x109F // Myanmar
+            | 0x1780..=0x17FF // Khmer
+            | 0x2E80..=0x9FFF // CJK radicals and symbols, kana, CJK ideographs
+            | 0xF900..=0xFAFF // CJK compatibility ideographs
+            | 0xFF00..=0xFFEF // fullwidth and halfwidth forms
+            | 0x20000..=0x3FFFF) // CJK ideographs beyond the basic plane
+}
+
 fn join_text(left: &str, right: &str) -> String {
     let (left, right) = (left.trim_end(), right.trim_start());
-    let spaced = left.chars().last().is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, ',' | ';' | ':'))
-        && right.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+    let spaced = left.chars().last().is_some_and(|c| is_spaced_letter(c) || matches!(c, ',' | ';' | ':'))
+        && right.chars().next().is_some_and(is_spaced_letter)
         && !punctuation_only(right);
     if spaced { format!("{left} {right}") } else { format!("{left}{right}") }
 }

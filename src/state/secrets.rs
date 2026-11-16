@@ -50,23 +50,33 @@ fn file() -> Option<std::path::PathBuf> {
     (!in_memory()).then(|| persist::data_root().map(|root| root.join("keys.json"))).flatten()
 }
 
+/// The saved keys: empty when there is no file, an error when there is one that can't be read.
+fn saved_keys() -> Result<HashMap<String, String>, String> {
+    let Some(path) = file() else {
+        return Ok(HashMap::new());
+    };
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("the saved keys can't be read: {e}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn read_file() -> HashMap<String, String> {
-    file()
-        .and_then(|path| std::fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    saved_keys().unwrap_or_default()
 }
 
 fn write_file(secret: Secret, value: &str) -> Result<(), String> {
     let path = file().ok_or("no data folder")?;
-    let mut keys = read_file();
+    // A file that can't be read is not replaced: writing only this key would lose the others.
+    let mut keys = saved_keys()?;
     if value.is_empty() {
         keys.remove(secret.account());
     } else {
         keys.insert(secret.account().to_owned(), value.to_owned());
     }
     let bytes = serde_json::to_vec(&keys).map_err(|e| e.to_string())?;
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    persist::write_durably(&path, &bytes, true).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

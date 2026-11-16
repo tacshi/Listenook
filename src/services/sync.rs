@@ -43,6 +43,8 @@ const BIND_WITHIN: Duration = Duration::from_secs(6);
 const REOPEN_AFTER: Duration = Duration::from_secs(1);
 const PAIR_WITHIN: Duration = Duration::from_secs(180);
 const PAIR_ATTEMPTS: u32 = 3;
+const PAIR_COOLDOWN: Duration = Duration::from_secs(30);
+const PAIR_FORGIVEN: Duration = Duration::from_secs(3600);
 const CHALLENGE_WITHIN: Duration = Duration::from_secs(60);
 const REPLIES_WITHIN: Duration = Duration::from_millis(1500);
 const MANIFEST_LIMIT: u64 = 256 * 1024 * 1024;
@@ -214,6 +216,34 @@ struct State {
     challenges: Vec<(String, Instant)>,
     busy: HashSet<String>,
     library: Option<Library>,
+    misses: Misses,
+}
+
+/// Wrong pairing codes, counted across pairings: asking again shows a new code but gives no new
+/// guesses. Once `PAIR_ATTEMPTS` are wrong, pairing waits, longer after each further miss, up to
+/// `PAIR_FORGIVEN`; an hour without a miss, or a pairing that succeeds, starts the count again.
+#[derive(Default)]
+struct Misses {
+    count: u32,
+    last: Option<Instant>,
+}
+
+impl Misses {
+    fn miss(&mut self) {
+        if self.last.is_some_and(|last| last.elapsed() >= PAIR_FORGIVEN) {
+            self.count = 0;
+        }
+        self.count += 1;
+        self.last = Some(Instant::now());
+    }
+
+    fn waiting(&self) -> bool {
+        let Some(last) = self.last.filter(|_| self.count >= PAIR_ATTEMPTS) else {
+            return false;
+        };
+        let wait = PAIR_COOLDOWN.saturating_mul(1 << (self.count - PAIR_ATTEMPTS).min(7)).min(PAIR_FORGIVEN);
+        last.elapsed() < wait
+    }
 }
 
 impl State {
@@ -357,7 +387,7 @@ pub(crate) fn platform() -> &'static str {
 }
 
 fn load_ledger(root: &Path) -> Ledger {
-    fs::read(root.join("sync.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+    persist::read_json(&root.join("sync.json")).unwrap_or_default()
 }
 
 pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible: bool) {
@@ -899,6 +929,7 @@ fn reply(stream: &mut TcpStream, status: u16, body: &[u8]) -> io::Result<()> {
         409 => "Conflict",
         410 => "Gone",
         426 => "Upgrade Required",
+        429 => "Too Many Requests",
         _ => "Bad Request",
     };
     write!(
@@ -1039,8 +1070,13 @@ fn read_body(call: &mut Call, limit: u64) -> io::Result<Vec<u8>> {
     if call.length > limit {
         return Err(io::Error::other("the body is too large"));
     }
-    let mut bytes = vec![0_u8; call.length as usize];
-    call.body.read_exact(&mut bytes)?;
+    // Grown as bytes arrive, not sized from the length the caller declared: a stated length
+    // costs nothing until the bytes are really sent.
+    let mut bytes = Vec::with_capacity(call.length.min(64 * 1024) as usize);
+    (&mut call.body).take(call.length).read_to_end(&mut bytes)?;
+    if (bytes.len() as u64) < call.length {
+        return Err(io::ErrorKind::UnexpectedEof.into());
+    }
     Ok(bytes)
 }
 
@@ -1162,7 +1198,7 @@ fn route(out: &mut TcpStream, call: &mut Call) -> io::Result<()> {
             reply(out, 200, b"{}")
         }
         ("GET", ["media", id]) => {
-            let source = persist::load_job(&root, id).map(|job| media_of(&root, &job));
+            let source = persist::load_job(&root, id).and_then(|job| media_of(&root, &job));
             let Some(mut file) = source.and_then(|path| fs::File::open(path).ok()) else {
                 return reply(out, 404, b"{}");
             };
@@ -1214,6 +1250,9 @@ fn answer_pairing(out: &mut TcpStream, me: Device, asked: PairAsk) -> io::Result
         return reply(out, 400, b"{}");
     };
     let mut state = state();
+    if state.misses.waiting() {
+        return reply(out, 429, b"{}");
+    }
     let other = state
         .pairing
         .as_ref()
@@ -1256,16 +1295,29 @@ fn confirm_pairing(out: &mut TcpStream, me: Device, confirm: PairConfirm) -> io:
         pairing_secret(&pairing.code, &pairing.shared, (&pairing.device.id, &pairing.theirs), (&me.id, &pairing.nonce));
     if !same(&confirm.proof, &proof(&secret, "", &pairing.device.id, "asker")) {
         pairing.attempts += 1;
-        let spent = pairing.attempts >= PAIR_ATTEMPTS;
+        let attempts = pairing.attempts;
+        state.misses.miss();
+        let waiting = state.misses.waiting();
+        let spent = attempts >= PAIR_ATTEMPTS || waiting;
         if spent && let Some(pairing) = state.pairing.take() {
             state.tell(Event::Paired { serial: pairing.serial, name: None });
         }
         drop(state);
-        return refuse(out, if spent { "expired" } else { "wrong" });
+        return refuse(
+            out,
+            if waiting {
+                "wait"
+            } else if spent {
+                "expired"
+            } else {
+                "wrong"
+            },
+        );
     }
     let Some(pairing) = state.pairing.take() else {
         return refuse(out, "expired");
     };
+    state.misses = Misses::default();
     let mine = state.ledger.circle.as_ref().map(Circle::offer);
     let sealed = if joins_answerer(pairing.offer.as_ref(), mine.as_ref()) {
         let circle = state.ledger.circle.get_or_insert_with(new_circle);
@@ -1357,11 +1409,12 @@ pub(crate) fn confirm(code: &str) -> Result<(), &'static str> {
             serde_json::from_reader(response.into_reader().take(4 * 1024 * 1024)).map_err(|_| "sync_failed")?
         }
         Err(ureq::Error::Status(403, response)) => {
-            if reason(response) == "wrong" {
+            let reason = reason(response);
+            if reason == "wrong" {
                 return Err("sync_wrong_code");
             }
             state().asking = None;
-            return Err("sync_code_expired");
+            return Err(if reason == "wait" { "sync_pair_wait" } else { "sync_code_expired" });
         }
         Err(ureq::Error::Status(404 | 410, _)) => {
             state().asking = None;
@@ -1538,8 +1591,11 @@ fn manifest_path(root: &Path, id: &str) -> PathBuf {
     root.join("jobs").join(id).join("manifest.json")
 }
 
-fn media_of(root: &Path, job: &Job) -> PathBuf {
-    PathBuf::from(persist::rehomed(&job.source_path, root, Path::is_file).unwrap_or_else(|| job.source_path.clone()))
+fn media_of(root: &Path, job: &Job) -> Option<PathBuf> {
+    let path = PathBuf::from(
+        persist::rehomed(&job.source_path, root, Path::is_file).unwrap_or_else(|| job.source_path.clone()),
+    );
+    (!persist::climbs(&path)).then_some(path)
 }
 
 fn names(entries: &[Entry]) -> impl Iterator<Item = (String, String)> + '_ {
@@ -1570,7 +1626,10 @@ fn recordings(root: &Path) -> (Index, String) {
     let entries = persist::load_jobs(root)
         .iter()
         .map(|job| {
-            let size = fs::metadata(media_of(root, job)).ok().filter(fs::Metadata::is_file).map(|file| file.len());
+            let size = media_of(root, job)
+                .and_then(|path| fs::metadata(path).ok())
+                .filter(fs::Metadata::is_file)
+                .map(|file| file.len());
             Entry::of(job, size)
         })
         .collect();
@@ -1644,6 +1703,7 @@ fn code_of(error: ureq::Error) -> &'static str {
     match error {
         ureq::Error::Status(409, _) => "sync_peer_busy",
         ureq::Error::Status(426, _) => "sync_incompatible",
+        ureq::Error::Status(429, _) => "sync_pair_wait",
         ureq::Error::Status(..) => "sync_failed",
         ureq::Error::Transport(_) => "sync_unreachable",
     }
@@ -1814,7 +1874,9 @@ fn exchange(
         .post(&format!("{base}/sync"))
         .send_bytes(&serde_json::to_vec(&hello).map_err(|_| "sync_failed")?);
     let welcome: Welcome = match answered {
-        Ok(response) => serde_json::from_reader(response.into_reader()).map_err(|_| "sync_failed")?,
+        Ok(response) => {
+            serde_json::from_reader(response.into_reader().take(MANIFEST_LIMIT)).map_err(|_| "sync_failed")?
+        }
         Err(ureq::Error::Status(403, response)) => {
             return Err(if reason(response) == "removed" {
                 state().leave();
@@ -1927,7 +1989,7 @@ fn exchange(
     let push = |transfer: &Transfer| -> Result<(), &'static str> {
         let id = &transfer.id;
         if transfer.media {
-            let source = persist::load_job(root, id).map(|job| media_of(root, &job)).ok_or("sync_failed")?;
+            let source = persist::load_job(root, id).and_then(|job| media_of(root, &job)).ok_or("sync_failed")?;
             let mut file = fs::File::open(&source).map_err(|_| "sync_failed")?;
             let length = file.metadata().map_err(|_| "sync_failed")?.len();
             let extension = media_extension(&transfer.media_name);
@@ -2044,6 +2106,7 @@ mod tests {
 
     fn started(root: &Path, port: u16) -> SocketAddr {
         unsafe { std::env::set_var("LISTENOOK_SYNC_PORT", port.to_string()) };
+        state().misses = Misses::default();
         configure(Some(root.to_owned()), "device-there".into(), "There".into(), true);
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let found = (0..50).find_map(|_| {
@@ -2083,7 +2146,7 @@ mod tests {
         let (index, _) = index_of(&root, &HashSet::new());
         assert_eq!(index.entries[0].media_size, 5);
         assert_eq!(index.entries[0].media_name.as_deref(), Some("Talk.m4a"));
-        assert_eq!(media_of(&root, &job), root.join("media/one/Talk.m4a"));
+        assert_eq!(media_of(&root, &job), Some(root.join("media/one/Talk.m4a")));
         let _ = fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
     }
 
@@ -2257,6 +2320,64 @@ mod tests {
         assert!(told && is_mate("device-here"), "the pairing is told and remembered");
         let saved: Ledger = serde_json::from_slice(&fs::read(there.join("sync.json")).unwrap()).unwrap();
         assert_eq!(saved.circle.map(|circle| circle.key), Some(circle.key));
+        configure(None, String::new(), String::new(), false);
+        let _ = fs::remove_dir_all(there);
+    }
+
+    #[test]
+    fn asking_again_for_a_code_gives_no_new_guesses_at_it() {
+        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let there = library("pairing-guesses");
+        let address = started(&there, 47935);
+        let base = format!("http://{address}/listenook");
+        take();
+        let asked = || {
+            let (private, public) = key_pair().unwrap();
+            let asked = PairAsk { device: asker(), nonce: "asker-nonce".into(), public, circle: None };
+            let answer: PairAnswer = json(post(&format!("{base}/pair"), &asked).unwrap());
+            let shared = agree(private, &answer.public).unwrap();
+            let code = take()
+                .1
+                .into_iter()
+                .find_map(|event| match event {
+                    Event::Pairing { code, .. } => Some(code),
+                    _ => None,
+                })
+                .expect("a code is shown");
+            (shared, answer.nonce, code)
+        };
+        let guess = |(shared, nonce, code): &(String, String, String), right: bool| {
+            let code = match (right, code.as_str()) {
+                (true, _) => code.clone(),
+                (false, "000000") => "111111".into(),
+                (false, _) => "000000".into(),
+            };
+            let secret = pairing_secret(&code, shared, ("device-here", "asker-nonce"), ("device-there", nonce));
+            let confirm = PairConfirm {
+                id: "device-here".into(),
+                proof: proof(&secret, "", "device-here", "asker"),
+                circle: None,
+            };
+            match post(&format!("{base}/pair/confirm"), &confirm) {
+                Ok(_) => "paired".to_owned(),
+                Err(ureq::Error::Status(403, response)) => reason(response),
+                Err(error) => panic!("{error}"),
+            }
+        };
+
+        let first = asked();
+        assert_eq!(guess(&first, false), "wrong");
+        assert_eq!(guess(&first, false), "wrong");
+        let again = asked();
+        assert_eq!(guess(&again, false), "wait", "a new code does not start the guesses again");
+        assert_eq!(guess(&again, true), "expired", "the code that was shown is spent");
+        let (_, public) = key_pair().unwrap();
+        let asking = PairAsk { device: asker(), nonce: "asker-nonce".into(), public, circle: None };
+        let refused = post(&format!("{base}/pair"), &asking);
+        assert!(matches!(refused, Err(ureq::Error::Status(429, _))), "no code is shown while pairing waits");
+        assert!(state().ledger.circle.is_none());
+
+        state().misses = Misses::default();
         configure(None, String::new(), String::new(), false);
         let _ = fs::remove_dir_all(there);
     }
