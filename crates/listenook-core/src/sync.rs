@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    activity::Activity,
     models::{Job, LibraryCatalog, Named},
     podcast::{Catalog, Feed, Followed, ListenProgress},
 };
@@ -66,6 +67,9 @@ pub struct Index {
     pub removed: Removed,
     pub podcasts: Podcasts,
     pub shelves: Shelves,
+    /// Each device's learning time; older peers send none.
+    #[serde(skip_serializing_if = "Activity::is_empty")]
+    pub activity: Activity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -750,5 +754,20 @@ mod tests {
         assert_eq!(media_file_name("a-1", "Talk.MP3"), "sync-a-1.mp3");
         assert_eq!(media_file_name("a-1", "x.../../etc"), "sync-a-1.etc");
         assert_eq!(media_file_name("a-1", "noext"), "sync-a-1.media");
+    }
+
+    #[test]
+    fn learning_time_travels_in_the_index_and_older_ones_still_read() {
+        use crate::activity::{Kind, parse_day};
+        let older: Index = serde_json::from_str(r#"{"entries": []}"#).unwrap();
+        assert!(older.activity.is_empty());
+        let mut index = Index::default();
+        assert!(!serde_json::to_string(&index).unwrap().contains("activity"));
+        index.activity.add("there", parse_day("2026-11-17").unwrap(), Kind::Listen, 600);
+        let sent: Index = serde_json::from_str(&serde_json::to_string(&index).unwrap()).unwrap();
+        let mut here = Activity::default();
+        here.add("here", parse_day("2026-11-17").unwrap(), Kind::Practice, 300);
+        assert!(here.merge(&sent.activity));
+        assert_eq!(here.on(parse_day("2026-11-17").unwrap()).total_s(), 900);
     }
 }

@@ -445,6 +445,7 @@ impl SyncState {
                 Incoming::Media { id, path } => store.adopt_media(&id, &path),
                 Incoming::Name { id, name } => store.adopt_name(&id, &name),
                 Incoming::Shelves(shelves) => store.adopt_shelves(&shelves),
+                Incoming::Activity(activity) => store.activity.adopt(&activity),
             }
         }
         for event in events {

@@ -924,6 +924,8 @@ pub struct BriefAnchor {
     pub offset: f32,
 }
 
+pub const DAILY_GOAL_MINUTES: u32 = 20;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -954,6 +956,7 @@ pub struct Settings {
     pub brief_anchors: BTreeMap<String, BriefAnchor>,
     #[serde(default = "truthy")]
     pub auto_align_transcripts: bool,
+    pub daily_goal_minutes: u32,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -981,6 +984,7 @@ impl Default for Settings {
             shelf_marks: BTreeMap::new(),
             brief_anchors: BTreeMap::new(),
             auto_align_transcripts: true,
+            daily_goal_minutes: DAILY_GOAL_MINUTES,
             extra: Map::new(),
         }
     }
@@ -993,6 +997,9 @@ impl Settings {
         }
         if self.mimic_pause_seconds > 10 {
             self.mimic_pause_seconds = 0;
+        }
+        if !(1..=240).contains(&self.daily_goal_minutes) {
+            self.daily_goal_minutes = DAILY_GOAL_MINUTES;
         }
         self.manifest_version = MANIFEST_VERSION;
         self

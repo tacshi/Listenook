@@ -11,6 +11,7 @@ use listenook_core::{
 use nsh_core::prelude::*;
 
 use super::{
+    activity::ActivityState,
     monitor::{self, MonitorConfig, MonitorFile, Seen},
     persist,
     podcast::PodcastState,
@@ -111,6 +112,7 @@ pub(crate) struct Store {
     running: Stored<HashMap<String, Spawned<()>>>,
     pub(crate) podcast: PodcastState,
     pub(crate) sync: SyncState,
+    pub(crate) activity: ActivityState,
 }
 
 #[derive(Clone, Default)]
@@ -167,6 +169,7 @@ impl Store {
         let library_catalog = root.as_deref().map(persist::load_library_catalog).unwrap_or_default();
         let root_listened = root.as_deref().map(persist::load_listening).unwrap_or_default();
         let root_monitor = root.as_deref().map(persist::load_monitor).unwrap_or_default();
+        let root_activity = root.as_deref().map(persist::load_activity).unwrap_or_default();
         let (jobs, mut settings, catalog) = match &root {
             Some(root) => (
                 persist::load_jobs(root)
@@ -212,6 +215,7 @@ impl Store {
             running: stored(HashMap::new()),
             podcast: PodcastState::new(catalog, root_listened),
             sync: SyncState::new(),
+            activity: ActivityState::new(root_activity),
         };
         match std::env::var("LISTENOOK_START").as_deref() {
             Ok("reader") => {
@@ -1001,6 +1005,26 @@ impl Store {
         let name: String = name.chars().take(64).collect();
         self.update_settings(|s| drop(s.extra.insert("sync_device_name".into(), name.into())));
         self.configure_sync();
+    }
+
+    /// This device's id, made on first need: Sync announces it, and the
+    /// learning time this device counts is filed under it.
+    pub(crate) fn device_id(&self) -> String {
+        let known =
+            self.settings.with_untracked(|s| s.extra.get("sync_device_id").and_then(|v| v.as_str()).map(str::to_owned));
+        known.unwrap_or_else(|| {
+            let id = uuid::Uuid::new_v4().to_string();
+            self.update_settings(|s| drop(s.extra.insert("sync_device_id".into(), id.clone().into())));
+            id
+        })
+    }
+
+    pub(crate) fn daily_goal_minutes(&self) -> u32 {
+        self.settings.with(|s| s.daily_goal_minutes)
+    }
+
+    pub(crate) fn set_daily_goal_minutes(&self, minutes: u32) {
+        self.update_settings(|s| s.daily_goal_minutes = minutes);
     }
 
     fn configure_sync(&self) {

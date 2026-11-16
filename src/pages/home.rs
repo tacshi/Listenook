@@ -9,7 +9,10 @@ use listenook_core::{
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
-use super::library::{detail, kind_icon};
+use super::{
+    home_stats,
+    library::{detail, kind_icon},
+};
 use crate::{
     platform,
     services::{podcasts, transcribe},
@@ -329,12 +332,32 @@ pub(crate) fn home() -> impl IntoElement {
                         .pb(px(ui::PAGE_INSET))
                         .gap_6()
                         .child(when(searching, move || results(found)).otherwise(move || {
+                            let has_continue = move || continued.with(|items| !items.is_empty());
+                            let beside = move || home_stats::beside();
                             view()
                                 .gap_6()
-                                .child(when(
-                                    move || continued.with(|items| !items.is_empty()),
-                                    move || section("Continue", None, continue_section(continued)),
-                                ))
+                                .child(
+                                    view()
+                                        .style_with(move |s| if beside() { s.flex_row().gap_4() } else { s.gap_6() })
+                                        .child(
+                                            view()
+                                                .style_with(move |s| {
+                                                    if beside() && has_continue() {
+                                                        s.w(px(300.0)).flex_shrink_0()
+                                                    } else {
+                                                        s.w_full()
+                                                    }
+                                                })
+                                                .child(home_stats::today_card(move || beside() && has_continue())),
+                                        )
+                                        .child(when(has_continue, move || {
+                                            view()
+                                                .flex_1()
+                                                .min_w(px(0.0))
+                                                .child(section("Continue", None, continue_section(continued)).flex_1())
+                                        })),
+                                )
+                                .child(when(home_stats::has_history, home_stats::activity_card))
                                 .child(when(
                                     move || processing.with(|jobs| !jobs.is_empty()) || waiting.get() > 0,
                                     move || section("Processing", None, processing_section(processing, waiting)),
@@ -368,7 +391,7 @@ pub(crate) fn home() -> impl IntoElement {
 type Link = (&'static str, Rc<dyn Fn()>);
 
 fn section(title: &'static str, link: Option<Link>, content: impl IntoElement) -> View {
-    let header = view().flex_row().items_center().justify_between().child(
+    let header = view().flex_row().items_center().justify_between().min_h(px(28.0)).child(
         text(l(title))
             .text_base()
             .font_weight(FontWeight::SEMIBOLD)
@@ -449,9 +472,11 @@ fn continue_section(continued: Memo<Vec<Resume>>) -> impl IntoElement {
             return view().into_element();
         };
         let rest: Vec<Resume> = items.collect();
+        // Beside Today the lead card takes the height Today leaves over.
         view()
+            .flex_1()
             .gap_3()
-            .child(lead_card(first))
+            .child(view().flex_1().child(lead_card(first)))
             .child(when(
                 {
                     let empty = rest.is_empty();
@@ -473,10 +498,11 @@ fn lead_card(item: Resume) -> impl IntoElement {
     let label = format!("{} {}", tr("Resume"), title);
     let id = item.id().to_owned();
     let pressed = item.clone();
-    let lead = card().child(
+    let lead = card().flex_1().child(
         pressable()
             .on_press(move || pressed.resume())
             .accessibility_label(label)
+            .flex_1()
             .flex_row()
             .items_center()
             .gap_4()

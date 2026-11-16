@@ -21,6 +21,16 @@ pub fn warning() -> AdaptiveColor {
     role("warning", theme().destructive)
 }
 
+/// Listening time in charts: an emerald green.
+pub fn listen() -> AdaptiveColor {
+    role("listen", theme().chart_1)
+}
+
+/// Practice time in charts: a hot orange beside the green.
+pub fn practice() -> AdaptiveColor {
+    role("practice", theme().chart_2)
+}
+
 pub fn control_border() -> AdaptiveColor {
     role("control-border", theme().input)
 }
@@ -63,6 +73,11 @@ pub fn radius() -> Length {
 
 pub fn radius_sm() -> Length {
     px(theme().number("radius-sm").unwrap_or(6.0)).into()
+}
+
+/// The corners of the smallest parts: a calendar's days, a key's swatches.
+pub fn radius_sm_small() -> Length {
+    px(2.0).into()
 }
 
 pub fn radius_lg() -> Length {

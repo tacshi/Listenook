@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use listenook_core::activity::Kind;
 use listenook_core::{ContentMode, Document, Job, Segment, dictation, highlights, playback, playback::Loudness};
 use nsh_core::prelude::*;
 
@@ -921,6 +922,7 @@ impl Review {
         }
         self.position_ms.set(position_ms);
         self.last_tick.with(|last| *last = Some((Instant::now(), position_ms)));
+        self.store.activity.note(Kind::Listen);
         self.disarm();
         if self.out_of_skipped(position_ms) {
             return;
@@ -1054,6 +1056,7 @@ impl Review {
         let Some(segment) = self.segment_now(index) else {
             return;
         };
+        self.store.activity.touch();
         let goal = self.store.settings().mimic_rep_goal;
         let reps = (self.reps.get_untracked() + 1).min(goal);
         let pause_ms = dictation::mimic_pause_ms(

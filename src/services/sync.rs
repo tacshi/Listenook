@@ -72,6 +72,7 @@ pub(crate) enum Incoming {
     Media { id: String, path: PathBuf },
     Name { id: String, name: String },
     Shelves(Box<Shelves>),
+    Activity(Box<listenook_core::activity::Activity>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -946,6 +947,8 @@ struct Hello {
     removed: listenook_core::sync::Removed,
     podcasts: Podcasts,
     shelves: Shelves,
+    #[serde(skip_serializing_if = "listenook_core::activity::Activity::is_empty")]
+    activity: listenook_core::activity::Activity,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -1505,6 +1508,7 @@ fn open_session(
     state.hand(Incoming::Catalog(hello.catalog.clone()));
     state.hand(Incoming::Podcasts(Box::new(hello.podcasts.clone())));
     state.hand(Incoming::Shelves(Box::new(hello.shelves.clone())));
+    state.hand(Incoming::Activity(Box::new(hello.activity.clone())));
     for (id, name) in &hello.names {
         state.hand(Incoming::Name { id: id.clone(), name: name.clone() });
     }
@@ -1576,6 +1580,7 @@ fn recordings(root: &Path) -> (Index, String) {
         removed: persist::load_removed(root),
         podcasts: Podcasts::of(&persist::load_catalog(root), &persist::load_listening(root)),
         shelves: Shelves::default(),
+        activity: persist::load_activity(root),
     };
     let revision = digest(&[&serde_json::to_string(&index).unwrap_or_default()]);
     state().library =
@@ -1803,6 +1808,7 @@ fn exchange(
         removed: local.removed.clone(),
         podcasts: local.podcasts.clone(),
         shelves: local.shelves.clone(),
+        activity: local.activity.clone(),
     };
     let answered = agent(Duration::from_secs(120))
         .post(&format!("{base}/sync"))
@@ -1855,6 +1861,7 @@ fn exchange(
         state.hand(Incoming::Catalog(welcome.index.catalog.clone()));
         state.hand(Incoming::Podcasts(Box::new(welcome.index.podcasts.clone())));
         state.hand(Incoming::Shelves(Box::new(welcome.index.shelves.clone())));
+        state.hand(Incoming::Activity(Box::new(welcome.index.activity.clone())));
         for (id, name) in names(&welcome.index.entries) {
             state.hand(Incoming::Name { id, name });
         }

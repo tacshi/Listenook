@@ -132,6 +132,37 @@ fn general() -> impl IntoElement {
             ))
     ))
     .child(section(
+        l("Learning"),
+        panel().child(
+            field(
+                l("Daily goal"),
+                dynamic(move || {
+                    store.lang();
+                    untracked(move || {
+                        select(
+                            "Daily goal",
+                            super::home_stats::GOALS
+                                .iter()
+                                .map(|minutes| {
+                                    (minutes.to_string().into(), super::home_stats::goal_choice(*minutes).into())
+                                })
+                                .collect(),
+                            move || SharedString::from(store.daily_goal_minutes().to_string()),
+                            move |value| {
+                                if let Ok(minutes) = value.parse() {
+                                    store.set_daily_goal_minutes(minutes);
+                                }
+                            },
+                        )
+                        .w(px(240.0))
+                        .into_element()
+                    })
+                }),
+            )
+            .child(hint(l("Time spent playing and practicing counts toward it. Home shows how today is going."))),
+        ),
+    ))
+    .child(section(
         l("Background"),
         panel()
             .child(switch(
