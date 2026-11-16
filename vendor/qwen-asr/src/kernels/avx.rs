@@ -289,42 +289,19 @@ pub unsafe fn dot_f32(a: &[f32], b: &[f32], n: usize) -> f32 {
     let mut acc3 = _mm256_setzero_ps();
 
     while i + 32 <= n {
-        acc0 = _mm256_fmadd_ps(
-            _mm256_loadu_ps(a.as_ptr().add(i)),
-            _mm256_loadu_ps(b.as_ptr().add(i)),
-            acc0,
-        );
-        acc1 = _mm256_fmadd_ps(
-            _mm256_loadu_ps(a.as_ptr().add(i + 8)),
-            _mm256_loadu_ps(b.as_ptr().add(i + 8)),
-            acc1,
-        );
-        acc2 = _mm256_fmadd_ps(
-            _mm256_loadu_ps(a.as_ptr().add(i + 16)),
-            _mm256_loadu_ps(b.as_ptr().add(i + 16)),
-            acc2,
-        );
-        acc3 = _mm256_fmadd_ps(
-            _mm256_loadu_ps(a.as_ptr().add(i + 24)),
-            _mm256_loadu_ps(b.as_ptr().add(i + 24)),
-            acc3,
-        );
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a.as_ptr().add(i)), _mm256_loadu_ps(b.as_ptr().add(i)), acc0);
+        acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a.as_ptr().add(i + 8)), _mm256_loadu_ps(b.as_ptr().add(i + 8)), acc1);
+        acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(a.as_ptr().add(i + 16)), _mm256_loadu_ps(b.as_ptr().add(i + 16)), acc2);
+        acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(a.as_ptr().add(i + 24)), _mm256_loadu_ps(b.as_ptr().add(i + 24)), acc3);
         i += 32;
     }
 
     while i + 8 <= n {
-        acc0 = _mm256_fmadd_ps(
-            _mm256_loadu_ps(a.as_ptr().add(i)),
-            _mm256_loadu_ps(b.as_ptr().add(i)),
-            acc0,
-        );
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a.as_ptr().add(i)), _mm256_loadu_ps(b.as_ptr().add(i)), acc0);
         i += 8;
     }
 
-    let mut sum = hsum_ps(_mm256_add_ps(
-        _mm256_add_ps(acc0, acc1),
-        _mm256_add_ps(acc2, acc3),
-    ));
+    let mut sum = hsum_ps(_mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3)));
 
     while i < n {
         sum += a[i] * b[i];
@@ -344,30 +321,15 @@ pub unsafe fn vec_scale_inplace(dst: &mut [f32], scale: f32, n: usize) {
     let s = _mm256_set1_ps(scale);
 
     while i + 32 <= n {
-        _mm256_storeu_ps(
-            dst.as_mut_ptr().add(i),
-            _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i)), s),
-        );
-        _mm256_storeu_ps(
-            dst.as_mut_ptr().add(i + 8),
-            _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i + 8)), s),
-        );
-        _mm256_storeu_ps(
-            dst.as_mut_ptr().add(i + 16),
-            _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i + 16)), s),
-        );
-        _mm256_storeu_ps(
-            dst.as_mut_ptr().add(i + 24),
-            _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i + 24)), s),
-        );
+        _mm256_storeu_ps(dst.as_mut_ptr().add(i), _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i)), s));
+        _mm256_storeu_ps(dst.as_mut_ptr().add(i + 8), _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i + 8)), s));
+        _mm256_storeu_ps(dst.as_mut_ptr().add(i + 16), _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i + 16)), s));
+        _mm256_storeu_ps(dst.as_mut_ptr().add(i + 24), _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i + 24)), s));
         i += 32;
     }
 
     while i + 8 <= n {
-        _mm256_storeu_ps(
-            dst.as_mut_ptr().add(i),
-            _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i)), s),
-        );
+        _mm256_storeu_ps(dst.as_mut_ptr().add(i), _mm256_mul_ps(_mm256_loadu_ps(dst.as_ptr().add(i)), s));
         i += 8;
     }
 
@@ -391,35 +353,19 @@ pub unsafe fn vec_axpy_inplace(dst: &mut [f32], src: &[f32], alpha: f32, n: usiz
     while i + 32 <= n {
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(src.as_ptr().add(i)),
-                a,
-                _mm256_loadu_ps(dst.as_ptr().add(i)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(src.as_ptr().add(i)), a, _mm256_loadu_ps(dst.as_ptr().add(i))),
         );
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i + 8),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(src.as_ptr().add(i + 8)),
-                a,
-                _mm256_loadu_ps(dst.as_ptr().add(i + 8)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(src.as_ptr().add(i + 8)), a, _mm256_loadu_ps(dst.as_ptr().add(i + 8))),
         );
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i + 16),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(src.as_ptr().add(i + 16)),
-                a,
-                _mm256_loadu_ps(dst.as_ptr().add(i + 16)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(src.as_ptr().add(i + 16)), a, _mm256_loadu_ps(dst.as_ptr().add(i + 16))),
         );
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i + 24),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(src.as_ptr().add(i + 24)),
-                a,
-                _mm256_loadu_ps(dst.as_ptr().add(i + 24)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(src.as_ptr().add(i + 24)), a, _mm256_loadu_ps(dst.as_ptr().add(i + 24))),
         );
         i += 32;
     }
@@ -427,11 +373,7 @@ pub unsafe fn vec_axpy_inplace(dst: &mut [f32], src: &[f32], alpha: f32, n: usiz
     while i + 8 <= n {
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(src.as_ptr().add(i)),
-                a,
-                _mm256_loadu_ps(dst.as_ptr().add(i)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(src.as_ptr().add(i)), a, _mm256_loadu_ps(dst.as_ptr().add(i))),
         );
         i += 8;
     }
@@ -457,35 +399,19 @@ pub unsafe fn vec_scale_add(dst: &mut [f32], src: &[f32], correction: f32, n: us
     while i + 32 <= n {
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(dst.as_ptr().add(i)),
-                c,
-                _mm256_loadu_ps(src.as_ptr().add(i)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(dst.as_ptr().add(i)), c, _mm256_loadu_ps(src.as_ptr().add(i))),
         );
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i + 8),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(dst.as_ptr().add(i + 8)),
-                c,
-                _mm256_loadu_ps(src.as_ptr().add(i + 8)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(dst.as_ptr().add(i + 8)), c, _mm256_loadu_ps(src.as_ptr().add(i + 8))),
         );
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i + 16),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(dst.as_ptr().add(i + 16)),
-                c,
-                _mm256_loadu_ps(src.as_ptr().add(i + 16)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(dst.as_ptr().add(i + 16)), c, _mm256_loadu_ps(src.as_ptr().add(i + 16))),
         );
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i + 24),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(dst.as_ptr().add(i + 24)),
-                c,
-                _mm256_loadu_ps(src.as_ptr().add(i + 24)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(dst.as_ptr().add(i + 24)), c, _mm256_loadu_ps(src.as_ptr().add(i + 24))),
         );
         i += 32;
     }
@@ -493,11 +419,7 @@ pub unsafe fn vec_scale_add(dst: &mut [f32], src: &[f32], correction: f32, n: us
     while i + 8 <= n {
         _mm256_storeu_ps(
             dst.as_mut_ptr().add(i),
-            _mm256_fmadd_ps(
-                _mm256_loadu_ps(dst.as_ptr().add(i)),
-                c,
-                _mm256_loadu_ps(src.as_ptr().add(i)),
-            ),
+            _mm256_fmadd_ps(_mm256_loadu_ps(dst.as_ptr().add(i)), c, _mm256_loadu_ps(src.as_ptr().add(i))),
         );
         i += 8;
     }
@@ -546,10 +468,7 @@ pub unsafe fn rms_norm_row(out: &mut [f32], x: &[f32], weight: &[f32], hidden: u
     while i + 8 <= hidden {
         let xv = _mm256_loadu_ps(x.as_ptr().add(i));
         let wv = _mm256_loadu_ps(weight.as_ptr().add(i));
-        _mm256_storeu_ps(
-            out.as_mut_ptr().add(i),
-            _mm256_mul_ps(_mm256_mul_ps(xv, rms_v), wv),
-        );
+        _mm256_storeu_ps(out.as_mut_ptr().add(i), _mm256_mul_ps(_mm256_mul_ps(xv, rms_v), wv));
         i += 8;
     }
     while i < hidden {
@@ -565,14 +484,7 @@ pub unsafe fn rms_norm_row(out: &mut [f32], x: &[f32], weight: &[f32], hidden: u
 /// at least `hidden` elements.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
-pub unsafe fn layer_norm_row(
-    out: &mut [f32],
-    x: &[f32],
-    weight: &[f32],
-    bias: &[f32],
-    hidden: usize,
-    eps: f32,
-) {
+pub unsafe fn layer_norm_row(out: &mut [f32], x: &[f32], weight: &[f32], bias: &[f32], hidden: usize, eps: f32) {
     // Pass 1: compute mean
     let mut i = 0usize;
     let mut sum0 = _mm256_setzero_ps();
@@ -626,10 +538,7 @@ pub unsafe fn layer_norm_row(
         let xv = _mm256_sub_ps(_mm256_loadu_ps(x.as_ptr().add(i)), mean_v);
         let wv = _mm256_loadu_ps(weight.as_ptr().add(i));
         let bv = _mm256_loadu_ps(bias.as_ptr().add(i));
-        _mm256_storeu_ps(
-            out.as_mut_ptr().add(i),
-            _mm256_fmadd_ps(_mm256_mul_ps(xv, inv_v), wv, bv),
-        );
+        _mm256_storeu_ps(out.as_mut_ptr().add(i), _mm256_fmadd_ps(_mm256_mul_ps(xv, inv_v), wv, bv));
         i += 8;
     }
     while i < hidden {
@@ -653,10 +562,7 @@ unsafe fn fast_exp_avx(x: __m256) -> __m256 {
     let ipart = _mm256_cvtps_epi32(val);
     let fpart = _mm256_sub_ps(val, _mm256_cvtepi32_ps(ipart));
 
-    let exp_i = _mm256_castsi256_ps(_mm256_slli_epi32(
-        _mm256_add_epi32(ipart, _mm256_set1_epi32(127)),
-        23,
-    ));
+    let exp_i = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_add_epi32(ipart, _mm256_set1_epi32(127)), 23));
 
     let f = _mm256_mul_ps(fpart, ln2);
     let c2 = _mm256_set1_ps(0.5);
@@ -798,11 +704,7 @@ unsafe fn sdot32(acc: __m256i, x: *const i8, w: *const i8) -> __m256i {
 /// w_bf16 must point to at least out_dim * in_dim valid bf16 values.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-pub unsafe fn quantize_bf16_to_int8(
-    w_bf16: *const u16,
-    out_dim: usize,
-    in_dim: usize,
-) -> (Vec<i8>, Vec<f32>) {
+pub unsafe fn quantize_bf16_to_int8(w_bf16: *const u16, out_dim: usize, in_dim: usize) -> (Vec<i8>, Vec<f32>) {
     let mut int8_data = vec![0i8; out_dim * in_dim];
     let mut scales = vec![0.0f32; out_dim];
     let abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFF_FFFF));
@@ -843,10 +745,7 @@ pub unsafe fn quantize_bf16_to_int8(
             // Saturating i32 -> i16 -> i8 narrowing (matches vqmovn). packs
             // works per 128-bit lane, so restore element order between steps.
             let p16 = _mm256_permute4x64_epi64(_mm256_packs_epi32(q0, q1), 0b11_01_10_00);
-            let p8 = _mm_packs_epi16(
-                _mm256_castsi256_si128(p16),
-                _mm256_extracti128_si256(p16, 1),
-            );
+            let p8 = _mm_packs_epi16(_mm256_castsi256_si128(p16), _mm256_extracti128_si256(p16, 1));
             _mm_storeu_si128(dst.add(k) as *mut __m128i, p8);
             k += 16;
         }
@@ -1012,14 +911,8 @@ pub unsafe fn argmax_int8_range(
             k += 32;
         }
 
-        let sum0_i32 = hsum_epi32(_mm256_add_epi32(
-            _mm256_add_epi32(acc0a, acc0c),
-            _mm256_add_epi32(acc0b, acc0d),
-        ));
-        let sum1_i32 = hsum_epi32(_mm256_add_epi32(
-            _mm256_add_epi32(acc1a, acc1c),
-            _mm256_add_epi32(acc1b, acc1d),
-        ));
+        let sum0_i32 = hsum_epi32(_mm256_add_epi32(_mm256_add_epi32(acc0a, acc0c), _mm256_add_epi32(acc0b, acc0d)));
+        let sum1_i32 = hsum_epi32(_mm256_add_epi32(_mm256_add_epi32(acc1a, acc1c), _mm256_add_epi32(acc1b, acc1d)));
 
         let mut tail0 = 0i32;
         let mut tail1 = 0i32;
@@ -1065,10 +958,7 @@ pub unsafe fn argmax_int8_range(
             k += 32;
         }
 
-        let sum_i32 = hsum_epi32(_mm256_add_epi32(
-            _mm256_add_epi32(acc0, acc2),
-            _mm256_add_epi32(acc1, acc3),
-        ));
+        let sum_i32 = hsum_epi32(_mm256_add_epi32(_mm256_add_epi32(acc0, acc2), _mm256_add_epi32(acc1, acc3)));
         let val = sum_i32 as f32 * x_scale * w_scales[o];
 
         // Scalar tail
@@ -1103,13 +993,7 @@ pub unsafe fn argmax_int8_range(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[inline]
-unsafe fn int8_row_dot_f32(
-    w_row: *const i8,
-    x_int8: *const i8,
-    x_scale: f32,
-    w_scale: f32,
-    in_dim: usize,
-) -> f32 {
+unsafe fn int8_row_dot_f32(w_row: *const i8, x_int8: *const i8, x_scale: f32, w_scale: f32, in_dim: usize) -> f32 {
     let mut acc0 = _mm256_setzero_si256();
     let mut acc1 = _mm256_setzero_si256();
     let mut k = 0;
@@ -1139,13 +1023,7 @@ unsafe fn int8_row_dot_f32(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[inline]
-unsafe fn int8_row_dot_argmax(
-    w_row: *const i8,
-    x_int8: *const i8,
-    x_scale: f32,
-    w_scale: f32,
-    in_dim: usize,
-) -> f32 {
+unsafe fn int8_row_dot_argmax(w_row: *const i8, x_int8: *const i8, x_scale: f32, w_scale: f32, in_dim: usize) -> f32 {
     let mut acc0 = _mm256_setzero_si256();
     let mut acc1 = _mm256_setzero_si256();
     let mut k = 0;

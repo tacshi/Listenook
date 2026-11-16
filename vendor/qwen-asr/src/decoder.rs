@@ -19,12 +19,7 @@ fn f32_bytes(s: &[f32]) -> &[u8] {
 /// Interleave gate+up rows into the fused buffer used as the INT8 quantization
 /// source (and, on arches without INT8 decode kernels, the runtime bf16
 /// SwiGLU decode weight).
-fn build_gate_up_fused(
-    gate_bf16: *const u16,
-    up_bf16: *const u16,
-    inter: usize,
-    hidden: usize,
-) -> Vec<u16> {
+fn build_gate_up_fused(gate_bf16: *const u16, up_bf16: *const u16, inter: usize, hidden: usize) -> Vec<u16> {
     let mut gate_up_fused = vec![0u16; 2 * inter * hidden];
     unsafe {
         let gate_slice = std::slice::from_raw_parts(gate_bf16, inter * hidden);
@@ -213,21 +208,7 @@ fn load_dec_layer(
 
         let b = |j: usize| sc.i8_buf(layout.layer_buf(i, j));
         let s = |j: usize| sc.f32_buf(layout.layer_buf(i, j));
-        (
-            gate_up_fused_kept,
-            b(0),
-            s(1),
-            b(2),
-            s(3),
-            b(4),
-            s(5),
-            b(6),
-            s(7),
-            b(8),
-            s(9),
-            b(10),
-            s(11),
-        )
+        (gate_up_fused_kept, b(0), s(1), b(2), s(3), b(4), s(5), b(6), s(7), b(8), s(9), b(10), s(11))
     } else {
         // Cold path: quantize into owned superpage Vecs (as before). The fused
         // gate_up buffer is the INT8 quantization source; on aarch64/x86_64 it
@@ -242,8 +223,7 @@ fn load_dec_layer(
         // FFN weights are INT8 quantized (per-row scales) from the original BF16
         // values — the interleaved fusion is a copy of the BF16 rows, so this is
         // single-rounded.
-        let (gate_up_int8, gate_up_int8_scales) =
-            quantize_to_superpage(gate_up_fused.as_ptr(), 2 * inter, hidden);
+        let (gate_up_int8, gate_up_int8_scales) = quantize_to_superpage(gate_up_fused.as_ptr(), 2 * inter, hidden);
         let (down_int8, down_int8_scales) = quantize_to_superpage(down_bf16, hidden, inter);
 
         #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -309,11 +289,7 @@ impl Decoder {
         let use_sidecar = !cfg.is_aligner() && int8_sidecar::enabled();
         let layout = SidecarLayout::compute(cfg);
         let sc_path = int8_sidecar::sidecar_path(model_dir);
-        let sidecar = if use_sidecar {
-            SidecarMmap::open_valid(&sc_path, model_dir, cfg, &layout)
-        } else {
-            None
-        };
+        let sidecar = if use_sidecar { SidecarMmap::open_valid(&sc_path, model_dir, cfg, &layout) } else { None };
         let have_sidecar = sidecar.is_some();
 
         // Per-layer weight loading is independent and conversion-heavy
@@ -362,19 +338,18 @@ impl Decoder {
         // Quantize lm_head to INT8 for fast argmax — skipped for aligner since
         // aligner never does single-token decode (all logits read out of prefill).
         // Warm sidecar: borrow it IN PLACE instead of quantizing.
-        let (lm_int8_opt, lm_scales_opt): (Option<WeightBuf<i8>>, Option<WeightBuf<f32>>) =
-            if cfg.is_aligner() {
-                (None, None)
-            } else if let Some(sc) = sidecar_ref {
-                let idx = layout.lm_head_idx(nlayers);
-                (Some(sc.i8_buf(idx)), Some(sc.f32_buf(idx + 1)))
-            } else {
-                let lm_weight = lm_head_bf16.unwrap_or(tok_embeddings_bf16);
-                let lm_out_dim = cfg.lm_head_dim();
-                let lm_in_dim = cfg.dec_hidden;
-                let (lm_int8, lm_scales) = quantize_to_superpage(lm_weight, lm_out_dim, lm_in_dim);
-                (Some(lm_int8.into()), Some(lm_scales.into()))
-            };
+        let (lm_int8_opt, lm_scales_opt): (Option<WeightBuf<i8>>, Option<WeightBuf<f32>>) = if cfg.is_aligner() {
+            (None, None)
+        } else if let Some(sc) = sidecar_ref {
+            let idx = layout.lm_head_idx(nlayers);
+            (Some(sc.i8_buf(idx)), Some(sc.f32_buf(idx + 1)))
+        } else {
+            let lm_weight = lm_head_bf16.unwrap_or(tok_embeddings_bf16);
+            let lm_out_dim = cfg.lm_head_dim();
+            let lm_in_dim = cfg.dec_hidden;
+            let (lm_int8, lm_scales) = quantize_to_superpage(lm_weight, lm_out_dim, lm_in_dim);
+            (Some(lm_int8.into()), Some(lm_scales.into()))
+        };
 
         // Cold run with sidecar enabled: persist the freshly-quantized buffers so
         // the next run mmaps them. Best-effort — failure just means we re-quantize
@@ -465,10 +440,8 @@ impl KvCache {
             for h in 0..self.n_kv_heads {
                 let old_off = (l * self.n_kv_heads + h) * old_head_stride;
                 let new_off = (l * self.n_kv_heads + h) * new_head_stride;
-                new_k[new_off..new_off + copy_len]
-                    .copy_from_slice(&self.k[old_off..old_off + copy_len]);
-                new_v[new_off..new_off + copy_len]
-                    .copy_from_slice(&self.v[old_off..old_off + copy_len]);
+                new_k[new_off..new_off + copy_len].copy_from_slice(&self.k[old_off..old_off + copy_len]);
+                new_v[new_off..new_off + copy_len].copy_from_slice(&self.v[old_off..old_off + copy_len]);
             }
         }
 
@@ -483,8 +456,7 @@ impl KvCache {
         for h in 0..self.n_kv_heads {
             let dst_off = (layer * self.n_kv_heads + h) * head_stride + pos * self.head_dim;
             let src_off = h * self.head_dim;
-            self.k[dst_off..dst_off + self.head_dim]
-                .copy_from_slice(&src[src_off..src_off + self.head_dim]);
+            self.k[dst_off..dst_off + self.head_dim].copy_from_slice(&src[src_off..src_off + self.head_dim]);
         }
     }
 
@@ -494,8 +466,7 @@ impl KvCache {
         for h in 0..self.n_kv_heads {
             let dst_off = (layer * self.n_kv_heads + h) * head_stride + pos * self.head_dim;
             let src_off = h * self.head_dim;
-            self.v[dst_off..dst_off + self.head_dim]
-                .copy_from_slice(&src[src_off..src_off + self.head_dim]);
+            self.v[dst_off..dst_off + self.head_dim].copy_from_slice(&src[src_off..src_off + self.head_dim]);
         }
     }
 
@@ -537,21 +508,13 @@ impl Default for RopeCache {
 
 impl RopeCache {
     pub fn new() -> Self {
-        RopeCache {
-            cos: Vec::new(),
-            sin: Vec::new(),
-            inv_freq: Vec::new(),
-            cap: 0,
-            head_dim: 0,
-        }
+        RopeCache { cos: Vec::new(), sin: Vec::new(), inv_freq: Vec::new(), cap: 0, head_dim: 0 }
     }
 
     pub fn ensure(&mut self, required_pos: usize, head_dim: usize, theta: f32) {
         if self.head_dim != head_dim || self.inv_freq.is_empty() {
             let half = head_dim / 2;
-            self.inv_freq = (0..half)
-                .map(|d| 1.0 / theta.powf((2 * d) as f32 / head_dim as f32))
-                .collect();
+            self.inv_freq = (0..half).map(|d| 1.0 / theta.powf((2 * d) as f32 / head_dim as f32)).collect();
             self.head_dim = head_dim;
         }
 
@@ -691,11 +654,7 @@ impl DecoderBuffers {
         let kv_dim = cfg.dec_kv_heads * cfg.dec_head_dim;
         let intermediate = cfg.dec_intermediate;
 
-        let mut new_cap = if self.pref_seq_cap > 0 {
-            self.pref_seq_cap
-        } else {
-            64
-        };
+        let mut new_cap = if self.pref_seq_cap > 0 { self.pref_seq_cap } else { 64 };
         while new_cap < seq_len {
             new_cap *= 2;
         }
@@ -731,16 +690,7 @@ pub fn decoder_prefill(
     input_embeds: &[f32],
     seq_len: usize,
 ) {
-    decoder_prefill_impl(
-        decoder,
-        cfg,
-        kv_cache,
-        rope,
-        bufs,
-        input_embeds,
-        seq_len,
-        false,
-    );
+    decoder_prefill_impl(decoder, cfg, kv_cache, rope, bufs, input_embeds, seq_len, false);
 }
 
 /// Prefill for autoregressive decoding (R15-8): fills the KV cache exactly like
@@ -759,16 +709,7 @@ pub fn decoder_prefill_kv_only(
     input_embeds: &[f32],
     seq_len: usize,
 ) {
-    decoder_prefill_impl(
-        decoder,
-        cfg,
-        kv_cache,
-        rope,
-        bufs,
-        input_embeds,
-        seq_len,
-        true,
-    );
+    decoder_prefill_impl(decoder, cfg, kv_cache, rope, bufs, input_embeds, seq_len, true);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -824,30 +765,19 @@ fn decoder_prefill_impl(
     // Guard against aligner configs, whose INT8 weight buffers are empty.
     // Desktop/BLAS builds never compile this branch — prefill stays on AMX f32
     // (see R12-F2).
-    #[cfg(all(
-        feature = "int8-prefill",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
     let use_int8 = kernels::int8_prefill_enabled()
-        && decoder.layers.first().map_or(false, |l| {
-            !l.wq_int8.is_empty() && !l.gate_up_int8.is_empty() && !l.down_int8.is_empty()
-        });
-    #[cfg(not(all(
-        feature = "int8-prefill",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    )))]
+        && decoder
+            .layers
+            .first()
+            .map_or(false, |l| !l.wq_int8.is_empty() && !l.gate_up_int8.is_empty() && !l.down_int8.is_empty());
+    #[cfg(not(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64")))]
     let use_int8 = false;
 
     // Per-position INT8 activation scratch, reused across all layers (largest
     // in_dim is `intermediate` for the down projection). Only allocated for the
     // INT8 prefill path.
-    #[cfg(all(
-        feature = "int8-prefill",
-        not(feature = "blas"),
-        target_arch = "aarch64"
-    ))]
+    #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
     let (mut xq_buf, mut xq_scales) = if use_int8 {
         let m = intermediate.max(q_dim).max(dim);
         (vec![0i8; seq_len * m], vec![0.0f32; seq_len])
@@ -862,25 +792,14 @@ fn decoder_prefill_impl(
         let kv_last = kv_only && layer_idx + 1 == n_layers;
 
         let x_norm = &mut bufs.pref_x_norm[..seq_len * dim];
-        kernels::rms_norm(
-            x_norm,
-            &bufs.pref_x[..seq_len * dim],
-            &layer.input_norm,
-            seq_len,
-            dim,
-            eps,
-        );
+        kernels::rms_norm(x_norm, &bufs.pref_x[..seq_len * dim], &layer.input_norm, seq_len, dim, eps);
 
         let q = &mut bufs.pref_q[..seq_len * q_dim];
         let k = &mut bufs.pref_k[..seq_len * kv_dim];
         let v = &mut bufs.pref_v[..seq_len * kv_dim];
 
         if use_int8 {
-            #[cfg(all(
-                feature = "int8-prefill",
-                not(feature = "blas"),
-                target_arch = "aarch64"
-            ))]
+            #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
             unsafe {
                 kernels::quantize_rows_into(
                     &mut xq_buf[..seq_len * dim],
@@ -970,16 +889,8 @@ fn decoder_prefill_impl(
 
         // Store K, V in cache (scatter to head-contiguous layout)
         for s in 0..seq_len {
-            kv_cache.k_write_pos(
-                layer_idx,
-                start_pos + s,
-                &bufs.pref_k[s * kv_dim..(s + 1) * kv_dim],
-            );
-            kv_cache.v_write_pos(
-                layer_idx,
-                start_pos + s,
-                &bufs.pref_v[s * kv_dim..(s + 1) * kv_dim],
-            );
+            kv_cache.k_write_pos(layer_idx, start_pos + s, &bufs.pref_k[s * kv_dim..(s + 1) * kv_dim]);
+            kv_cache.v_write_pos(layer_idx, start_pos + s, &bufs.pref_v[s * kv_dim..(s + 1) * kv_dim]);
         }
         if kv_last {
             break;
@@ -1008,11 +919,7 @@ fn decoder_prefill_impl(
 
         let proj_out = &mut bufs.pref_proj_out[..seq_len * dim];
         if use_int8 {
-            #[cfg(all(
-                feature = "int8-prefill",
-                not(feature = "blas"),
-                target_arch = "aarch64"
-            ))]
+            #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
             unsafe {
                 kernels::quantize_rows_into(
                     &mut xq_buf[..seq_len * q_dim],
@@ -1049,14 +956,7 @@ fn decoder_prefill_impl(
 
         // Post-attention RMSNorm + SwiGLU MLP
         let x_norm2 = &mut bufs.pref_x_norm[..seq_len * dim];
-        kernels::rms_norm(
-            x_norm2,
-            &bufs.pref_x[..seq_len * dim],
-            &layer.post_attn_norm,
-            seq_len,
-            dim,
-            eps,
-        );
+        kernels::rms_norm(x_norm2, &bufs.pref_x[..seq_len * dim], &layer.post_attn_norm, seq_len, dim, eps);
 
         // Two separate GEMMs into pref_gate/pref_up, then fused swiglu — replaces
         // the prior interleaved-fusion path that needed an extra ~700 MB owned
@@ -1065,11 +965,7 @@ fn decoder_prefill_impl(
         if use_int8 {
             // Fused INT8 gate_up + SwiGLU into `gate` directly (matches the
             // single-token `int8_swiglu_range` path — no separate up buffer).
-            #[cfg(all(
-                feature = "int8-prefill",
-                not(feature = "blas"),
-                target_arch = "aarch64"
-            ))]
+            #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
             unsafe {
                 kernels::quantize_rows_into(
                     &mut xq_buf[..seq_len * dim],
@@ -1119,11 +1015,7 @@ fn decoder_prefill_impl(
 
         let ffn_out = &mut bufs.pref_ffn_out[..seq_len * dim];
         if use_int8 {
-            #[cfg(all(
-                feature = "int8-prefill",
-                not(feature = "blas"),
-                target_arch = "aarch64"
-            ))]
+            #[cfg(all(feature = "int8-prefill", not(feature = "blas"), target_arch = "aarch64"))]
             unsafe {
                 kernels::quantize_rows_into(
                     &mut xq_buf[..seq_len * intermediate],
@@ -1240,9 +1132,7 @@ pub fn decoder_forward(
         // workers force their kernels single-threaded) and the BF16 fallback
         // keep the old epilogue after the region.
         let lm_fused = match (&decoder.lm_head_int8, &decoder.lm_head_int8_scales) {
-            (Some(d), Some(s)) if kernels::get_num_threads() > 1 => {
-                Some((d.as_ptr() as usize, s.as_ptr() as usize))
-            }
+            (Some(d), Some(s)) if kernels::get_num_threads() > 1 => Some((d.as_ptr() as usize, s.as_ptr() as usize)),
             _ => None,
         };
         let norm_w: &[f32] = &decoder.norm;
@@ -1267,11 +1157,9 @@ pub fn decoder_forward(
                 // Stage: pre-attention norm + input quantization (tid 0).
                 if tid == 0 {
                     let x = unsafe { std::slice::from_raw_parts(x_ptr as *const f32, dim) };
-                    let x_norm =
-                        unsafe { std::slice::from_raw_parts_mut(x_norm_ptr as *mut f32, dim) };
+                    let x_norm = unsafe { std::slice::from_raw_parts_mut(x_norm_ptr as *mut f32, dim) };
                     kernels::rms_norm(x_norm, x, &layer.input_norm, 1, dim, eps);
-                    let x_int8 =
-                        unsafe { std::slice::from_raw_parts_mut(x_int8_ptr as *mut i8, dim) };
+                    let x_int8 = unsafe { std::slice::from_raw_parts_mut(x_int8_ptr as *mut i8, dim) };
                     unsafe {
                         *(scales_ptr as *mut f32) = kernels::quantize_into(x_int8, x_norm);
                     }
@@ -1310,14 +1198,7 @@ pub fn decoder_forward(
                     let q = unsafe { std::slice::from_raw_parts_mut(q_ptr as *mut f32, q_dim) };
                     let k = unsafe { std::slice::from_raw_parts_mut(k_ptr as *mut f32, kv_dim) };
                     kernels::rms_norm_per_head(q, &layer.q_norm_weight, 1, n_heads, head_dim, eps);
-                    kernels::rms_norm_per_head(
-                        k,
-                        &layer.k_norm_weight,
-                        1,
-                        n_kv_heads,
-                        head_dim,
-                        eps,
-                    );
+                    kernels::rms_norm_per_head(k, &layer.k_norm_weight, 1, n_kv_heads, head_dim, eps);
                     kernels::apply_rope_neox(q, rope_cos, rope_sin, 1, n_heads, head_dim);
                     kernels::apply_rope_neox(k, rope_cos, rope_sin, 1, n_kv_heads, head_dim);
 
@@ -1344,8 +1225,7 @@ pub fn decoder_forward(
 
                 // Stage: causal attention, split by KV-head group (GQA-paired).
                 if let Some((h0, h1)) = kernels::attn_head_range(tid, nt, 1, n_heads, n_kv_heads) {
-                    let attn_out =
-                        unsafe { std::slice::from_raw_parts_mut(attn_out_ptr as *mut f32, q_dim) };
+                    let attn_out = unsafe { std::slice::from_raw_parts_mut(attn_out_ptr as *mut f32, q_dim) };
                     let q = unsafe { std::slice::from_raw_parts(q_ptr as *const f32, q_dim) };
                     kernels::causal_attention_heads(
                         attn_out,
@@ -1368,13 +1248,10 @@ pub fn decoder_forward(
 
                 // Stage: quantize attention output for the O-projection (tid 0).
                 if tid == 0 {
-                    let attn_out =
-                        unsafe { std::slice::from_raw_parts(attn_out_ptr as *const f32, q_dim) };
-                    let attn_int8 =
-                        unsafe { std::slice::from_raw_parts_mut(attn_int8_ptr as *mut i8, q_dim) };
+                    let attn_out = unsafe { std::slice::from_raw_parts(attn_out_ptr as *const f32, q_dim) };
+                    let attn_int8 = unsafe { std::slice::from_raw_parts_mut(attn_int8_ptr as *mut i8, q_dim) };
                     unsafe {
-                        *(scales_ptr as *mut f32).add(1) =
-                            kernels::quantize_into(attn_int8, attn_out);
+                        *(scales_ptr as *mut f32).add(1) = kernels::quantize_into(attn_int8, attn_out);
                     }
                 }
                 barrier.wait();
@@ -1403,11 +1280,9 @@ pub fn decoder_forward(
                 // Stage: post-attention norm + input quantization (tid 0).
                 if tid == 0 {
                     let x = unsafe { std::slice::from_raw_parts(x_ptr as *const f32, dim) };
-                    let x_norm =
-                        unsafe { std::slice::from_raw_parts_mut(x_norm_ptr as *mut f32, dim) };
+                    let x_norm = unsafe { std::slice::from_raw_parts_mut(x_norm_ptr as *mut f32, dim) };
                     kernels::rms_norm(x_norm, x, &layer.post_attn_norm, 1, dim, eps);
-                    let x_int8 =
-                        unsafe { std::slice::from_raw_parts_mut(x_int8_ptr as *mut i8, dim) };
+                    let x_int8 = unsafe { std::slice::from_raw_parts_mut(x_int8_ptr as *mut i8, dim) };
                     unsafe {
                         *(scales_ptr as *mut f32).add(2) = kernels::quantize_into(x_int8, x_norm);
                     }
@@ -1436,15 +1311,10 @@ pub fn decoder_forward(
 
                 // Stage: quantize FFN activation for the down-projection (tid 0).
                 if tid == 0 {
-                    let ffn_out = unsafe {
-                        std::slice::from_raw_parts(ffn_out_ptr as *const f32, intermediate)
-                    };
-                    let ffn_int8 = unsafe {
-                        std::slice::from_raw_parts_mut(ffn_int8_ptr as *mut i8, intermediate)
-                    };
+                    let ffn_out = unsafe { std::slice::from_raw_parts(ffn_out_ptr as *const f32, intermediate) };
+                    let ffn_int8 = unsafe { std::slice::from_raw_parts_mut(ffn_int8_ptr as *mut i8, intermediate) };
                     unsafe {
-                        *(scales_ptr as *mut f32).add(3) =
-                            kernels::quantize_into(ffn_int8, ffn_out);
+                        *(scales_ptr as *mut f32).add(3) = kernels::quantize_into(ffn_int8, ffn_out);
                     }
                 }
                 barrier.wait();
@@ -1480,13 +1350,11 @@ pub fn decoder_forward(
                 // Stage: final norm + copy-back + quantize (tid 0 serial glue).
                 if tid == 0 {
                     let x = unsafe { std::slice::from_raw_parts(x_ptr as *const f32, dim) };
-                    let x_norm =
-                        unsafe { std::slice::from_raw_parts_mut(x_norm_ptr as *mut f32, dim) };
+                    let x_norm = unsafe { std::slice::from_raw_parts_mut(x_norm_ptr as *mut f32, dim) };
                     kernels::rms_norm(x_norm, x, norm_w, 1, dim, eps);
                     let x_mut = unsafe { std::slice::from_raw_parts_mut(x_ptr as *mut f32, dim) };
                     x_mut.copy_from_slice(x_norm);
-                    let x_int8 =
-                        unsafe { std::slice::from_raw_parts_mut(x_int8_ptr as *mut i8, dim) };
+                    let x_int8 = unsafe { std::slice::from_raw_parts_mut(x_int8_ptr as *mut i8, dim) };
                     unsafe {
                         *(scales_ptr as *mut f32) = kernels::quantize_into(x_int8, x_norm);
                     }
@@ -1501,9 +1369,7 @@ pub fn decoder_forward(
                     let end = (start + chunk).min(lm_out_dim);
                     let x_scale = unsafe { *(scales_ptr as *const f32) };
                     let (best, bv) = if start < end {
-                        let w_scales = unsafe {
-                            std::slice::from_raw_parts(lm_scales_ptr as *const f32, lm_out_dim)
-                        };
+                        let w_scales = unsafe { std::slice::from_raw_parts(lm_scales_ptr as *const f32, lm_out_dim) };
                         unsafe {
                             kernels::int8_argmax_range(
                                 x_int8_ptr as *const i8,
@@ -1560,24 +1426,10 @@ pub fn decoder_forward(
     // Non-SIMD-arch (BF16) path: unchanged dispatch-per-stage layer loop.
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     for (layer_idx, layer) in decoder.layers.iter().enumerate() {
-        kernels::rms_norm(
-            &mut bufs.x_norm[..dim],
-            &bufs.x[..dim],
-            &layer.input_norm,
-            1,
-            dim,
-            eps,
-        );
+        kernels::rms_norm(&mut bufs.x_norm[..dim], &bufs.x[..dim], &layer.input_norm, 1, dim, eps);
 
         unsafe {
-            kernels::linear_nobias_bf16(
-                &mut bufs.q[..q_dim],
-                &bufs.x_norm[..dim],
-                layer.wq_weight_bf16,
-                1,
-                dim,
-                q_dim,
-            );
+            kernels::linear_nobias_bf16(&mut bufs.q[..q_dim], &bufs.x_norm[..dim], layer.wq_weight_bf16, 1, dim, q_dim);
             kernels::linear_nobias_bf16(
                 &mut bufs.k[..kv_dim],
                 &bufs.x_norm[..dim],
@@ -1596,39 +1448,11 @@ pub fn decoder_forward(
             );
         }
 
-        kernels::rms_norm_per_head(
-            &mut bufs.q[..q_dim],
-            &layer.q_norm_weight,
-            1,
-            n_heads,
-            head_dim,
-            eps,
-        );
-        kernels::rms_norm_per_head(
-            &mut bufs.k[..kv_dim],
-            &layer.k_norm_weight,
-            1,
-            n_kv_heads,
-            head_dim,
-            eps,
-        );
+        kernels::rms_norm_per_head(&mut bufs.q[..q_dim], &layer.q_norm_weight, 1, n_heads, head_dim, eps);
+        kernels::rms_norm_per_head(&mut bufs.k[..kv_dim], &layer.k_norm_weight, 1, n_kv_heads, head_dim, eps);
 
-        kernels::apply_rope_neox(
-            &mut bufs.q[..q_dim],
-            rope_cos,
-            rope_sin,
-            1,
-            n_heads,
-            head_dim,
-        );
-        kernels::apply_rope_neox(
-            &mut bufs.k[..kv_dim],
-            rope_cos,
-            rope_sin,
-            1,
-            n_kv_heads,
-            head_dim,
-        );
+        kernels::apply_rope_neox(&mut bufs.q[..q_dim], rope_cos, rope_sin, 1, n_heads, head_dim);
+        kernels::apply_rope_neox(&mut bufs.k[..kv_dim], rope_cos, rope_sin, 1, n_kv_heads, head_dim);
 
         kv_cache.k_write_pos(layer_idx, pos, &bufs.k[..kv_dim]);
         kv_cache.v_write_pos(layer_idx, pos, &bufs.v[..kv_dim]);
@@ -1662,14 +1486,7 @@ pub fn decoder_forward(
             dim,
         );
 
-        kernels::rms_norm(
-            &mut bufs.x_norm[..dim],
-            &bufs.x[..dim],
-            &layer.post_attn_norm,
-            1,
-            dim,
-            eps,
-        );
+        kernels::rms_norm(&mut bufs.x_norm[..dim], &bufs.x[..dim], &layer.post_attn_norm, 1, dim, eps);
 
         // gate_up + SwiGLU
         kernels::linear_nobias_bf16_swiglu(
@@ -1693,14 +1510,7 @@ pub fn decoder_forward(
     kv_cache.len = pos + 1;
 
     // Final norm + streaming argmax (use x_norm as temp to avoid heap allocation)
-    kernels::rms_norm(
-        &mut bufs.x_norm[..dim],
-        &bufs.x[..dim],
-        &decoder.norm,
-        1,
-        dim,
-        eps,
-    );
+    kernels::rms_norm(&mut bufs.x_norm[..dim], &bufs.x[..dim], &decoder.norm, 1, dim, eps);
     bufs.x[..dim].copy_from_slice(&bufs.x_norm[..dim]);
 
     // Overlap the lm_head argmax with preparation for the next decode step.
@@ -1889,11 +1699,7 @@ pub fn decoder_forward_batched(
             barrier.wait();
 
             // Caller-thread elapsed time includes the stage's completion barrier.
-            let stage_profile = if tid == 0 {
-                kernels::ProfileGuard::new(&kernels::PROF.batch_qkv)
-            } else {
-                None
-            };
+            let stage_profile = if tid == 0 { kernels::ProfileGuard::new(&kernels::PROF.batch_qkv) } else { None };
             // Stage: fused QKV projection, batched (rows outer, sessions inner).
             {
                 let (s, e) = kernels::range_for(tid, nt, q_dim + 2 * kv_dim);
@@ -1934,14 +1740,7 @@ pub fn decoder_forward_batched(
                     let q = std::slice::from_raw_parts_mut(q_ptr[bi] as *mut f32, q_dim);
                     let k = std::slice::from_raw_parts_mut(k_ptr[bi] as *mut f32, kv_dim);
                     kernels::rms_norm_per_head(q, &layer.q_norm_weight, 1, n_heads, head_dim, eps);
-                    kernels::rms_norm_per_head(
-                        k,
-                        &layer.k_norm_weight,
-                        1,
-                        n_kv_heads,
-                        head_dim,
-                        eps,
-                    );
+                    kernels::rms_norm_per_head(k, &layer.k_norm_weight, 1, n_kv_heads, head_dim, eps);
                     let cos = std::slice::from_raw_parts(rope_cos_ptr[bi] as *const f32, head_dim);
                     let sin = std::slice::from_raw_parts(rope_sin_ptr[bi] as *const f32, head_dim);
                     kernels::apply_rope_neox(q, cos, sin, 1, n_heads, head_dim);
@@ -1970,11 +1769,8 @@ pub fn decoder_forward_batched(
             barrier.wait();
 
             // Caller-thread elapsed time includes the stage's completion barrier.
-            let stage_profile = if tid == 0 {
-                kernels::ProfileGuard::new(&kernels::PROF.batch_attention)
-            } else {
-                None
-            };
+            let stage_profile =
+                if tid == 0 { kernels::ProfileGuard::new(&kernels::PROF.batch_attention) } else { None };
             // Stage: causal attention, striped over (session, GQA group) items —
             // sessions have different sequence lengths, so each item carries its
             // session's pos / total_seq / KV base.
@@ -1990,14 +1786,9 @@ pub fn decoder_forward_batched(
                     let kv_off = (layer_idx * n_kv_heads + g) * kv_stride[bi];
                     unsafe {
                         // Each task exclusively borrows its own GQA group's output.
-                        let attn_out = std::slice::from_raw_parts_mut(
-                            (attn_out_ptr[bi] as *mut f32).add(group_off),
-                            group_dim,
-                        );
-                        let q = std::slice::from_raw_parts(
-                            (q_ptr[bi] as *const f32).add(group_off),
-                            group_dim,
-                        );
+                        let attn_out =
+                            std::slice::from_raw_parts_mut((attn_out_ptr[bi] as *mut f32).add(group_off), group_dim);
+                        let q = std::slice::from_raw_parts((q_ptr[bi] as *const f32).add(group_off), group_dim);
                         let k_base = (kv_k_ptr[bi] as *const f32).add(kv_off);
                         let v_base = (kv_v_ptr[bi] as *const f32).add(kv_off);
                         kernels::causal_attention_heads(
@@ -2027,12 +1818,9 @@ pub fn decoder_forward_batched(
             let mut bi = tid;
             while bi < b {
                 unsafe {
-                    let attn_out =
-                        std::slice::from_raw_parts(attn_out_ptr[bi] as *const f32, q_dim);
-                    let attn_int8 =
-                        std::slice::from_raw_parts_mut(attn_int8_ptr[bi] as *mut i8, q_dim);
-                    *(scales_addr as *mut f32).add(4 * bi + 1) =
-                        kernels::quantize_into(attn_int8, attn_out);
+                    let attn_out = std::slice::from_raw_parts(attn_out_ptr[bi] as *const f32, q_dim);
+                    let attn_int8 = std::slice::from_raw_parts_mut(attn_int8_ptr[bi] as *mut i8, q_dim);
+                    *(scales_addr as *mut f32).add(4 * bi + 1) = kernels::quantize_into(attn_int8, attn_out);
                 }
                 bi += nt;
             }
@@ -2070,19 +1858,14 @@ pub fn decoder_forward_batched(
                     let x_norm = std::slice::from_raw_parts_mut(x_norm_ptr[bi] as *mut f32, dim);
                     kernels::rms_norm(x_norm, x, &layer.post_attn_norm, 1, dim, eps);
                     let x_int8 = std::slice::from_raw_parts_mut(x_int8_ptr[bi] as *mut i8, dim);
-                    *(scales_addr as *mut f32).add(4 * bi + 2) =
-                        kernels::quantize_into(x_int8, x_norm);
+                    *(scales_addr as *mut f32).add(4 * bi + 2) = kernels::quantize_into(x_int8, x_norm);
                 }
                 bi += nt;
             }
             barrier.wait();
 
             // Caller-thread elapsed time includes the stage's completion barrier.
-            let stage_profile = if tid == 0 {
-                kernels::ProfileGuard::new(&kernels::PROF.batch_ffn)
-            } else {
-                None
-            };
+            let stage_profile = if tid == 0 { kernels::ProfileGuard::new(&kernels::PROF.batch_ffn) } else { None };
             // Stage: fused gate_up + SwiGLU, batched over intermediate rows.
             {
                 let (s, e) = kernels::range_for(tid, nt, intermediate);
@@ -2109,12 +1892,9 @@ pub fn decoder_forward_batched(
             let mut bi = tid;
             while bi < b {
                 unsafe {
-                    let ffn_out =
-                        std::slice::from_raw_parts(ffn_out_ptr[bi] as *const f32, intermediate);
-                    let ffn_int8 =
-                        std::slice::from_raw_parts_mut(ffn_int8_ptr[bi] as *mut i8, intermediate);
-                    *(scales_addr as *mut f32).add(4 * bi + 3) =
-                        kernels::quantize_into(ffn_int8, ffn_out);
+                    let ffn_out = std::slice::from_raw_parts(ffn_out_ptr[bi] as *const f32, intermediate);
+                    let ffn_int8 = std::slice::from_raw_parts_mut(ffn_int8_ptr[bi] as *mut i8, intermediate);
+                    *(scales_addr as *mut f32).add(4 * bi + 3) = kernels::quantize_into(ffn_int8, ffn_out);
                 }
                 bi += nt;
             }
@@ -2169,9 +1949,7 @@ pub fn decoder_forward_batched(
     // Same index-stable tie-break as the single-session path (R12-E2).
     let head_profile = kernels::ProfileGuard::new(&kernels::PROF.batch_lm_head);
     let lm_out_dim = cfg.lm_head_dim();
-    if let (Some(int8_data), Some(lm_scales)) =
-        (&decoder.lm_head_int8, &decoder.lm_head_int8_scales)
-    {
+    if let (Some(int8_data), Some(lm_scales)) = (&decoder.lm_head_int8, &decoder.lm_head_int8_scales) {
         let xs: Vec<&[f32]> = sessions.iter().map(|s| &s.bufs.x[..dim]).collect();
         let best = kernels::argmax_matvec_int8_batched(&xs, int8_data, lm_scales, dim, lm_out_dim);
         for (dst, &t) in out_tokens[..b].iter_mut().zip(best.iter()) {
@@ -2288,14 +2066,7 @@ pub fn decoder_forward_verify(
     assert!(out_argmax.len() >= k, "need k output slots");
 
     if k == 1 {
-        out_argmax[0] = decoder_forward(
-            decoder,
-            cfg,
-            kv_cache,
-            rope,
-            &mut bufs[0],
-            &input_embeds[..dim],
-        );
+        out_argmax[0] = decoder_forward(decoder, cfg, kv_cache, rope, &mut bufs[0], &input_embeds[..dim]);
         return;
     }
 
@@ -2455,14 +2226,7 @@ pub fn decoder_forward_verify(
                     let q = std::slice::from_raw_parts_mut(q_ptr[bi] as *mut f32, q_dim);
                     let kk = std::slice::from_raw_parts_mut(k_ptr[bi] as *mut f32, kv_dim);
                     kernels::rms_norm_per_head(q, &layer.q_norm_weight, 1, n_heads, head_dim, eps);
-                    kernels::rms_norm_per_head(
-                        kk,
-                        &layer.k_norm_weight,
-                        1,
-                        n_kv_heads,
-                        head_dim,
-                        eps,
-                    );
+                    kernels::rms_norm_per_head(kk, &layer.k_norm_weight, 1, n_kv_heads, head_dim, eps);
                     let cos = std::slice::from_raw_parts(rope_cos_ptr[bi] as *const f32, head_dim);
                     let sin = std::slice::from_raw_parts(rope_sin_ptr[bi] as *const f32, head_dim);
                     kernels::apply_rope_neox(q, cos, sin, 1, n_heads, head_dim);
@@ -2505,8 +2269,7 @@ pub fn decoder_forward_verify(
                     let g = item % n_kv_heads;
                     let layer_kv_off = layer_idx * n_kv_heads * kv_stride[bi];
                     unsafe {
-                        let attn_out =
-                            std::slice::from_raw_parts_mut(attn_out_ptr[bi] as *mut f32, q_dim);
+                        let attn_out = std::slice::from_raw_parts_mut(attn_out_ptr[bi] as *mut f32, q_dim);
                         let q = std::slice::from_raw_parts(q_ptr[bi] as *const f32, q_dim);
                         let k_base = (kv_k_ptr[bi] as *const f32).add(layer_kv_off);
                         let v_base = (kv_v_ptr[bi] as *const f32).add(layer_kv_off);
@@ -2536,12 +2299,9 @@ pub fn decoder_forward_verify(
             let mut bi = tid;
             while bi < k {
                 unsafe {
-                    let attn_out =
-                        std::slice::from_raw_parts(attn_out_ptr[bi] as *const f32, q_dim);
-                    let attn_int8 =
-                        std::slice::from_raw_parts_mut(attn_int8_ptr[bi] as *mut i8, q_dim);
-                    *(scales_addr as *mut f32).add(4 * bi + 1) =
-                        kernels::quantize_into(attn_int8, attn_out);
+                    let attn_out = std::slice::from_raw_parts(attn_out_ptr[bi] as *const f32, q_dim);
+                    let attn_int8 = std::slice::from_raw_parts_mut(attn_int8_ptr[bi] as *mut i8, q_dim);
+                    *(scales_addr as *mut f32).add(4 * bi + 1) = kernels::quantize_into(attn_int8, attn_out);
                 }
                 bi += nt;
             }
@@ -2579,8 +2339,7 @@ pub fn decoder_forward_verify(
                     let x_norm = std::slice::from_raw_parts_mut(x_norm_ptr[bi] as *mut f32, dim);
                     kernels::rms_norm(x_norm, x, &layer.post_attn_norm, 1, dim, eps);
                     let x_int8 = std::slice::from_raw_parts_mut(x_int8_ptr[bi] as *mut i8, dim);
-                    *(scales_addr as *mut f32).add(4 * bi + 2) =
-                        kernels::quantize_into(x_int8, x_norm);
+                    *(scales_addr as *mut f32).add(4 * bi + 2) = kernels::quantize_into(x_int8, x_norm);
                 }
                 bi += nt;
             }
@@ -2612,12 +2371,9 @@ pub fn decoder_forward_verify(
             let mut bi = tid;
             while bi < k {
                 unsafe {
-                    let ffn_out =
-                        std::slice::from_raw_parts(ffn_out_ptr[bi] as *const f32, intermediate);
-                    let ffn_int8 =
-                        std::slice::from_raw_parts_mut(ffn_int8_ptr[bi] as *mut i8, intermediate);
-                    *(scales_addr as *mut f32).add(4 * bi + 3) =
-                        kernels::quantize_into(ffn_int8, ffn_out);
+                    let ffn_out = std::slice::from_raw_parts(ffn_out_ptr[bi] as *const f32, intermediate);
+                    let ffn_int8 = std::slice::from_raw_parts_mut(ffn_int8_ptr[bi] as *mut i8, intermediate);
+                    *(scales_addr as *mut f32).add(4 * bi + 3) = kernels::quantize_into(ffn_int8, ffn_out);
                 }
                 bi += nt;
             }
@@ -2669,9 +2425,7 @@ pub fn decoder_forward_verify(
     // lm_head argmax: stream the head weights once for ALL k final hidden
     // states. Same index-stable tie-break as the single-session path (R12-E2).
     let lm_out_dim = cfg.lm_head_dim();
-    if let (Some(int8_data), Some(lm_scales)) =
-        (&decoder.lm_head_int8, &decoder.lm_head_int8_scales)
-    {
+    if let (Some(int8_data), Some(lm_scales)) = (&decoder.lm_head_int8, &decoder.lm_head_int8_scales) {
         let xs: Vec<&[f32]> = bufs[..k].iter().map(|b| &b.x[..dim]).collect();
         let best = kernels::argmax_matvec_int8_batched(&xs, int8_data, lm_scales, dim, lm_out_dim);
         for (dst, &t) in out_argmax[..k].iter_mut().zip(best.iter()) {
@@ -2691,9 +2445,7 @@ pub fn decoder_forward_verify(
 #[inline]
 fn lm_head_argmax(decoder: &Decoder, x: &[f32], dim: usize, lm_out_dim: usize) -> i32 {
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    if let (Some(ref int8_data), Some(ref scales)) =
-        (&decoder.lm_head_int8, &decoder.lm_head_int8_scales)
-    {
+    if let (Some(ref int8_data), Some(ref scales)) = (&decoder.lm_head_int8, &decoder.lm_head_int8_scales) {
         return kernels::argmax_matvec_int8(x, int8_data, scales, dim, lm_out_dim) as i32;
     }
     let lm_weight = decoder.lm_head_bf16.unwrap_or(decoder.tok_embeddings_bf16);
@@ -2751,12 +2503,7 @@ pub fn decoder_prefill_logits(
 ///
 /// # Safety
 /// tok_emb_bf16 must point to valid memory for at least (token_id + 1) * dim bf16 values.
-pub unsafe fn tok_embed_bf16_to_f32(
-    dst: &mut [f32],
-    tok_emb_bf16: *const u16,
-    token_id: i32,
-    dim: usize,
-) {
+pub unsafe fn tok_embed_bf16_to_f32(dst: &mut [f32], tok_emb_bf16: *const u16, token_id: i32, dim: usize) {
     let src = unsafe { std::slice::from_raw_parts(tok_emb_bf16.add(token_id as usize * dim), dim) };
     kernels::bf16_to_f32_buf(dst, src);
 }
