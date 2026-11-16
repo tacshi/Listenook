@@ -31,8 +31,24 @@ const FEED_STALE_MS: i64 = 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Resume {
-    Recording { id: String, title: String, glyph: Icon, position: i64, duration: i64, at: String },
-    Episode { episode: Box<Episode>, show: String, artwork: String, position: i64, duration: i64, at: String },
+    Recording {
+        id: String,
+        title: String,
+        glyph: Icon,
+        show: Option<String>,
+        artwork: String,
+        position: i64,
+        duration: i64,
+        at: String,
+    },
+    Episode {
+        episode: Box<Episode>,
+        show: String,
+        artwork: String,
+        position: i64,
+        duration: i64,
+        at: String,
+    },
 }
 
 impl Resume {
@@ -73,8 +89,9 @@ impl Resume {
         let (position, duration) = self.progress();
         let mut parts =
             vec![if duration > 0 { format!("{} / {}", clock(position), clock(duration)) } else { clock(position) }];
-        if let Resume::Episode { show, .. } = self {
-            parts.push(show.clone());
+        match self {
+            Resume::Episode { show, .. } | Resume::Recording { show: Some(show), .. } => parts.push(show.clone()),
+            Resume::Recording { show: None, .. } => {}
         }
         parts.join(" · ")
     }
@@ -108,9 +125,12 @@ fn resumable() -> Vec<Resume> {
         .filter(|(id, ..)| store.shelved(Shelf::Continue, id))
         .filter_map(|(id, at, position)| {
             let job = jobs.iter().find(|job| job.id == id && job.has_transcript())?;
+            let (glyph, artwork) = job_glyph(job);
             Some(Resume::Recording {
                 title: job.title(),
-                glyph: kind_icon(job),
+                glyph,
+                artwork,
+                show: podcasts::show_of(job),
                 duration: job.duration_ms(),
                 id,
                 position,
@@ -394,9 +414,19 @@ fn tile_icon(glyph: Icon, artwork: String, size: f32) -> View {
     if artwork.is_empty() { tile } else { tile.child(image(artwork).size(px(size)).object_fit(ResizeMode::Cover)) }
 }
 
+fn job_tile(job: &Job) -> View {
+    let (glyph, artwork) = job_glyph(job);
+    tile_icon(glyph, artwork, 36.0)
+}
+
+fn job_glyph(job: &Job) -> (Icon, String) {
+    let glyph = kind_icon(job);
+    (glyph, if glyph == Icon::Podcast { podcasts::artwork_of(job) } else { String::new() })
+}
+
 fn resume_glyph(item: &Resume) -> (Icon, String) {
     match item {
-        Resume::Recording { glyph, .. } => (*glyph, String::new()),
+        Resume::Recording { glyph, artwork, .. } => (*glyph, artwork.clone()),
         Resume::Episode { artwork, .. } => (Icon::Podcast, artwork.clone()),
     }
 }
@@ -539,7 +569,7 @@ fn processing_section(processing: Memo<Vec<Rc<Job>>>, waiting: Memo<usize>) -> i
                 let fraction = computed(move || store.job(&id).and_then(|job| job.progress.fraction.map(|f| f as f32)));
                 list_row(|| false)
                     .on_press(move || store.show(Filter::InProgress))
-                    .child(tile_icon(job.with_untracked(|job| kind_icon(job)), String::new(), 36.0))
+                    .child(job.with_untracked(|job| job_tile(job)))
                     .child(
                         view()
                             .flex_1()
@@ -601,7 +631,7 @@ fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
                     .on_press(move || if readable { store.open_transcript(&opened) } else { store.show(Filter::All) })
                     .gap_3()
                     .p_3()
-                    .child(tile_icon(job.with_untracked(|job| kind_icon(job)), String::new(), 36.0))
+                    .child(job.with_untracked(|job| job_tile(job)))
                     .child(
                         view()
                             .gap_0p5()
@@ -620,6 +650,7 @@ fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
                                             parts.push(clock(job.duration_ms()));
                                         }
                                         parts.push(date(&job.created_at));
+                                        parts.extend(podcasts::show_of(job));
                                         SharedString::from(parts.join(" · "))
                                     })
                                 })
@@ -714,7 +745,7 @@ fn results(found: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
                 let readable = job.with_untracked(|job| job.has_transcript());
                 list_row(|| false)
                     .on_press(move || if readable { store.open_transcript(&id) } else { store.show(Filter::All) })
-                    .child(tile_icon(job.with_untracked(|job| kind_icon(job)), String::new(), 36.0))
+                    .child(job.with_untracked(|job| job_tile(job)))
                     .child(
                         view()
                             .flex_1()

@@ -1,5 +1,5 @@
 use listenook_core::{
-    JobProgress, JobSourceOrigin, JobStatus, MediaMetadata, PodcastProvenance, TranscriptAcquisitionMode,
+    Job, JobProgress, JobSourceOrigin, JobStatus, MediaMetadata, PodcastProvenance, TranscriptAcquisitionMode,
     podcast::{self, Episode, Feed, ShowSummary},
 };
 use std::sync::{
@@ -61,6 +61,22 @@ pub(crate) fn job_of(episode_id: &str) -> Option<String> {
         .map(|job| job.id.clone())
 }
 
+pub(crate) fn show_of(job: &Job) -> Option<String> {
+    job.podcast_provenance.as_ref().map(|p| p.show_title.trim().to_owned()).filter(|show| !show.is_empty())
+}
+
+pub(crate) fn artwork_of(job: &Job) -> String {
+    let Some(provenance) = &job.podcast_provenance else {
+        return String::new();
+    };
+    provenance
+        .artwork_url
+        .clone()
+        .filter(|url| !url.is_empty())
+        .or_else(|| store().podcast.feed(&provenance.feed_url).and_then(|feed| feed.artwork_url))
+        .unwrap_or_default()
+}
+
 pub(crate) fn deep_listen(episode: &Episode, feed: &Feed) {
     let store = store();
     if let Some(existing) = job_of(&episode.id) {
@@ -93,7 +109,7 @@ pub(crate) fn deep_listen(episode: &Episode, feed: &Feed) {
         show_title: feed.title.clone(),
         episode_title: episode.title.clone(),
         author: feed.author.clone(),
-        artwork_url: episode.artwork_url.clone(),
+        artwork_url: episode.artwork_url.clone().filter(|url| !url.is_empty()).or_else(|| feed.artwork_url.clone()),
         published_at: episode.published_at.clone(),
         language: feed.language.clone(),
         transcripts: episode.transcripts.clone(),

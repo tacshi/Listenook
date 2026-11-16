@@ -1467,3 +1467,32 @@ fn a_change_here_reaches_a_paired_device_within_seconds() {
     assert!(changed.elapsed() < Duration::from_secs(30), "synced after {:?}", changed.elapsed());
     assert!(second.contains("\"removed\"") && second.contains("\"sample\""), "the removal goes with it");
 }
+
+#[test]
+fn a_downloaded_episode_keeps_its_show_on_home() {
+    let mut it = start(
+        "home-downloaded",
+        |root| {
+            seed_transcript(root);
+            let path = manifest(root, "sample");
+            let mut job: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            job["source_origin"] = json!("podcast");
+            job["podcast_provenance"] = json!({
+                "feed_url": "https://example.com/aee.xml", "episode_id": "aee-2722",
+                "enclosure_url": "https://example.com/aee-2722.mp3", "show_title": "All Ears English Podcast",
+                "episode_title": "We Wager You'll Love This Episode",
+            });
+            std::fs::write(&path, job.to_string()).unwrap();
+            let settings = json!({
+                "playback_positions_ms": {"sample": 6000},
+                "playback_played_at": {"sample": "2026-11-15T10:00:00.000Z"},
+            });
+            std::fs::write(root.join("settings.json"), settings.to_string()).unwrap();
+        },
+        Vec::new(),
+    );
+    it.app.press("role:button[Home]").unwrap();
+    it.app.wait_for("Continue").unwrap();
+    assert!(it.app.shows("00:06 · All Ears English Podcast"));
+    assert!(it.app.shows("2026-11-10 · All Ears English Podcast"));
+}
