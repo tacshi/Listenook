@@ -296,6 +296,15 @@ impl Document {
         Some((segment.start_ms - LEAD_IN_MS).max(before).max(0).min(segment.start_ms))
     }
 
+    /// Where sentence `index` stops playing: its end, or the next sentence's
+    /// start where the two overlap, so a sentence never sounds the next one's
+    /// head.
+    pub fn play_end(&self, index: usize) -> Option<i64> {
+        let segment = self.segments.get(index)?;
+        let next = self.segments.get(index + 1).map_or(i64::MAX, |next| next.start_ms);
+        Some(segment.end_ms.min(next).max(segment.start_ms))
+    }
+
     pub fn segment_at(&self, position_ms: i64) -> Option<usize> {
         let after = self.segments.partition_point(|segment| segment.start_ms <= position_ms);
         if self.play_start(after).is_some_and(|start| start <= position_ms) {
@@ -921,6 +930,19 @@ mod tests {
         assert_eq!(document.segment_at(9650), Some(2));
         assert_eq!(document.segment_at(11950), Some(3));
         assert_eq!(Document::default().segment_at(100), None);
+    }
+
+    #[test]
+    fn a_sentence_stops_where_the_next_one_starts_when_they_overlap() {
+        let segment = |start_ms, end_ms| Segment { start_ms, end_ms, ..Default::default() };
+        let document = Document {
+            segments: vec![segment(0, 5070), segment(5070, 9000), segment(8800, 12000)],
+            ..Default::default()
+        };
+        assert_eq!(document.play_end(0), Some(5070));
+        assert_eq!(document.play_end(1), Some(8800));
+        assert_eq!(document.play_end(2), Some(12000));
+        assert_eq!(document.play_end(3), None);
     }
 
     #[test]
