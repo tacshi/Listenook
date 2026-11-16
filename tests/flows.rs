@@ -446,6 +446,29 @@ fn the_arrow_keys_step_over_a_skipped_sentence() {
 }
 
 #[test]
+fn a_stretch_of_sentences_is_skipped_by_picking_its_first_and_last() {
+    let mut it = open_sample("skip-range");
+    it.app.long_press("Welcome back to the show.").unwrap();
+    it.app.press("Skip from here…").unwrap();
+    it.app.wait_for("Now tap the last sentence to skip.").unwrap();
+    it.app.press_key("escape").unwrap();
+    it.app.wait_for_gone("Now tap the last sentence to skip.", GONE).unwrap();
+    it.app.press("Start with short episodes, and repeat each sentence out loud.").unwrap();
+    assert!(it.app.shows("Welcome back to the show."), "Escape leaves nothing half picked");
+
+    it.app.long_press("So, what should a beginner do first?").unwrap();
+    it.app.press("Skip from here…").unwrap();
+    it.app.wait_for("Now tap the last sentence to skip.").unwrap();
+    it.app.press("Today we are talking about how people learn languages.").unwrap();
+    it.app.wait_for("Skipped · 00:08").unwrap();
+    assert!(!it.app.shows("Now tap the last sentence to skip."));
+    assert!(!it.app.shows("Listening every day matters more than studying hard once a week."));
+    assert!(!it.app.shows("So, what should a beginner do first?"));
+    assert!(it.app.shows("Welcome back to the show."));
+    assert!(it.app.shows("Start with short episodes, and repeat each sentence out loud."));
+}
+
+#[test]
 fn the_ai_finds_ads_and_they_are_skipped_on_one_tap() {
     let reply = json!({"ads": [{"first": "segment-2", "last": "segment-3", "reason": "sponsor read"}]});
     let routes = llm_routes(&reply.to_string());

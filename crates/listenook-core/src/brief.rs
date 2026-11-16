@@ -257,6 +257,12 @@ pub fn study_from_json(replies: &[Value], request: &BriefRequest, document: &Doc
 }
 
 pub fn chunks(document: &Document) -> Vec<String> {
+    chunks_of(document, CHUNK_CHARACTERS)
+}
+
+/// The transcript as one line for each sentence that plays, in pieces of at
+/// most `limit` characters.
+pub fn chunks_of(document: &Document, limit: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for segment in document.segments.iter().filter(|s| !s.skipped && !s.text.trim().is_empty()) {
         let mut line = format!("[id={}][{}]", segment.id, clock(segment.start_ms));
@@ -269,7 +275,7 @@ pub fn chunks(document: &Document) -> Vec<String> {
         }
         line.push_str(&format!(" {}", segment.text.trim()));
         match out.last_mut() {
-            Some(chunk) if chunk.len() + line.len() < CHUNK_CHARACTERS => {
+            Some(chunk) if chunk.len() + line.len() < limit => {
                 chunk.push('\n');
                 chunk.push_str(&line);
             }

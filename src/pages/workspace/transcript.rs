@@ -222,7 +222,20 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
             review.set_skipped(index, index, true);
         }
     };
+    let skip_from = move || {
+        if let Some(index) = index.get_untracked() {
+            review.begin_skip(index);
+        }
+    };
+    let tap = move || {
+        if let Some(index) = index.get_untracked()
+            && !review.finish_skip(index)
+        {
+            review.jump_to(index);
+        }
+    };
     let found_ad = move || index.get().is_some_and(|index| review.found_ad(index));
+    let starts_skip = move || index.get().is_some() && index.get() == review.skip_start();
     let line = view()
         .element_ref(&row_ref)
         .w_full()
@@ -231,7 +244,9 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
         .transition_colors()
         .duration(motion::BASE)
         .bg(move || {
-            if is_current() {
+            if starts_skip() {
+                theme().primary.opacity(0.16)
+            } else if is_current() {
                 tokens::highlight()
             } else if found_ad() {
                 theme().muted
@@ -313,7 +328,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                         ))
                         .child(when(editing, move || editor(review)).otherwise(move || {
                             nsh_base::button()
-                                .on_press(press)
+                                .on_press(tap)
                                 .rounded(tokens::radius_sm)
                                 .focus_visible(tokens::focus_ring)
                                 .child(ui::veil(hidden, move || {
@@ -521,16 +536,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                     ))
                     .child(ui::menu_divider())
                     .child(ui::menu_action(Icon::Scissors, l("Skip this sentence"), skip))
-                    .child(when(
-                        move || is_repeating() && range().is_some_and(|(first, last)| last > first),
-                        move || {
-                            ui::menu_action(Icon::Scissors, l("Skip the repeated sentences"), move || {
-                                if let Some((first, last)) = review.repeat_range() {
-                                    review.set_skipped(first, last, true);
-                                }
-                            })
-                        },
-                    ))
+                    .child(ui::menu_action(Icon::Scissors, l("Skip from here…"), skip_from))
                     .child(ui::menu_divider())
                     .child(ui::menu_action(Icon::Pencil, l("Edit"), edit))
                     .child(ui::menu_action(Icon::Copy, l("Copy sentence"), move || {
@@ -673,6 +679,10 @@ fn editor(review: Review) -> impl IntoElement {
                         .flex_row()
                         .justify_end()
                         .gap_2()
+                        .child(
+                            button(Variant::Ghost, Size::Sm, l("Skip from here…"))
+                                .on_press(move || review.skip_editing_onward()),
+                        )
                         .child(ui::icon_button(Icon::Scissors, tr("Skip this sentence"), Size::Sm, move || {
                             review.skip_editing()
                         }))

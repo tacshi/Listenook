@@ -377,18 +377,19 @@ async fn ad_json(settings: &LlmProviderSettings, prompt: &str) -> Result<Value, 
 async fn scan_for_ads(store: Store, id: &str) -> Result<(), String> {
     let settings = store.settings().llm_provider_settings;
     let document = store.job_now(id).and_then(|job| job.document.clone()).ok_or("ad_scan_empty_transcript")?;
-    let chunks = brief::chunks(&document);
+    let chunks = ads::chunks(&document);
     if chunks.is_empty() {
         return Err("ad_scan_empty_transcript".into());
     }
     let total = chunks.len();
+    let title = store.job_now(id).map(|job| job.title()).unwrap_or_default();
     let mut replies = Vec::with_capacity(total);
     for (index, chunk) in chunks.iter().enumerate() {
         store.update_job(id, |job| {
             job.ad_scan.completed_chunks = index as u32;
             job.ad_scan.total_chunks = total as u32;
         });
-        let prompt = ads::prompt(chunk, index, total);
+        let prompt = ads::prompt(&title, chunk, index, total);
         replies.push(ad_json(&settings, &prompt).await.map_err(|failure| recoded(failure, "ad_scan_"))?);
     }
     // Read again: the transcript may have changed while the model thought.

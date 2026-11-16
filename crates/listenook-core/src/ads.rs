@@ -5,20 +5,38 @@ use serde_json::Value;
 
 use crate::models::{AdFinding, Document};
 
+/// How much transcript goes in one request. Whether a stretch is an ad
+/// depends on the whole episode, so a recording is sent whole up to this
+/// (some 3 hours of speech, about 60 000 tokens); only a longer one is split.
+pub const WHOLE_CHARACTERS: usize = 240_000;
+
 /// A run shorter than this is not taken for an ad: a passing mention of a
 /// sponsor is part of the show.
 pub const MIN_AD_MS: i64 = 5_000;
 
-pub const SYSTEM_PROMPT: &str = "You find the advertising in timestamped transcripts of podcasts and videos, so a language learner can skip it. Ads are sponsor reads, paid promotions, \"this episode is brought to you by\" segments, discount codes, and inserted ad breaks. The show's own intro, outro, theme, self-promotion of the show itself, and its real content are not ads. Use only the supplied segment IDs. When unsure, leave it out. Return JSON only, with no Markdown fences.";
+pub const SYSTEM_PROMPT: &str = "You find the advertising in timestamped transcripts of podcasts and videos, so a language learner can skip it and keep only the episode itself. Ads are sponsor reads, paid promotions, \"this episode is brought to you by\" segments, discount codes, inserted ad breaks, and trailers or promos for other shows, podcasts or programmes, even from the same publisher or network. A trailer can sound like real storytelling, with quotes and voices: judge each stretch by whether it belongs to this episode's own topic, from its title. A trailer often ends with a call to action such as \"listen on … wherever you get your podcasts\" or \"search for … \"; the ad runs to there. Ads often come before the episode's own greeting, or interrupt it. Give each ad as one stretch from its first to its last segment, including a short station or show ident that sits between the ad and the episode's own greeting. The episode's own greeting, presenters' introductions, its topic and its real content are not ads. Use only the supplied segment IDs. Return JSON only, with no Markdown fences.";
 
 const SHAPE: &str =
     r#"{"ads":[{"first":"segment-id where the ad starts","last":"segment-id where it ends","reason":"a few words"}]}"#;
 
-/// The prompt for one chunk of [`crate::brief::chunks`].
-pub fn prompt(chunk: &str, index: usize, total: usize) -> String {
+/// The transcript to look through, whole unless it is very long.
+pub fn chunks(document: &Document) -> Vec<String> {
+    crate::brief::chunks_of(document, WHOLE_CHARACTERS)
+}
+
+/// The prompt for the episode called `title`: all of it, or chunk `index`
+/// of `total` when it is too long to send at once.
+pub fn prompt(title: &str, chunk: &str, index: usize, total: usize) -> String {
+    let part = if total > 1 {
+        format!(
+            "This is part {} of {total} of the transcript. An ad may start or end outside this part: then give the first or last segment of it that is here.\n",
+            index + 1
+        )
+    } else {
+        "This is the whole transcript: read all of it before deciding what is an ad.\n".to_owned()
+    };
     format!(
-        "Find the ads in transcript chunk {} of {total}. An ad may start or end outside this chunk: then give the first or last segment of it that is here.\nReturn exactly this JSON shape, with an empty list when there are none:\n{SHAPE}\n\nTranscript:\n{chunk}",
-        index + 1,
+        "Episode title: {title}\n{part}Return exactly this JSON shape, with an empty list when there are no ads:\n{SHAPE}\n\nTranscript:\n{chunk}"
     )
 }
 
@@ -152,6 +170,17 @@ mod tests {
         document.segments[5].end_ms = document.segments[5].start_ms + 2_000;
         let replies = [json!({"ads": [{"first": "s5", "last": "s5"}, {"first": "s0", "last": "s8"}]})];
         assert!(findings(&replies, &document).is_empty());
+    }
+
+    #[test]
+    fn an_episode_is_sent_whole_with_its_title() {
+        let mut document = document();
+        document.segments[3].skipped = true;
+        let chunks = chunks(&document);
+        assert_eq!(chunks.len(), 1);
+        assert!(!chunks[0].contains("[id=s3]"), "what is skipped already is not sent");
+        let prompt = prompt("Why do we itch?", &chunks[0], 0, 1);
+        assert!(prompt.contains("Episode title: Why do we itch?") && prompt.contains("whole transcript"));
     }
 
     #[test]

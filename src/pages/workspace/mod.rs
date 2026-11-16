@@ -184,7 +184,9 @@ fn opened(id: &str) -> impl IntoElement {
         }
     });
     on_key("escape", move |_| {
-        if review.fullscreen.get_untracked() {
+        if review.skip_from.get_untracked().is_some() {
+            review.skip_from.set(None);
+        } else if review.fullscreen.get_untracked() {
             set_fullscreen(review, false);
         } else if review.editing.get_untracked().is_some() {
             review.editing.set(None);
@@ -418,6 +420,7 @@ fn opened(id: &str) -> impl IntoElement {
         .child(when(move || !review.fullscreen.get(), move || header(review, export, rename, translate)))
         .child(when(move || !review.fullscreen.get(), move || translation_strip(review)))
         .child(when(move || !review.fullscreen.get(), move || ad_strip(review)))
+        .child(when(move || !review.fullscreen.get(), move || skip_strip(review)))
         .child(
             view()
                 .flex_1()
@@ -762,6 +765,35 @@ fn translation_strip(review: Review) -> impl IntoElement {
                 }),
             )
     })
+}
+
+/// While a stretch to skip is picked: what to do next, and a way out.
+fn skip_strip(review: Review) -> impl IntoElement {
+    when(
+        move || review.skip_from.with(Option::is_some),
+        move || {
+            on_key_with(
+                "escape",
+                KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() },
+                move |_| review.skip_from.set(None),
+            );
+            view()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .px(px(ui::PAGE_INSET))
+                .py_2()
+                .border_b_1()
+                .border_color(|| theme().border)
+                .bg(|| theme().primary.opacity(0.08))
+                .test_id("skip-strip")
+                .child(ui::icon(Icon::Scissors, 14.0).text_color(|| theme().primary))
+                .child(
+                    text(l("Now tap the last sentence to skip.")).text_sm().flex_1().text_color(|| theme().foreground),
+                )
+                .child(button(Variant::Ghost, Size::Sm, l("Cancel")).on_press(move || review.skip_from.set(None)))
+        },
+    )
 }
 
 /// The search for ads: while it runs, and what it found, to skip or not.

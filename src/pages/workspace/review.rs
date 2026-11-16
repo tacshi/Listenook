@@ -143,6 +143,8 @@ pub(super) struct Review {
     pub(super) searching: Signal<bool>,
     pub(super) query: Signal<String>,
     pub(super) repeating: Signal<Option<Span>>,
+    /// The first sentence of a stretch to skip, while its last is picked.
+    pub(super) skip_from: Signal<Option<String>>,
     pub(super) handle_at: Signal<Option<String>>,
     pub(super) handle_cell: Signal<Option<u64>>,
     rows: Stored<Vec<Row>>,
@@ -306,6 +308,7 @@ impl Review {
             searching,
             query,
             repeating: signal(None),
+            skip_from: signal(None),
             handle_at: signal(None),
             handle_cell: signal(None),
             rows: stored(Vec::new()),
@@ -438,6 +441,40 @@ impl Review {
                     self.editing.set(None);
                 }
             });
+        }
+    }
+
+    /// Starts a stretch to skip at sentence `index`: the next sentence
+    /// tapped ends it.
+    pub(super) fn begin_skip(&self, index: usize) {
+        if let Some(segment) = self.segment_now(index) {
+            batch(|| {
+                self.editing.set(None);
+                self.skip_from.set(Some(segment.id));
+            });
+        }
+    }
+
+    /// Where the stretch being picked starts.
+    pub(super) fn skip_start(&self) -> Option<usize> {
+        let id = self.skip_from.get()?;
+        self.job.with(|job| job.as_ref()?.document.as_ref()?.segments.iter().position(|segment| segment.id == id))
+    }
+
+    /// Skips from where the stretch started through sentence `index`,
+    /// whichever comes first. Whether a stretch was being picked.
+    pub(super) fn finish_skip(&self, index: usize) -> bool {
+        let Some(start) = untracked(|| self.skip_start()) else {
+            return false;
+        };
+        self.skip_from.set(None);
+        self.set_skipped(start.min(index), start.max(index), true);
+        true
+    }
+
+    pub(super) fn skip_editing_onward(&self) {
+        if let Some(index) = self.editing.get_untracked().and_then(|editing| self.index_of(&editing.segment_id)) {
+            self.begin_skip(index);
         }
     }
 
