@@ -60,23 +60,37 @@ fn opened(id: &str) -> impl IntoElement {
     let translate = signal(false);
     let brief_dialog = signal(false);
     let has_video = review.has_video;
-    let path = review.job.with_untracked(|job| job.as_ref().map(|job| job.source_path.clone()).unwrap_or_default());
-    let source = signal(if playable::needs_help(&path) { String::new() } else { file_url(&path) });
-    let waiting_for_source = signal(playable::needs_help(&path));
-    if playable::needs_help(&path) {
-        let job_id = review.job.with_untracked(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
-        if playable::made(&job_id).is_none() {
-            toast(Tone::Info, tr("Preparing this recording for playback…"));
+    let source = signal(String::new());
+    let waiting_for_source = signal(false);
+    let loaded = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
+    effect(move || {
+        let path = review.job.with(|job| job.as_ref().map(|job| job.source_path.clone()).unwrap_or_default());
+        if loaded.borrow().as_deref() == Some(path.as_str()) {
+            return;
         }
-        spawn(async move {
-            match playable::prepare(job_id, path).await {
-                Some(made) => source.set(file_url(&made.to_string_lossy())),
-                None => toast(Tone::Error, tr("This recording's format cannot be played here.")),
+        loaded.replace(Some(path.clone()));
+        untracked(|| {
+            let helps = playable::needs_help(&path);
+            batch(|| {
+                waiting_for_source.set(helps);
+                source.set(if helps { String::new() } else { file_url(&path) });
+            });
+            if !helps {
+                return;
             }
+            let job_id = review.job.with(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
+            if playable::made(&job_id).is_none() {
+                toast(Tone::Info, tr("Preparing this recording for playback…"));
+            }
+            spawn(async move {
+                match playable::prepare(job_id, path).await {
+                    Some(made) => source.set(file_url(&made.to_string_lossy())),
+                    None => toast(Tone::Error, tr("This recording's format cannot be played here.")),
+                }
+            });
         });
-    }
-    let start_at = review.position_ms.get_untracked();
-    let plays_on_load = store.take_play_on_open(id);
+    });
+    let plays_on_load = std::cell::Cell::new(store.take_play_on_open(id));
     let restore = move || {
         if review.fullscreen.get_untracked() {
             batch(|| {
@@ -250,10 +264,11 @@ fn opened(id: &str) -> impl IntoElement {
         })
         .on_load(move |info: &VideoInfo| {
             review.duration_ms.set((info.duration * 1000.0) as i64);
+            let start_at = review.position_ms.get_untracked();
             if start_at > 0 {
                 review.player.seek(start_at as f64 / 1000.0);
             }
-            if plays_on_load {
+            if plays_on_load.replace(false) {
                 review.paused.set(false);
             }
         })
@@ -632,6 +647,10 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                 }))
                 .child(menu_action(Icon::Export, l("Export…"), move || export.show(&review.id())))
                 .child(menu_action(Icon::Pencil, l("Rename…"), move || rename.show(&review.id())))
+                .child(when(
+                    || !crate::platform::is_phone() || cfg!(target_os = "ios"),
+                    move || menu_action(Icon::Refresh, l("Relink media…"), move || crate::util::relink(review.id())),
+                ))
         }));
     if !touch {
         return bar.into_element();
