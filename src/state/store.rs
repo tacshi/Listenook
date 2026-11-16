@@ -745,6 +745,7 @@ impl Store {
             let _ = std::fs::remove_dir_all(root.join("podcasts").join(id));
         }
         crate::services::playable::forget(id);
+        crate::services::audio::forget_loudness(id);
     }
 
     pub(crate) fn saved_rate(&self, key: &str) -> f32 {

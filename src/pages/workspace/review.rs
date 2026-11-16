@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use listenook_core::{ContentMode, Document, Job, Segment, dictation, highlights, playback};
+use listenook_core::{ContentMode, Document, Job, Segment, dictation, highlights, playback, playback::Loudness};
 use nsh_core::prelude::*;
 
 use crate::{
@@ -126,6 +126,8 @@ pub(super) struct Review {
     pub(super) store: Store,
     id: Stored<String>,
     pub(super) job: Memo<Option<Rc<Job>>>,
+    /// How loud the recording is, once measured: where its pauses are.
+    loudness: Signal<Option<Rc<Loudness>>>,
     pub(super) player: ElementRef,
     pub(super) list: ElementRef,
     pub(super) position_ms: Signal<i64>,
@@ -230,14 +232,28 @@ impl Review {
             store.setting(|s| s.extra.get("reader_brief_open").and_then(serde_json::Value::as_bool)).unwrap_or(false);
         let query = signal(String::new());
         let searching = signal(false);
-        let current = computed(move || {
-            let position = position_ms.get();
-            job.with(|job| job.as_ref()?.document.as_ref()?.segment_at(position))
-        });
+        let loudness = signal(None::<Rc<Loudness>>);
+        let segment_at = move |position: i64| {
+            loudness.with(|loudness| {
+                job.with(|job| job.as_ref()?.document.as_ref()?.segment_at(position, loudness.as_deref()))
+            })
+        };
+        let current = computed(move || segment_at(position_ms.get()));
         let scrub = signal(None::<i64>);
-        let scrubbed = computed(move || {
-            let at = scrub.get()?;
-            job.with(|job| job.as_ref()?.document.as_ref()?.segment_at(at))
+        let scrubbed = computed(move || segment_at(scrub.get()?));
+        // The pauses between sentences, from the recording itself, measured
+        // once for each recording the job points at.
+        let source = computed(move || job.with(|job| job.as_ref().map(|job| job.source_path.clone())));
+        let job_id = id.to_owned();
+        effect(move || {
+            let Some(source) = source.get() else {
+                return;
+            };
+            let job_id = job_id.clone();
+            spawn(async move {
+                let measured = blocking(move || crate::services::audio::loudness(&job_id, &source)).await;
+                loudness.try_set(measured.ok().flatten().map(Rc::new));
+            });
         });
         let shown = computed(move || {
             let needle = if searching.get() { query.with(|q| q.trim().to_lowercase()) } else { String::new() };
@@ -263,6 +279,7 @@ impl Review {
             store,
             id: stored(id.to_owned()),
             job,
+            loudness,
             player: element_ref(),
             list: element_ref(),
             position_ms,
@@ -347,12 +364,16 @@ impl Review {
 
     fn play_start(&self, index: usize) -> i64 {
         self.job.with_untracked(|job| {
-            job.as_ref().and_then(|job| job.document.as_ref()?.play_start(index)).unwrap_or_default()
+            let loudness = self.loudness.with_untracked(Option::clone);
+            job.as_ref()
+                .and_then(|job| job.document.as_ref()?.play_start(index, loudness.as_deref()))
+                .unwrap_or_default()
         })
     }
 
     fn play_end(&self, index: usize) -> Option<i64> {
-        self.job.with_untracked(|job| job.as_ref()?.document.as_ref()?.play_end(index))
+        let loudness = self.loudness.with_untracked(Option::clone);
+        self.job.with_untracked(|job| job.as_ref()?.document.as_ref()?.play_end(index, loudness.as_deref()))
     }
 
     fn index_of(&self, segment_id: &str) -> Option<usize> {

@@ -447,6 +447,23 @@ pub fn mkv_subtitles<R: Read + Seek>(input: R) -> Vec<SubtitleTrack> {
     tracks.into_iter().map(|(.., track)| track).filter(|track| !track.cues.is_empty()).collect()
 }
 
+/// How many seconds at the start of an MP4's first audio track its edit list
+/// leaves out: the encoder's priming, which players skip (2112 samples from
+/// Apple's encoders, none in many others). `None` without an audio track or
+/// an edit list.
+pub fn mp4_audio_skip<R: Read + Seek>(input: R, size: u64) -> Option<f64> {
+    let file = mp4::Mp4Reader::read_header(input, size).ok()?;
+    let (_, track) = file
+        .tracks()
+        .iter()
+        .filter(|(_, track)| matches!(track.track_type(), Ok(mp4::TrackType::Audio)))
+        .min_by_key(|(id, _)| **id)?;
+    let edits = &track.trak.edts.as_ref()?.elst.as_ref()?.entries;
+    // An empty edit (media time -1) only delays the track.
+    let edit = edits.iter().find(|edit| edit.media_time != u64::MAX && edit.media_time != u64::from(u32::MAX))?;
+    Some(edit.media_time as f64 / f64::from(track.timescale().max(1)))
+}
+
 pub fn mp4_subtitles<R: Read + Seek>(input: R, size: u64) -> Vec<SubtitleTrack> {
     let Ok(mut file) = mp4::Mp4Reader::read_header(input, size) else {
         return Vec::new();
