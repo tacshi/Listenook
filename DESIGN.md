@@ -5,11 +5,24 @@ product; everything else gets out of its way.
 
 ## Structure
 
-The app opens on Home, which gathers what to do next: Continue (what was
+The app opens on Home, which gathers what to do next. Its first row is
+Today (a ring filling toward the daily goal, today's listening and practice
+minutes, and the streak of days the goal was met) beside Continue (what was
 played last, recordings and podcast episodes together, each resuming where
-it stopped), Processing (while something transcribes or waits), Recently
-added, and New episodes from the shows followed. A section with nothing to
-show is not drawn; with nothing at all, Home is one empty state. A card's
+it stopped); on a narrow page Today is a row above Continue. Activity
+follows once two days have time: bars of the last 7 or 30 days, listening
+under practice with a line at the goal, beside a calendar of the last 20
+weeks (12 on a narrow page), the hovered day said under each. Then
+Processing (while something transcribes or waits), Recently added, and New
+episodes from the shows followed. A section with nothing to show is not
+drawn; with nothing at all, Home is one empty state.
+
+Learning time is the seconds something plays (a recording, an episode, a
+video) and the seconds a practice mode is open and in use (an input in the
+last two minutes), counted once however many report it. Each device keeps
+its own per-day log in `activity.json`; Sync merges the logs, so every
+device shows the time of all of them. The goal is set from Today's menu or
+Settings › General. A card's
 context menu (a secondary click, or a finger held on it) takes it off
 Continue or Recently added, with Undo in the toast; nothing is deleted, and
 an item taken off Continue returns once it is opened or played again.
@@ -55,6 +68,7 @@ separated by hairlines; shadows only on what floats (menus, dialogs, toasts).
 | `control-border` | The edge of fields, selects and checkboxes (3:1 against the page) |
 | `destructive` | Destructive actions and errors |
 | `success`, `warning` | A finished job, a job that needs attention |
+| `listen`, `practice` | Learning time in charts: emerald for listening, hot orange for practice. The one place Home goes bright; never used for actions |
 | `highlight`, `highlight-foreground` | The sentence being played |
 | `scrim` | The layer behind a dialog |
 
@@ -94,6 +108,7 @@ Colors live in `theme.json` and are read through `nsh_base::theme()` and
 | `modal`, `modal_actions`, `confirm_destructive` | Centered dialog; the system's alert for confirmations |
 | `toast`, `toast_host` | Info, Success, Error |
 | `page_header`, `card`, `section`, `separator`, `list_row`, `badge`, `empty_state`, `spinner`, `key_cap` | |
+| `chart::goal_ring`, `chart::day_bars`, `chart::heatmap`, `chart::heat_key`, `chart::swatch` | `nsh_base::plot` marks in `listen` (listening, calendar shades) and `practice`; the goal line in `foreground` at 45% |
 
 A look a page needs becomes a variant here first.
 
@@ -126,6 +141,12 @@ With reduced motion, presses do not scale, entrances land at once
 | Work runs | The progress bar's fill glides between values, `BASE` | Static bar |
 | Search opens | The search bar appears under the header without motion | Same |
 | A section gains or loses everything it shows | It appears or leaves without motion | Same |
+| Home first shows | The goal ring sweeps round to today's time; the bars grow from the baseline (plot appear, 2 × `BASE`) | Appear |
+| Minutes are added or the goal changes | The ring sweeps and the bars grow to their new values, the goal line moving with the scale (plot update, `BASE`) | Jumps |
+| Week ↔ Month | The segmented indicator slides; the new bars grow in | Appear |
+| Hover or arrow keys over the bars | The other bars dim, `INSTANT`; the caption under them says the day in place of the key | Instant |
+| Hover over the calendar | The caption under it says the day in place of the key | Same |
+| The goal is met | The ring closes and its line turns to "Goal met" in `success` | Same |
 | Nothing to show | The empty state fades in | Appears |
 
 ### Library

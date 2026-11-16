@@ -1,3 +1,4 @@
+pub(crate) mod activity;
 pub(crate) mod monitor;
 pub(crate) mod persist;
 pub(crate) mod podcast;

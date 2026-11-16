@@ -180,6 +180,7 @@ pub(crate) fn shell() -> impl IntoElement {
     });
 
     set_interval(std::time::Duration::from_secs(5), move || store.scan_watched_folder());
+    set_interval(std::time::Duration::from_secs(1), move || store.activity.tick());
     let owner = Owner::current();
     let ticker = stored(None::<Spawned<()>>);
     let busy = computed(move || store.sync.busy());
@@ -939,6 +940,9 @@ fn podcast_player() -> impl IntoElement {
         })
         .on_progress(move |progress: &VideoProgress| {
             player.report((progress.current_time * 1000.0) as i64, (progress.duration * 1000.0) as i64);
+            if !untracked(|| player.paused()) {
+                store.activity.note(listenook_core::activity::Kind::Listen);
+            }
         })
         .on_end(move || player.set_paused(true))
         .absolute()

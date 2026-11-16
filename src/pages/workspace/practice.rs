@@ -7,7 +7,7 @@ use nsh_core::prelude::*;
 
 use super::review::{Practice, Review, Side};
 use crate::{
-    state::{l, tr},
+    state::{l, store, tr},
     ui::{
         self, Icon, Size, Status, Variant, badge, field, hint, icon, icon_text_button, segmented, select, text_area,
         tokens,
@@ -45,6 +45,12 @@ pub(super) fn stop(review: Review) {
 }
 
 pub(super) fn practice_panel(review: Review) -> impl IntoElement {
+    let activity = store().activity;
+    effect(move || {
+        let on = review.practice.get() != Practice::None;
+        untracked(|| activity.set_practicing(on));
+    });
+    cleanup(move || activity.set_practicing(false));
     let heading = move || -> SharedString {
         match review.target().and_then(|index| review.segment(index).map(|segment| (index, segment))) {
             Some((index, segment)) => format!("{} {} · {}", tr("Sentence"), index + 1, clock(segment.start_ms)).into(),
@@ -76,6 +82,10 @@ pub(super) fn practice_panel(review: Review) -> impl IntoElement {
 fn dictation_panel(review: Review) -> impl IntoElement {
     let answer = signal(String::new());
     let result = signal(None::<Vec<DictationWord>>);
+    effect(move || {
+        answer.with(|_| ());
+        untracked(|| store().activity.touch());
+    });
     let pinned = signal(untracked(|| review.target()));
     let target = move || pinned.get().and_then(|index| review.segment(index));
     let supported = move || {
@@ -106,6 +116,7 @@ fn dictation_panel(review: Review) -> impl IntoElement {
         if answer.with_untracked(|a| a.trim().is_empty()) {
             return;
         }
+        store().activity.touch();
         let words = dictation::compare(&segment.text, &answer.get_untracked());
         batch(|| {
             review.paused.set(true);

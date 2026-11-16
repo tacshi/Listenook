@@ -1,5 +1,6 @@
 mod dialogs;
 mod home;
+mod home_stats;
 mod library;
 mod player;
 mod podcast;

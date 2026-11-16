@@ -171,6 +171,56 @@ fn home_resumes_what_was_played_last_and_lists_what_was_added() {
     it.app.wait_for("Welcome back to the show.").unwrap();
 }
 
+fn seed_activity(root: &Path) {
+    use listenook_core::activity::{Days, day_key, today};
+    let today = today();
+    let mut days = serde_json::Map::new();
+    days.insert(day_key(today), json!({"listen_s": 720, "practice_s": 360}));
+    for back in 1..=4 {
+        days.insert(day_key(today - Days::new(back)), json!({"listen_s": 900, "practice_s": 400}));
+    }
+    let log = json!({"version": 1, "devices": {"another-device": days}});
+    std::fs::write(root.join("activity.json"), log.to_string()).unwrap();
+}
+
+#[test]
+fn home_shows_today_against_the_goal_and_the_days_before() {
+    let mut it = start(
+        "home-activity",
+        |root| {
+            seed_transcript(root);
+            seed_activity(root);
+        },
+        Vec::new(),
+    );
+    it.app.press("role:button[Home]").unwrap();
+    it.app.wait_for("Today").unwrap();
+    assert!(it.app.shows("of 20 min"));
+    assert!(it.app.shows("12 min"));
+    assert!(it.app.shows("6 min"));
+    assert!(it.app.shows("4-day streak"));
+    assert!(it.app.shows("2 min to go"));
+    assert!(it.app.shows("Activity"));
+    it.app.wait_for("label:Learning time, last 7 days").unwrap();
+    it.app.press("Month").unwrap();
+    it.app.wait_for("label:Learning time, last 30 days").unwrap();
+    it.app.press("label:Daily goal").unwrap();
+    it.app.press("10 min a day").unwrap();
+    it.app.wait_for("Goal met").unwrap();
+    it.app.wait_for("5-day streak").unwrap();
+    let settings = std::fs::read_to_string(it.root.join("settings.json")).unwrap();
+    assert!(settings.contains("\"daily_goal_minutes\": 10"), "{settings}");
+}
+
+#[test]
+fn home_starts_today_at_nothing_without_history() {
+    let mut it = start("home-no-activity", seed_transcript, Vec::new());
+    it.app.press("role:button[Home]").unwrap();
+    it.app.wait_for("Play something to start today's minutes.").unwrap();
+    assert!(it.app.shows("of 20 min"));
+    assert!(!it.app.shows("Activity"));
+}
+
 #[test]
 fn a_card_comes_off_continue_and_recently_added_until_it_is_opened_again() {
     let mut it = start(

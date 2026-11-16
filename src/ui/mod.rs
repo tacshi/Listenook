@@ -1,4 +1,5 @@
 mod button;
+pub(crate) mod chart;
 mod form;
 mod icons;
 mod layout;

@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod ads;
 pub mod audio;
 pub mod brief;

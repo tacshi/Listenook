@@ -162,6 +162,16 @@ pub(crate) fn save_listening(root: &Path, entries: &[listenook_core::podcast::Li
     write_library(&root.join("podcast_playback.json"), &serde_json::json!({"version": 1, "entries": kept}))
 }
 
+pub(crate) fn load_activity(root: &Path) -> listenook_core::activity::Activity {
+    read_json(&root.join("activity.json")).unwrap_or_default()
+}
+
+/// `share` also tells Sync, which is kept for when time stops being counted.
+pub(crate) fn save_activity(root: &Path, log: &listenook_core::activity::Activity, share: bool) -> io::Result<()> {
+    let path = root.join("activity.json");
+    if share { write_library(&path, log) } else { write_json(&path, log) }
+}
+
 pub(crate) fn podcast_path(root: &Path, id: &str, file_name: &str) -> PathBuf {
     root.join("podcasts").join(id).join(file_name)
 }

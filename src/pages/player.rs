@@ -304,6 +304,9 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         })
         .on_progress(move |progress: &VideoProgress| {
             let position = (progress.current_time * 1000.0) as i64;
+            if !paused.get_untracked() {
+                store.activity.note(listenook_core::activity::Kind::Listen);
+            }
             let again = repeating.get_untracked().then(|| {
                 cues.with_untracked(|cues| {
                     let cues = cues.as_ref()?;
