@@ -13,7 +13,7 @@ use review::{Practice, Review, Side};
 
 use super::dialogs::{ExportDialog, JobDialog, export_dialog, rename_dialog};
 use crate::{
-    services::{llm, media, playable},
+    services::{llm, media, playable, podcasts},
     shell::{rate_menu, time_text, top_bar},
     state::{error_text, l, store, tr},
     ui::{
@@ -215,10 +215,13 @@ fn opened(id: &str) -> impl IntoElement {
     let beat = computed(move || review.position_ms.get() / 5000);
     effect(move || {
         beat.get();
-        let title = review.job.with(|job| job.as_ref().map(|job| job.title()).unwrap_or_default());
+        let (title, artist) = review.job.with(|job| {
+            let title = job.as_ref().map(|job| job.title()).unwrap_or_default();
+            (title, job.as_deref().and_then(podcasts::show_of).unwrap_or_else(|| "Listenook".into()))
+        });
         controls.publish(Some(media::Now {
             title,
-            artist: "Listenook".into(),
+            artist,
             position_ms: review.position_ms.get_untracked(),
             duration_ms: review.duration_ms.get(),
             playing: !review.paused.get(),
