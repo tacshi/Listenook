@@ -15,7 +15,7 @@
     "macos": "icon.png",
     "ios": "icon-full.png",
     "android": "icon-full.png",
-    "windows": "icon-full.png",
+    "windows": "icon-windows.png",
     "linux": "icon-full.png"
   },
   "ios": {
