@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
+use crate::playback::Loudness;
+
 pub const MANIFEST_VERSION: u32 = 15;
 pub const MAX_MEDIA_DURATION_MS: i64 = 300 * 60 * 1000;
 
@@ -290,31 +292,82 @@ impl Document {
         self.updated_at = now_iso();
     }
 
-    pub fn play_start(&self, index: usize) -> Option<i64> {
+    /// Where sentence `index` starts playing: in the pause before it when
+    /// `loudness` shows one, else a little before its marked start, but not
+    /// before the sentence ahead of it ends.
+    pub fn play_start(&self, index: usize, loudness: Option<&Loudness>) -> Option<i64> {
         let segment = self.segments.get(index)?;
-        let before = index.checked_sub(1).map_or(0, |before| self.segments[before].end_ms);
-        Some((segment.start_ms - LEAD_IN_MS).max(before).max(0).min(segment.start_ms))
+        let heard = loudness.and_then(|loudness| self.pause_before(index, loudness));
+        let heard = heard.filter(|start| *start < segment.end_ms);
+        Some(heard.unwrap_or_else(|| {
+            let before = index.checked_sub(1).map_or(0, |before| self.segments[before].end_ms);
+            (segment.start_ms - LEAD_IN_MS).max(before).max(0).min(segment.start_ms)
+        }))
     }
 
-    /// Where sentence `index` stops playing: its end, or the next sentence's
-    /// start where the two overlap, so a sentence never sounds the next one's
-    /// head.
-    pub fn play_end(&self, index: usize) -> Option<i64> {
+    /// Where sentence `index` stops playing: in the pause after it when
+    /// `loudness` shows one, else its marked end, or the next sentence's
+    /// start where the two overlap.
+    pub fn play_end(&self, index: usize, loudness: Option<&Loudness>) -> Option<i64> {
         let segment = self.segments.get(index)?;
-        let next = self.segments.get(index + 1).map_or(i64::MAX, |next| next.start_ms);
-        Some(segment.end_ms.min(next).max(segment.start_ms))
+        let heard = loudness.and_then(|loudness| self.pause_after(index, loudness));
+        let heard = heard.filter(|end| *end > segment.start_ms);
+        Some(heard.unwrap_or_else(|| {
+            let next = self.segments.get(index + 1).map_or(i64::MAX, |next| next.start_ms);
+            segment.end_ms.min(next).max(segment.start_ms)
+        }))
     }
 
-    pub fn segment_at(&self, position_ms: i64) -> Option<usize> {
+    /// The pause where sentence `index` hands over to the next one. Sentences
+    /// closer than [`PAUSE_REACH_MS`] share one; further apart, each looks on
+    /// its own side of the middle.
+    fn pause_after(&self, index: usize, loudness: &Loudness) -> Option<i64> {
+        let end = self.segments.get(index)?.end_ms;
+        let to = match self.segments.get(index + 1) {
+            Some(next) if next.start_ms - end <= PAUSE_REACH_MS => next.start_ms + PAUSE_INTO_NEXT_MS,
+            Some(next) => (end + PAUSE_REACH_MS).min((end + next.start_ms) / 2),
+            None => end + PAUSE_REACH_MS,
+        };
+        loudness.pause_between(end - PAUSE_BEFORE_END_MS, to)
+    }
+
+    fn pause_before(&self, index: usize, loudness: &Loudness) -> Option<i64> {
+        let start = self.segments.get(index)?.start_ms;
+        let from = match index.checked_sub(1).map(|before| &self.segments[before]) {
+            Some(before) if start - before.end_ms <= PAUSE_REACH_MS => return self.pause_after(index - 1, loudness),
+            Some(before) => (start - PAUSE_REACH_MS).max((before.end_ms + start) / 2),
+            None => start - PAUSE_REACH_MS,
+        };
+        loudness.pause_between(from.max(0), start + PAUSE_INTO_NEXT_MS)
+    }
+
+    pub fn segment_at(&self, position_ms: i64, loudness: Option<&Loudness>) -> Option<usize> {
         let after = self.segments.partition_point(|segment| segment.start_ms <= position_ms);
-        if self.play_start(after).is_some_and(|start| start <= position_ms) {
+        if self.play_start(after, loudness).is_some_and(|start| start <= position_ms) {
             return Some(after);
         }
-        after.checked_sub(1)
+        let current = after.checked_sub(1)?;
+        // Its sound may start after its marked start: until then, the one
+        // before it is still playing.
+        if current > 0 && self.play_start(current, loudness).is_some_and(|start| position_ms < start) {
+            return Some(current - 1);
+        }
+        Some(current)
     }
 }
 
 pub const LEAD_IN_MS: i64 = 250;
+
+/// How far past a sentence's marked end, and before the next one's marked
+/// start, the pause between them is looked for.
+pub const PAUSE_REACH_MS: i64 = 300;
+
+/// How far into the next sentence: its first sound often starts after its
+/// marked start (up to 170 ms in Soniox transcripts).
+const PAUSE_INTO_NEXT_MS: i64 = 150;
+
+/// How far back from a marked end: the last sound can stop just short of it.
+const PAUSE_BEFORE_END_MS: i64 = 40;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -918,18 +971,45 @@ mod tests {
             segments: vec![segment(210, 5070), segment(5200, 9000), segment(9900, 12000), segment(11900, 13000)],
             ..Default::default()
         };
-        assert_eq!(document.play_start(0), Some(0));
-        assert_eq!(document.play_start(1), Some(5070));
-        assert_eq!(document.play_start(2), Some(9650));
-        assert_eq!(document.play_start(3), Some(11900));
-        assert_eq!(document.play_start(4), None);
-        assert_eq!(document.segment_at(0), Some(0));
-        assert_eq!(document.segment_at(5069), Some(0));
-        assert_eq!(document.segment_at(5070), Some(1));
-        assert_eq!(document.segment_at(9649), Some(1));
-        assert_eq!(document.segment_at(9650), Some(2));
-        assert_eq!(document.segment_at(11950), Some(3));
-        assert_eq!(Document::default().segment_at(100), None);
+        assert_eq!(document.play_start(0, None), Some(0));
+        assert_eq!(document.play_start(1, None), Some(5070));
+        assert_eq!(document.play_start(2, None), Some(9650));
+        assert_eq!(document.play_start(3, None), Some(11900));
+        assert_eq!(document.play_start(4, None), None);
+        assert_eq!(document.segment_at(0, None), Some(0));
+        assert_eq!(document.segment_at(5069, None), Some(0));
+        assert_eq!(document.segment_at(5070, None), Some(1));
+        assert_eq!(document.segment_at(9649, None), Some(1));
+        assert_eq!(document.segment_at(9650, None), Some(2));
+        assert_eq!(document.segment_at(11950, None), Some(3));
+        assert_eq!(Document::default().segment_at(100, None), None);
+    }
+
+    #[test]
+    fn a_sentence_starts_and_stops_in_the_pause_the_recording_shows() {
+        let segment = |start_ms, end_ms| Segment { start_ms, end_ms, ..Default::default() };
+        // The first sentence's last sound runs on to 1100 ms, past its marked
+        // end; the second's first sound starts at 1190 ms, after its marked
+        // start. A long pause follows, then a sentence with no pause before it.
+        let document = Document {
+            segments: vec![segment(0, 1000), segment(1000, 2000), segment(3000, 4000), segment(4000, 5000)],
+            ..Default::default()
+        };
+        let mut frames = vec![150_u8; 600];
+        frames[110..119].fill(60);
+        frames[220..295].fill(60);
+        frames[230] = 55;
+        frames[290] = 55;
+        let loudness = Loudness::from_frames(frames);
+        let loudness = Some(&loudness);
+        assert_eq!(document.play_end(0, loudness), Some(1105));
+        assert_eq!(document.play_start(1, loudness), Some(1105));
+        assert_eq!(document.segment_at(1050, loudness), Some(0), "still the first sentence's last sound");
+        assert_eq!(document.segment_at(1105, loudness), Some(1));
+        assert_eq!(document.play_end(1, loudness), Some(2305), "in the pause, on its own side of the middle");
+        assert_eq!(document.play_start(2, loudness), Some(2905));
+        assert_eq!(document.play_end(2, loudness), Some(4000), "no pause: the marked end");
+        assert_eq!(document.play_start(3, loudness), Some(4000));
     }
 
     #[test]
@@ -939,10 +1019,10 @@ mod tests {
             segments: vec![segment(0, 5070), segment(5070, 9000), segment(8800, 12000)],
             ..Default::default()
         };
-        assert_eq!(document.play_end(0), Some(5070));
-        assert_eq!(document.play_end(1), Some(8800));
-        assert_eq!(document.play_end(2), Some(12000));
-        assert_eq!(document.play_end(3), None);
+        assert_eq!(document.play_end(0, None), Some(5070));
+        assert_eq!(document.play_end(1, None), Some(8800));
+        assert_eq!(document.play_end(2, None), Some(12000));
+        assert_eq!(document.play_end(3, None), None);
     }
 
     #[test]
