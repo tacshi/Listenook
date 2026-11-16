@@ -156,17 +156,12 @@ pub fn get_num_threads() -> usize {
 }
 
 pub fn get_num_cpus() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
 }
 
 #[cfg(target_os = "macos")]
 fn sysctl_uint(name: &[u8]) -> Option<usize> {
-    debug_assert!(
-        name.last() == Some(&0),
-        "sysctl name must be NUL-terminated"
-    );
+    debug_assert!(name.last() == Some(&0), "sysctl name must be NUL-terminated");
     let mut out: i32 = 0;
     let mut size = std::mem::size_of::<i32>();
     let rc = unsafe {
@@ -257,10 +252,8 @@ pub(crate) fn parallel_for<F: Fn(usize, usize) + Send + Sync>(f: F) {
 
     // Publish dispatch data via atomics (Relaxed OK: gen_atomic Release provides ordering)
     pool.done_atomic.store(0, Ordering::Relaxed);
-    pool.fn_ptr_atomic
-        .store(&f as *const F as *const () as usize, Ordering::Relaxed);
-    pool.fn_call_atomic
-        .store(trampoline::<F> as *const () as usize, Ordering::Relaxed);
+    pool.fn_ptr_atomic.store(&f as *const F as *const () as usize, Ordering::Relaxed);
+    pool.fn_call_atomic.store(trampoline::<F> as *const () as usize, Ordering::Relaxed);
     pool.n_threads_atomic.store(n_threads, Ordering::Relaxed);
     // Release: ensures all stores above are visible to workers that Acquire gen_atomic
     pool.gen_atomic.fetch_add(1, Ordering::Release);
@@ -400,11 +393,7 @@ pub(crate) struct RegionBarrier {
 impl RegionBarrier {
     #[inline]
     fn new(nt: usize) -> Self {
-        RegionBarrier {
-            arrived: CachePadded(AtomicUsize::new(0)),
-            generation: CachePadded(AtomicUsize::new(0)),
-            nt,
-        }
+        RegionBarrier { arrived: CachePadded(AtomicUsize::new(0)), generation: CachePadded(AtomicUsize::new(0)), nt }
     }
 
     /// Block until all `nt` participants have called `wait`.
@@ -485,10 +474,7 @@ pub(crate) fn decode_region_threads() -> usize {
     static CAP: OnceLock<Option<usize>> = OnceLock::new();
     let nt = get_num_threads();
     let cap = *CAP.get_or_init(|| {
-        std::env::var("QWEN_ASR_DECODE_THREADS")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .filter(|&n| n > 0)
+        std::env::var("QWEN_ASR_DECODE_THREADS").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|&n| n > 0)
     });
     match cap {
         Some(n) => nt.min(n).max(1),
@@ -520,25 +506,16 @@ mod tests {
         for _ in 0..Backoff::SPIN_LIMIT {
             backoff.wait();
         }
-        assert_eq!(
-            backoff.yield_calls, 0,
-            "short waits must remain syscall-free"
-        );
+        assert_eq!(backoff.yield_calls, 0, "short waits must remain syscall-free");
         backoff.wait();
-        assert_eq!(
-            backoff.yield_calls, 1,
-            "long waits must yield to other workers"
-        );
+        assert_eq!(backoff.yield_calls, 1, "long waits must yield to other workers");
 
         let further_polls = 2 * (Backoff::SPIN_LIMIT + 1);
         for _ in 0..further_polls {
             backoff.wait();
         }
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        assert_eq!(
-            backoff.yield_calls, 3,
-            "long waits must not become yield storms"
-        );
+        assert_eq!(backoff.yield_calls, 3, "long waits must not become yield storms");
         #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
         assert_eq!(
             backoff.yield_calls,
