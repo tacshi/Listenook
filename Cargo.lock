@@ -2103,6 +2103,7 @@ dependencies = [
  "roxmltree 0.20.0",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -2375,6 +2376,7 @@ dependencies = [
  "nsh-testing",
  "nsh-updater",
  "qwen-asr",
+ "ring",
  "serde",
  "serde_json",
  "sha2",

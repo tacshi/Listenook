@@ -13,5 +13,5 @@ pub(crate) use library::library;
 pub(crate) use player::{VIDEO_EXTENSIONS, is_video, open_player, player};
 pub(crate) use podcast::{podcasts_page as podcasts, show_screen as podcast_show};
 pub(crate) use settings::settings_dialog;
-pub(crate) use sync::{sync_dialog, sync_request_dialog};
+pub(crate) use sync::{mate_row, sync_code_dialog, sync_dialog};
 pub(crate) use workspace::reader;

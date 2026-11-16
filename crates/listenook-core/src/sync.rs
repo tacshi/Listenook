@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     models::{Job, LibraryCatalog, Named},
     podcast::{Catalog, Feed, Followed, ListenProgress},
 };
 
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
+pub const CODE_LENGTH: usize = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -18,6 +20,8 @@ pub struct Device {
     pub name: String,
     pub platform: String,
     pub port: u16,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub revision: String,
 }
 
 impl Device {
@@ -61,6 +65,89 @@ pub struct Index {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub removed: Removed,
     pub podcasts: Podcasts,
+    pub shelves: Shelves,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Mark {
+    pub hidden: bool,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Position {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position_ms: Option<i64>,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Shelves {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub positions: BTreeMap<String, Position>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub marks: BTreeMap<String, Mark>,
+}
+
+impl Shelves {
+    pub fn of(
+        positions: &BTreeMap<String, i64>,
+        played: &BTreeMap<String, String>,
+        marks: &BTreeMap<String, Mark>,
+    ) -> Shelves {
+        let mut kept: BTreeMap<String, Position> = played
+            .iter()
+            .map(|(id, at)| (id.clone(), Position { position_ms: positions.get(id).copied(), at: at.clone() }))
+            .collect();
+        for (id, position) in positions {
+            kept.entry(id.clone()).or_insert_with(|| Position { position_ms: Some(*position), at: String::new() });
+        }
+        Shelves { positions: kept, marks: marks.clone() }
+    }
+
+    pub fn of_settings(settings: &crate::models::Settings) -> Shelves {
+        let mut marks = settings.shelf_marks.clone();
+        let hidden = [("continue", &settings.continue_hidden), ("recent", &settings.recent_hidden)];
+        for (shelf, ids) in hidden {
+            for id in ids {
+                let unmarked = Mark { hidden: true, at: "1970-01-01T00:00:00.000Z".into() };
+                marks.entry(format!("{shelf}:{id}")).or_insert(unmarked);
+            }
+        }
+        Shelves::of(&settings.playback_positions_ms, &settings.playback_played_at, &marks)
+    }
+
+    pub fn positions(&self) -> (BTreeMap<String, i64>, BTreeMap<String, String>) {
+        let positions =
+            self.positions.iter().filter_map(|(id, position)| Some((id.clone(), position.position_ms?))).collect();
+        let played = self
+            .positions
+            .iter()
+            .filter(|(_, position)| !position.at.is_empty())
+            .map(|(id, position)| (id.clone(), position.at.clone()))
+            .collect();
+        (positions, played)
+    }
+}
+
+pub fn merge_shelves(mine: &mut Shelves, theirs: &Shelves) -> bool {
+    let mut changed = false;
+    for (id, other) in &theirs.positions {
+        if mine.positions.get(id).is_none_or(|known| later(&other.at, &known.at)) {
+            mine.positions.insert(id.clone(), other.clone());
+            changed = true;
+        }
+    }
+    for (key, other) in &theirs.marks {
+        if mine.marks.get(key).is_none_or(|known| later(&other.at, &known.at)) {
+            mine.marks.insert(key.clone(), other.clone());
+            changed = true;
+        }
+    }
+    changed
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -144,6 +231,119 @@ pub fn merge_podcasts(catalog: &mut Catalog, listened: &mut Vec<ListenProgress>,
         }
     }
     (catalog.clone(), listened.clone()) != before
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Member {
+    pub name: String,
+    pub platform: String,
+    pub joined_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed_at: Option<String>,
+}
+
+impl Member {
+    pub fn is_in(&self) -> bool {
+        self.removed_at.as_deref().is_none_or(|at| later(&self.joined_at, at))
+    }
+
+    fn changed_at(&self) -> i64 {
+        millis(&self.joined_at).max(self.removed_at.as_deref().map_or(i64::MIN, millis))
+    }
+}
+
+pub type Members = BTreeMap<String, Member>;
+
+pub fn merge_members(mine: &mut Members, theirs: &Members) -> bool {
+    let mut changed = false;
+    for (id, other) in theirs {
+        if id.is_empty() || mine.get(id).is_some_and(|known| known.changed_at() >= other.changed_at()) {
+            continue;
+        }
+        mine.insert(id.clone(), other.clone());
+        changed = true;
+    }
+    changed
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Circle {
+    pub id: String,
+    pub key: String,
+    pub members: Members,
+}
+
+impl Circle {
+    pub fn has(&self, id: &str) -> bool {
+        self.members.get(id).is_some_and(Member::is_in)
+    }
+
+    pub fn size(&self) -> usize {
+        self.members.values().filter(|member| member.is_in()).count()
+    }
+
+    pub fn offer(&self) -> Offer {
+        Offer { id: self.id.clone(), size: self.size() }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Offer {
+    pub id: String,
+    pub size: usize,
+}
+
+pub fn joins_answerer(asker: Option<&Offer>, answerer: Option<&Offer>) -> bool {
+    match (asker, answerer) {
+        (Some(asker), Some(answerer)) => asker.id == answerer.id || answerer.size >= asker.size,
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
+pub fn digest(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    hex(&hasher.finalize())
+}
+
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..text.len()).step_by(2).map(|at| u8::from_str_radix(text.get(at..at + 2)?, 16).ok()).collect()
+}
+
+pub fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |differ, (x, y)| differ | (x ^ y)) == 0
+}
+
+pub fn seal(key: &str, secret: &str, label: &str) -> Option<String> {
+    let key = unhex(key)?;
+    let pad = unhex(&digest(&[secret, label]))?;
+    (key.len() == pad.len()).then(|| hex(&key.iter().zip(&pad).map(|(a, b)| a ^ b).collect::<Vec<_>>()))
+}
+
+pub fn pairing_secret(code: &str, shared: &str, asker: (&str, &str), answerer: (&str, &str)) -> String {
+    digest(&["listenook pairing", code, shared, asker.0, asker.1, answerer.0, answerer.1])
+}
+
+pub fn proof(key: &str, nonce: &str, device: &str, role: &str) -> String {
+    digest(&[key, nonce, device, role])
+}
+
+pub fn is_code(text: &str) -> bool {
+    text.len() == CODE_LENGTH && text.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 pub type Removed = BTreeMap<String, String>;
@@ -445,6 +645,104 @@ mod tests {
         let sent = Podcasts::of(&catalog, &listened);
         assert_eq!(sent.played.len(), 1);
         assert_eq!(sent.listened.len(), 3);
+    }
+
+    fn member(joined: &str, removed: Option<&str>) -> Member {
+        Member {
+            name: "Mac".into(),
+            joined_at: joined.into(),
+            removed_at: removed.map(str::to_owned),
+            ..Member::default()
+        }
+    }
+
+    #[test]
+    fn the_later_of_joining_and_removal_wins_when_members_merge() {
+        const LATER: &str = "2026-03-01T00:00:00.000Z";
+        let mut mine = Members::from([("a".to_owned(), member(EARLY, None)), ("b".to_owned(), member(LATE, None))]);
+        let theirs = Members::from([
+            ("a".to_owned(), member(EARLY, Some(LATE))),
+            ("b".to_owned(), member(EARLY, Some(EARLY))),
+            ("c".to_owned(), member(EARLY, None)),
+        ]);
+        assert!(merge_members(&mut mine, &theirs));
+        assert!(!mine["a"].is_in(), "removed after it joined");
+        assert!(mine["b"].is_in(), "joined again after the removal");
+        assert!(mine["c"].is_in());
+        assert!(!merge_members(&mut mine, &theirs), "a second merge changes nothing");
+        let back = Members::from([("a".to_owned(), member(LATER, Some(LATE)))]);
+        assert!(merge_members(&mut mine, &back));
+        assert!(mine["a"].is_in(), "paired again after the removal");
+    }
+
+    #[test]
+    fn the_circle_with_more_devices_is_the_one_joined() {
+        let offer = |id: &str, size| Offer { id: id.into(), size };
+        assert!(joins_answerer(None, None));
+        assert!(joins_answerer(None, Some(&offer("b", 2))));
+        assert!(!joins_answerer(Some(&offer("a", 1)), None));
+        assert!(!joins_answerer(Some(&offer("a", 3)), Some(&offer("b", 2))));
+        assert!(joins_answerer(Some(&offer("a", 2)), Some(&offer("b", 2))));
+        assert!(joins_answerer(Some(&offer("a", 3)), Some(&offer("a", 2))));
+    }
+
+    #[test]
+    fn a_sealed_key_opens_only_with_the_same_secret() {
+        let key = digest(&["key"]);
+        let sealed = seal(&key, "secret", "asker").unwrap();
+        assert_ne!(sealed, key);
+        assert_eq!(seal(&sealed, "secret", "asker").unwrap(), key);
+        assert_ne!(seal(&sealed, "other", "asker").unwrap(), key);
+        assert_eq!(seal("not hex", "secret", "asker"), None);
+        assert!(same(&key, &key.clone()) && !same(&key, &sealed) && !same("ab", "abc"));
+        assert!(is_code("012345") && !is_code("12345") && !is_code("12345a"));
+        let secret = pairing_secret("123456", "shared", ("a", "1"), ("b", "2"));
+        assert_ne!(secret, pairing_secret("123457", "shared", ("a", "1"), ("b", "2")));
+        assert_ne!(digest(&["ab", "c"]), digest(&["a", "bc"]));
+    }
+
+    #[test]
+    fn the_later_place_in_a_recording_and_the_later_removal_from_a_shelf_win() {
+        let place = |position_ms: Option<i64>, at: &str| Position { position_ms, at: at.into() };
+        let mark = |hidden: bool, at: &str| Mark { hidden, at: at.into() };
+        let mut mine = Shelves {
+            positions: [
+                ("a".to_owned(), place(Some(10_000), LATE)),
+                ("b".to_owned(), place(Some(20_000), EARLY)),
+                ("c".to_owned(), place(Some(30_000), EARLY)),
+            ]
+            .into(),
+            marks: [("continue:a".to_owned(), mark(true, EARLY))].into(),
+        };
+        let theirs = Shelves {
+            positions: [
+                ("a".to_owned(), place(Some(5_000), EARLY)),
+                ("b".to_owned(), place(Some(50_000), LATE)),
+                ("c".to_owned(), place(None, LATE)),
+                ("d".to_owned(), place(Some(1_000), EARLY)),
+            ]
+            .into(),
+            marks: [("continue:a".to_owned(), mark(false, LATE)), ("recent:d".to_owned(), mark(true, EARLY))].into(),
+        };
+        assert!(merge_shelves(&mut mine, &theirs));
+        let (positions, played) = mine.positions();
+        assert_eq!(positions, [("a".to_owned(), 10_000), ("b".to_owned(), 50_000), ("d".to_owned(), 1_000)].into());
+        assert!(played.contains_key("c"), "a finished recording stays finished");
+        assert!(!mine.marks["continue:a"].hidden && mine.marks["recent:d"].hidden);
+        assert!(!merge_shelves(&mut mine, &theirs), "a second merge changes nothing");
+        let kept = Shelves::of(&positions, &played, &mine.marks);
+        assert_eq!(kept, mine);
+        let settings = crate::models::Settings {
+            continue_hidden: ["old".to_owned()].into(),
+            shelf_marks: [("continue:a".to_owned(), mark(false, LATE))].into(),
+            ..crate::models::Settings::default()
+        };
+        let sent = Shelves::of_settings(&settings);
+        assert!(sent.marks["continue:old"].hidden, "a card removed before marks were kept still goes");
+        let mut newer =
+            Shelves { marks: [("continue:old".to_owned(), mark(false, EARLY))].into(), ..Shelves::default() };
+        merge_shelves(&mut newer, &sent);
+        assert!(!newer.marks["continue:old"].hidden, "and any real change wins over it");
     }
 
     #[test]

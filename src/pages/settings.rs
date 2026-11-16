@@ -224,6 +224,45 @@ fn general() -> impl IntoElement {
                 }),
             ),
     )))
+    .child(paired_devices())
+}
+
+fn paired_devices() -> impl IntoElement {
+    let store = store();
+    let sync = store.sync;
+    let paired = move || !sync.mates().is_empty();
+    let leave = move || {
+        confirm_destructive(
+            tr("Unpair this device?"),
+            tr("It stops syncing with all your devices, and they forget it. What is already here stays."),
+            tr("Cancel"),
+            tr("Unpair"),
+            move || sync.leave(),
+        );
+    };
+    section(
+        l("Paired devices"),
+        panel()
+            .child(hint(move || {
+                if paired() {
+                    tr("This device syncs on its own with these devices whenever both are open on the same network. Recordings over 500 MB are copied only when you sync yourself.")
+                } else {
+                    tr("This device is not paired with any other. Open Sync to pair one with a code.")
+                }
+            }))
+            .child(view().gap_1().child(each(move || sync.mates(), |mate| mate.id.clone(), move |mate, _| crate::pages::mate_row(mate))))
+            .child(
+                when(paired, move || {
+                    button(Variant::Outline, Size::Md, l("Unpair this device")).self_start().on_press(leave)
+                })
+                .otherwise(move || {
+                    button(Variant::Default, Size::Md, l("Open Sync")).self_start().on_press(move || {
+                        store.settings_open().set(false);
+                        sync.show();
+                    })
+                }),
+            ),
+    )
 }
 
 fn key_field(

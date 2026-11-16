@@ -36,7 +36,24 @@ pub(crate) fn learn_data_root() {
     }
 }
 
-fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub(crate) fn changed() {
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    crate::services::sync::poke();
+}
+
+fn write_library(path: &Path, value: &impl serde::Serialize) -> io::Result<()> {
+    let written = write_json(path, value);
+    changed();
+    written
+}
+
+pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -76,13 +93,14 @@ pub(crate) fn save_job(root: &Path, job: &Job) -> io::Result<()> {
     if !Job::is_valid_id(&job.id) {
         return Err(io::Error::other("invalid job id"));
     }
-    write_json(&root.join("jobs").join(&job.id).join("manifest.json"), job)
+    write_library(&root.join("jobs").join(&job.id).join("manifest.json"), job)
 }
 
 pub(crate) fn delete_job(root: &Path, id: &str) -> io::Result<()> {
     if !Job::is_valid_id(id) {
         return Err(io::Error::other("invalid job id"));
     }
+    changed();
     match fs::remove_dir_all(root.join("jobs").join(id)) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
         _ => Ok(()),
@@ -102,7 +120,7 @@ pub(crate) fn load_library_catalog(root: &Path) -> LibraryCatalog {
 }
 
 pub(crate) fn save_library_catalog(root: &Path, catalog: &LibraryCatalog) -> io::Result<()> {
-    write_json(&root.join("library_catalog.json"), catalog)
+    write_library(&root.join("library_catalog.json"), catalog)
 }
 
 pub(crate) fn load_removed(root: &Path) -> listenook_core::sync::Removed {
@@ -110,7 +128,7 @@ pub(crate) fn load_removed(root: &Path) -> listenook_core::sync::Removed {
 }
 
 pub(crate) fn save_removed(root: &Path, removed: &listenook_core::sync::Removed) -> io::Result<()> {
-    write_json(&root.join("removed.json"), removed)
+    write_library(&root.join("removed.json"), removed)
 }
 
 pub(crate) fn load_monitor(root: &Path) -> super::monitor::MonitorFile {
@@ -130,7 +148,7 @@ pub(crate) fn save_catalog(
     catalog: &Catalog,
     heard: &[listenook_core::podcast::ListenProgress],
 ) -> io::Result<()> {
-    write_json(&root.join("podcast_catalog.json"), &catalog.trimmed(heard))
+    write_library(&root.join("podcast_catalog.json"), &catalog.trimmed(heard))
 }
 
 pub(crate) fn load_listening(root: &Path) -> Vec<listenook_core::podcast::ListenProgress> {
@@ -141,7 +159,7 @@ pub(crate) fn load_listening(root: &Path) -> Vec<listenook_core::podcast::Listen
 
 pub(crate) fn save_listening(root: &Path, entries: &[listenook_core::podcast::ListenProgress]) -> io::Result<()> {
     let kept: Vec<_> = entries.iter().take(200).collect();
-    write_json(&root.join("podcast_playback.json"), &serde_json::json!({"version": 1, "entries": kept}))
+    write_library(&root.join("podcast_playback.json"), &serde_json::json!({"version": 1, "entries": kept}))
 }
 
 pub(crate) fn podcast_path(root: &Path, id: &str, file_name: &str) -> PathBuf {

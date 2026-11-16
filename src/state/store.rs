@@ -59,6 +59,19 @@ impl Shelf {
         }
     }
 
+    fn mark(self, id: &str) -> String {
+        match self {
+            Shelf::Continue => format!("continue:{id}"),
+            Shelf::Recent => format!("recent:{id}"),
+        }
+    }
+
+    fn of_mark(key: &str) -> Option<(Shelf, &str)> {
+        key.strip_prefix("continue:")
+            .map(|id| (Shelf::Continue, id))
+            .or_else(|| key.strip_prefix("recent:").map(|id| (Shelf::Recent, id)))
+    }
+
     fn hidden_mut(self, settings: &mut Settings) -> &mut std::collections::BTreeSet<String> {
         match self {
             Shelf::Continue => &mut settings.continue_hidden,
@@ -431,10 +444,7 @@ impl Store {
             None => positions.remove(job_id).is_some(),
         });
         if changed {
-            self.played.update(|played| match position {
-                Some(_) => drop(played.insert(job_id.to_owned(), listenook_core::now_iso())),
-                None => drop(played.remove(job_id)),
-            });
+            self.played.update(|played| drop(played.insert(job_id.to_owned(), listenook_core::now_iso())));
             self.save_settings();
         }
     }
@@ -465,6 +475,36 @@ impl Store {
             } else {
                 hidden.insert(id.to_owned());
             }
+            let mark = listenook_core::sync::Mark { hidden: !shown, at: listenook_core::now_iso() };
+            settings.shelf_marks.insert(shelf.mark(id), mark);
+        });
+        persist::changed();
+    }
+
+    pub(crate) fn adopt_shelves(&self, theirs: &listenook_core::sync::Shelves) {
+        let marks = self.settings.with_untracked(|settings| settings.shelf_marks.clone());
+        let mut mine = listenook_core::sync::Shelves::of(&self.positions.get(), &self.played.get_untracked(), &marks);
+        if !listenook_core::sync::merge_shelves(&mut mine, theirs) {
+            return;
+        }
+        let (positions, played) = mine.positions();
+        self.positions.replace(positions);
+        batch(|| {
+            self.played.set(played);
+            self.update_settings(|settings| {
+                for (key, mark) in &mine.marks {
+                    let Some((shelf, id)) = Shelf::of_mark(key) else {
+                        continue;
+                    };
+                    let hidden = shelf.hidden_mut(settings);
+                    if mark.hidden {
+                        hidden.insert(id.to_owned());
+                    } else {
+                        hidden.remove(id);
+                    }
+                }
+                settings.shelf_marks = mine.marks;
+            });
         });
     }
 
@@ -972,6 +1012,7 @@ impl Store {
             None => String::new(),
         };
         crate::services::sync::configure(self.data_root(), id, untracked(|| self.device_name()), visible);
+        self.sync.refresh();
     }
 
     pub(crate) fn busy_ids(&self) -> std::collections::HashSet<String> {

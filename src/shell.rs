@@ -185,20 +185,28 @@ pub(crate) fn shell() -> impl IntoElement {
     let busy = computed(move || store.sync.busy());
     let visible = computed(move || store.sync_visible());
     effect(move || {
-        let period = match (busy.get(), visible.get()) {
-            (true, _) => Some(250),
-            (false, true) => Some(1000),
-            (false, false) => None,
-        };
+        let (busy, visible) = (busy.get(), visible.get());
         let next = untracked(|| {
-            period.map(|ms| owner.run(|| set_interval(std::time::Duration::from_millis(ms), move || store.sync.tick())))
+            owner.run(|| match (busy, visible) {
+                (true, _) => Some(set_interval(std::time::Duration::from_millis(250), move || store.sync.tick())),
+                (false, true) => Some(spawn(async move {
+                    while untracked(|| store.sync_visible()) {
+                        let (within, seen) = untracked(|| store.sync.waiting());
+                        let _ = blocking(move || crate::services::sync::wait(within, seen)).await;
+                        store.sync.tick();
+                    }
+                })),
+                (false, false) => None,
+            })
         });
         if let Some(previous) = ticker.replace(next) {
             previous.cancel();
         }
-        if period.is_none() {
-            untracked(|| store.sync.tick());
-        }
+        untracked(|| store.sync.tick());
+    });
+    effect(move || {
+        let now = lifecycle();
+        untracked(|| store.sync.lifecycle(now));
     });
     if is_desktop() {
         effect(move || {
@@ -270,7 +278,7 @@ pub(crate) fn shell() -> impl IntoElement {
         .child(pages::settings_dialog())
         .child(pages::subtitle_choice_dialog())
         .child(pages::sync_dialog())
-        .child(pages::sync_request_dialog())
+        .child(pages::sync_code_dialog())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -617,6 +625,8 @@ fn sync_status() -> SharedString {
     let sync = store().sync;
     match sync.phase() {
         Phase::Asking(_) | Phase::Running(_) | Phase::Serving(_) => tr("Syncing…"),
+        Phase::Pairing(_) => tr("Pairing…"),
+        _ if sync.rounding() => tr("Syncing…"),
         Phase::Done(..) => tr("Synced"),
         Phase::Failed(_) => tr("Not synced"),
         Phase::Choosing => SharedString::default(),
