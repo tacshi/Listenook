@@ -1,6 +1,9 @@
-use std::{rc::Rc, time::Duration};
+use std::{
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
-use listenook_core::{ContentMode, Document, Job, Segment, dictation, highlights};
+use listenook_core::{ContentMode, Document, Job, Segment, dictation, highlights, playback};
 use nsh_core::prelude::*;
 
 use crate::{
@@ -41,6 +44,29 @@ impl Span {
         Span { first: id.clone(), last: id }
     }
 }
+
+/// What happens when playback reaches the end of what is playing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edge {
+    /// A sentence played once: stop.
+    Stop,
+    /// A repeat: back to its first sentence.
+    Loop(usize),
+    /// A Mimic pass over this sentence: pause for the learner to say it.
+    Mimic(usize),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SentCut {
+    at: Instant,
+    from_ms: i64,
+    waited_ms: f64,
+    rate: f32,
+}
+
+/// The longest a seek stays silent when no tick shows it landed (a platform
+/// that does not tick while paused).
+const HUSH_AT_MOST: Duration = Duration::from_millis(400);
 
 #[derive(Default)]
 struct Drag {
@@ -138,6 +164,19 @@ pub(super) struct Review {
     pub(super) waiting: Signal<bool>,
     pub(super) stop_at: Signal<Option<i64>>,
     wait: Stored<Option<Spawned<()>>>,
+    /// The player is muted while a seek is in flight.
+    pub(super) hushed: Signal<bool>,
+    /// The seek in flight: from where, to where.
+    landing: Stored<Option<(i64, i64)>>,
+    unhush: Stored<Option<Spawned<()>>>,
+    edge_timer: Stored<Option<Spawned<()>>>,
+    /// The latest tick that played on: when it came, and where.
+    last_tick: Stored<Option<(Instant, i64)>>,
+    /// How long a cut takes to reach the player, as measured.
+    lag_ms: Stored<f64>,
+    /// The cut just sent, to measure that from: when, from which tick, how
+    /// long after it, at what speed.
+    sent_cut: Stored<Option<SentCut>>,
     pub(super) current: Memo<Option<usize>>,
     pub(super) scrub: Signal<Option<i64>>,
     pub(super) scrubbed: Memo<Option<usize>>,
@@ -280,6 +319,13 @@ impl Review {
             waiting: signal(false),
             stop_at: signal(None),
             wait: stored(None),
+            hushed: signal(false),
+            landing: stored(None),
+            unhush: stored(None),
+            edge_timer: stored(None),
+            last_tick: stored(None),
+            lag_ms: stored(playback::DEFAULT_LAG_MS),
+            sent_cut: stored(None),
             current,
             scrub,
             scrubbed,
@@ -303,6 +349,10 @@ impl Review {
         self.job.with_untracked(|job| {
             job.as_ref().and_then(|job| job.document.as_ref()?.play_start(index)).unwrap_or_default()
         })
+    }
+
+    fn play_end(&self, index: usize) -> Option<i64> {
+        self.job.with_untracked(|job| job.as_ref()?.document.as_ref()?.play_end(index))
     }
 
     fn index_of(&self, segment_id: &str) -> Option<usize> {
@@ -392,9 +442,57 @@ impl Review {
     }
 
     pub(super) fn seek(&self, position_ms: i64) {
+        self.jump(position_ms, false);
+    }
+
+    /// Whether the player reports where it is every 50 ms rather than every
+    /// 500 ms: in the foreground, or while the end of a sentence is watched.
+    pub(super) fn ticks_often(&self) -> bool {
+        lifecycle() != nsh_core::element::Lifecycle::Background
+            || self.repeating.with(Option::is_some)
+            || self.stop_at.with(Option::is_some)
+    }
+
+    /// Moves playback to `position_ms`. Until a seek lands the player goes on
+    /// sounding from where it was (some 30 ms on AVPlayer, more on slow
+    /// media): past a sentence's end, that is the next sentence's head. So a
+    /// `quiet` jump, one that plays on from a sentence's start, keeps the
+    /// player muted until a tick shows the new place.
+    fn jump(&self, position_ms: i64, quiet: bool) {
         let position_ms = position_ms.max(0);
+        self.disarm();
+        if quiet && untracked(|| self.ticks_often()) {
+            // A seek on top of one still in flight: the player is still where
+            // the first one left from.
+            let from = self.landing.with(|landing| landing.map(|(from, _)| from));
+            let from = from.unwrap_or_else(|| self.position_ms.get_untracked());
+            self.landing.with(|landing| *landing = Some((from, position_ms)));
+            self.hushed.set(true);
+            let review = *self;
+            let fallback = spawn(async move {
+                timer(HUSH_AT_MOST).await;
+                review.unhush.replace(None);
+                review.settle();
+            });
+            if let Some(earlier) = self.unhush.replace(Some(fallback)) {
+                earlier.cancel();
+            }
+        } else {
+            self.settle();
+        }
         self.position_ms.set(position_ms);
         self.player.seek(position_ms as f64 / 1000.0);
+    }
+
+    /// The seek in flight landed (or is no longer waited for): sound again.
+    fn settle(&self) {
+        if let Some(fallback) = self.unhush.replace(None) {
+            fallback.cancel();
+        }
+        self.landing.with(|landing| *landing = None);
+        if self.hushed.get_untracked() {
+            self.hushed.set(false);
+        }
     }
 
     pub(super) fn toggle_play(&self) {
@@ -426,7 +524,7 @@ impl Review {
             }
             self.revealed.set(None);
         });
-        self.seek(self.play_start(index));
+        self.jump(self.play_start(index), play);
         self.paused.set(!play);
     }
 
@@ -450,7 +548,7 @@ impl Review {
             self.reps.set(0);
             self.stop_at.set(None);
         });
-        self.seek(self.play_start(index));
+        self.jump(self.play_start(index), true);
         self.paused.set(false);
     }
 
@@ -654,12 +752,12 @@ impl Review {
     }
 
     pub(super) fn replay_once(&self, index: usize) {
-        let Some(segment) = self.segment_now(index) else {
+        let Some(end) = self.play_end(index) else {
             return;
         };
         self.cancel_wait();
-        self.stop_at.set(Some(segment.end_ms));
-        self.seek(self.play_start(index));
+        self.stop_at.set(Some(end));
+        self.jump(self.play_start(index), true);
         self.paused.set(false);
     }
 
@@ -674,32 +772,102 @@ impl Review {
         if duration_ms > 0 {
             self.duration_ms.set(duration_ms);
         }
+        self.measure_lag(position_ms);
+        if let Some((from, to)) = self.landing.with(|landing| *landing) {
+            if !playback::landed(from, to, position_ms) {
+                // Still sounding from before the seek: not where it is going.
+                return;
+            }
+            self.settle();
+        }
         if self.paused.get_untracked() {
             return;
         }
         self.position_ms.set(position_ms);
-        if self.stop_at.get_untracked().is_some_and(|end| position_ms >= end) {
-            batch(|| {
-                self.stop_at.set(None);
-                self.paused.set(true);
-            });
-            return;
-        }
-        let Some((index, last)) = untracked(|| self.repeat_range()) else {
+        self.last_tick.with(|last| *last = Some((Instant::now(), position_ms)));
+        self.disarm();
+        let Some((end, edge)) = self.edge() else {
             return;
         };
-        if self.practice.get_untracked() != Practice::Mimic {
-            if self.segment_now(last).is_some_and(|segment| position_ms >= segment.end_ms) {
-                self.seek(self.play_start(index));
+        let lag_ms = self.lag_ms.with(|lag| *lag);
+        match playback::time_to_end(position_ms, end, self.rate.get_untracked(), lag_ms) {
+            Some(wait) if wait.is_zero() => self.reach(edge),
+            Some(wait) => self.arm(wait, (end, edge)),
+            None => {}
+        }
+    }
+
+    /// Where what is playing ends, and what happens there.
+    fn edge(&self) -> Option<(i64, Edge)> {
+        if let Some(end) = self.stop_at.get_untracked() {
+            return Some((end, Edge::Stop));
+        }
+        let (first, last) = untracked(|| self.repeat_range())?;
+        if self.practice.get_untracked() == Practice::Mimic {
+            return Some((self.play_end(first)?, Edge::Mimic(first)));
+        }
+        Some((self.play_end(last)?, Edge::Loop(first)))
+    }
+
+    /// Acts on `edge` when playback gets there, `wait` from now, unless a
+    /// tick, a pause or a change to what is playing comes first.
+    fn arm(&self, wait: Duration, edge: (i64, Edge)) {
+        let review = *self;
+        let task = spawn(async move {
+            timer(wait).await;
+            review.edge_timer.replace(None);
+            let due = !review.paused.get_untracked()
+                && review.landing.with(|landing| landing.is_none())
+                && review.edge() == Some(edge);
+            if due {
+                review.reach(edge.1);
             }
+        });
+        if let Some(earlier) = self.edge_timer.replace(Some(task)) {
+            earlier.cancel();
+        }
+    }
+
+    fn disarm(&self) {
+        if let Some(armed) = self.edge_timer.replace(None) {
+            armed.cancel();
+        }
+    }
+
+    fn reach(&self, edge: Edge) {
+        if let Some((tick_at, from_ms)) = self.last_tick.with(|last| *last) {
+            let waited_ms = tick_at.elapsed().as_secs_f64() * 1000.0;
+            let sent = SentCut { at: Instant::now(), from_ms, waited_ms, rate: self.rate.get_untracked() };
+            self.sent_cut.with(|cut| *cut = Some(sent));
+        }
+        match edge {
+            Edge::Stop => batch(|| {
+                self.stop_at.set(None);
+                self.paused.set(true);
+            }),
+            Edge::Loop(first) => self.jump(self.play_start(first), true),
+            Edge::Mimic(index) => self.end_mimic_pass(index),
+        }
+    }
+
+    /// The player ticks the moment a seek or a pause reaches it (AVPlayer
+    /// does): where it was then shows how long the cut took.
+    fn measure_lag(&self, position_ms: i64) {
+        let Some(sent) = self.sent_cut.with(Option::take) else {
+            return;
+        };
+        if sent.at.elapsed() > Duration::from_millis(100) {
             return;
         }
+        if let Some(measured) = playback::lag(sent.from_ms, sent.waited_ms, position_ms, sent.rate) {
+            self.lag_ms.with(|lag| *lag = playback::adjusted_lag(*lag, measured));
+        }
+    }
+
+    fn end_mimic_pass(&self, index: usize) {
         let Some(segment) = self.segment_now(index) else {
             return;
         };
-        if position_ms < segment.end_ms {
-            return;
-        }
         let goal = self.store.settings().mimic_rep_goal;
         let reps = (self.reps.get_untracked() + 1).min(goal);
         let pause_ms = dictation::mimic_pause_ms(
@@ -718,7 +886,7 @@ impl Review {
             review.waiting.set(false);
             review.wait.replace(None);
             if reps < goal {
-                review.seek(review.play_start(index));
+                review.jump(review.play_start(index), true);
                 review.paused.set(false);
             } else if index + 1 < review.count() {
                 review.play_from(index + 1);

@@ -1,0 +1,105 @@
+//! Stopping playback exactly at a sentence's end.
+//!
+//! The player reports where it is in ticks (every 50 ms while a sentence
+//! repeats), and the place right after a sentence's end is often the next
+//! sentence's first sound. Waiting for the first tick past the end lets up to
+//! a tick of it through, and what the app does about it (mute, pause, seek)
+//! takes a while to reach the player: 27 ms on an iPad Pro. So the end is
+//! timed from the ticks before it, that lag is measured from the tick the
+//! player sends when the cut takes hold, and a seek stays silent until a tick
+//! shows it has landed.
+
+use std::time::Duration;
+
+/// How close to the end (in real time, past the lag and margin) a tick has to
+/// be to time the end from it: within the next tick, with room for that tick
+/// to come late.
+const TIMED_WITHIN_MS: f64 = 120.0;
+
+/// The lag before any was measured: a little over an iPad Pro's.
+pub const DEFAULT_LAG_MS: f64 = 30.0;
+
+/// The longest lag believed: a later report is not the cut's.
+const MAX_LAG_MS: f64 = 80.0;
+
+/// How far before the end the cut takes hold, for the sound already on its
+/// way to the speaker then.
+const MARGIN_MS: f64 = 15.0;
+
+/// The wait from a tick at `position_ms` until a cut sent then takes hold
+/// just before `end_ms`, playing at `rate` with `lag_ms` between sending and
+/// taking hold: zero when it is due, `None` while the end is too far off to
+/// time from this tick.
+pub fn time_to_end(position_ms: i64, end_ms: i64, rate: f32, lag_ms: f64) -> Option<Duration> {
+    let left = (end_ms - position_ms) as f64 / f64::from(rate.max(0.1)) - lag_ms - MARGIN_MS;
+    if left <= 0.0 {
+        return Some(Duration::ZERO);
+    }
+    (left <= TIMED_WITHIN_MS).then(|| Duration::from_micros((left * 1000.0) as u64))
+}
+
+/// The lag one cut shows: it was sent `waited_ms` after a tick at `from_ms`,
+/// and the player's next tick, at `reported_ms`, came when it took hold.
+/// `None` when that tick cannot be the cut's.
+pub fn lag(from_ms: i64, waited_ms: f64, reported_ms: i64, rate: f32) -> Option<f64> {
+    let lag = (reported_ms - from_ms) as f64 / f64::from(rate.max(0.1)) - waited_ms;
+    (0.0..=MAX_LAG_MS).contains(&lag).then_some(lag)
+}
+
+/// The lag to time the next cut with, after `measured` joins `estimate`.
+pub fn adjusted_lag(estimate: f64, measured: f64) -> f64 {
+    (estimate + measured) / 2.0
+}
+
+/// How far short of the target a forward seek may land (a tick's rounding).
+const LANDING_SLACK_MS: i64 = 50;
+
+/// Whether a tick at `position_ms` comes from where a seek from `from_ms` to
+/// `to_ms` landed, rather than from the player still playing on from where it
+/// was. Going back, all it plays on with is at or past `from_ms`; going
+/// forward, it is short of `to_ms`.
+pub fn landed(from_ms: i64, to_ms: i64, position_ms: i64) -> bool {
+    if to_ms < from_ms { position_ms < from_ms } else { position_ms >= to_ms - LANDING_SLACK_MS }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cut_is_sent_ahead_of_the_end_by_the_lag() {
+        assert_eq!(time_to_end(18_600, 18_810, 1.0, 30.0), None);
+        assert_eq!(time_to_end(18_700, 18_810, 1.0, 30.0), Some(Duration::from_millis(65)));
+        assert_eq!(time_to_end(18_750, 18_810, 1.0, 27.0), Some(Duration::from_millis(18)));
+        assert_eq!(time_to_end(18_600, 18_810, 2.0, 30.0), Some(Duration::from_millis(60)));
+        assert_eq!(time_to_end(18_770, 18_810, 1.0, 30.0), Some(Duration::ZERO));
+        assert_eq!(time_to_end(18_900, 18_810, 1.0, 30.0), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn the_lag_is_what_the_player_played_after_the_cut_was_sent() {
+        // Sent on the tick at 18 800; the player was at 18 827 when it took hold.
+        assert_eq!(lag(18_800, 0.0, 18_827, 1.0), Some(27.0));
+        // Sent 18 ms after the tick at 18 750, by a timer.
+        assert_eq!(lag(18_750, 18.0, 18_795, 1.0), Some(27.0));
+        assert_eq!(lag(18_750, 0.0, 18_804, 2.0), Some(27.0));
+        assert_eq!(lag(18_800, 0.0, 18_790, 1.0), None, "a tick from before it was sent");
+        assert_eq!(lag(18_800, 0.0, 18_950, 1.0), None, "a later tick");
+        assert_eq!(adjusted_lag(30.0, 27.0), 28.5);
+    }
+
+    #[test]
+    fn a_seek_back_has_landed_once_a_tick_is_behind_where_it_left() {
+        assert!(!landed(36_480, 32_430, 36_504), "the player still plays on past the end");
+        assert!(!landed(36_480, 32_430, 36_480));
+        assert!(landed(36_480, 32_430, 32_430));
+        assert!(landed(36_480, 32_430, 32_470));
+    }
+
+    #[test]
+    fn a_seek_forward_has_landed_once_a_tick_reaches_it() {
+        assert!(!landed(10_000, 20_000, 10_040));
+        assert!(landed(10_000, 20_000, 19_990));
+        assert!(landed(10_000, 20_000, 20_030));
+    }
+}
