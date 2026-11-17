@@ -30,6 +30,9 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", default-features = false, features = ["sync"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
+spake2 = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = { version = "0.5.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }

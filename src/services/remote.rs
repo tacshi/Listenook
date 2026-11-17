@@ -33,6 +33,8 @@ pub(crate) const SONIOX_MODEL: &str = "stt-async-v6";
 const MOSS_MODEL: &str = "moss-transcribe-diarize";
 const MOSS_VERSION: &str = "v20260410-streamparam-20260703";
 const MOSS_MAX_BYTES: usize = 512 * 1024 * 1024;
+/// Files larger than this are uploaded straight from the disk.
+const STREAM_FROM: u64 = 32 * 1024 * 1024;
 
 impl Provider {
     fn base(self) -> &'static str {
@@ -100,12 +102,16 @@ impl Provider {
         let response =
             fetch(request.header("Authorization", format!("Bearer {key}"))).await.map_err(Failure::network)?;
         let body: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
-        if response.ok() {
+        self.answer(response.status(), body)
+    }
+
+    fn answer(self, status: u16, body: Value) -> Result<Value, Failure> {
+        if (200..300).contains(&status) {
             Ok(body)
-        } else if response.status() == 404 && body.is_null() {
+        } else if status == 404 && body.is_null() {
             Err(Failure::new(self.code("request_failed"), "Not found."))
         } else {
-            Err(self.failure(response.status(), &body))
+            Err(self.failure(status, &body))
         }
     }
 
@@ -165,25 +171,30 @@ impl Provider {
                 .bytes(),
         );
         let tail = format!("\r\n--{boundary}--\r\n");
-        let moss = self == Provider::Moss;
+        let content_type = format!("multipart/form-data; boundary={boundary}");
+        let missing = |e: std::io::Error| Failure::new("missing_source", e.to_string());
+        let size = std::fs::metadata(&path).map_err(missing)?.len();
+        if self == Provider::Moss && size > MOSS_MAX_BYTES as u64 {
+            return Err(Failure::new("moss_file_too_large", "MOSS accepts files up to 512 MB."));
+        }
+        if size > STREAM_FROM {
+            // Sent from the file as it is read, not gathered in memory first: an hour of
+            // uncompressed audio is hundreds of megabytes, enough for a phone to end the app.
+            let (url, auth) = (format!("{}/files", self.base()), format!("Bearer {key}"));
+            let parts = Multipart { head, path, size, tail: tail.into_bytes(), content_type };
+            let (status, body) =
+                blocking(move || parts.post(&url, &auth)).await.map_err(|e| Failure::network(e.to_string()))??;
+            return self.id_of(&self.answer(status, body)?, &["id"]);
+        }
         let body = blocking(move || -> Result<Vec<u8>, Failure> {
-            use std::io::Read;
-            let missing = |e: std::io::Error| Failure::new("missing_source", e.to_string());
-            let mut file = std::fs::File::open(path).map_err(missing)?;
-            let size = file.metadata().map_err(missing)?.len() as usize;
-            if moss && size > MOSS_MAX_BYTES {
-                return Err(Failure::new("moss_file_too_large", "MOSS accepts files up to 512 MB."));
-            }
-            let mut body = Vec::with_capacity(head.len() + size + tail.len());
-            body.extend(head);
-            file.read_to_end(&mut body).map_err(missing)?;
+            let mut body = head;
+            body.extend(std::fs::read(path).map_err(missing)?);
             body.extend(tail.bytes());
             Ok(body)
         })
         .await
         .map_err(|e| Failure::new("missing_source", e.to_string()))??;
-        let request = HttpRequest::post(format!("{}/files", self.base()), body)
-            .header("Content-Type", format!("multipart/form-data; boundary={boundary}"));
+        let request = HttpRequest::post(format!("{}/files", self.base()), body).header("Content-Type", content_type);
         let answer = self.send(request, key).await?;
         self.id_of(&answer, &["id"])
     }
@@ -267,10 +278,93 @@ impl Provider {
     }
 }
 
+/// A multipart upload of a file, sent from the disk as it is read.
+struct Multipart {
+    head: Vec<u8>,
+    path: PathBuf,
+    size: u64,
+    tail: Vec<u8>,
+    content_type: String,
+}
+
+impl Multipart {
+    /// Posts it to `url`: the status and the JSON that came back.
+    fn post(self, url: &str, auth: &str) -> Result<(u16, Value), Failure> {
+        use std::io::{Cursor, Read};
+        let file = std::fs::File::open(&self.path).map_err(|e| Failure::new("missing_source", e.to_string()))?;
+        let length = self.head.len() as u64 + self.size + self.tail.len() as u64;
+        let body = Cursor::new(self.head).chain(file.take(self.size)).chain(Cursor::new(self.tail));
+        let sent = super::http()
+            .post(url)
+            .set("Authorization", auth)
+            .set("Content-Type", &self.content_type)
+            .set("Content-Length", &length.to_string())
+            .send(body);
+        let response = match sent {
+            Ok(response) | Err(ureq::Error::Status(_, response)) => response,
+            Err(error) => return Err(Failure::network(error.to_string())),
+        };
+        let status = response.status();
+        let body = serde_json::from_reader(response.into_reader().take(16 * 1024 * 1024)).unwrap_or(Value::Null);
+        Ok((status, body))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Progress {
     Queued(Duration),
     Running(Duration),
     Done(Value),
     Failed(Failure),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    use super::*;
+
+    #[test]
+    fn a_large_file_is_sent_from_the_disk_with_its_length() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/files", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut headers = Vec::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line.trim().is_empty() {
+                    break;
+                }
+                headers.push(line.trim().to_ascii_lowercase());
+            }
+            let length: usize = headers
+                .iter()
+                .find_map(|header| header.strip_prefix("content-length: ")?.parse().ok())
+                .expect("a fixed length, not chunks");
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let reply = r#"{"id":"file-1"}"#;
+            write!(&stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{reply}", reply.len()).unwrap();
+            (headers, body)
+        });
+        let path = std::env::temp_dir().join(format!("listenook-upload-{}.wav", std::process::id()));
+        std::fs::write(&path, b"RIFF0123456789").unwrap();
+        let parts = Multipart {
+            head: b"--b\r\n\r\n".to_vec(),
+            path: path.clone(),
+            size: 14,
+            tail: b"\r\n--b--\r\n".to_vec(),
+            content_type: "multipart/form-data; boundary=b".into(),
+        };
+        let (status, body) = parts.post(&url, "Bearer key").unwrap();
+        assert_eq!((status, body), (200, json!({"id": "file-1"})));
+        let (headers, sent) = server.join().unwrap();
+        assert_eq!(sent, b"--b\r\n\r\nRIFF0123456789\r\n--b--\r\n");
+        assert!(headers.contains(&"authorization: bearer key".to_owned()));
+        assert!(!headers.iter().any(|header| header.starts_with("transfer-encoding")));
+        let _ = std::fs::remove_file(path);
+    }
 }

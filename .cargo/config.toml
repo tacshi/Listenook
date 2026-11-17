@@ -1,2 +1,4 @@
-[target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+avx2,+fma"]
+# No CPU features are switched on for the whole build: the Windows app has to start on any
+# x86-64 processor. The speech engine's kernels enable AVX2 and FMA on their own
+# (`#[target_feature]` in vendor/qwen-asr/src/kernels/avx.rs), and local transcription is
+# offered only where the processor has them (`services::local::supported`).

@@ -94,14 +94,12 @@ pub fn optimization_flags() -> Vec<&'static str> {
             flags.push("DotProd");
         }
     } else if cfg!(target_arch = "x86_64") {
-        if cfg!(target_feature = "avx2") {
+        // Listenook: the kernels are built for AVX2 and FMA on their own (`target_feature` on
+        // each), and the app runs them only where the processor has both; the rest of the
+        // build targets any x86-64 processor.
+        #[cfg(target_arch = "x86_64")]
+        if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
             flags.push("AVX2");
-        } else if cfg!(target_feature = "avx") {
-            flags.push("AVX");
-        } else if cfg!(target_feature = "sse4.1") {
-            flags.push("SSE4.1");
-        }
-        if cfg!(target_feature = "fma") {
             flags.push("FMA");
         }
     }

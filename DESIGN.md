@@ -35,8 +35,9 @@ shows; an episode sent to the Library is a recording like any other.
 
 Sync with another device on the same network sits at the foot of the
 sidebar, above Settings, and says when a sync runs or how the last one
-ended: one dialog chooses the device and follows the sync, and the other
-device asks its user before anything is copied. Both Libraries end as their
+ended: one dialog chooses the device and follows the sync. Two devices pair
+once, with a code the other one shows, and paired devices then sync without
+asking. Both Libraries end as their
 union, and so do the podcasts followed (an unfollow made after a follow
 wins) and the place left in each episode (the one saved last wins); whether
 this device can be found is set in that dialog, where it matters.

@@ -144,9 +144,32 @@ impl LoudnessMeter {
     }
 }
 
+/// The subtitle to repeat, as (start, end), when playback was at `before`: the one already
+/// repeating while it still plays, else the latest one to start of those playing. With
+/// overlapping subtitles, an earlier one that ends first must not take the repeat over.
+pub fn repeated_cue(
+    cues: impl IntoIterator<Item = (i64, i64)>,
+    held: Option<(i64, i64)>,
+    before: i64,
+) -> Option<(i64, i64)> {
+    let covers = |(start, end): (i64, i64)| start <= before && before < end;
+    held.filter(|&cue| covers(cue))
+        .or_else(|| cues.into_iter().filter(|&cue| covers(cue)).max_by_key(|&(start, _)| start))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_subtitle_repeating_keeps_the_repeat_when_another_overlaps_it() {
+        let cues = [(0, 5000), (4000, 8000), (9000, 10_000)];
+        let held = repeated_cue(cues, None, 6000);
+        assert_eq!(held, Some((4000, 8000)), "the one playing is repeated");
+        assert_eq!(repeated_cue(cues, held, 4500), Some((4000, 8000)), "not the earlier one ending at 5 s");
+        assert_eq!(repeated_cue(cues, None, 8500), None, "between subtitles nothing repeats");
+        assert_eq!(repeated_cue(cues, held, 9500), Some((9000, 10_000)), "once past it, the next one");
+    }
 
     fn tone(hertz: f64, amplitude: f64, ms: usize) -> Vec<i16> {
         (0..ms * 16)

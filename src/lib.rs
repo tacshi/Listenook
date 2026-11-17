@@ -9,6 +9,39 @@ mod util;
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
+/// What the headless flows need to play another device in a sync: its key, and TLS as sync
+/// speaks it. Not part of the app.
+#[doc(hidden)]
+pub mod testing {
+    use std::{
+        io,
+        net::TcpStream,
+        path::Path,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use crate::services::secure::Identity;
+
+    /// The fingerprint of the certificate of the device whose key is kept in `library`; the
+    /// key is made there the first time.
+    pub fn device_key(library: &Path) -> String {
+        Identity::of(library).expect("a key can be made").fingerprint.clone()
+    }
+
+    /// An HTTP client for the device whose key is kept in `library`, going on only with the
+    /// device whose fingerprint is `there` (any device when `None`); `seen` gets the one it reached.
+    pub fn client(library: &Path, there: Option<&str>, seen: Option<Arc<Mutex<String>>>) -> ureq::Agent {
+        Identity::of(library).expect("a key can be made").agent(there, seen, Duration::from_secs(30))
+    }
+
+    /// Answers a connection as the device whose key is kept in `library`: the stream, and the
+    /// fingerprint of the device that connected.
+    pub fn answer(library: &Path, tcp: TcpStream) -> io::Result<(impl io::Read + io::Write, String)> {
+        Identity::of(library)?.accept(tcp)
+    }
+}
+
 #[native_module("listenook/native")]
 fn native(registry: &mut Registry) {
     registry.register::<App>();

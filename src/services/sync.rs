@@ -5,8 +5,8 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket},
     path::{Path, PathBuf},
     sync::{
-        Condvar, Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Condvar, Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -15,17 +15,15 @@ use std::{
 use listenook_core::{
     Job, LibraryCatalog, now_iso,
     sync::{
-        Circle, Device, Entry, Index, Member, Members, Offer, PROTOCOL, Podcasts, Shelves, Transfer, digest, hex,
-        is_code, is_sync_name, joins_answerer, media_extension, media_file_name, merge_members, pairing_secret,
-        plan_with, proof, same, seal, unhex,
+        Circle, Device, Entry, Index, Member, Members, Offer, PROTOCOL, Pake, Podcasts, Shelves, Transfer, digest, hex,
+        is_code, is_sync_name, joins_answerer, media_extension, media_file_name, merge_members, pake_proof, plan_with,
+        same,
     },
 };
-use ring::{
-    agreement,
-    rand::{SecureRandom, SystemRandom},
-};
+use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 
+use super::secure::{Identity, Wire};
 use crate::state::persist;
 
 pub(crate) const PORT: u16 = 47823;
@@ -45,7 +43,8 @@ const PAIR_WITHIN: Duration = Duration::from_secs(180);
 const PAIR_ATTEMPTS: u32 = 3;
 const PAIR_COOLDOWN: Duration = Duration::from_secs(30);
 const PAIR_FORGIVEN: Duration = Duration::from_secs(3600);
-const CHALLENGE_WITHIN: Duration = Duration::from_secs(60);
+/// Connections answered at once; more wait for one to end.
+const HANDLERS: usize = 32;
 const REPLIES_WITHIN: Duration = Duration::from_millis(1500);
 const MANIFEST_LIMIT: u64 = 256 * 1024 * 1024;
 pub(crate) const LARGE_MEDIA: u64 = 500 * 1024 * 1024;
@@ -133,10 +132,11 @@ struct Pairing {
     serial: u64,
     device: Device,
     code: String,
-    nonce: String,
-    theirs: String,
-    shared: String,
+    /// The fingerprint of the certificate the asking device showed.
+    asker: String,
     offer: Option<Offer>,
+    /// The key the code gave (SPAKE2), once the asker sent its side of it.
+    key: Option<Vec<u8>>,
     attempts: u32,
     at: Instant,
 }
@@ -145,10 +145,8 @@ struct Pairing {
 struct Asking {
     address: SocketAddr,
     device: Device,
-    nonce: String,
-    theirs: String,
-    shared: String,
-    offer: Option<Offer>,
+    /// The fingerprint of the certificate the asked device showed.
+    answerer: String,
 }
 
 struct Resumable {
@@ -159,6 +157,9 @@ struct Resumable {
 
 struct Session {
     token: String,
+    /// The fingerprint of the certificate of the device syncing: the token is good only on its
+    /// connections.
+    peer: String,
     device: String,
     busy: HashSet<String>,
     name: String,
@@ -213,7 +214,7 @@ struct State {
     ledger: Ledger,
     pairing: Option<Pairing>,
     asking: Option<Asking>,
-    challenges: Vec<(String, Instant)>,
+    identity: Option<Arc<Identity>>,
     busy: HashSet<String>,
     library: Option<Library>,
     misses: Misses,
@@ -314,32 +315,39 @@ fn new_code() -> String {
     format!("{:06}", u32::from_be_bytes(bytes) % 1_000_000)
 }
 
-fn key_pair() -> Option<(agreement::EphemeralPrivateKey, String)> {
-    let private = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &SystemRandom::new()).ok()?;
-    let public = hex(private.compute_public_key().ok()?.as_ref());
-    Some((private, public))
-}
-
-fn agree(private: agreement::EphemeralPrivateKey, public: &str) -> Option<String> {
-    let public = agreement::UnparsedPublicKey::new(&agreement::X25519, unhex(public)?);
-    agreement::agree_ephemeral(private, &public, hex).ok()
-}
-
 fn new_circle() -> Circle {
-    Circle { id: random_hex(8), key: random_hex(32), members: Members::new() }
+    Circle { id: random_hex(8), members: Members::new() }
 }
 
-fn join(circle: &mut Circle, devices: [&Device; 2]) {
+/// Adds the two devices that paired, each with the fingerprint of its certificate.
+fn join(circle: &mut Circle, devices: [(&Device, &str); 2]) {
     let at = now_iso();
-    for device in devices {
+    for (device, key) in devices {
         let member = Member {
             name: device.name.clone(),
             platform: device.platform.clone(),
             joined_at: at.clone(),
             removed_at: None,
+            key: key.to_owned(),
         };
         circle.members.insert(device.id.clone(), member);
     }
+}
+
+fn identity() -> Result<Arc<Identity>, &'static str> {
+    state().identity.clone().ok_or("sync_failed")
+}
+
+/// The fingerprint of the certificate of the paired device `id`.
+fn key_of(id: &str) -> Result<String, &'static str> {
+    let state = state();
+    let circle = state.ledger.circle.as_ref().ok_or("sync_unpaired")?;
+    circle
+        .members
+        .get(id)
+        .filter(|member| member.is_in() && !member.key.is_empty())
+        .map(|m| m.key.clone())
+        .ok_or("sync_unpaired")
 }
 
 pub(crate) fn default_name() -> String {
@@ -397,6 +405,13 @@ pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible
     if state.root != root {
         state.ledger = root.as_deref().map(load_ledger).unwrap_or_default();
         state.library = None;
+        state.identity = root
+            .as_deref()
+            .and_then(|root| Identity::of(root).map_err(|error| log::error!("sync: this device's key: {error}")).ok());
+        // Devices paired before sync ran over TLS are known by no certificate: they pair again.
+        if state.ledger.circle.as_ref().is_some_and(|circle| !circle.is_keyed()) {
+            state.ledger = Ledger::default();
+        }
     }
     state.root = root;
     state.me = Device {
@@ -493,60 +508,44 @@ pub(crate) fn remove(id: &str) {
     let Some(member) = state.ledger.circle.as_mut().and_then(|circle| circle.members.get_mut(id)) else {
         return;
     };
-    member.removed_at = Some(now_iso());
+    member.remove();
     state.ledger.seen.remove(id);
     state.save();
 }
 
 pub(crate) fn leave() {
-    let (circle, me, places) = {
+    let (identity, places) = {
         let mut state = state();
         let Some(circle) = state.ledger.circle.clone() else {
             return;
         };
-        let places: Vec<SocketAddr> = circle
+        let places: Vec<(SocketAddr, String)> = circle
             .members
-            .keys()
-            .filter(|id| **id != state.me.id)
-            .filter_map(|id| {
-                state
+            .iter()
+            .filter(|(id, member)| **id != state.me.id && !member.key.is_empty())
+            .filter_map(|(id, member)| {
+                let address = state
                     .peers
                     .get(id)
                     .map(|(peer, _)| peer.address)
-                    .or_else(|| state.ledger.seen.get(id).and_then(|seen| seen.address.parse().ok()))
+                    .or_else(|| state.ledger.seen.get(id).and_then(|seen| seen.address.parse().ok()))?;
+                Some((address, member.key.clone()))
             })
             .collect();
-        let me = state.me.id.clone();
+        let identity = state.identity.clone();
         state.leave();
-        (circle, me, places)
+        (identity, places)
     };
-    for address in places {
-        let (key, me) = (circle.key.clone(), me.clone());
+    let Some(identity) = identity else {
+        return;
+    };
+    for (address, key) in places {
+        let identity = identity.clone();
         thread::spawn(move || {
-            let base = format!("http://{address}/listenook");
-            let Some(challenge) = ureq::AgentBuilder::new()
-                .timeout(Duration::from_secs(3))
-                .build()
-                .get(&format!("{base}/challenge"))
-                .call()
-                .ok()
-                .and_then(|response| serde_json::from_reader::<_, Challenge>(response.into_reader().take(4096)).ok())
-            else {
-                return;
-            };
-            let leaving =
-                Leaving { proof: proof(&key, &challenge.nonce, &me, "leave"), id: me, nonce: challenge.nonce };
-            if let Ok(body) = serde_json::to_vec(&leaving) {
-                let _ = agent(Duration::from_secs(3)).post(&format!("{base}/leave")).send_bytes(&body);
-            }
+            let agent = identity.agent(Some(&key), None, Duration::from_secs(3));
+            let _ = agent.post(&format!("https://{address}/listenook/leave")).send_bytes(b"{}");
         });
     }
-}
-
-fn take_challenge(state: &mut State, nonce: &str) -> bool {
-    state.challenges.retain(|(_, at)| at.elapsed() < CHALLENGE_WITHIN);
-    let asked = state.challenges.iter().position(|(known, _)| !nonce.is_empty() && known == nonce);
-    asked.map(|at| state.challenges.remove(at)).is_some()
 }
 
 pub(crate) fn wait(within: Duration, seen: u64) {
@@ -728,20 +727,14 @@ fn local_address() -> Option<Ipv4Addr> {
     }
 }
 
-fn agent(read: Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(4))
-        .timeout_read(read)
-        .timeout_write(Duration::from_secs(60))
-        .build()
-}
-
 fn ask_within(address: SocketAddr, within: Duration) -> Option<Device> {
-    let response = ureq::AgentBuilder::new()
+    let response = identity()
+        .ok()?
+        .builder(None, None)
         .timeout_connect(within)
         .timeout_read(Duration::from_secs(10))
         .build()
-        .get(&format!("http://{address}/listenook/info"))
+        .get(&format!("https://{address}/listenook/info"))
         .call()
         .ok()?;
     let device: Device = serde_json::from_reader(response.into_reader().take(64 * 1024)).ok()?;
@@ -857,12 +850,16 @@ fn accept_from(turn: u64, listener: &TcpListener) -> io::Result<()> {
         if state().turn != turn {
             return Ok(());
         }
-        if is_local(from.ip()) {
+        static ANSWERING: AtomicUsize = AtomicUsize::new(0);
+        if is_local(from.ip()) && ANSWERING.fetch_add(1, Ordering::SeqCst) < HANDLERS {
             thread::spawn(move || {
                 if let Err(error) = handle(stream, from.ip()) {
                     log::debug!("sync: {error}");
                 }
+                ANSWERING.fetch_sub(1, Ordering::SeqCst);
             });
+        } else if is_local(from.ip()) {
+            ANSWERING.fetch_sub(1, Ordering::SeqCst);
         }
     }
 }
@@ -875,13 +872,20 @@ struct Call {
     progress: Option<(u64, u64, u64)>,
     offset: u64,
     from: IpAddr,
-    body: BufReader<TcpStream>,
+    /// The fingerprint of the certificate the caller showed.
+    peer: String,
+    body: BufReader<Wire>,
 }
 
-fn read_call(stream: TcpStream, from: IpAddr) -> io::Result<Call> {
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
-    let mut body = BufReader::new(stream);
+impl Call {
+    /// Where the answer goes, once what the call sent was read.
+    fn out(&mut self) -> &mut Wire {
+        self.body.get_mut()
+    }
+}
+
+fn read_call(wire: Wire, from: IpAddr, peer: String) -> io::Result<Call> {
+    let mut body = BufReader::new(wire);
     let (mut method, mut path, mut length, mut token) = (String::new(), String::new(), 0, String::new());
     let (mut progress, mut offset) = (None, 0);
     let mut head = (&mut body).take(16 * 1024);
@@ -918,10 +922,10 @@ fn read_call(stream: TcpStream, from: IpAddr) -> io::Result<Call> {
             }
         }
     }
-    Ok(Call { method, path, length, token, progress, offset, from, body })
+    Ok(Call { method, path, length, token, progress, offset, from, peer, body })
 }
 
-fn reply(stream: &mut TcpStream, status: u16, body: &[u8]) -> io::Result<()> {
+fn reply(stream: &mut impl Write, status: u16, body: &[u8]) -> io::Result<()> {
     let reason = match status {
         200 => "OK",
         403 => "Forbidden",
@@ -941,11 +945,11 @@ fn reply(stream: &mut TcpStream, status: u16, body: &[u8]) -> io::Result<()> {
     stream.flush()
 }
 
-fn reply_json(stream: &mut TcpStream, value: &impl Serialize) -> io::Result<()> {
+fn reply_json(stream: &mut impl Write, value: &impl Serialize) -> io::Result<()> {
     reply(stream, 200, &serde_json::to_vec(value).map_err(io::Error::other)?)
 }
 
-fn refuse(stream: &mut TcpStream, reason: &str) -> io::Result<()> {
+fn refuse(stream: &mut impl Write, reason: &str) -> io::Result<()> {
     reply(stream, 403, &serde_json::to_vec(&Refusal { reason: reason.to_owned() }).map_err(io::Error::other)?)
 }
 
@@ -968,8 +972,6 @@ struct Hello {
     catalog: LibraryCatalog,
     resume: bool,
     auto: bool,
-    nonce: String,
-    proof: String,
     revision: String,
     members: Members,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -994,7 +996,6 @@ struct Welcome {
     token: String,
     device: Device,
     index: Index,
-    proof: String,
     revision: String,
     members: Members,
 }
@@ -1007,20 +1008,6 @@ struct Done {
 
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
-struct Challenge {
-    nonce: String,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-#[serde(default)]
-struct Leaving {
-    id: String,
-    nonce: String,
-    proof: String,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-#[serde(default)]
 struct Refusal {
     reason: String,
 }
@@ -1029,8 +1016,6 @@ struct Refusal {
 #[serde(default)]
 struct PairAsk {
     device: Device,
-    nonce: String,
-    public: String,
     circle: Option<Offer>,
 }
 
@@ -1038,32 +1023,38 @@ struct PairAsk {
 #[serde(default)]
 struct PairAnswer {
     device: Device,
-    nonce: String,
-    public: String,
     circle: Option<Offer>,
 }
 
+/// A side of the code's key exchange (SPAKE2).
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
-struct Sealed {
+struct PairKey {
     id: String,
-    key: String,
+    message: String,
+}
+
+/// The devices of a circle, as pairing shares them.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct Shared {
+    id: String,
     members: Members,
 }
 
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
-struct PairConfirm {
+struct PairFinish {
     id: String,
     proof: String,
-    circle: Option<Sealed>,
+    circle: Option<Shared>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
 struct PairDone {
     proof: String,
-    circle: Option<Sealed>,
+    circle: Shared,
 }
 
 fn read_body(call: &mut Call, limit: u64) -> io::Result<Vec<u8>> {
@@ -1081,8 +1072,15 @@ fn read_body(call: &mut Call, limit: u64) -> io::Result<Vec<u8>> {
 }
 
 fn handle(stream: TcpStream, from: IpAddr) -> io::Result<()> {
-    let mut out = stream.try_clone()?;
-    let mut call = read_call(stream, from)?;
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    let identity = state().identity.clone().ok_or_else(|| io::Error::other("this device has no key"))?;
+    let (wire, peer) = identity.accept(stream)?;
+    let mut call = read_call(wire, from, peer)?;
+    // A token is good only on connections of the device it was given to.
+    if state().session.as_ref().is_some_and(|session| session.token == call.token && session.peer != call.peer) {
+        call.token.clear();
+    }
     let token = call.token.clone();
     let progress = call.progress;
     let counted = in_session(&token, |session| {
@@ -1091,7 +1089,10 @@ fn handle(stream: TcpStream, from: IpAddr) -> io::Result<()> {
             (session.items, session.items_total, session.bytes_total) = (items, items_total, bytes_total);
         }
     });
-    let result = route(&mut out, &mut call);
+    let result = route(&mut call);
+    let wire = call.out();
+    wire.conn.send_close_notify();
+    let _ = wire.conn.complete_io(&mut wire.sock);
     if counted {
         in_session(&token, |session| {
             session.calls = session.calls.saturating_sub(1);
@@ -1103,91 +1104,87 @@ fn handle(stream: TcpStream, from: IpAddr) -> io::Result<()> {
     result
 }
 
-fn route(out: &mut TcpStream, call: &mut Call) -> io::Result<()> {
+fn route(call: &mut Call) -> io::Result<()> {
     let (root, me) = {
         let state = state();
         (state.root.clone(), state.me.clone())
     };
     let Some(root) = root else {
-        return reply(out, 404, b"{}");
+        return reply(call.out(), 404, b"{}");
     };
     let path = call.path.clone();
     let parts: Vec<&str> = path.trim_start_matches("/listenook/").split('/').collect();
     if !path.starts_with("/listenook/") {
-        return reply(out, 404, b"{}");
+        return reply(call.out(), 404, b"{}");
     }
-    let method = call.method.clone();
+    let (method, peer) = (call.method.clone(), call.peer.clone());
     match (method.as_str(), parts.as_slice()) {
-        ("GET", ["info"]) => reply_json(out, &Device { revision: library(&root).1, ..me }),
-        ("GET", ["challenge"]) => {
-            let nonce = random_hex(16);
-            let mut state = state();
-            state.challenges.retain(|(_, at)| at.elapsed() < CHALLENGE_WITHIN);
-            if state.challenges.len() >= 64 {
-                state.challenges.remove(0);
-            }
-            state.challenges.push((nonce.clone(), Instant::now()));
-            drop(state);
-            reply_json(out, &Challenge { nonce })
-        }
+        ("GET", ["info"]) => reply_json(call.out(), &Device { revision: library(&root).1, ..me }),
         ("POST", ["pair"]) => {
             let asked: PairAsk = serde_json::from_slice(&read_body(call, 256 * 1024)?)?;
-            answer_pairing(out, me, asked)
+            answer_pairing(call.out(), me, asked, peer)
         }
         ("POST", ["pair", "confirm"]) => {
-            let confirm: PairConfirm = serde_json::from_slice(&read_body(call, 4 * 1024 * 1024)?)?;
-            confirm_pairing(out, me, confirm)
+            let theirs: PairKey = serde_json::from_slice(&read_body(call, 64 * 1024)?)?;
+            confirm_pairing(call.out(), &me, theirs, &peer)
+        }
+        ("POST", ["pair", "finish"]) => {
+            let finish: PairFinish = serde_json::from_slice(&read_body(call, 4 * 1024 * 1024)?)?;
+            finish_pairing(call.out(), &me, finish, &peer)
         }
         ("POST", ["pair", "cancel", id]) => {
             let mut state = state();
-            if let Some(pairing) = state.pairing.take_if(|pairing| pairing.device.id == *id) {
+            if let Some(pairing) = state.pairing.take_if(|pairing| pairing.device.id == *id && pairing.asker == peer) {
                 state.tell(Event::Paired { serial: pairing.serial, name: None });
             }
             drop(state);
-            reply(out, 200, b"{}")
+            reply(call.out(), 200, b"{}")
         }
         ("POST", ["leave"]) => {
-            let leaving: Leaving = serde_json::from_slice(&read_body(call, 64 * 1024)?)?;
+            read_body(call, 64 * 1024)?;
             let mut state = state();
-            let fresh = take_challenge(&mut state, &leaving.nonce);
-            let member = state.ledger.circle.as_mut().filter(|circle| {
-                fresh && same(&leaving.proof, &proof(&circle.key, &leaving.nonce, &leaving.id, "leave"))
-            });
-            let Some(member) = member.and_then(|circle| circle.members.get_mut(&leaving.id)) else {
+            let holder = state.ledger.circle.as_ref().and_then(|circle| circle.holder(&peer)).map(str::to_owned);
+            let member = holder
+                .as_ref()
+                .and_then(|holder| state.ledger.circle.as_mut().and_then(|circle| circle.members.get_mut(holder)));
+            let Some(member) = member else {
                 drop(state);
-                return refuse(out, "unpaired");
+                return refuse(call.out(), "unpaired");
             };
-            member.removed_at = Some(now_iso());
-            state.ledger.seen.remove(&leaving.id);
+            member.remove();
+            if let Some(holder) = holder {
+                state.ledger.seen.remove(&holder);
+            }
             state.save();
             drop(state);
-            reply(out, 200, b"{}")
+            reply(call.out(), 200, b"{}")
         }
         ("POST", ["sync"]) => {
             let hello: Hello = serde_json::from_slice(&read_body(call, 4 * 1024 * 1024)?)?;
-            welcome(out, &root, me, hello, call.from)
+            let from = call.from;
+            welcome(call.out(), &root, me, hello, from, &peer)
         }
         _ if !in_session(&call.token, |_| {}) => {
             let ended = !call.token.is_empty() && state().stopped.as_deref() == Some(call.token.as_str());
-            reply(out, if ended { 403 } else { 410 }, b"{}")
+            reply(call.out(), if ended { 403 } else { 410 }, b"{}")
         }
         ("POST", ["done"]) => {
             let done: Done = serde_json::from_slice(&read_body(call, 64 * 1024)?).unwrap_or_default();
             end_session(&mut state(), done.complete, false);
-            reply(out, 200, b"{}")
+            reply(call.out(), 200, b"{}")
         }
-        (_, [_, id, ..]) if !Job::is_valid_id(id) => reply(out, 400, b"{}"),
+        (_, [_, id, ..]) if !Job::is_valid_id(id) => reply(call.out(), 400, b"{}"),
         ("GET", ["manifest", id]) => match fs::read(manifest_path(&root, id)) {
             Ok(bytes) => {
                 in_session(&call.token, |session| session.sent += 1);
-                reply(out, 200, &bytes)
+                reply(call.out(), 200, &bytes)
             }
-            Err(_) => reply(out, 404, b"{}"),
+            Err(_) => reply(call.out(), 404, b"{}"),
         },
         ("PUT", ["manifest", id]) => {
             let job: Job = serde_json::from_slice(&read_body(call, MANIFEST_LIMIT)?)?;
             if job.id != *id {
-                return reply(out, 400, b"{}");
+                return reply(call.out(), 400, b"{}");
             }
             let mut state = state();
             state.hand(Incoming::Job(Box::new(job)));
@@ -1195,31 +1192,31 @@ fn route(out: &mut TcpStream, call: &mut Call) -> io::Result<()> {
                 session.received += 1;
             }
             drop(state);
-            reply(out, 200, b"{}")
+            reply(call.out(), 200, b"{}")
         }
         ("GET", ["media", id]) => {
             let source = persist::load_job(&root, id).and_then(|job| media_of(&root, &job));
             let Some(mut file) = source.and_then(|path| fs::File::open(path).ok()) else {
-                return reply(out, 404, b"{}");
+                return reply(call.out(), 404, b"{}");
             };
             let length = file.metadata()?.len();
             let offset = if call.offset < length { call.offset } else { 0 };
             file.seek(SeekFrom::Start(offset))?;
             let resumed = if offset > 0 { format!("X-Listenook-Offset: {offset}\r\n") } else { String::new() };
             write!(
-                out,
+                call.out(),
                 "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n{resumed}Connection: close\r\n\r\n",
                 length - offset
             )?;
             let token = call.token.clone();
             in_session(&token, |session| session.bytes += offset);
-            copy(&mut file, out, length - offset, |count| in_session(&token, |session| session.bytes += count))?;
-            out.flush()
+            copy(&mut file, call.out(), length - offset, |count| in_session(&token, |session| session.bytes += count))?;
+            call.out().flush()
         }
         ("GET", ["part", id, extension]) => {
             let path = root.join("media").join(media_file_name(id, &format!("x.{extension}")));
             let size = fs::metadata(path.with_extension("part")).map(|file| file.len()).unwrap_or(0);
-            reply_json(out, &Part { size })
+            reply_json(call.out(), &Part { size })
         }
         ("PUT", ["media", id, extension]) => {
             let path = root.join("media").join(media_file_name(id, &format!("x.{extension}")));
@@ -1230,25 +1227,19 @@ fn route(out: &mut TcpStream, call: &mut Call) -> io::Result<()> {
                 in_session(&token, |session| session.bytes += count)
             })?;
             state().hand(Incoming::Media { id: (*id).to_owned(), path });
-            reply(out, 200, b"{}")
+            reply(call.out(), 200, b"{}")
         }
-        _ => reply(out, 404, b"{}"),
+        _ => reply(call.out(), 404, b"{}"),
     }
 }
 
-fn answer_pairing(out: &mut TcpStream, me: Device, asked: PairAsk) -> io::Result<()> {
+fn answer_pairing(out: &mut Wire, me: Device, asked: PairAsk, asker: String) -> io::Result<()> {
     if asked.device.app != "listenook" || asked.device.id.is_empty() || asked.device.id == me.id {
         return reply(out, 400, b"{}");
     }
     if asked.device.protocol != PROTOCOL {
         return reply(out, 426, b"{}");
     }
-    let Some((private, public)) = key_pair() else {
-        return reply(out, 400, b"{}");
-    };
-    let Some(shared) = agree(private, &asked.public).filter(|_| !asked.nonce.is_empty()) else {
-        return reply(out, 400, b"{}");
-    };
     let mut state = state();
     if state.misses.waiting() {
         return reply(out, 429, b"{}");
@@ -1265,35 +1256,62 @@ fn answer_pairing(out: &mut TcpStream, me: Device, asked: PairAsk) -> io::Result
     }
     state.serial += 1;
     let serial = state.serial;
-    let (code, nonce) = (new_code(), random_hex(16));
+    let code = new_code();
     let circle = state.ledger.circle.as_ref().map(Circle::offer);
     state.pairing = Some(Pairing {
         serial,
         device: asked.device.clone(),
         code: code.clone(),
-        nonce: nonce.clone(),
-        theirs: asked.nonce,
-        shared,
+        asker,
         offer: asked.circle,
+        key: None,
         attempts: 0,
         at: Instant::now(),
     });
     state.tell(Event::Pairing { serial, device: asked.device, code });
     drop(state);
-    reply_json(out, &PairAnswer { device: me, nonce, public, circle })
+    reply_json(out, &PairAnswer { device: me, circle })
 }
 
-fn confirm_pairing(out: &mut TcpStream, me: Device, confirm: PairConfirm) -> io::Result<()> {
+/// The pairing the device holding `asker` started, while it may still finish.
+fn pairing_of<'a>(state: &'a mut State, id: &str, asker: &str) -> Option<&'a mut Pairing> {
+    state
+        .pairing
+        .as_mut()
+        .filter(|pairing| pairing.device.id == id && pairing.asker == asker && pairing.at.elapsed() < PAIR_WITHIN)
+}
+
+/// The asker's side of the code's key exchange: answers with this side. Whether the code was
+/// right shows only at `finish_pairing`, where the try is counted.
+fn confirm_pairing(out: &mut Wire, me: &Device, theirs: PairKey, asker: &str) -> io::Result<()> {
+    let mine = state().identity.as_ref().map(|identity| identity.fingerprint.clone()).unwrap_or_default();
     let mut state = state();
-    let Some(pairing) =
-        state.pairing.as_mut().filter(|pairing| pairing.device.id == confirm.id && pairing.at.elapsed() < PAIR_WITHIN)
-    else {
+    let Some(pairing) = pairing_of(&mut state, &theirs.id, asker) else {
         drop(state);
         return refuse(out, "expired");
     };
-    let secret =
-        pairing_secret(&pairing.code, &pairing.shared, (&pairing.device.id, &pairing.theirs), (&me.id, &pairing.nonce));
-    if !same(&confirm.proof, &proof(&secret, "", &pairing.device.id, "asker")) {
+    let (pake, message) = Pake::start(&pairing.code, (&pairing.device.id, asker), (&me.id, &mine), false);
+    let Some(key) = pake.finish(&theirs.message) else {
+        drop(state);
+        return reply(out, 400, b"{}");
+    };
+    pairing.key = Some(key);
+    drop(state);
+    reply_json(out, &PairKey { id: me.id.clone(), message })
+}
+
+fn finish_pairing(out: &mut Wire, me: &Device, finish: PairFinish, asker: &str) -> io::Result<()> {
+    let mine = state().identity.as_ref().map(|identity| identity.fingerprint.clone()).unwrap_or_default();
+    let mut state = state();
+    let Some(pairing) = pairing_of(&mut state, &finish.id, asker) else {
+        drop(state);
+        return refuse(out, "expired");
+    };
+    let Some(key) = pairing.key.take() else {
+        drop(state);
+        return refuse(out, "expired");
+    };
+    if !same(&finish.proof, &pake_proof(&key, "asker")) {
         pairing.attempts += 1;
         let attempts = pairing.attempts;
         state.misses.miss();
@@ -1303,48 +1321,37 @@ fn confirm_pairing(out: &mut TcpStream, me: Device, confirm: PairConfirm) -> io:
             state.tell(Event::Paired { serial: pairing.serial, name: None });
         }
         drop(state);
-        return refuse(
-            out,
-            if waiting {
-                "wait"
-            } else if spent {
-                "expired"
-            } else {
-                "wrong"
-            },
-        );
+        let reason = if waiting {
+            "wait"
+        } else if spent {
+            "expired"
+        } else {
+            "wrong"
+        };
+        return refuse(out, reason);
     }
     let Some(pairing) = state.pairing.take() else {
         return refuse(out, "expired");
     };
     state.misses = Misses::default();
-    let mine = state.ledger.circle.as_ref().map(Circle::offer);
-    let sealed = if joins_answerer(pairing.offer.as_ref(), mine.as_ref()) {
-        let circle = state.ledger.circle.get_or_insert_with(new_circle);
-        join(circle, [&me, &pairing.device]);
-        seal(&circle.key, &secret, "answerer circle").map(|key| Sealed {
-            id: circle.id.clone(),
-            key,
-            members: circle.members.clone(),
-        })
-    } else {
-        let theirs = confirm.circle.and_then(|sealed| {
-            let key = seal(&sealed.key, &secret, "asker circle")?;
-            Some(Circle { id: sealed.id, key, members: sealed.members })
-        });
-        let Some(mut circle) = theirs else {
-            state.tell(Event::Paired { serial: pairing.serial, name: None });
-            drop(state);
-            return reply(out, 400, b"{}");
-        };
-        join(&mut circle, [&me, &pairing.device]);
-        state.adopt(circle);
-        None
-    };
+    // Both circles end as one, with the devices of both; it keeps the name of the larger one.
+    let mine_offer = state.ledger.circle.as_ref().map(Circle::offer);
+    let joins = joins_answerer(pairing.offer.as_ref(), mine_offer.as_ref());
+    let circle = state.ledger.circle.get_or_insert_with(new_circle);
+    if let Some(theirs) = &finish.circle {
+        if !joins && !theirs.id.is_empty() {
+            circle.id = theirs.id.clone();
+        }
+        merge_members(&mut circle.members, &theirs.members);
+    }
+    join(circle, [(me, &mine), (&pairing.device, asker)]);
+    let shared = Shared { id: circle.id.clone(), members: circle.members.clone() };
+    let circle = circle.clone();
+    state.adopt(circle);
     state.save();
     state.tell(Event::Paired { serial: pairing.serial, name: Some(pairing.device.name.clone()) });
     drop(state);
-    reply_json(out, &PairDone { proof: proof(&secret, "", &me.id, "answerer"), circle: sealed })
+    reply_json(out, &PairDone { proof: pake_proof(&key, "answerer"), circle: shared })
 }
 
 pub(crate) fn pair(address: SocketAddr) -> Result<Device, &'static str> {
@@ -1355,11 +1362,11 @@ pub(crate) fn pair(address: SocketAddr) -> Result<Device, &'static str> {
     if me.id.is_empty() {
         return Err("sync_failed");
     }
-    let (private, public) = key_pair().ok_or("sync_failed")?;
-    let nonce = random_hex(16);
-    let asked = PairAsk { device: me, nonce: nonce.clone(), public, circle: offer };
-    let answer: PairAnswer = agent(Duration::from_secs(10))
-        .post(&format!("http://{address}/listenook/pair"))
+    let seen = Arc::new(Mutex::new(String::new()));
+    let asked = PairAsk { device: me, circle: offer };
+    let answer: PairAnswer = identity()?
+        .agent(None, Some(seen.clone()), Duration::from_secs(10))
+        .post(&format!("https://{address}/listenook/pair"))
         .send_bytes(&serde_json::to_vec(&asked).map_err(|_| "sync_failed")?)
         .map_err(code_of)
         .and_then(|response| {
@@ -1368,16 +1375,12 @@ pub(crate) fn pair(address: SocketAddr) -> Result<Device, &'static str> {
     if !answer.device.is_compatible() {
         return Err("sync_incompatible");
     }
-    let shared = agree(private, &answer.public).ok_or("sync_failed")?;
+    let answerer = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    if answerer.is_empty() {
+        return Err("sync_failed");
+    }
     remember(answer.device.clone(), address);
-    state().asking = Some(Asking {
-        address,
-        device: answer.device.clone(),
-        nonce,
-        theirs: answer.nonce,
-        shared,
-        offer: answer.circle,
-    });
+    state().asking = Some(Asking { address, device: answer.device.clone(), answerer });
     Ok(answer.device)
 }
 
@@ -1386,69 +1389,80 @@ pub(crate) fn confirm(code: &str) -> Result<(), &'static str> {
     if !is_code(&code) {
         return Err("sync_wrong_code");
     }
+    let identity = identity()?;
     let (asking, me, circle) = {
         let state = state();
         (state.asking.clone().ok_or("sync_code_expired")?, state.me.clone(), state.ledger.circle.clone())
     };
-    let secret = pairing_secret(&code, &asking.shared, (&me.id, &asking.nonce), (&asking.device.id, &asking.theirs));
-    let joins = joins_answerer(circle.as_ref().map(Circle::offer).as_ref(), asking.offer.as_ref());
-    let sealed = match (&circle, joins) {
-        (Some(circle), false) => Some(Sealed {
-            id: circle.id.clone(),
-            key: seal(&circle.key, &secret, "asker circle").ok_or("sync_failed")?,
-            members: circle.members.clone(),
-        }),
-        _ => None,
-    };
-    let confirmed = PairConfirm { id: me.id.clone(), proof: proof(&secret, "", &me.id, "asker"), circle: sealed };
-    let done = agent(Duration::from_secs(10))
-        .post(&format!("http://{}/listenook/pair/confirm", asking.address))
-        .send_bytes(&serde_json::to_vec(&confirmed).map_err(|_| "sync_failed")?);
-    let done: PairDone = match done {
-        Ok(response) => {
-            serde_json::from_reader(response.into_reader().take(4 * 1024 * 1024)).map_err(|_| "sync_failed")?
-        }
-        Err(ureq::Error::Status(403, response)) => {
-            let reason = reason(response);
-            if reason == "wrong" {
-                return Err("sync_wrong_code");
+    // Only the device seen when asking: a certificate that changed is someone else.
+    let agent = identity.agent(Some(&asking.answerer), None, Duration::from_secs(10));
+    let base = format!("https://{}/listenook", asking.address);
+    let refused = |error: ureq::Error| -> &'static str {
+        match error {
+            ureq::Error::Status(403, response) => {
+                let reason = reason(response);
+                if reason == "wrong" {
+                    return "sync_wrong_code";
+                }
+                state().asking = None;
+                if reason == "wait" { "sync_pair_wait" } else { "sync_code_expired" }
             }
-            state().asking = None;
-            return Err(if reason == "wait" { "sync_pair_wait" } else { "sync_code_expired" });
+            ureq::Error::Status(404 | 410, _) => {
+                state().asking = None;
+                "sync_code_expired"
+            }
+            error => code_of(error),
         }
-        Err(ureq::Error::Status(404 | 410, _)) => {
-            state().asking = None;
-            return Err("sync_code_expired");
-        }
-        Err(error) => return Err(code_of(error)),
     };
+    let (pake, message) =
+        Pake::start(&code, (&me.id, &identity.fingerprint), (&asking.device.id, &asking.answerer), true);
+    let sent = PairKey { id: me.id.clone(), message };
+    let theirs: PairKey = agent
+        .post(&format!("{base}/pair/confirm"))
+        .send_bytes(&serde_json::to_vec(&sent).map_err(|_| "sync_failed")?)
+        .map_err(refused)
+        .and_then(|response| {
+            serde_json::from_reader(response.into_reader().take(64 * 1024)).map_err(|_| "sync_failed")
+        })?;
+    let key = pake.finish(&theirs.message).ok_or("sync_failed")?;
+    let finish = PairFinish {
+        id: me.id.clone(),
+        proof: pake_proof(&key, "asker"),
+        circle: circle.as_ref().map(|circle| Shared { id: circle.id.clone(), members: circle.members.clone() }),
+    };
+    let done: PairDone = agent
+        .post(&format!("{base}/pair/finish"))
+        .send_bytes(&serde_json::to_vec(&finish).map_err(|_| "sync_failed")?)
+        .map_err(refused)
+        .and_then(|response| {
+            serde_json::from_reader(response.into_reader().take(4 * 1024 * 1024)).map_err(|_| "sync_failed")
+        })?;
     let mut state = state();
     state.asking = None;
-    if !same(&done.proof, &proof(&secret, "", &asking.device.id, "answerer")) {
+    if !same(&done.proof, &pake_proof(&key, "answerer")) {
         return Err("sync_failed");
     }
-    let mut circle = if joins {
-        let sealed = done.circle.ok_or("sync_failed")?;
-        let key = seal(&sealed.key, &secret, "answerer circle").ok_or("sync_failed")?;
-        Circle { id: sealed.id, key, members: sealed.members }
-    } else {
-        circle.ok_or("sync_failed")?
-    };
-    join(&mut circle, [&me, &asking.device]);
+    let mut circle = circle.unwrap_or_else(new_circle);
+    if !done.circle.id.is_empty() {
+        circle.id = done.circle.id;
+    }
+    merge_members(&mut circle.members, &done.circle.members);
+    join(&mut circle, [(&me, &identity.fingerprint), (&asking.device, &asking.answerer)]);
     state.adopt(circle);
     state.saw(&asking.device.id, asking.address, None);
     Ok(())
 }
 
 pub(crate) fn abandon() {
-    let (asking, id) = {
+    let (asking, id, identity) = {
         let mut state = state();
-        (state.asking.take(), state.me.id.clone())
+        (state.asking.take(), state.me.id.clone(), state.identity.clone())
     };
-    if let Some(asking) = asking {
+    if let (Some(asking), Some(identity)) = (asking, identity) {
         thread::spawn(move || {
-            let _ = agent(Duration::from_secs(3))
-                .post(&format!("http://{}/listenook/pair/cancel/{id}", asking.address))
+            let _ = identity
+                .agent(Some(&asking.answerer), None, Duration::from_secs(3))
+                .post(&format!("https://{}/listenook/pair/cancel/{id}", asking.address))
                 .call();
         });
     }
@@ -1460,7 +1474,7 @@ fn reason(response: ureq::Response) -> String {
         .unwrap_or_default()
 }
 
-fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello, from: IpAddr) -> io::Result<()> {
+fn welcome(out: &mut Wire, root: &Path, me: Device, hello: Hello, from: IpAddr, peer: &str) -> io::Result<()> {
     if hello.device.app != "listenook" || hello.device.id.is_empty() {
         return reply(out, 400, b"{}");
     }
@@ -1470,16 +1484,17 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello, from: IpA
     let id = hello.device.id.clone();
     let trusted = {
         let mut state = state();
-        let fresh = take_challenge(&mut state, &hello.nonce);
-        let Some(circle) = state
-            .ledger
-            .circle
-            .as_mut()
-            .filter(|circle| fresh && same(&hello.proof, &proof(&circle.key, &hello.nonce, &id, "hello")))
+        // The device is the one whose certificate it showed, and it has to be in the circle
+        // before anything it says is taken: a device taken out cannot put itself back.
+        let Some(circle) = state.ledger.circle.as_mut().filter(|circle| circle.holder(peer) == Some(id.as_str()))
         else {
             drop(state);
             return refuse(out, "unpaired");
         };
+        if !circle.has(&id) {
+            drop(state);
+            return refuse(out, "removed");
+        }
         let mut changed = merge_members(&mut circle.members, &hello.members);
         if let Some(member) = circle.members.get_mut(&id).filter(|member| member.is_in())
             && (member.name != hello.device.name || member.platform != hello.device.platform)
@@ -1492,7 +1507,7 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello, from: IpA
         } else if !circle.has(&id) {
             Err("removed")
         } else {
-            Ok((circle.key.clone(), circle.members.clone()))
+            Ok(circle.members.clone())
         };
         match verdict {
             Err("unpaired") => state.leave(),
@@ -1501,8 +1516,8 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello, from: IpA
         }
         verdict
     };
-    let (key, members) = match trusted {
-        Ok(trusted) => trusted,
+    let members = match trusted {
+        Ok(members) => members,
         Err(reason) => return refuse(out, reason),
     };
     let (_, revision) = library(root);
@@ -1527,22 +1542,12 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello, from: IpA
             },
         };
         let address = SocketAddr::new(from, hello.device.port).to_string();
-        open_session(&mut state, &hello, &token, busy.clone(), counts, (address, revision.clone()));
+        open_session(&mut state, &hello, (&token, peer), busy.clone(), counts, (address, revision.clone()));
         busy
     };
     let (index, _) = index_of(root, &busy);
     in_session(&token, |_| {});
-    let sent = reply_json(
-        out,
-        &Welcome {
-            token: token.clone(),
-            proof: proof(&key, &hello.nonce, &me.id, "welcome"),
-            device: me,
-            index,
-            revision,
-            members,
-        },
-    );
+    let sent = reply_json(out, &Welcome { token: token.clone(), device: me, index, revision, members });
     if sent.is_err() {
         in_session(&token, |session| session.broken = Some(Instant::now()));
     }
@@ -1552,7 +1557,7 @@ fn welcome(out: &mut TcpStream, root: &Path, me: Device, hello: Hello, from: IpA
 fn open_session(
     state: &mut State,
     hello: &Hello,
-    token: &str,
+    (token, peer): (&str, &str),
     busy: HashSet<String>,
     (received, sent): (u32, u32),
     (address, mine): (String, String),
@@ -1568,6 +1573,7 @@ fn open_session(
     state.resumable = None;
     state.session = Some(Session {
         token: token.to_owned(),
+        peer: peer.to_owned(),
         device: hello.device.id.clone(),
         busy,
         name: hello.device.name.clone(),
@@ -1730,7 +1736,7 @@ pub(crate) fn round(busy: &HashSet<String>, force: bool) -> u32 {
         if !force && !device.revision.is_empty() && seen.mine == mine && seen.theirs == device.revision {
             continue;
         }
-        match sync_with(address, busy.clone(), &Progress::default(), true, force) {
+        match sync_with(address, &mate.id, busy.clone(), &Progress::default(), true, force) {
             Ok(_) => synced += 1,
             Err(code) => log::debug!("sync: with {}: {code}", mate.name),
         }
@@ -1766,11 +1772,13 @@ fn reach(id: &str, looked: &mut bool) -> Option<(SocketAddr, Device)> {
 
 pub(crate) fn sync_with(
     address: SocketAddr,
+    id: &str,
     busy: HashSet<String>,
     progress: &Progress,
     auto: bool,
     whole: bool,
 ) -> Result<Summary, &'static str> {
+    let (identity, key) = (identity()?, key_of(id)?);
     let (root, me) = {
         let mut state = state();
         if state.session.is_some() || state.starting {
@@ -1780,7 +1788,7 @@ pub(crate) fn sync_with(
         (state.root.clone(), state.me.clone())
     };
     let result = match root {
-        Some(root) => persist_with(address, &root, &me, &busy, progress, (auto, whole)),
+        Some(root) => persist_with((address, &key, &identity), &root, &me, &busy, progress, (auto, whole)),
         None => Err("sync_failed"),
     };
     progress.waiting.store(false, Ordering::Relaxed);
@@ -1789,7 +1797,7 @@ pub(crate) fn sync_with(
 }
 
 fn persist_with(
-    address: SocketAddr,
+    (address, key, identity): (SocketAddr, &str, &Identity),
     root: &Path,
     me: &Device,
     busy: &HashSet<String>,
@@ -1800,7 +1808,15 @@ fn persist_with(
     let mut lost: Option<Instant> = None;
     loop {
         let again = lost.is_some();
-        let code = match exchange(address, root, me.clone(), busy, progress, (again, auto, whole), &mut summary) {
+        let code = match exchange(
+            (address, key, identity),
+            root,
+            me.clone(),
+            busy,
+            progress,
+            (again, auto, whole),
+            &mut summary,
+        ) {
             Ok(()) => return Ok(summary),
             Err(code) => code,
         };
@@ -1839,8 +1855,10 @@ fn recoverable(code: &str) -> bool {
     matches!(code, "sync_interrupted" | "sync_unreachable")
 }
 
+/// Syncs with the device at `address` whose certificate has the fingerprint `key`, as the
+/// device `identity` is.
 fn exchange(
-    address: SocketAddr,
+    (address, key, identity): (SocketAddr, &str, &Identity),
     root: &Path,
     me: Device,
     busy: &HashSet<String>,
@@ -1848,16 +1866,11 @@ fn exchange(
     (resume, auto, whole): (bool, bool, bool),
     summary: &mut Summary,
 ) -> Result<(), &'static str> {
-    let base = format!("http://{address}/listenook");
+    let base = format!("https://{address}/listenook");
+    let agent = |read: Duration| identity.agent(Some(key), None, read);
     let circle = state().ledger.circle.clone().ok_or("sync_unpaired")?;
-    let challenge: Challenge =
-        agent(Duration::from_secs(10)).get(&format!("{base}/challenge")).call().map_err(code_of).and_then(
-            |response| serde_json::from_reader(response.into_reader().take(4096)).map_err(|_| "sync_failed"),
-        )?;
     let (local, revision) = index_of(root, busy);
     let hello = Hello {
-        proof: proof(&circle.key, &challenge.nonce, &me.id, "hello"),
-        nonce: challenge.nonce.clone(),
         device: me,
         catalog: local.catalog.clone(),
         resume,
@@ -1887,16 +1900,13 @@ fn exchange(
         }
         Err(error) => return Err(code_of(error)),
     };
-    if !same(&welcome.proof, &proof(&circle.key, &challenge.nonce, &welcome.device.id, "welcome")) {
-        return Err("sync_unpaired");
-    }
     {
         let mut state = state();
         let Some(mine) = state.ledger.circle.as_mut().filter(|mine| mine.id == circle.id) else {
             return Err("sync_unpaired");
         };
         merge_members(&mut mine.members, &welcome.members);
-        let trusted = mine.has(&welcome.device.id);
+        let trusted = mine.has(&welcome.device.id) && mine.holder(key) == Some(welcome.device.id.as_str());
         state.saw(&welcome.device.id, address, None);
         if !trusted {
             return Err("sync_unpaired");
@@ -2093,12 +2103,25 @@ mod tests {
         job
     }
 
-    fn paired(root: &Path, ids: &[&str]) -> Circle {
-        let members = ids
+    fn fingerprint_of(library: &Path) -> String {
+        Identity::of(library).unwrap().fingerprint.clone()
+    }
+
+    /// Pairs the devices in `root`'s ledger, each known by the key kept in its library.
+    fn paired(root: &Path, devices: &[(&str, &Path)]) -> Circle {
+        let members = devices
             .iter()
-            .map(|id| ((*id).to_owned(), Member { name: (*id).into(), joined_at: now_iso(), ..Member::default() }))
+            .map(|(id, library)| {
+                let member = Member {
+                    name: (*id).into(),
+                    joined_at: now_iso(),
+                    key: fingerprint_of(library),
+                    ..Member::default()
+                };
+                ((*id).to_owned(), member)
+            })
             .collect();
-        let circle = Circle { id: "circle".into(), key: digest(&["key"]), members };
+        let circle = Circle { id: "circle".into(), members };
         let ledger = Ledger { circle: Some(circle.clone()), ..Ledger::default() };
         fs::write(root.join("sync.json"), serde_json::to_vec(&ledger).unwrap()).unwrap();
         circle
@@ -2117,9 +2140,15 @@ mod tests {
         address
     }
 
+    /// Another device, with the key kept in `library`, that goes on only with the device whose
+    /// key is kept in `there` (with any device when `None`).
+    fn client(library: &Path, there: Option<&Path>) -> ureq::Agent {
+        Identity::of(library).unwrap().agent(there.map(fingerprint_of).as_deref(), None, Duration::from_secs(2))
+    }
+
     #[allow(clippy::result_large_err)]
-    fn post(url: &str, body: &impl Serialize) -> Result<ureq::Response, ureq::Error> {
-        agent(Duration::from_secs(2)).post(url).send_bytes(&serde_json::to_vec(body).unwrap())
+    fn post(agent: &ureq::Agent, url: &str, body: &impl Serialize) -> Result<ureq::Response, ureq::Error> {
+        agent.post(url).send_bytes(&serde_json::to_vec(body).unwrap())
     }
 
     fn json<T: serde::de::DeserializeOwned>(response: ureq::Response) -> T {
@@ -2128,6 +2157,56 @@ mod tests {
 
     fn asker() -> Device {
         Device { app: "listenook".into(), protocol: PROTOCOL, id: "device-here".into(), ..Device::default() }
+    }
+
+    fn shown_code() -> String {
+        take()
+            .1
+            .into_iter()
+            .find_map(|event| match event {
+                Event::Pairing { code, device, .. } if device.id == "device-here" => Some(code),
+                _ => None,
+            })
+            .expect("a code is shown")
+    }
+
+    /// Asks the device at `base` to pair as "device-here" with the key in `library`, and tries
+    /// `code`: what it answered, or why it refused.
+    fn try_code(base: &str, library: &Path, there: &str, code: &str) -> Result<PairDone, String> {
+        let here = Identity::of(library).unwrap();
+        let agent = here.agent(Some(there), None, Duration::from_secs(2));
+        let (pake, message) = Pake::start(code, ("device-here", &here.fingerprint), ("device-there", there), true);
+        let theirs = match post(&agent, &format!("{base}/pair/confirm"), &PairKey { id: "device-here".into(), message })
+        {
+            Ok(response) => json::<PairKey>(response),
+            Err(ureq::Error::Status(403, response)) => return Err(reason(response)),
+            Err(error) => panic!("{error}"),
+        };
+        let key = pake.finish(&theirs.message).expect("a key exchange message");
+        let finish = PairFinish { id: "device-here".into(), proof: pake_proof(&key, "asker"), circle: None };
+        match post(&agent, &format!("{base}/pair/finish"), &finish) {
+            Ok(response) => {
+                let done: PairDone = json(response);
+                assert!(same(&done.proof, &pake_proof(&key, "answerer")), "the device proves it knew the code");
+                Ok(done)
+            }
+            Err(ureq::Error::Status(403, response)) => Err(reason(response)),
+            Err(error) => panic!("{error}"),
+        }
+    }
+
+    /// Asks the device at `base` for a code, as "device-here" with the key in `library`: the
+    /// fingerprint of the certificate the device showed.
+    #[allow(clippy::result_large_err)]
+    fn ask_for_code(base: &str, library: &Path) -> Result<String, ureq::Error> {
+        let seen = Arc::new(Mutex::new(String::new()));
+        let agent = Identity::of(library).unwrap().agent(None, Some(seen.clone()), Duration::from_secs(2));
+        post(
+            &agent,
+            &format!("{base}/pair"),
+            &PairAsk { device: Device { name: "Here".into(), ..asker() }, circle: None },
+        )?;
+        Ok(seen.lock().unwrap().clone())
     }
 
     #[test]
@@ -2182,12 +2261,14 @@ mod tests {
             ..Default::default()
         };
         persist::save_listening(&here, &[heard]).unwrap();
-        paired(&there, &["device-there", "device-here"]);
+        paired(&there, &[("device-there", &there), ("device-here", &here)]);
         let address = started(&there, 47931);
 
         let progress = Progress::default();
         let mut summary = Summary::default();
-        exchange(address, &here, asker(), &HashSet::new(), &progress, (false, true, true), &mut summary).unwrap();
+        let (key, identity) = (fingerprint_of(&there), Identity::of(&here).unwrap());
+        let reached = (address, key.as_str(), &*identity);
+        exchange(reached, &here, asker(), &HashSet::new(), &progress, (false, true, true), &mut summary).unwrap();
         assert_eq!(summary, Summary { received: 2, sent: 2 });
         assert_eq!(progress.items.load(Ordering::Relaxed), 4);
 
@@ -2229,185 +2310,122 @@ mod tests {
         let seen = state().ledger.seen.get("device-here").cloned().unwrap_or_default();
         assert!(!seen.synced_at.is_empty() && !seen.mine.is_empty(), "when and what was synced is kept");
 
-        let refused = agent(Duration::from_secs(2)).get(&format!("http://{address}/listenook/manifest/both")).call();
+        let refused = client(&here, Some(&there)).get(&format!("https://{address}/listenook/manifest/both")).call();
         assert!(matches!(refused, Err(ureq::Error::Status(410, _))));
         configure(None, String::new(), String::new(), false);
         let _ = (fs::remove_dir_all(there), fs::remove_dir_all(here));
     }
 
     #[test]
-    fn a_device_without_the_circles_key_is_refused_and_copies_nothing() {
+    fn a_device_not_paired_is_refused_and_copies_nothing() {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let there = library("refusing");
+        let (there, here, stranger) = (library("refusing"), library("refusing-here"), library("stranger"));
         recording(&there, "kept", "2026-01-01T00:00:00.000Z", None);
-        paired(&there, &["device-there", "device-here"]);
+        paired(&there, &[("device-there", &there), ("device-here", &here)]);
         let address = started(&there, 47932);
-        let base = format!("http://{address}/listenook");
+        let base = format!("https://{address}/listenook");
         take();
-        let challenge: Challenge =
-            json(agent(Duration::from_secs(2)).get(&format!("{base}/challenge")).call().unwrap());
-        let hello = Hello {
-            device: asker(),
-            nonce: challenge.nonce.clone(),
-            proof: proof(&digest(&["another key"]), &challenge.nonce, "device-here", "hello"),
-            ..Hello::default()
-        };
-        let refused = post(&format!("{base}/sync"), &hello);
-        let Err(ureq::Error::Status(403, response)) = refused else {
-            panic!("a wrong key is refused");
+        let hello = Hello { device: asker(), ..Hello::default() };
+        let Err(ureq::Error::Status(403, response)) =
+            post(&client(&stranger, Some(&there)), &format!("{base}/sync"), &hello)
+        else {
+            panic!("a device with another key is refused");
         };
         assert_eq!(reason(response), "unpaired");
-        let replayed = Hello { proof: proof(&digest(&["key"]), &challenge.nonce, "device-here", "hello"), ..hello };
-        let again = post(&format!("{base}/sync"), &replayed);
-        assert!(matches!(again, Err(ureq::Error::Status(403, _))), "a challenge answers once");
+        let posing = Hello { device: Device { id: "device-there".into(), ..asker() }, ..Hello::default() };
+        let refused = post(&client(&here, Some(&there)), &format!("{base}/sync"), &posing);
+        assert!(matches!(refused, Err(ureq::Error::Status(403, _))), "a paired device cannot pass for another");
+        let elsewhere = post(&client(&here, Some(&stranger)), &format!("{base}/sync"), &hello);
+        assert!(
+            matches!(elsewhere, Err(ureq::Error::Transport(_))),
+            "a device with another certificate is not trusted"
+        );
         assert!(take().0.is_empty());
         assert!(state().ledger.circle.is_some(), "a refusal does not leave the circle");
         configure(None, String::new(), String::new(), false);
-        let _ = fs::remove_dir_all(there);
+        let _ = (fs::remove_dir_all(there), fs::remove_dir_all(here), fs::remove_dir_all(stranger));
     }
 
     #[test]
     fn the_code_shown_here_pairs_the_device_that_asked_and_a_wrong_one_does_not() {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let there = library("pairing");
+        let (there, here, relay) = (library("pairing"), library("pairing-here"), library("pairing-relay"));
         let address = started(&there, 47933);
-        let base = format!("http://{address}/listenook");
+        let base = format!("https://{address}/listenook");
         take();
-        let (private, public) = key_pair().unwrap();
-        let asker = Device { name: "Here".into(), ..asker() };
-        let asked = PairAsk { device: asker.clone(), nonce: "asker-nonce".into(), public, circle: None };
-        let answer: PairAnswer = json(post(&format!("{base}/pair"), &asked).unwrap());
-        let shared = agree(private, &answer.public).unwrap();
-        let code = take()
-            .1
-            .into_iter()
-            .find_map(|event| match event {
-                Event::Pairing { code, device, .. } if device.id == "device-here" => Some(code),
-                _ => None,
-            })
-            .expect("a code is shown");
+        let seen = ask_for_code(&base, &here).unwrap();
+        assert_eq!(seen, fingerprint_of(&there));
+        let code = shown_code();
         assert!(is_code(&code));
-        let secret_of =
-            |code: &str| pairing_secret(code, &shared, ("device-here", "asker-nonce"), ("device-there", &answer.nonce));
         let wrong = if code == "000000" { "111111" } else { "000000" };
-        let guess = PairConfirm {
-            id: "device-here".into(),
-            proof: proof(&secret_of(wrong), "", "device-here", "asker"),
-            circle: None,
-        };
-        let refused = post(&format!("{base}/pair/confirm"), &guess);
-        let Err(ureq::Error::Status(403, response)) = refused else {
-            panic!("a wrong code is refused");
-        };
-        assert_eq!(reason(response), "wrong");
+        assert_eq!(try_code(&base, &here, &seen, wrong).err().as_deref(), Some("wrong"));
         assert!(state().ledger.circle.is_none());
-
-        let secret = secret_of(&code);
-        let right =
-            PairConfirm { id: "device-here".into(), proof: proof(&secret, "", "device-here", "asker"), circle: None };
-        let done: PairDone = json(post(&format!("{base}/pair/confirm"), &right).unwrap());
-        assert!(
-            same(&done.proof, &proof(&secret, "", "device-there", "answerer")),
-            "the device proves it knew the code"
+        assert_eq!(
+            try_code(&base, &relay, &seen, &code).err().as_deref(),
+            Some("expired"),
+            "only the device that asked can finish, even with the code"
         );
-        let sealed = done.circle.expect("its circle comes sealed");
+
+        let done = try_code(&base, &here, &seen, &code).unwrap();
         let circle = state().ledger.circle.clone().expect("a circle was made");
-        assert_ne!(sealed.key, circle.key, "the key does not travel in the clear");
-        assert_eq!(seal(&sealed.key, &secret, "answerer circle").unwrap(), circle.key);
         assert!(circle.has("device-here") && circle.has("device-there"));
+        assert_eq!(circle.members["device-here"].key, fingerprint_of(&here), "known by its certificate");
+        assert_eq!(done.circle.members["device-there"].key, fingerprint_of(&there));
         let told =
             take().1.into_iter().any(|event| matches!(event, Event::Paired { name: Some(name), .. } if name == "Here"));
         assert!(told && is_mate("device-here"), "the pairing is told and remembered");
         let saved: Ledger = serde_json::from_slice(&fs::read(there.join("sync.json")).unwrap()).unwrap();
-        assert_eq!(saved.circle.map(|circle| circle.key), Some(circle.key));
+        assert_eq!(saved.circle, Some(circle));
         configure(None, String::new(), String::new(), false);
-        let _ = fs::remove_dir_all(there);
+        let _ = (fs::remove_dir_all(there), fs::remove_dir_all(here), fs::remove_dir_all(relay));
     }
 
     #[test]
     fn asking_again_for_a_code_gives_no_new_guesses_at_it() {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let there = library("pairing-guesses");
+        let (there, here) = (library("pairing-guesses"), library("pairing-guesses-here"));
         let address = started(&there, 47935);
-        let base = format!("http://{address}/listenook");
+        let base = format!("https://{address}/listenook");
         take();
-        let asked = || {
-            let (private, public) = key_pair().unwrap();
-            let asked = PairAsk { device: asker(), nonce: "asker-nonce".into(), public, circle: None };
-            let answer: PairAnswer = json(post(&format!("{base}/pair"), &asked).unwrap());
-            let shared = agree(private, &answer.public).unwrap();
-            let code = take()
-                .1
-                .into_iter()
-                .find_map(|event| match event {
-                    Event::Pairing { code, .. } => Some(code),
-                    _ => None,
-                })
-                .expect("a code is shown");
-            (shared, answer.nonce, code)
-        };
-        let guess = |(shared, nonce, code): &(String, String, String), right: bool| {
-            let code = match (right, code.as_str()) {
-                (true, _) => code.clone(),
-                (false, "000000") => "111111".into(),
-                (false, _) => "000000".into(),
-            };
-            let secret = pairing_secret(&code, shared, ("device-here", "asker-nonce"), ("device-there", nonce));
-            let confirm = PairConfirm {
-                id: "device-here".into(),
-                proof: proof(&secret, "", "device-here", "asker"),
-                circle: None,
-            };
-            match post(&format!("{base}/pair/confirm"), &confirm) {
-                Ok(_) => "paired".to_owned(),
-                Err(ureq::Error::Status(403, response)) => reason(response),
-                Err(error) => panic!("{error}"),
-            }
-        };
+        let wrong = |code: &str| if code == "000000" { "111111" } else { "000000" }.to_owned();
 
-        let first = asked();
-        assert_eq!(guess(&first, false), "wrong");
-        assert_eq!(guess(&first, false), "wrong");
-        let again = asked();
-        assert_eq!(guess(&again, false), "wait", "a new code does not start the guesses again");
-        assert_eq!(guess(&again, true), "expired", "the code that was shown is spent");
-        let (_, public) = key_pair().unwrap();
-        let asking = PairAsk { device: asker(), nonce: "asker-nonce".into(), public, circle: None };
-        let refused = post(&format!("{base}/pair"), &asking);
+        let seen = ask_for_code(&base, &here).unwrap();
+        let first = shown_code();
+        assert_eq!(try_code(&base, &here, &seen, &wrong(&first)).err().as_deref(), Some("wrong"));
+        assert_eq!(try_code(&base, &here, &seen, &wrong(&first)).err().as_deref(), Some("wrong"));
+        ask_for_code(&base, &here).unwrap();
+        let again = shown_code();
+        let third = try_code(&base, &here, &seen, &wrong(&again)).err();
+        assert_eq!(third.as_deref(), Some("wait"), "a new code does not start the guesses again");
+        assert_eq!(try_code(&base, &here, &seen, &again).err().as_deref(), Some("expired"), "the code shown is spent");
+        let refused = ask_for_code(&base, &here);
         assert!(matches!(refused, Err(ureq::Error::Status(429, _))), "no code is shown while pairing waits");
         assert!(state().ledger.circle.is_none());
 
         state().misses = Misses::default();
         configure(None, String::new(), String::new(), false);
-        let _ = fs::remove_dir_all(there);
+        let _ = (fs::remove_dir_all(there), fs::remove_dir_all(here));
     }
 
     #[test]
     fn a_device_that_leaves_is_forgotten_by_the_others() {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let there = library("leaving");
-        let circle = paired(&there, &["device-there", "device-here"]);
+        let (there, here, stranger) = (library("leaving"), library("leaving-here"), library("leaving-stranger"));
+        paired(&there, &[("device-there", &there), ("device-here", &here)]);
         let address = started(&there, 47934);
-        let base = format!("http://{address}/listenook");
+        let base = format!("https://{address}/listenook");
         assert!(is_mate("device-here"));
-        let nonce =
-            || json::<Challenge>(agent(Duration::from_secs(2)).get(&format!("{base}/challenge")).call().unwrap()).nonce;
-        let forged = nonce();
-        let forged = Leaving {
-            proof: proof(&digest(&["other"]), &forged, "device-here", "leave"),
-            id: "device-here".into(),
-            nonce: forged,
-        };
-        assert!(matches!(post(&format!("{base}/leave"), &forged), Err(ureq::Error::Status(403, _))));
+        let forged = client(&stranger, Some(&there)).post(&format!("{base}/leave")).send_bytes(b"{}");
+        assert!(matches!(forged, Err(ureq::Error::Status(403, _))));
         assert!(is_mate("device-here"), "only a device of the circle can say it leaves");
-        let nonce = nonce();
-        let leaving =
-            Leaving { proof: proof(&circle.key, &nonce, "device-here", "leave"), id: "device-here".into(), nonce };
-        post(&format!("{base}/leave"), &leaving).unwrap();
+        client(&here, Some(&there)).post(&format!("{base}/leave")).send_bytes(b"{}").unwrap();
         assert!(!is_mate("device-here"));
         assert!(mates().is_empty());
+        let back =
+            post(&client(&here, Some(&there)), &format!("{base}/sync"), &Hello { device: asker(), ..Hello::default() });
+        assert!(matches!(back, Err(ureq::Error::Status(403, _))), "a device that left cannot sync again");
         configure(None, String::new(), String::new(), false);
-        let _ = fs::remove_dir_all(there);
+        let _ = (fs::remove_dir_all(there), fs::remove_dir_all(here), fs::remove_dir_all(stranger));
     }
 
     #[test]

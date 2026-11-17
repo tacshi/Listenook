@@ -150,6 +150,12 @@ impl ActivityState {
         }
     }
 
+    /// Writes the time counted so far now, and tells Sync: the app is going to the background,
+    /// where the system may end it, or quitting.
+    pub(crate) fn flush(&self) {
+        self.settle(Instant::now(), true);
+    }
+
     /// Once a second, from the shell.
     pub(crate) fn tick(&self) {
         let now = Instant::now();

@@ -9,7 +9,9 @@ use crate::{
     podcast::{Catalog, Feed, Followed, ListenProgress},
 };
 
-pub const PROTOCOL: u32 = 2;
+/// 3: sync runs over TLS between devices that know each other's certificate, and pairing
+/// checks the code with SPAKE2.
+pub const PROTOCOL: u32 = 3;
 pub const CODE_LENGTH: usize = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -245,11 +247,26 @@ pub struct Member {
     pub joined_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removed_at: Option<String>,
+    /// The fingerprint of the device's certificate: the device is the one that holds its key.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub key: String,
 }
 
 impl Member {
     pub fn is_in(&self) -> bool {
         self.removed_at.as_deref().is_none_or(|at| later(&self.joined_at, at))
+    }
+
+    /// Takes the device out from now. The time is after the one it joined at even when that came
+    /// from a device whose clock runs ahead, so the removal is never older than the joining.
+    pub fn remove(&mut self) {
+        let now = millis(&crate::models::now_iso());
+        let at = now.max(millis(&self.joined_at).saturating_add(1));
+        self.removed_at = Some(
+            chrono::DateTime::from_timestamp_millis(at)
+                .map(|at| at.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+                .unwrap_or_else(crate::models::now_iso),
+        );
     }
 
     fn changed_at(&self) -> i64 {
@@ -275,13 +292,23 @@ pub fn merge_members(mine: &mut Members, theirs: &Members) -> bool {
 #[serde(default)]
 pub struct Circle {
     pub id: String,
-    pub key: String,
     pub members: Members,
 }
 
 impl Circle {
     pub fn has(&self, id: &str) -> bool {
         self.members.get(id).is_some_and(Member::is_in)
+    }
+
+    /// The id of the device in the circle that holds the certificate with this fingerprint.
+    pub fn holder(&self, key: &str) -> Option<&str> {
+        self.members.iter().find(|(_, member)| !key.is_empty() && member.key == key).map(|(id, _)| id.as_str())
+    }
+
+    /// Whether every device was paired with a certificate. Circles made before sync ran over TLS
+    /// were not, and have to be paired again.
+    pub fn is_keyed(&self) -> bool {
+        self.members.values().all(|member| !member.key.is_empty())
     }
 
     pub fn size(&self) -> usize {
@@ -332,18 +359,41 @@ pub fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |differ, (x, y)| differ | (x ^ y)) == 0
 }
 
-pub fn seal(key: &str, secret: &str, label: &str) -> Option<String> {
-    let key = unhex(key)?;
-    let pad = unhex(&digest(&[secret, label]))?;
-    (key.len() == pad.len()).then(|| hex(&key.iter().zip(&pad).map(|(a, b)| a ^ b).collect::<Vec<_>>()))
+/// One side of checking a pairing code with SPAKE2: both devices turn the code into a shared
+/// key without sending it, and someone who watches or relays the exchange learns nothing that
+/// lets them try codes on their own; each try takes a round with a device, which counts it.
+/// Each side names both devices by id and by the fingerprint of the certificate it saw, so a
+/// relay in the middle (which shows each side its own certificate) makes the keys differ.
+pub struct Pake(spake2::Spake2<spake2::Ed25519Group>);
+
+impl Pake {
+    /// Starts the asker's side (`asking`) or the answerer's: the message to send the other side.
+    pub fn start(code: &str, asker: (&str, &str), answerer: (&str, &str), asking: bool) -> (Pake, String) {
+        let password = spake2::Password::new(code.as_bytes());
+        let name = |(id, key): (&str, &str)| spake2::Identity::new(format!("{id}|{key}").as_bytes());
+        let (asker, answerer) = (name(asker), name(answerer));
+        let (state, message) = if asking {
+            spake2::Spake2::<spake2::Ed25519Group>::start_a(&password, &asker, &answerer)
+        } else {
+            spake2::Spake2::<spake2::Ed25519Group>::start_b(&password, &asker, &answerer)
+        };
+        (Pake(state), hex(&message))
+    }
+
+    /// The shared key, from the other side's message; `None` when it is not a message.
+    pub fn finish(self, theirs: &str) -> Option<Vec<u8>> {
+        self.0.finish(&unhex(theirs)?).ok()
+    }
 }
 
-pub fn pairing_secret(code: &str, shared: &str, asker: (&str, &str), answerer: (&str, &str)) -> String {
-    digest(&["listenook pairing", code, shared, asker.0, asker.1, answerer.0, answerer.1])
-}
-
-pub fn proof(key: &str, nonce: &str, device: &str, role: &str) -> String {
-    digest(&[key, nonce, device, role])
+/// What a device sends to show it holds the pairing key: the other side checks it, and a wrong
+/// one means a wrong code.
+pub fn pake_proof(key: &[u8], role: &str) -> String {
+    use hmac::Mac;
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key).expect("HMAC takes a key of any length");
+    mac.update(b"listenook pairing ");
+    mac.update(role.as_bytes());
+    hex(&mac.finalize().into_bytes())
 }
 
 pub fn is_code(text: &str) -> bool {
@@ -704,18 +754,44 @@ mod tests {
     }
 
     #[test]
-    fn a_sealed_key_opens_only_with_the_same_secret() {
+    fn the_same_code_and_certificates_give_both_sides_one_key() {
+        let (asker, answerer) = (("a", "key-a"), ("b", "key-b"));
+        let pair = |asker_code: &str, answerer_code: &str, seen: (&str, &str)| {
+            let (mine, sent) = Pake::start(asker_code, asker, seen, true);
+            let (theirs, answered) = Pake::start(answerer_code, asker, answerer, false);
+            (mine.finish(&answered).unwrap(), theirs.finish(&sent).unwrap())
+        };
+        let (here, there) = pair("123456", "123456", answerer);
+        assert_eq!(here, there);
+        assert_eq!(pake_proof(&here, "asker"), pake_proof(&there, "asker"));
+        assert_ne!(pake_proof(&here, "asker"), pake_proof(&here, "answerer"));
+        let (here, there) = pair("123457", "123456", answerer);
+        assert_ne!(pake_proof(&here, "asker"), pake_proof(&there, "asker"), "another code");
+        let (here, there) = pair("123456", "123456", ("b", "key-of-a-relay"));
+        assert_ne!(here, there, "a certificate other than the device's");
+        assert!(Pake::start("123456", asker, answerer, true).0.finish("not hex").is_none());
         let key = digest(&["key"]);
-        let sealed = seal(&key, "secret", "asker").unwrap();
-        assert_ne!(sealed, key);
-        assert_eq!(seal(&sealed, "secret", "asker").unwrap(), key);
-        assert_ne!(seal(&sealed, "other", "asker").unwrap(), key);
-        assert_eq!(seal("not hex", "secret", "asker"), None);
-        assert!(same(&key, &key.clone()) && !same(&key, &sealed) && !same("ab", "abc"));
+        assert!(same(&key, &key.clone()) && !same(&key, &digest(&["other"])) && !same("ab", "abc"));
         assert!(is_code("012345") && !is_code("12345") && !is_code("12345a"));
-        let secret = pairing_secret("123456", "shared", ("a", "1"), ("b", "2"));
-        assert_ne!(secret, pairing_secret("123457", "shared", ("a", "1"), ("b", "2")));
         assert_ne!(digest(&["ab", "c"]), digest(&["a", "bc"]));
+    }
+
+    #[test]
+    fn a_removal_is_never_older_than_the_joining_it_ends() {
+        let mut ahead = member("2999-01-01T00:00:00.000Z", None);
+        ahead.remove();
+        assert!(!ahead.is_in(), "a device whose clock ran ahead is still taken out");
+        let mut now = member(EARLY, None);
+        now.remove();
+        assert!(!now.is_in());
+        let circle = Circle {
+            id: "c".into(),
+            members: Members::from([("a".to_owned(), Member { key: "fa".into(), ..member(EARLY, None) })]),
+        };
+        assert_eq!(circle.holder("fa"), Some("a"));
+        assert_eq!(circle.holder(""), None);
+        assert!(circle.is_keyed());
+        assert!(!Circle { members: Members::from([("b".to_owned(), member(EARLY, None))]), ..circle }.is_keyed());
     }
 
     #[test]
