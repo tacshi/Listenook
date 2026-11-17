@@ -604,6 +604,7 @@ const ZH: &[(&str, &str)] = &[
     ("Edit current sentence", "编辑当前句子"),
     ("Maximize", "最大化"),
     ("More actions", "更多操作"),
+    ("More sentence actions", "更多句子操作"),
     ("Nothing is waiting or being transcribed.", "没有等待或正在转写的录音。"),
     (
         "No recordings in this group. Add one with Group… in its menu.",

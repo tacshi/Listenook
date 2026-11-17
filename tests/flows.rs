@@ -497,13 +497,14 @@ fn saving_an_emptied_sentence_deletes_it() {
 }
 
 #[test]
-fn the_delete_button_removes_a_sentence_and_the_undo_key_brings_it_back() {
+fn deleting_a_sentence_from_the_editor_can_be_undone() {
     let mut it = open_sample("delete-button");
     it.app.press("role:button[Bilingual]").unwrap();
     it.app.press("Original").unwrap();
     it.app.press("label:Edit >> nth=1").unwrap();
     it.app.wait_for("role:button[Save]").unwrap();
-    it.app.press("label:Delete sentence").unwrap();
+    it.app.press("label:More sentence actions").unwrap();
+    it.app.press("Delete sentence").unwrap();
     it.app.wait_for_gone("Today we are talking about how people learn languages.", GONE).unwrap();
     it.app.wait_for("Sentence deleted").unwrap();
     it.app.press_key("mod+z").unwrap();
@@ -519,7 +520,8 @@ fn a_skipped_sentence_folds_away_and_comes_back() {
     it.app.press("Original").unwrap();
     it.app.press("label:Edit >> nth=1").unwrap();
     it.app.wait_for("role:button[Save]").unwrap();
-    it.app.press("label:Skip this sentence").unwrap();
+    it.app.press("label:More sentence actions").unwrap();
+    it.app.press("Skip this sentence").unwrap();
     it.app.wait_for_gone("Today we are talking about how people learn languages.", GONE).unwrap();
     it.app.wait_for("Skipped · 00:02").unwrap();
     let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
@@ -1647,4 +1649,38 @@ fn a_downloaded_episode_keeps_its_show_on_home() {
     it.app.wait_for("Continue").unwrap();
     assert!(it.app.shows("00:06 · All Ears English Podcast"));
     assert!(it.app.shows("2026-11-10 · All Ears English Podcast"));
+}
+
+#[test]
+fn the_editor_actions_sit_on_one_row_with_the_rest_in_a_menu() {
+    let mut it = start(
+        "editor-actions",
+        |root| {
+            seed_transcript(root);
+            llm(root, "");
+        },
+        Vec::new(),
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.wait_for("role:button[Save]").unwrap();
+    let screen = it.app.screen();
+    let nodes = screen.layout_nodes();
+    let bounds = |selector: &str| {
+        let id = screen.press_target(selector).unwrap().unwrap();
+        nodes.iter().find(|node| node.id == id).unwrap().bounds
+    };
+    let split = bounds("role:button[Split at cursor]");
+    let more = bounds("label:More sentence actions");
+    let save = bounds("role:button[Save]");
+    let middle = |b: &nsh_core::Bounds<nsh_core::Points>| b.origin.y + b.size.height * 0.5;
+    assert_eq!(middle(&split), middle(&save), "Split {split:?} and Save {save:?} share a row");
+    assert!(split.origin.x < more.origin.x && more.origin.x < save.origin.x, "Split, More, then Save");
+    assert!(!it.app.shows("Translate again"), "it waits in the menu");
+    it.app.press("label:More sentence actions").unwrap();
+    it.app.wait_for("Translate again").unwrap();
+    assert!(it.app.shows("Skip from here…"));
+    assert!(it.app.shows("Delete sentence"));
 }

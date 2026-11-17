@@ -615,6 +615,13 @@ fn editor(review: Review) -> impl IntoElement {
     let editing = move || review.editing.get_untracked();
     let original = move || review.editing.with(|e| e.as_ref().is_some_and(|e| e.original));
     let translation = move || review.editing.with(|e| e.as_ref().is_some_and(|e| e.translation));
+    let can_retranslate = move || {
+        translation()
+            && !review.job.with(|job| {
+                job.as_ref().is_some_and(|job| job.translation_state.status == listenook_core::TranslationStatus::Translating)
+            })
+            && store.setting(|s| s.llm_provider_settings.validate().is_none())
+    };
     view()
         .gap_2()
         .child(when(original, move || {
@@ -633,13 +640,12 @@ fn editor(review: Review) -> impl IntoElement {
             view()
                 .flex_row()
                 .flex_wrap()
+                .items_center()
                 .gap_2()
-                .child(button(Variant::Outline, Size::Sm, l("Cancel")).on_press(move || review.editing.set(None)))
-                .child(button(Variant::Primary, Size::Sm, l("Save")).on_press(move || review.save_edit()))
                 .child(when(original, move || {
                     view()
                         .flex_row()
-                        .gap_2()
+                        .gap_1()
                         .child(
                             button(Variant::Ghost, Size::Sm, l("Split at cursor"))
                                 .on_press(move || review.split_editing()),
@@ -651,49 +657,51 @@ fn editor(review: Review) -> impl IntoElement {
                         )
                 }))
                 .child(when(
+                    move || original() || can_retranslate(),
                     move || {
-                        translation()
-                            && !review.job.with(|job| {
-                                job.as_ref().is_some_and(|job| {
-                                    job.translation_state.status == listenook_core::TranslationStatus::Translating
+                        let open = signal(false);
+                        ui::menu_with(open, ui::menu_trigger(Icon::More, tr("More sentence actions"), Size::Sm, open))
+                            .child(when(can_retranslate, move || {
+                                ui::menu_action(Icon::Languages, l("Translate again"), move || {
+                                    if let Some(Editing { segment_id, .. }) = editing() {
+                                        let target = store
+                                            .job_now(&review.id())
+                                            .map(|job| job.translation_state.target_language.clone());
+                                        let target = target.filter(|t| !t.is_empty()).unwrap_or_else(|| "en".into());
+                                        llm::start_translation(&review.id(), &target, Some(vec![segment_id]));
+                                        review.editing.set(None);
+                                    }
                                 })
-                            })
-                            && store.setting(|s| s.llm_provider_settings.validate().is_none())
-                    },
-                    move || {
-                        button(Variant::Ghost, Size::Sm, l("Translate again")).on_press(move || {
-                            if let Some(Editing { segment_id, .. }) = editing() {
-                                let target = store
-                                    .job_now(&review.id())
-                                    .map(|job| job.translation_state.target_language.clone());
-                                let target = target.filter(|t| !t.is_empty()).unwrap_or_else(|| "en".into());
-                                llm::start_translation(&review.id(), &target, Some(vec![segment_id]));
-                                review.editing.set(None);
-                            }
-                        })
+                            }))
+                            .child(when(move || original() && can_retranslate(), ui::menu_divider))
+                            .child(when(original, move || {
+                                ui::menu_action(Icon::Scissors, l("Skip this sentence"), move || review.skip_editing())
+                            }))
+                            .child(when(original, move || {
+                                ui::menu_action(Icon::Scissors, l("Skip from here…"), move || {
+                                    review.skip_editing_onward()
+                                })
+                            }))
+                            .child(when(original, ui::menu_divider))
+                            .child(when(original, move || {
+                                ui::menu_danger(Icon::Trash, l("Delete sentence"), move || review.delete_editing())
+                            }))
                     },
                 ))
-                .child(when(original, move || {
+                // Grows from its own width, so on a narrow screen Cancel and Save wrap
+                // together to the right of a line of their own rather than squeezing.
+                .child(
                     view()
-                        .flex_1()
+                        .flex_grow(1.0)
+                        .flex_shrink_0()
                         .flex_row()
                         .justify_end()
                         .gap_2()
                         .child(
-                            button(Variant::Ghost, Size::Sm, l("Skip from here…"))
-                                .on_press(move || review.skip_editing_onward()),
+                            button(Variant::Outline, Size::Sm, l("Cancel")).on_press(move || review.editing.set(None)),
                         )
-                        .child(ui::icon_button(Icon::Scissors, tr("Skip this sentence"), Size::Sm, move || {
-                            review.skip_editing()
-                        }))
-                        .child(ui::icon_button_as(
-                            Variant::Danger,
-                            Icon::Trash,
-                            tr("Delete sentence"),
-                            Size::Sm,
-                            move || review.delete_editing(),
-                        ))
-                })),
+                        .child(button(Variant::Primary, Size::Sm, l("Save")).on_press(move || review.save_edit())),
+                ),
         )
 }
 
