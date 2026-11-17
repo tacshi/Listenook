@@ -823,7 +823,7 @@ impl Store {
         for job in members {
             self.update_job(&job, |job| job.group_id = None);
         }
-        self.change_catalog(|catalog| catalog.groups.retain(|g| g.id != id));
+        self.change_catalog(|catalog| catalog.remove(id));
         if self.filter.get_untracked() == Filter::Group(id.to_owned()) {
             self.filter.set(Filter::All);
         }
@@ -867,7 +867,7 @@ impl Store {
         for job in tagged {
             self.update_job(&job, |job| job.tag_ids.retain(|tag| tag != id));
         }
-        self.change_catalog(|catalog| catalog.tags.retain(|t| t.id != id));
+        self.change_catalog(|catalog| catalog.remove(id));
         if self.filter.get_untracked() == Filter::Tag(id.to_owned()) {
             self.filter.set(Filter::All);
         }
@@ -1070,6 +1070,13 @@ impl Store {
         let mut merged = self.catalog.get_untracked();
         let map = listenook_core::sync::merge_catalog(&mut merged, theirs);
         if merged != self.catalog.get_untracked() {
+            let shown = match self.filter.get_untracked() {
+                Filter::Group(id) | Filter::Tag(id) => Some(id),
+                _ => None,
+            };
+            if shown.is_some_and(|id| merged.removed.contains_key(&id)) {
+                self.filter.set(Filter::All);
+            }
             self.change_catalog(|catalog| *catalog = merged);
         }
         map
@@ -1084,7 +1091,7 @@ impl Store {
             return;
         }
         let mut job = recovered(job);
-        listenook_core::sync::rehome(&mut job, map);
+        self.catalog.with_untracked(|catalog| listenook_core::sync::rehome(&mut job, map, &catalog.removed));
         let name = job.file_name();
         let brought = root.join("media").join(listenook_core::sync::media_file_name(&job.id, &job.file_name()));
         // The plan was made when the sync started; an edit made here since then is newer than

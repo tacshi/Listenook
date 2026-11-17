@@ -837,11 +837,24 @@ pub struct LibraryCatalog {
     pub version: u32,
     pub groups: Vec<Named>,
     pub tags: Vec<Named>,
+    /// Groups and tags deleted here or on a paired device, by id, with when: sync never brings
+    /// them back. A new group or tag gets a new id, so a name can be used again.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub removed: BTreeMap<String, String>,
 }
 
 impl Default for LibraryCatalog {
     fn default() -> Self {
-        Self { version: 1, groups: Vec::new(), tags: Vec::new() }
+        Self { version: 1, groups: Vec::new(), tags: Vec::new(), removed: BTreeMap::new() }
+    }
+}
+
+impl LibraryCatalog {
+    /// Deletes a group or tag here and remembers it so sync deletes it on the other devices.
+    pub fn remove(&mut self, id: &str) {
+        self.groups.retain(|group| group.id != id);
+        self.tags.retain(|tag| tag.id != id);
+        self.removed.entry(id.to_owned()).or_insert_with(now_iso);
     }
 }
 
