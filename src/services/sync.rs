@@ -110,6 +110,16 @@ pub(crate) struct Progress {
     pub(crate) bytes_total: AtomicU64,
     pub(crate) stop: AtomicBool,
     pub(crate) waiting: AtomicBool,
+    /// The set-up of sync (`State::turn`) the sync started under.
+    turn: AtomicU64,
+}
+
+impl Progress {
+    /// Whether the sync is to stop: it was cancelled, or sync was set up again since it started
+    /// (turned off and on, another library), and it is no longer this set-up's to finish.
+    fn halted(&self) -> bool {
+        self.stop.load(Ordering::Relaxed) || state().turn != self.turn.load(Ordering::Relaxed)
+    }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
@@ -205,7 +215,9 @@ struct State {
     session: Option<Session>,
     resumable: Option<Resumable>,
     stopped: Option<String>,
-    starting: bool,
+    /// The sync this device started that is running, by its number; the next number.
+    starting: Option<u64>,
+    starts: u64,
     serial: u64,
     incoming: Vec<Incoming>,
     events: Vec<Event>,
@@ -446,6 +458,7 @@ pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible
     state.pairing = None;
     state.asking = None;
     state.session = None;
+    state.starting = None;
     let turn = state.turn;
     drop(state);
     if was_visible {
@@ -1528,7 +1541,7 @@ fn welcome(out: &mut Wire, root: &Path, me: Device, hello: Hello, from: IpAddr, 
             end_session(&mut state, false, true);
         }
         let same_device = state.session.as_ref().is_some_and(|session| session.device == id);
-        if state.starting || (state.session.is_some() && !same_device) {
+        if state.starting.is_some() || (state.session.is_some() && !same_device) {
             drop(state);
             return reply(out, 409, b"{}");
         }
@@ -1716,10 +1729,10 @@ fn code_of(error: ureq::Error) -> &'static str {
 }
 
 pub(crate) fn round(busy: &HashSet<String>, force: bool) -> u32 {
-    let root = {
+    let (root, turn) = {
         let state = state();
         match &state.root {
-            Some(root) if state.visible && state.ledger.circle.is_some() => root.clone(),
+            Some(root) if state.visible && state.ledger.circle.is_some() => (root.clone(), state.turn),
             _ => return 0,
         }
     };
@@ -1728,9 +1741,14 @@ pub(crate) fn round(busy: &HashSet<String>, force: bool) -> u32 {
     let mut looked = false;
     let mut synced = 0;
     for mate in mates {
-        let Some((address, device)) = reach(&mate.id, &mut looked) else {
+        // A round belongs to the library and devices it started with: once sync is set up
+        // again (turned off and on, another library), it stops rather than go on with theirs.
+        let Some((address, device)) = reach(&mate.id, &mut looked, turn) else {
             continue;
         };
+        if state().turn != turn {
+            break;
+        }
         let seen = state().ledger.seen.get(&mate.id).cloned().unwrap_or_default();
         let (_, mine) = library(&root);
         if !force && !device.revision.is_empty() && seen.mine == mine && seen.theirs == device.revision {
@@ -1744,10 +1762,13 @@ pub(crate) fn round(busy: &HashSet<String>, force: bool) -> u32 {
     synced
 }
 
-fn reach(id: &str, looked: &mut bool) -> Option<(SocketAddr, Device)> {
+fn reach(id: &str, looked: &mut bool, turn: u64) -> Option<(SocketAddr, Device)> {
     loop {
         let places: Vec<SocketAddr> = {
             let state = state();
+            if state.turn != turn {
+                return None;
+            }
             let mut places: Vec<SocketAddr> = state.peers.get(id).map(|(peer, _)| peer.address).into_iter().collect();
             if let Some(known) = state.ledger.seen.get(id).and_then(|seen| seen.address.parse().ok())
                 && !places.contains(&known)
@@ -1779,20 +1800,28 @@ pub(crate) fn sync_with(
     whole: bool,
 ) -> Result<Summary, &'static str> {
     let (identity, key) = (identity()?, key_of(id)?);
-    let (root, me) = {
+    let (root, me, mine) = {
         let mut state = state();
-        if state.session.is_some() || state.starting {
+        if state.session.is_some() || state.starting.is_some() {
             return Err("sync_peer_busy");
         }
-        state.starting = true;
-        (state.root.clone(), state.me.clone())
+        state.starts += 1;
+        let mine = state.starts;
+        state.starting = Some(mine);
+        progress.turn.store(state.turn, Ordering::Relaxed);
+        (state.root.clone(), state.me.clone(), mine)
     };
     let result = match root {
         Some(root) => persist_with((address, &key, &identity), &root, &me, &busy, progress, (auto, whole)),
         None => Err("sync_failed"),
     };
     progress.waiting.store(false, Ordering::Relaxed);
-    state().starting = false;
+    // Only this sync's own mark: once sync was set up again, another may be running.
+    let mut state = state();
+    if state.starting == Some(mine) {
+        state.starting = None;
+    }
+    drop(state);
     result
 }
 
@@ -1820,7 +1849,7 @@ fn persist_with(
             Ok(()) => return Ok(summary),
             Err(code) => code,
         };
-        let stopped = || progress.stop.load(Ordering::Relaxed);
+        let stopped = || progress.halted();
         let worth = recoverable(code) || (again && code == "sync_peer_busy");
         if auto || stopped() || !worth || !progress.accepted.load(Ordering::Relaxed) {
             return Err(code);
@@ -1912,7 +1941,7 @@ fn exchange(
             return Err("sync_unpaired");
         }
     }
-    if progress.stop.load(Ordering::Relaxed) {
+    if progress.halted() {
         return Err("sync_cancelled");
     }
     progress.accepted.store(true, Ordering::Relaxed);
@@ -1952,7 +1981,7 @@ fn exchange(
     };
     let moved = |count: u64| {
         progress.bytes.fetch_add(count, Ordering::Relaxed);
-        !progress.stop.load(Ordering::Relaxed)
+        !progress.halted()
     };
     let failed = |error: ureq::Error| match error {
         ureq::Error::Status(403, _) => "sync_cancelled_there",
@@ -1960,7 +1989,7 @@ fn exchange(
         other => code_of(other),
     };
     let stopped = |_: io::Error| {
-        if progress.stop.load(Ordering::Relaxed) { "sync_cancelled" } else { "sync_interrupted" }
+        if progress.halted() { "sync_cancelled" } else { "sync_interrupted" }
     };
     let pull = |transfer: &Transfer| -> Result<(), &'static str> {
         let id = &transfer.id;
@@ -2016,9 +2045,10 @@ fn exchange(
             if have > 0 {
                 request = request.set("X-Listenook-Offset", &have.to_string());
             }
-            request.set("Content-Length", &(length - have).to_string()).send(&mut counted).map_err(|error| {
-                if progress.stop.load(Ordering::Relaxed) { "sync_cancelled" } else { failed(error) }
-            })?;
+            request
+                .set("Content-Length", &(length - have).to_string())
+                .send(&mut counted)
+                .map_err(|error| if progress.halted() { "sync_cancelled" } else { failed(error) })?;
         }
         if transfer.manifest {
             let manifest = fs::read(manifest_path(root, id)).map_err(|_| "sync_failed")?;
@@ -2029,7 +2059,7 @@ fn exchange(
 
     let mut outcome = Ok(());
     for (transfer, pulling) in plan.pull.iter().map(|t| (t, true)).chain(plan.push.iter().map(|t| (t, false))) {
-        if progress.stop.load(Ordering::Relaxed) {
+        if progress.halted() {
             outcome = Err("sync_cancelled");
             break;
         }
@@ -2044,7 +2074,7 @@ fn exchange(
         }
         progress.items.fetch_add(1, Ordering::Relaxed);
     }
-    if matches!(outcome, Err(code) if recoverable(code)) && !progress.stop.load(Ordering::Relaxed) {
+    if matches!(outcome, Err(code) if recoverable(code)) && !progress.halted() {
         return outcome;
     }
     let told = call(agent(Duration::from_secs(5)).post(&format!("{base}/done")))
@@ -2265,6 +2295,7 @@ mod tests {
         let address = started(&there, 47931);
 
         let progress = Progress::default();
+        progress.turn.store(state().turn, Ordering::Relaxed);
         let mut summary = Summary::default();
         let (key, identity) = (fingerprint_of(&there), Identity::of(&here).unwrap());
         let reached = (address, key.as_str(), &*identity);
@@ -2426,6 +2457,21 @@ mod tests {
         assert!(matches!(back, Err(ureq::Error::Status(403, _))), "a device that left cannot sync again");
         configure(None, String::new(), String::new(), false);
         let _ = (fs::remove_dir_all(there), fs::remove_dir_all(here), fs::remove_dir_all(stranger));
+    }
+
+    #[test]
+    fn a_sync_stops_once_sync_is_set_up_again_and_leaves_the_next_one_alone() {
+        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = library("set-up-again");
+        started(&root, 47936);
+        let progress = Progress::default();
+        progress.turn.store(state().turn, Ordering::Relaxed);
+        state().starting = Some(1);
+        assert!(!progress.halted(), "a sync of this set-up goes on");
+        configure(None, String::new(), String::new(), false);
+        assert!(progress.halted(), "turning sync off ends it");
+        assert_eq!(state().starting, None, "and what it marked as running");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

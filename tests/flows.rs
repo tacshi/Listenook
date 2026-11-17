@@ -559,6 +559,8 @@ fn a_stretch_of_sentences_is_skipped_by_picking_its_first_and_last() {
     it.app.long_press("Welcome back to the show.").unwrap();
     it.app.press("Skip from here…").unwrap();
     it.app.wait_for("Now tap the last sentence to skip.").unwrap();
+    // The menu takes Escape until it has faded out; the key is for the reader once it is gone.
+    it.app.wait_for_gone("role:menu", GONE).unwrap();
     it.app.press_key("escape").unwrap();
     it.app.wait_for_gone("Now tap the last sentence to skip.", GONE).unwrap();
     it.app.press("Start with short episodes, and repeat each sentence out loud.").unwrap();
