@@ -486,9 +486,11 @@ pub fn plan_with(local: &[Entry], remote: &[Entry], removed_here: &Removed, remo
 }
 
 pub fn merge_catalog(local: &mut LibraryCatalog, remote: &LibraryCatalog) -> HashMap<String, String> {
-    fn merge(local: &mut Vec<Named>, remote: &[Named], map: &mut HashMap<String, String>) {
+    fn merge(local: &mut Vec<Named>, remote: &[Named], removed: &Removed, map: &mut HashMap<String, String>) {
+        local.retain(|named| !removed.contains_key(&named.id));
         for other in remote {
-            if other.id.is_empty() || local.iter().any(|named| named.id == other.id) {
+            if other.id.is_empty() || removed.contains_key(&other.id) || local.iter().any(|named| named.id == other.id)
+            {
                 continue;
             }
             match local.iter().find(|named| named.name == other.name) {
@@ -497,26 +499,33 @@ pub fn merge_catalog(local: &mut LibraryCatalog, remote: &LibraryCatalog) -> Has
             }
         }
     }
+    for (id, at) in &remote.removed {
+        local.removed.entry(id.clone()).or_insert_with(|| at.clone());
+    }
+    let removed = local.removed.clone();
     let mut map = HashMap::new();
-    merge(&mut local.groups, &remote.groups, &mut map);
-    merge(&mut local.tags, &remote.tags, &mut map);
+    merge(&mut local.groups, &remote.groups, &removed, &mut map);
+    merge(&mut local.tags, &remote.tags, &removed, &mut map);
     map
 }
 
-pub fn rehome(job: &mut Job, map: &HashMap<String, String>) {
-    if map.is_empty() {
-        return;
-    }
+/// Moves a recording from the other device onto this device's groups and tags, and out of any
+/// that were deleted.
+pub fn rehome(job: &mut Job, map: &HashMap<String, String>, removed: &Removed) {
     if let Some(group) = &mut job.group_id
         && let Some(here) = map.get(group)
     {
         *group = here.clone();
+    }
+    if job.group_id.as_ref().is_some_and(|group| removed.contains_key(group)) {
+        job.group_id = None;
     }
     for tag in &mut job.tag_ids {
         if let Some(here) = map.get(tag) {
             *tag = here.clone();
         }
     }
+    job.tag_ids.retain(|tag| !removed.contains_key(tag));
     job.tag_ids.sort();
     job.tag_ids.dedup();
 }
@@ -654,8 +663,40 @@ mod tests {
         assert_eq!(local.tags.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t1", "t8"]);
         assert_eq!(map.get("t7").map(String::as_str), Some("t1"));
         let mut job = Job { tag_ids: vec!["t8".into(), "t7".into(), "t1".into()], ..Job::default() };
-        rehome(&mut job, &map);
+        rehome(&mut job, &map, &local.removed);
         assert_eq!(job.tag_ids, ["t1", "t8"]);
+    }
+
+    #[test]
+    fn a_deleted_group_or_tag_stays_deleted_on_both_sides() {
+        let named = |id: &str, name: &str| Named { id: id.into(), name: name.into() };
+        let both = || LibraryCatalog {
+            groups: vec![named("g1", "English"), named("g2", "Work")],
+            tags: vec![named("t1", "todo")],
+            ..Default::default()
+        };
+        let (mut here, mut there) = (both(), both());
+        here.remove("g1");
+        here.remove("t1");
+
+        assert!(merge_catalog(&mut here, &there).is_empty());
+        assert_eq!(here.groups, [named("g2", "Work")]);
+        assert!(here.tags.is_empty());
+
+        merge_catalog(&mut there, &here);
+        assert_eq!(there.groups, [named("g2", "Work")]);
+        assert!(there.tags.is_empty());
+        assert!(there.removed.contains_key("g1") && there.removed.contains_key("t1"));
+
+        let mut job = Job { group_id: Some("g1".into()), tag_ids: vec!["t1".into()], ..Job::default() };
+        rehome(&mut job, &HashMap::new(), &there.removed);
+        assert_eq!(job.group_id, None);
+        assert!(job.tag_ids.is_empty());
+
+        let mut again = here.clone();
+        again.groups.push(named("g3", "English"));
+        merge_catalog(&mut there, &again);
+        assert!(there.groups.iter().any(|group| group.id == "g3"));
     }
 
     fn followed(url: &str, at: &str) -> Followed {
