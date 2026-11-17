@@ -13,3 +13,8 @@ roxmltree = "0.20"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 matroska-demuxer = "0.8.1"
 mp4 = "0.14.0"
+chardetng = "0.1"
+encoding_rs = "0.8"
+unicode-normalization = "0.1"
+spake2 = "0.4"
+hmac = "0.12"

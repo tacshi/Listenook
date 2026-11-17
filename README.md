@@ -71,7 +71,9 @@ takes files of up to 5 hours.
   media, and export TXT, Markdown, SRT, or WebVTT. Briefs export as Markdown.
 - **Sync between devices:** copy the Library, the podcasts you follow, and
   where you left each episode to and from another device running Listenook
-  on the same local network. The other device asks before anything is copied.
+  on the same local network. Devices pair once with a code shown on the other
+  one, then sync on their own, encrypted, with no other device able to join
+  in. Devices paired by an earlier version pair again.
 - **Monitor a folder:** new media in a watched folder is added to the Library,
   ready to transcribe. Listenook can stay in the macOS menu bar or the Windows
   tray to keep watching, and launch at login.
@@ -102,7 +104,7 @@ desktop-only.
 | Soniox | All platforms; API key required | Speaker labels, word timing, language detection, and optional translation during transcription. |
 | MOSS Pro | All platforms; API key required | Speaker-labelled transcription through MOSI. |
 | MOSS Local | Apple Silicon Macs, macOS 15+ | Local Core ML transcription with speaker labels. |
-| Qwen3 Local | All platforms | Local multilingual transcription on the CPU with word timing, without speaker labels. |
+| Qwen3 Local | All platforms (on Intel and AMD processors, those with AVX2, from about 2013) | Local multilingual transcription on the CPU with word timing, without speaker labels. |
 
 Qwen3 Local needs the Qwen3 ForcedAligner model as well, which times each
 word; the same model can add word timing to MOSS transcripts. Local speech

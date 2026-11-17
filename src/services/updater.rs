@@ -3,6 +3,10 @@ use nsh_core::prelude::*;
 pub(crate) const SELF_UPDATING: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
 #[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos", windows)),
+    expect(dead_code, reason = "phones and tablets update from their app store, so only desktops leave Idle")
+)]
 pub(crate) enum UpdateState {
     #[default]
     Idle,

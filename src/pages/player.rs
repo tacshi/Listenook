@@ -124,6 +124,9 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     let tracks = signal(Vec::<Track>::new());
     let chosen = signal(remembered.as_ref().and_then(|entry| entry.subtitle_id.clone()));
     let repeating = signal(false);
+    // The subtitle being repeated, as (start, end): kept while it plays, so an earlier one that
+    // overlaps it and ends first does not take the repeat over.
+    let held = stored(None::<(i64, i64)>);
 
     let cues = computed(move || {
         let id = chosen.get()?;
@@ -311,15 +314,19 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                 cues.with_untracked(|cues| {
                     let cues = cues.as_ref()?;
                     let before = position_ms.get_untracked();
-                    cues.iter()
-                        .find(|cue| cue.start_ms <= before && before < cue.end_ms && position >= cue.end_ms)
-                        .cloned()
+                    let spans = cues.iter().map(|cue| (cue.start_ms, cue.end_ms));
+                    let kept = listenook_core::playback::repeated_cue(spans, held.get(), before);
+                    held.replace(kept);
+                    kept.filter(|&(_, end)| position >= end)
                 })
             });
+            if !repeating.get_untracked() {
+                held.replace(None);
+            }
             match again.flatten() {
-                Some(cue) => {
-                    position_ms.set(cue.start_ms);
-                    media.seek(cue.start_ms as f64 / 1000.0);
+                Some((start, _)) => {
+                    position_ms.set(start);
+                    media.seek(start as f64 / 1000.0);
                 }
                 None => position_ms.set(position),
             }

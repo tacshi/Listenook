@@ -4,7 +4,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use listenook_core::podcast;
+use listenook_core::{
+    podcast,
+    sync::{PROTOCOL, Pake, pake_proof},
+};
+use nsh_app_listenook::testing::{answer, client, device_key};
 use nsh_engine::{
     EngineConfig, Points, Root, Size,
     geometry::{point, px},
@@ -61,29 +65,37 @@ fn on_port(port: u16) -> impl FnOnce(&Path) {
     }
 }
 
-fn circle_key() -> String {
-    listenook_core::sync::digest(&["test circle"])
+/// Where the other device in a sync keeps its key, beside this device's library.
+fn other_library(root: &Path) -> PathBuf {
+    PathBuf::from(format!("{}-other", root.display()))
 }
 
 fn paired_on_port(port: u16) -> impl FnOnce(&Path) {
     move |root| {
         on_port(port)(root);
         std::fs::write(root.join("settings.json"), json!({"sync_device_id": "this-device"}).to_string()).unwrap();
-        let ledger = json!({"circle": {"id": "circle", "key": circle_key(), "members": {
-            "this-device": {"name": "This", "platform": "macos", "joined_at": "2026-11-01T00:00:00.000Z"},
-            "other": {"name": "Studio Mac", "platform": "macos", "joined_at": "2026-11-01T00:00:00.000Z"},
+        let ledger = json!({"circle": {"id": "circle", "members": {
+            "this-device": {"name": "This", "platform": "macos", "joined_at": "2026-11-01T00:00:00.000Z", "key": device_key(root)},
+            "other": {"name": "Studio Mac", "platform": "macos", "joined_at": "2026-11-01T00:00:00.000Z", "key": device_key(&other_library(root))},
         }}});
         std::fs::write(root.join("sync.json"), ledger.to_string()).unwrap();
     }
 }
 
 fn other_device(port: u16) -> serde_json::Value {
-    json!({"app": "listenook", "protocol": 2, "id": "other", "name": "Studio Mac", "platform": "macos", "port": port})
+    json!({"app": "listenook", "protocol": PROTOCOL, "id": "other", "name": "Studio Mac", "platform": "macos", "port": port})
 }
 
-fn hello_to(base: &str, key: &str, mut hello: serde_json::Value) -> Result<(serde_json::Value, String), String> {
+/// The other device, which goes on only with this one.
+fn other(root: &Path) -> ureq::Agent {
+    client(&other_library(root), Some(&device_key(root)), None)
+}
+
+/// The other device starts a sync with this one at `base`: what it was welcomed with.
+fn hello_to(root: &Path, base: &str, hello: serde_json::Value) -> Result<serde_json::Value, String> {
+    let agent = other(root);
     for _ in 0..50 {
-        let challenge = match ureq::get(&format!("{base}/challenge")).call() {
+        let welcome = match agent.post(&format!("{base}/sync")).send_string(&hello.to_string()) {
             Ok(response) => response.into_string().map_err(|error| error.to_string())?,
             Err(ureq::Error::Transport(_)) => {
                 std::thread::sleep(Duration::from_millis(100));
@@ -91,19 +103,65 @@ fn hello_to(base: &str, key: &str, mut hello: serde_json::Value) -> Result<(serd
             }
             Err(error) => return Err(error.to_string()),
         };
-        let challenge: serde_json::Value = serde_json::from_str(&challenge).map_err(|error| error.to_string())?;
-        let nonce = challenge["nonce"].as_str().ok_or("no nonce")?.to_owned();
-        hello["nonce"] = json!(nonce);
-        hello["proof"] = json!(listenook_core::sync::proof(key, &nonce, "other", "hello"));
-        let welcome = ureq::post(&format!("{base}/sync"))
-            .timeout(Duration::from_secs(30))
-            .send_string(&hello.to_string())
-            .map_err(|error| error.to_string())?
-            .into_string()
-            .map_err(|error| error.to_string())?;
-        return Ok((serde_json::from_str(&welcome).map_err(|error| error.to_string())?, nonce));
+        return serde_json::from_str(&welcome).map_err(|error| error.to_string());
     }
     Err("the device never answered".into())
+}
+
+/// One request to a device played by a test, over TLS: its path, its headers in lower case,
+/// its body, and where the answer goes.
+struct Asked<S> {
+    path: String,
+    headers: Vec<String>,
+    body: Vec<u8>,
+    peer: String,
+    stream: S,
+}
+
+fn asked<S: std::io::Read + std::io::Write>((stream, peer): (S, String)) -> Asked<S> {
+    use std::io::{BufRead, BufReader, Read};
+    let mut reader = BufReader::new(stream);
+    let mut first = String::new();
+    reader.read_line(&mut first).unwrap();
+    let mut headers = Vec::new();
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line.trim().is_empty() {
+            break;
+        }
+        headers.push(line.trim().to_ascii_lowercase());
+    }
+    let length: usize =
+        headers.iter().find_map(|header| header.strip_prefix("content-length:")?.trim().parse().ok()).unwrap_or(0);
+    let mut body = vec![0_u8; length];
+    reader.read_exact(&mut body).unwrap();
+    let path = first.split(' ').nth(1).unwrap_or("").to_owned();
+    // What the reader holds beyond the request is nothing: the client waits for the answer.
+    Asked { path, headers, body, peer, stream: reader.into_inner() }
+}
+
+impl<S: std::io::Write> Asked<S> {
+    fn header(&self, name: &str) -> Option<String> {
+        self.headers.iter().find_map(|header| Some(header.strip_prefix(name)?.strip_prefix(':')?.trim().to_owned()))
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::from_slice(&self.body).unwrap_or_default()
+    }
+
+    fn reply(mut self, text: &str) {
+        let _ = self.stream.write_all(text.as_bytes());
+        let _ = self.stream.flush();
+    }
+
+    fn answer(self, status: u16, body: serde_json::Value) {
+        let body = body.to_string();
+        self.reply(&format!(
+            "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ));
+    }
 }
 
 fn manifest(root: &Path, id: &str) -> PathBuf {
@@ -501,6 +559,8 @@ fn a_stretch_of_sentences_is_skipped_by_picking_its_first_and_last() {
     it.app.long_press("Welcome back to the show.").unwrap();
     it.app.press("Skip from here…").unwrap();
     it.app.wait_for("Now tap the last sentence to skip.").unwrap();
+    // The menu takes Escape until it has faded out; the key is for the reader once it is gone.
+    it.app.wait_for_gone("role:menu", GONE).unwrap();
     it.app.press_key("escape").unwrap();
     it.app.wait_for_gone("Now tap the last sentence to skip.", GONE).unwrap();
     it.app.press("Start with short episodes, and repeat each sentence out loud.").unwrap();
@@ -958,8 +1018,9 @@ fn a_paired_devices_sync_needs_no_answer_and_its_recording_arrives() {
     it.app.wait_for("My devices").unwrap();
     assert!(it.app.shows("Studio Mac"), "the paired device is listed");
 
-    let other = std::thread::spawn(|| -> Result<(serde_json::Value, String), String> {
-        let base = "http://127.0.0.1:47941/listenook";
+    let root = it.root.clone();
+    let other = std::thread::spawn(move || -> Result<serde_json::Value, String> {
+        let base = "https://127.0.0.1:47941/listenook";
         let hello = json!({
             "device": other_device(47941),
             "shelves": {
@@ -975,7 +1036,7 @@ fn a_paired_devices_sync_needs_no_answer_and_its_recording_arrives() {
                 ]}],
             },
         });
-        let (welcome, nonce) = hello_to(base, &circle_key(), hello)?;
+        let welcome = hello_to(&root, base, hello)?;
         let token = welcome["token"].as_str().ok_or("no token")?.to_owned();
         let job = json!({
             "manifest_version": 15, "id": "from-other", "source_path": "/elsewhere/talk.m4a",
@@ -983,21 +1044,21 @@ fn a_paired_devices_sync_needs_no_answer_and_its_recording_arrives() {
             "status": "completed", "display_title": "Sent from the studio", "tag_ids": ["t9"],
             "document": {"segments": [{"id": "segment-1", "start_ms": 0, "end_ms": 900, "text": "Hello."}]},
         });
-        ureq::put(&format!("{base}/manifest/from-other"))
+        other(&root)
+            .put(&format!("{base}/manifest/from-other"))
             .set("X-Listenook-Token", &token)
             .send_string(&job.to_string())
             .map_err(|error| error.to_string())?;
-        ureq::post(&format!("{base}/done"))
+        other(&root)
+            .post(&format!("{base}/done"))
             .set("X-Listenook-Token", &token)
             .send_string(r#"{"complete":true}"#)
             .map_err(|error| error.to_string())?;
-        Ok((welcome, nonce))
+        Ok(welcome)
     });
 
-    let (welcome, nonce) = other.join().unwrap().unwrap();
+    let welcome = other.join().unwrap().unwrap();
     assert_eq!(welcome["index"]["entries"][0]["id"], "sample", "the other device is told what is here");
-    let proof = listenook_core::sync::proof(&circle_key(), &nonce, "this-device", "welcome");
-    assert_eq!(welcome["proof"], proof, "this device proves it is one of the circle");
     assert!(!it.app.shows("Pair a device"), "a paired device is not asked about");
 
     it.app.wait_for("Sent from the studio").unwrap();
@@ -1023,20 +1084,19 @@ fn a_paired_devices_sync_needs_no_answer_and_its_recording_arrives() {
 
 #[test]
 fn a_device_pairs_with_the_code_shown_here_and_a_wrong_code_does_not() {
-    use listenook_core::sync::{hex, pairing_secret, proof, seal, unhex};
-    use ring::{agreement, rand::SystemRandom};
     let mut it = start("sync-pair", on_port(47944), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
     it.app.press("Sync").unwrap();
     it.app.wait_for("Nearby devices").unwrap();
     assert!(!it.app.shows("My devices"), "nothing is paired yet");
 
-    let base = "http://127.0.0.1:47944/listenook";
-    let private = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &SystemRandom::new()).unwrap();
-    let public = hex(private.compute_public_key().unwrap().as_ref());
-    let asked = json!({"device": other_device(47944), "nonce": "asker-nonce", "public": public});
+    let base = "https://127.0.0.1:47944/listenook";
+    let library = other_library(&it.root);
+    let seen = Arc::new(Mutex::new(String::new()));
+    let asking = client(&library, None, Some(seen.clone()));
+    let asked = json!({"device": other_device(47944)});
     let answer: serde_json::Value = (0..50)
-        .find_map(|_| match ureq::post(&format!("{base}/pair")).send_string(&asked.to_string()) {
+        .find_map(|_| match asking.post(&format!("{base}/pair")).send_string(&asked.to_string()) {
             Ok(response) => Some(response.into_string().unwrap()),
             Err(_) => {
                 std::thread::sleep(Duration::from_millis(100));
@@ -1047,10 +1107,8 @@ fn a_device_pairs_with_the_code_shown_here_and_a_wrong_code_does_not() {
         .parse()
         .unwrap();
     let here = answer["device"]["id"].as_str().unwrap().to_owned();
-    let theirs = answer["nonce"].as_str().unwrap().to_owned();
-    let peer =
-        agreement::UnparsedPublicKey::new(&agreement::X25519, unhex(answer["public"].as_str().unwrap()).unwrap());
-    let shared = agreement::agree_ephemeral(private, &peer, hex).unwrap();
+    let here_key = seen.lock().unwrap().clone();
+    assert_eq!(here_key, device_key(&it.root), "the device shows its own certificate");
 
     it.app.wait_for("Pair a device").unwrap();
     it.app.wait_for("“Studio Mac”").ok();
@@ -1062,37 +1120,56 @@ fn a_device_pairs_with_the_code_shown_here_and_a_wrong_code_does_not() {
         .find(|text| text.len() == 7 && text.chars().filter(char::is_ascii_digit).count() == 6)
         .map(|text| text.replace(' ', ""))
         .expect("a six-digit code is shown");
-    let secret_of = |code: &str| pairing_secret(code, &shared, ("other", "asker-nonce"), (&here, &theirs));
+    let try_code = |code: &str| -> Result<serde_json::Value, u16> {
+        let agent = client(&library, Some(&here_key), None);
+        let (pake, message) = Pake::start(code, ("other", &device_key(&library)), (&here, &here_key), true);
+        let sent = json!({"id": "other", "message": message});
+        let theirs: serde_json::Value = agent
+            .post(&format!("{base}/pair/confirm"))
+            .send_string(&sent.to_string())
+            .unwrap()
+            .into_string()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let key = pake.finish(theirs["message"].as_str().unwrap()).unwrap();
+        let finish = json!({"id": "other", "proof": pake_proof(&key, "asker")});
+        match agent.post(&format!("{base}/pair/finish")).send_string(&finish.to_string()) {
+            Ok(response) => {
+                let done: serde_json::Value = response.into_string().unwrap().parse().unwrap();
+                assert_eq!(done["proof"], pake_proof(&key, "answerer"), "the device proves it knew the code");
+                Ok(done)
+            }
+            Err(ureq::Error::Status(status, _)) => Err(status),
+            Err(error) => panic!("{error}"),
+        }
+    };
     let wrong = if shown == "000000" { "111111" } else { "000000" };
-    let guess = json!({"id": "other", "proof": proof(&secret_of(wrong), "", "other", "asker")});
-    let refused = ureq::post(&format!("{base}/pair/confirm")).send_string(&guess.to_string());
-    assert!(matches!(refused, Err(ureq::Error::Status(403, _))), "a wrong code is refused");
+    assert_eq!(try_code(wrong).err(), Some(403), "a wrong code is refused");
     assert!(it.app.shows("Pair a device"), "the code stays up after one wrong try");
 
-    let secret = secret_of(&shown);
-    let right = json!({"id": "other", "proof": proof(&secret, "", "other", "asker")});
-    let done: serde_json::Value = ureq::post(&format!("{base}/pair/confirm"))
-        .send_string(&right.to_string())
-        .unwrap()
-        .into_string()
-        .unwrap()
-        .parse()
-        .unwrap();
-    assert_eq!(done["proof"], proof(&secret, "", &here, "answerer"));
-    let key = seal(done["circle"]["key"].as_str().unwrap(), &secret, "answerer circle").unwrap();
+    let done = try_code(&shown).unwrap();
+    assert_eq!(done["circle"]["members"]["other"]["key"], device_key(&library));
     it.app.wait_for_gone("Pair a device", GONE).unwrap();
     it.app.wait_for("My devices").unwrap();
     it.app.wait_for("Studio Mac").unwrap();
     let saved = std::fs::read_to_string(it.root.join("sync.json")).unwrap();
-    assert!(saved.contains(&key) && saved.contains("Studio Mac"), "the pairing is remembered");
+    assert!(saved.contains(&device_key(&library)) && saved.contains("Studio Mac"), "the pairing is remembered");
 
-    let (welcome, _) = hello_to(base, &key, json!({"device": other_device(47944), "auto": true})).unwrap();
+    let welcome = hello_to(&it.root, base, json!({"device": other_device(47944), "auto": true})).unwrap();
     let token = welcome["token"].as_str().unwrap().to_owned();
-    ureq::post(&format!("{base}/done")).set("X-Listenook-Token", &token).send_string(r#"{"complete":true}"#).unwrap();
+    other(&it.root)
+        .post(&format!("{base}/done"))
+        .set("X-Listenook-Token", &token)
+        .send_string(r#"{"complete":true}"#)
+        .unwrap();
     std::thread::sleep(Duration::from_millis(500));
     assert!(!it.app.shows("Synced with Studio Mac"), "a sync on its own says nothing");
-    let wrong_key = hello_to(base, &circle_key(), json!({"device": other_device(47944)}));
-    assert!(wrong_key.is_err_and(|error| error.contains("403")), "another key is refused");
+    let stranger = PathBuf::from(format!("{}-stranger", it.root.display()));
+    let refused = client(&stranger, Some(&here_key), None)
+        .post(&format!("{base}/sync"))
+        .send_string(&json!({"device": other_device(47944)}).to_string());
+    assert!(matches!(refused, Err(ureq::Error::Status(403, _))), "another device's key is refused");
 }
 
 #[test]
@@ -1119,90 +1196,65 @@ fn home_continues_an_episode_of_a_show_not_followed() {
 
 #[test]
 fn this_device_pairs_by_entering_the_code_shown_on_the_other_one() {
-    use listenook_core::sync::{hex, pairing_secret, proof, seal, unhex};
-    use ring::{agreement, rand::SystemRandom};
-    use std::io::{BufRead, BufReader, Read, Write};
     let mut it = start("sync-asker", on_port(47945), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let key = listenook_core::sync::digest(&["their circle"]);
-    let theirs_key = key.clone();
+    let library = other_library(&it.root);
+    let theirs_key = device_key(&library);
+    let there = library.clone();
     let other = std::thread::spawn(move || {
-        let key = theirs_key;
         let device = other_device(port);
-        let (mut asker, mut shared, mut theirs) = (String::new(), String::new(), String::new());
-        let mut asked = Vec::new();
+        let mine = device_key(&there);
+        let (mut asker, mut asker_key, mut key) = (String::new(), String::new(), Vec::new());
+        let mut asked_paths = Vec::new();
         for stream in listener.incoming() {
-            let mut stream = stream.unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let (mut first, mut length) = (String::new(), 0_usize);
-            reader.read_line(&mut first).unwrap();
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                if line.trim().is_empty() {
-                    break;
-                }
-                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    length = value.trim().parse().unwrap();
-                }
-            }
-            let mut body = vec![0_u8; length];
-            reader.read_exact(&mut body).unwrap();
-            let body: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-            let path = first.split(' ').nth(1).unwrap_or("").to_owned();
-            let answer = |status: u16, body: serde_json::Value| {
-                let body = body.to_string();
-                format!("HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+            let Ok(connected) = answer(&there, stream.unwrap()) else {
+                continue;
             };
-            let secret = || pairing_secret("246810", &shared, (&asker, &theirs), ("other", "answer-nonce"));
-            let reply = match path.as_str() {
-                "/listenook/info" => answer(200, device.clone()),
+            let call = asked(connected);
+            let (path, body, peer) = (call.path.clone(), call.json(), call.peer.clone());
+            match path.as_str() {
+                "/listenook/info" => call.answer(200, device.clone()),
                 "/listenook/pair" => {
-                    let private =
-                        agreement::EphemeralPrivateKey::generate(&agreement::X25519, &SystemRandom::new()).unwrap();
-                    let public = hex(private.compute_public_key().unwrap().as_ref());
-                    let peer = agreement::UnparsedPublicKey::new(
-                        &agreement::X25519,
-                        unhex(body["public"].as_str().unwrap()).unwrap(),
-                    );
-                    shared = agreement::agree_ephemeral(private, &peer, hex).unwrap();
                     asker = body["device"]["id"].as_str().unwrap().to_owned();
-                    theirs = body["nonce"].as_str().unwrap().to_owned();
-                    answer(200, json!({"device": device, "nonce": "answer-nonce", "public": public}))
+                    asker_key = peer;
+                    call.answer(200, json!({"device": device}))
                 }
-                "/listenook/pair/confirm" if body["proof"] != proof(&secret(), "", &asker, "asker") => {
-                    answer(403, json!({"reason": "wrong"}))
+                "/listenook/pair/confirm" => {
+                    let (pake, message) = Pake::start("246810", (&asker, &asker_key), ("other", &mine), false);
+                    key = pake.finish(body["message"].as_str().unwrap()).unwrap();
+                    call.answer(200, json!({"id": "other", "message": message}))
                 }
-                "/listenook/pair/confirm" => answer(
+                "/listenook/pair/finish" if body["proof"] != pake_proof(&key, "asker") => {
+                    call.answer(403, json!({"reason": "wrong"}))
+                }
+                "/listenook/pair/finish" => call.answer(
                     200,
                     json!({
-                        "proof": proof(&secret(), "", "other", "answerer"),
-                        "circle": {"id": "theirs", "key": seal(&key, &secret(), "answerer circle").unwrap(), "members": {
-                            "other": {"name": "Studio Mac", "platform": "macos", "joined_at": "2026-11-01T00:00:00.000Z"},
+                        "proof": pake_proof(&key, "answerer"),
+                        "circle": {"id": "theirs", "members": {
+                            "other": {"name": "Studio Mac", "platform": "macos", "joined_at": "2026-11-01T00:00:00.000Z", "key": mine},
                         }},
                     }),
                 ),
-                "/listenook/challenge" => answer(200, json!({"nonce": "sync-nonce"})),
-                "/listenook/sync" if body["proof"] == proof(&key, "sync-nonce", &asker, "hello") => answer(
+                "/listenook/sync" if peer == asker_key => call.answer(
                     200,
                     json!({
-                        "token": "token", "device": device, "proof": proof(&key, "sync-nonce", "other", "welcome"),
+                        "token": "token", "device": device,
                         "index": {"entries": [], "catalog": {"version": 1, "groups": [], "tags": []}},
                     }),
                 ),
-                "/listenook/sync" => answer(403, json!({"reason": "unpaired"})),
-                _ => answer(200, json!({})),
-            };
-            stream.write_all(reply.as_bytes()).unwrap();
-            asked.push(path.clone());
+                "/listenook/sync" => call.answer(403, json!({"reason": "unpaired"})),
+                _ => call.answer(200, json!({})),
+            }
+            asked_paths.push(path.clone());
             if path == "/listenook/done" {
                 break;
             }
         }
-        asked
+        asked_paths
     });
 
     it.app.press("Sync").unwrap();
@@ -1216,10 +1268,10 @@ fn this_device_pairs_by_entering_the_code_shown_on_the_other_one() {
     it.app.type_text("text:6-digit code", "246 810\n").unwrap();
     it.app.wait_for_within("Synced with Studio Mac", Duration::from_secs(10)).unwrap();
     let asked = other.join().unwrap();
-    assert_eq!(asked.iter().filter(|path| *path == "/listenook/pair/confirm").count(), 2);
+    assert_eq!(asked.iter().filter(|path| *path == "/listenook/pair/finish").count(), 2);
     assert!(asked.contains(&"/listenook/sync".to_owned()), "the first sync follows the pairing");
     let saved = std::fs::read_to_string(it.root.join("sync.json")).unwrap();
-    assert!(saved.contains(&key), "this device joined the other one's circle");
+    assert!(saved.contains("\"theirs\"") && saved.contains(&theirs_key), "this device joined the other one's circle");
     it.app.press("role:button[Done]").unwrap();
     it.app.press("Sync").unwrap();
     it.app.wait_for("My devices").unwrap();
@@ -1234,16 +1286,19 @@ fn a_recording_removed_on_the_other_device_is_removed_here() {
     it.app.wait_for("My devices").unwrap();
     let old = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
 
+    let root = it.root.clone();
     let other = std::thread::spawn(move || -> Result<(), String> {
-        let base = "http://127.0.0.1:47943/listenook";
+        let base = "https://127.0.0.1:47943/listenook";
         let hello = json!({"device": other_device(47943), "removed": {"sample": "2099-01-01T00:00:00.000Z"}});
-        let (welcome, _) = hello_to(base, &circle_key(), hello)?;
+        let welcome = hello_to(&root, base, hello)?;
         let token = welcome["token"].as_str().ok_or("no token")?.to_owned();
-        ureq::put(&format!("{base}/manifest/sample"))
+        other(&root)
+            .put(&format!("{base}/manifest/sample"))
             .set("X-Listenook-Token", &token)
             .send_string(&old)
             .map_err(|error| error.to_string())?;
-        ureq::post(&format!("{base}/done"))
+        other(&root)
+            .post(&format!("{base}/done"))
             .set("X-Listenook-Token", &token)
             .send_string(r#"{"complete":true}"#)
             .map_err(|error| error.to_string())?;
@@ -1259,15 +1314,14 @@ fn a_recording_removed_on_the_other_device_is_removed_here() {
 
 #[test]
 fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
-    use std::io::Write;
     let mut it = start("sync-served", paired_on_port(47942), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
     it.app.press("Sync").unwrap();
     it.app.wait_for("My devices").unwrap();
 
-    let base = "http://127.0.0.1:47942/listenook";
+    let base = "https://127.0.0.1:47942/listenook";
     let hello = json!({"device": other_device(47942), "catalog": {"version": 1, "groups": [], "tags": []}});
-    let (welcome, _) = hello_to(base, &circle_key(), hello).unwrap();
+    let welcome = hello_to(&it.root, base, hello).unwrap();
     let token = welcome["token"].as_str().unwrap().to_owned();
 
     it.app.wait_for("Syncing with Studio Mac…").unwrap();
@@ -1277,12 +1331,19 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
         "created_at": "2026-11-12T08:00:00.000Z", "updated_at": "2026-11-12T09:00:00.000Z",
         "status": "completed", "display_title": "Sent from the studio",
     });
-    ureq::put(&format!("{base}/manifest/from-other"))
+    other(&it.root)
+        .put(&format!("{base}/manifest/from-other"))
         .set("X-Listenook-Token", &token)
         .set("X-Listenook-Progress", "1 3 0")
         .send_string(&job.to_string())
         .unwrap();
     it.app.wait_for("1 / 3 recordings").unwrap();
+    let stranger = PathBuf::from(format!("{}-stranger", it.root.display()));
+    let taken = client(&stranger, Some(&device_key(&it.root)), None)
+        .get(&format!("{base}/manifest/sample"))
+        .set("X-Listenook-Token", &token)
+        .call();
+    assert!(matches!(taken, Err(ureq::Error::Status(410, _))), "a token is no good on another device's connection");
 
     it.app.press("role:button[Close]").unwrap();
     it.app.wait_for_gone("Syncing with Studio Mac…", GONE).unwrap();
@@ -1290,24 +1351,34 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
     it.app.press("Sync").unwrap();
     it.app.wait_for("Syncing with Studio Mac…").unwrap();
 
-    let mut broken = std::net::TcpStream::connect("127.0.0.1:47942").unwrap();
-    write!(
-        broken,
-        "PUT /listenook/media/from-other/m4a HTTP/1.1\r\nX-Listenook-Token: {token}\r\nContent-Length: 1000\r\n\r\nhalf"
-    )
-    .unwrap();
-    drop(broken);
+    /// Gives what it holds, then fails as a connection that drops does.
+    struct Breaks(std::io::Cursor<&'static [u8]>);
+    impl std::io::Read for Breaks {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.read(buffer)? {
+                0 => Err(std::io::Error::other("the connection dropped")),
+                read => Ok(read),
+            }
+        }
+    }
+    let broken = other(&it.root)
+        .put(&format!("{base}/media/from-other/m4a"))
+        .set("X-Listenook-Token", &token)
+        .set("Content-Length", "1000")
+        .send(Breaks(std::io::Cursor::new(b"half")));
+    assert!(broken.is_err());
     it.app.wait_for_within("The sync did not finish", Duration::from_secs(20)).unwrap();
     assert!(it.app.shows("The connection was lost. What was copied is kept; sync again to finish."));
-    let late = ureq::get(&format!("{base}/manifest/sample")).set("X-Listenook-Token", &token).call();
+    let late = other(&it.root).get(&format!("{base}/manifest/sample")).set("X-Listenook-Token", &token).call();
     assert!(matches!(late, Err(ureq::Error::Status(410, _))), "the sync is over for the other device too");
 
     let hello =
         json!({"device": other_device(47942), "catalog": {"version": 1, "groups": [], "tags": []}, "resume": true});
-    let (welcome, _) = hello_to(base, &circle_key(), hello).unwrap();
+    let welcome = hello_to(&it.root, base, hello).unwrap();
     let token = welcome["token"].as_str().unwrap().to_owned();
     it.app.wait_for("Syncing with Studio Mac…").unwrap();
-    let part: serde_json::Value = ureq::get(&format!("{base}/part/from-other/m4a"))
+    let part: serde_json::Value = other(&it.root)
+        .get(&format!("{base}/part/from-other/m4a"))
         .set("X-Listenook-Token", &token)
         .call()
         .unwrap()
@@ -1316,88 +1387,135 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
         .parse()
         .unwrap();
     assert_eq!(part["size"], 4, "what arrived before the loss was kept");
-    ureq::put(&format!("{base}/media/from-other/m4a"))
+    other(&it.root)
+        .put(&format!("{base}/media/from-other/m4a"))
         .set("X-Listenook-Token", &token)
         .set("X-Listenook-Offset", "4")
         .send_string(&"z".repeat(996))
         .unwrap();
     let media = std::fs::read_to_string(it.root.join("media/sync-from-other.m4a")).unwrap();
     assert_eq!(media, format!("half{}", "z".repeat(996)));
-    ureq::post(&format!("{base}/done")).set("X-Listenook-Token", &token).send_string(r#"{"complete":true}"#).unwrap();
+    other(&it.root)
+        .post(&format!("{base}/done"))
+        .set("X-Listenook-Token", &token)
+        .send_string(r#"{"complete":true}"#)
+        .unwrap();
     it.app.wait_for("Synced with Studio Mac").unwrap();
     it.app.press("role:button[Done]").unwrap();
     it.app.wait_for_gone("Synced with Studio Mac", GONE).unwrap();
 }
 
 #[test]
+fn a_path_sent_by_the_other_device_never_names_a_file_here() {
+    let mut it = start("sync-path", paired_on_port(47948), Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    let private = std::env::temp_dir().join(format!("listenook-flow-private-{}.m4a", std::process::id()));
+    std::fs::write(&private, "not for the other device").unwrap();
+    it.app.press("Sync").unwrap();
+    it.app.wait_for("My devices").unwrap();
+
+    let base = "https://127.0.0.1:47948/listenook";
+    let hello = json!({"device": other_device(47948), "catalog": {"version": 1, "groups": [], "tags": []}});
+    let welcome = hello_to(&it.root, base, hello).unwrap();
+    let token = welcome["token"].as_str().unwrap().to_owned();
+    it.app.wait_for("Syncing with Studio Mac…").unwrap();
+    let job = json!({
+        "manifest_version": 15, "id": "probe", "source_path": private.to_str().unwrap(),
+        "created_at": "2026-11-12T08:00:00.000Z", "updated_at": "2026-11-12T09:00:00.000Z",
+        "status": "completed", "display_title": "Probe from the studio",
+    });
+    other(&it.root)
+        .put(&format!("{base}/manifest/probe"))
+        .set("X-Listenook-Token", &token)
+        .send_string(&job.to_string())
+        .unwrap();
+    it.app.press("role:button[Close]").unwrap();
+    it.app.wait_for("Probe from the studio").unwrap();
+
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest(&it.root, "probe")).unwrap()).unwrap();
+    let kept = it.root.join("media/sync-probe.m4a");
+    assert_eq!(saved["source_path"].as_str(), kept.to_str(), "the recording waits for its media in the app's folder");
+    let served = other(&it.root).get(&format!("{base}/media/probe")).set("X-Listenook-Token", &token).call();
+    assert!(matches!(served, Err(ureq::Error::Status(404, _))), "the file the path named is not sent");
+    let _ = std::fs::remove_file(private);
+
+    let put = |id: &str, updated_at: &str, title: &str| {
+        let job = json!({
+            "manifest_version": 15, "id": id, "source_path": "/elsewhere/talk.m4a",
+            "created_at": "2026-11-12T08:00:00.000Z", "updated_at": updated_at,
+            "status": "completed", "display_title": title,
+        });
+        other(&it.root)
+            .put(&format!("{base}/manifest/{id}"))
+            .set("X-Listenook-Token", &token)
+            .send_string(&job.to_string())
+            .unwrap();
+    };
+    put("probe", "2026-11-12T08:30:00.000Z", "An older probe");
+    put("after", "2026-11-12T09:00:00.000Z", "Sent after the older probe");
+    it.app.wait_for("Sent after the older probe").unwrap();
+    assert!(it.app.shows("Probe from the studio") && !it.app.shows("An older probe"), "the newer recording here stays");
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest(&it.root, "probe")).unwrap()).unwrap();
+    assert_eq!(saved["display_title"], "Probe from the studio");
+}
+
+#[test]
 fn a_lost_connection_is_taken_up_again_where_it_broke_off() {
-    use std::io::{BufRead, BufReader, Read, Write};
     let mut it = start("sync-lost", paired_on_port(47943), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let there = other_library(&it.root);
+    let here_key = device_key(&it.root);
     let other = std::thread::spawn(move || {
         let device = other_device(port);
-        let mut asked: Vec<(String, Option<String>, String)> = Vec::new();
+        let mut asked_for: Vec<(String, Option<String>, String)> = Vec::new();
         for stream in listener.incoming() {
-            let mut stream = stream.unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let (mut first, mut length, mut offset) = (String::new(), 0_usize, None);
-            reader.read_line(&mut first).unwrap();
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                if line.trim().is_empty() {
-                    break;
-                }
-                let line = line.to_ascii_lowercase();
-                if let Some(value) = line.strip_prefix("content-length:") {
-                    length = value.trim().parse().unwrap();
-                }
-                if let Some(value) = line.strip_prefix("x-listenook-offset:") {
-                    offset = Some(value.trim().to_owned());
-                }
-            }
-            let mut body = vec![0_u8; length];
-            reader.read_exact(&mut body).unwrap();
-            let path = first.split(' ').nth(1).unwrap_or("").to_owned();
-            let json = |body: serde_json::Value| {
-                let body = body.to_string();
-                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+            let Ok(connected) = answer(&there, stream.unwrap()) else {
+                continue;
             };
-            let answer = match (path.as_str(), offset.as_deref()) {
-                ("/listenook/info", _) => json(device.clone()),
-                ("/listenook/challenge", _) => json(json!({"nonce": "lost-nonce"})),
-                ("/listenook/sync", _) => json(json!({
-                    "token": "token", "device": device,
-                    "proof": listenook_core::sync::proof(&circle_key(), "lost-nonce", "other", "welcome"),
-                    "index": {
-                        "entries": [{"id": "lost", "updated_at": "2026-11-12T09:00:00.000Z", "media_name": "talk.m4a", "media_size": 1000}],
-                        "catalog": {"version": 1, "groups": [], "tags": []},
-                    },
-                })),
+            let call = asked(connected);
+            assert_eq!(call.peer, here_key, "only this device asks");
+            let (path, offset) = (call.path.clone(), call.header("x-listenook-offset"));
+            let body = String::from_utf8_lossy(&call.body).into_owned();
+            match (path.as_str(), offset.as_deref()) {
+                ("/listenook/info", _) => call.answer(200, device.clone()),
+                ("/listenook/sync", _) => call.answer(
+                    200,
+                    json!({
+                        "token": "token", "device": device,
+                        "index": {
+                            "entries": [{"id": "lost", "updated_at": "2026-11-12T09:00:00.000Z", "media_name": "talk.m4a", "media_size": 1000}],
+                            "catalog": {"version": 1, "groups": [], "tags": []},
+                        },
+                    }),
+                ),
                 ("/listenook/media/lost", None) => {
-                    format!("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n{}", "x".repeat(100))
+                    call.reply(&format!("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n{}", "x".repeat(100)))
                 }
-                ("/listenook/media/lost", Some("100")) => format!(
+                ("/listenook/media/lost", Some("100")) => call.reply(&format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: 900\r\nX-Listenook-Offset: 100\r\nConnection: close\r\n\r\n{}",
                     "y".repeat(900)
+                )),
+                ("/listenook/manifest/lost", _) => call.answer(
+                    200,
+                    json!({
+                        "manifest_version": 15, "id": "lost", "source_path": "/elsewhere/talk.m4a",
+                        "created_at": "2026-11-12T08:00:00.000Z", "updated_at": "2026-11-12T09:00:00.000Z",
+                        "status": "completed", "display_title": "Came through",
+                    }),
                 ),
-                ("/listenook/manifest/lost", _) => json(json!({
-                    "manifest_version": 15, "id": "lost", "source_path": "/elsewhere/talk.m4a",
-                    "created_at": "2026-11-12T08:00:00.000Z", "updated_at": "2026-11-12T09:00:00.000Z",
-                    "status": "completed", "display_title": "Came through",
-                })),
-                _ => json(json!({})),
-            };
-            stream.write_all(answer.as_bytes()).unwrap();
-            asked.push((path.clone(), offset, String::from_utf8_lossy(&body).into_owned()));
+                _ => call.answer(200, json!({})),
+            }
+            asked_for.push((path.clone(), offset, body));
             if path == "/listenook/done" {
                 break;
             }
         }
-        asked
+        asked_for
     });
 
     it.app.press("Sync").unwrap();
@@ -1438,12 +1556,11 @@ fn settings_list_the_paired_devices_and_unpair_this_one() {
     it.app.wait_for("This device is not paired with any other. Open Sync to pair one with a code.").unwrap();
     assert!(!it.app.shows("Studio Mac"));
     let saved = std::fs::read_to_string(it.root.join("sync.json")).unwrap();
-    assert!(!saved.contains(&circle_key()), "the circle's key is gone from this device");
+    assert!(!saved.contains(&device_key(&other_library(&it.root))), "the other device is forgotten here");
 }
 
 #[test]
 fn a_change_here_reaches_a_paired_device_within_seconds() {
-    use std::io::{BufRead, BufReader, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut it = start(
@@ -1463,41 +1580,26 @@ fn a_change_here_reaches_a_paired_device_within_seconds() {
         Vec::new(),
     );
     let (tell, heard) = std::sync::mpsc::channel::<String>();
+    let there = other_library(&it.root);
     std::thread::spawn(move || {
-        let device = json!({"app": "listenook", "protocol": 2, "id": "other", "name": "Studio Mac", "platform": "macos", "port": port, "revision": "theirs"});
+        let device = json!({"app": "listenook", "protocol": PROTOCOL, "id": "other", "name": "Studio Mac", "platform": "macos", "port": port, "revision": "theirs"});
         for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { break };
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let (mut first, mut length) = (String::new(), 0_usize);
-            reader.read_line(&mut first).unwrap();
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                if line.trim().is_empty() {
-                    break;
-                }
-                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    length = value.trim().parse().unwrap();
-                }
-            }
-            let mut body = vec![0_u8; length];
-            reader.read_exact(&mut body).unwrap();
-            let path = first.split(' ').nth(1).unwrap_or("").to_owned();
-            let answer = match path.as_str() {
+            let Ok(stream) = stream else { break };
+            let Ok(connected) = answer(&there, stream) else {
+                continue;
+            };
+            let call = asked(connected);
+            let (path, body) = (call.path.clone(), String::from_utf8_lossy(&call.body).into_owned());
+            let reply = match path.as_str() {
                 "/listenook/info" => device.clone(),
-                "/listenook/challenge" => json!({"nonce": "n"}),
                 "/listenook/sync" => json!({
                     "token": "token", "device": device, "revision": "theirs",
-                    "proof": listenook_core::sync::proof(&circle_key(), "n", "other", "welcome"),
                     "index": {"entries": [], "catalog": {"version": 1, "groups": [], "tags": []}},
                 }),
                 _ => json!({}),
-            }
-            .to_string();
-            let reply =
-                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len());
-            stream.write_all(reply.as_bytes()).unwrap();
-            if path == "/listenook/sync" && tell.send(String::from_utf8_lossy(&body).into_owned()).is_err() {
+            };
+            call.answer(200, reply);
+            if path == "/listenook/sync" && tell.send(body).is_err() {
                 break;
             }
         }

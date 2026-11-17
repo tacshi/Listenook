@@ -16,7 +16,6 @@ exclude = ["vendor"]
 listenook-core = { path = "crates/listenook-core" }
 nsh-core = { version = "0.5.1" }
 nsh-base = { version = "0.5.1" }
-env_logger = "0.11"
 log = "0.4"
 serde_json = "1"
 serde = "1"
@@ -30,6 +29,13 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", default-features = false, features = ["sync"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
+spake2 = "0.4"
+
+# Only the desktop binary (src/main.rs) prints its log; phones and tablets log through nsh.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+env_logger = "0.11"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = { version = "0.5.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
@@ -49,6 +55,13 @@ qwen-asr = { path = "vendor/qwen-asr" }
 
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
 qwen-asr = { path = "vendor/qwen-asr", default-features = false, features = ["blas"] }
+
+# Dependencies are built lightly optimized even in development: unoptimized, they make so many
+# small functions that the macOS linker can no longer index the binary's unwind tables (over
+# 16 MB of __eh_frame), and they run the headless tests slowly. This app's own code stays
+# unoptimized for debugging.
+[profile.dev.package."*"]
+opt-level = 1
 
 [profile.dev.package.qwen-asr]
 opt-level = 3

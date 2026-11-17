@@ -44,7 +44,15 @@ fn worker_supported() -> bool {
     cfg!(all(target_os = "macos", target_arch = "aarch64")) && worker_path().is_some()
 }
 
+/// Whether this device can run the Qwen3 engine. On an Intel or AMD processor its kernels
+/// need AVX2 and FMA (every one since about 2013 has them); without them the app runs, but
+/// local transcription is not offered.
 pub(crate) fn supported() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
     true
 }
 

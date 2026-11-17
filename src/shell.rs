@@ -207,7 +207,16 @@ pub(crate) fn shell() -> impl IntoElement {
     });
     effect(move || {
         let now = lifecycle();
-        untracked(|| store.sync.lifecycle(now));
+        untracked(|| {
+            if now == nsh_core::element::Lifecycle::Background {
+                store.activity.flush();
+            }
+            store.sync.lifecycle(now);
+        });
+    });
+    nsh_core::element::desktop::on_app_quit(move || {
+        store.activity.flush();
+        async {}
     });
     if is_desktop() {
         effect(move || {

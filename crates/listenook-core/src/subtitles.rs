@@ -14,7 +14,11 @@ static BLANK_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n(?:[ \t]*\n
 static CLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?$").unwrap());
 static VOICE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<v(?:\.\S+)*\s+([^>]+)>").unwrap());
-static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]*>").unwrap());
+/// A markup tag (`<i>`, `</b>`, `<v Name>`, `<c.yellow>`) or a WebVTT timestamp (`<00:01.500>`);
+/// a `<` followed by a space, as in `a < b`, is text.
+static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"</?(?:[A-Za-z][^<>]*|\d[\d:.]*)>").unwrap());
+/// An ASS override block left in an SRT file by a converter, such as `{\an8}`.
+static OVERRIDE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\\[^}]*\}").unwrap());
 static ASS_OVERRIDE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{[^}]*\}").unwrap());
 static ASS_DRAW_ON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\p[1-9]").unwrap());
 
@@ -80,7 +84,13 @@ pub fn decode(bytes: &[u8]) -> String {
     }
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_owned(),
-        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+        // Not UTF-8: subtitles saved in a legacy encoding, often GBK or Big5 for Chinese and
+        // Windows-1252 for Western languages. The encoding is guessed from the bytes.
+        Err(_) => {
+            let mut detector = chardetng::EncodingDetector::new();
+            detector.feed(bytes, true);
+            detector.guess(None, true).decode_without_bom_handling(bytes).0.into_owned()
+        }
     }
 }
 
@@ -102,7 +112,7 @@ fn clock_ms(text: &str) -> Option<i64> {
         return None;
     }
     let fraction = found.get(4).map_or(0, |m| format!("{:0<3}", m.as_str()).parse::<i64>().unwrap_or(0));
-    Some(((number(1) * 60 + minutes) * 60 + seconds) * 1000 + fraction)
+    number(1).checked_mul(3_600_000)?.checked_add((minutes * 60 + seconds) * 1000 + fraction)
 }
 
 fn timing(line: &str) -> Option<(i64, i64)> {
@@ -138,6 +148,9 @@ fn block_cues(text: &str, vtt: bool) -> (Vec<Cue>, usize) {
             None => invalid += 1,
         }
     }
+    // Files out of time order are common (converted or hand-edited ones); everything that finds
+    // the sentence at a time expects them in order. The sort keeps the file's order for ties.
+    cues.sort_by_key(|cue| (cue.start_ms, cue.end_ms));
     (cues, invalid)
 }
 
@@ -224,7 +237,8 @@ pub fn import_subtitles(
     let mut speakers: Vec<Speaker> = Vec::new();
     for (index, cue) in cues.iter().enumerate() {
         let voice = VOICE.captures(&cue.text).map(|found| found[1].trim().to_owned());
-        let text = clean_caption(&decode_entities(&TAG.replace_all(&cue.text, "")), true);
+        let text = OVERRIDE_TAG.replace_all(&cue.text, "");
+        let text = clean_caption(&decode_entities(&TAG.replace_all(&text, "")), true);
         let mut end_ms = cue.end_ms;
         if let Some(duration) = duration_ms.filter(|d| *d > 0) {
             if cue.start_ms >= duration {
@@ -266,6 +280,37 @@ pub fn import_subtitles(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn srt_cues_out_of_order_are_put_in_time_order() {
+        let srt = "1\n00:00:10,000 --> 00:00:12,000\nA\n\n2\n00:00:05,000 --> 00:00:07,000\nB\n\n3\n00:00:14,000 --> 00:00:16,000\nC\n";
+        let imported = import_subtitles(srt, "srt", None).unwrap();
+        let texts: Vec<_> = imported.document.segments.iter().map(|s| (s.text.as_str(), s.start_ms)).collect();
+        assert_eq!(texts, [("B", 5000), ("A", 10_000), ("C", 14_000)]);
+    }
+
+    #[test]
+    fn srt_override_tags_go_and_a_lone_angle_bracket_stays() {
+        let srt = "1\n00:00:01,000 --> 00:00:02,000\n{\\an8}<i>Hello</i> {laughs}\n\n2\n00:00:03,000 --> 00:00:04,000\nif a < b and c > d\n";
+        let imported = import_subtitles(srt, "srt", None).unwrap();
+        let texts: Vec<_> = imported.document.segments.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["Hello {laughs}", "if a < b and c > d"]);
+    }
+
+    #[test]
+    fn a_huge_hour_makes_the_cue_invalid_instead_of_overflowing() {
+        assert_eq!(clock_ms("99999999999999999:00:00,000"), None);
+        assert_eq!(clock_ms("100:00:00,000"), Some(360_000_000));
+    }
+
+    #[test]
+    fn legacy_chinese_and_western_encodings_are_read() {
+        // "你好，欢迎收听。" in GBK, and "Café déjà vu" in Windows-1252.
+        let (gbk, _, _) = encoding_rs::GBK.encode("你好，欢迎收听今天的节目。我们来聊聊学习语言。");
+        assert_eq!(decode(&gbk), "你好，欢迎收听今天的节目。我们来聊聊学习语言。");
+        let (western, _, _) = encoding_rs::WINDOWS_1252.encode("Café, déjà vu, señor.");
+        assert_eq!(decode(&western), "Café, déjà vu, señor.");
+    }
 
     #[test]
     fn cues_after_several_blank_lines_are_kept() {

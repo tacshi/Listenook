@@ -1,8 +1,13 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
+use unicode_normalization::UnicodeNormalization;
 
-static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*").unwrap());
+/// A word: a grouped or decimal number (`10,000`, `3.5`), or letters and digits with the
+/// accents written as separate marks and the apostrophes inside it (`café`, `don't`).
+static WORD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\p{N}+(?:[.,]\p{N}+)+|[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:['’][\p{L}\p{M}\p{N}]+)*").unwrap()
+});
 static LATIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z]+").unwrap());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,8 +22,12 @@ pub fn words(text: &str) -> Vec<String> {
     WORD.find_iter(text).map(|m| m.as_str().to_owned()).collect()
 }
 
+/// How a word is compared: in one Unicode form (so `é` typed as one letter or as `e` and an
+/// accent is the same), without case, with one kind of apostrophe, and a number without its
+/// thousands commas (`10,000` is `10000`).
 fn normalized(word: &str) -> String {
-    word.to_lowercase().replace('’', "'")
+    let word = word.nfc().collect::<String>().to_lowercase().replace('’', "'");
+    if word.chars().all(|c| c.is_numeric() || matches!(c, ',' | '.')) { word.replace(',', "") } else { word }
 }
 
 pub fn compare(reference: &str, answer: &str) -> Vec<DictationWord> {
@@ -98,6 +107,15 @@ mod tests {
         );
         assert!(is_correct(&compare("It's fine.", "it’s FINE")));
         assert!(!is_correct(&compare("", "")));
+    }
+
+    #[test]
+    fn accents_however_typed_and_grouped_numbers_match() {
+        assert!(is_correct(&compare("Caf\u{e9} au lait", "cafe\u{301} au lait")));
+        assert!(is_correct(&compare("It costs 10,000 dollars.", "it costs 10000 dollars")));
+        assert!(is_correct(&compare("Pi is 3.14.", "pi is 3.14")));
+        assert_eq!(words("the 3rd of 1,500 people"), ["the", "3rd", "of", "1,500", "people"]);
+        assert!(!is_correct(&compare("cafe", "caf\u{e9}")), "an accent still counts");
     }
 
     #[test]

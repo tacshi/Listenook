@@ -475,6 +475,8 @@ const ZH: &[(&str, &str)] = &[
     ("Close player", "关闭播放器"),
     ("Hide sidebar", "隐藏边栏"),
     ("Show sidebar", "显示边栏"),
+    ("Sidebar", "边栏"),
+    ("new recordings from the watched folder.", "个新录音来自监视的文件夹。"),
     ("Show or hide the sidebar", "显示或隐藏边栏"),
     ("Video on top", "视频在上方"),
     ("Video at the side", "视频在侧边"),
@@ -806,6 +808,10 @@ fn known_error(code: &str) -> Option<(&'static str, &'static str)> {
         "sync_wrong_code" => (
             "That code is not right. Check it on the other device and try again.",
             "验证码不正确，请在另一台设备上核对后重试。",
+        ),
+        "sync_pair_wait" => (
+            "Too many wrong codes. Wait a few minutes, then start pairing again.",
+            "错误的验证码次数过多，请稍等几分钟后再重新开始配对。",
         ),
         "sync_code_expired" => (
             "The code is no longer valid. Start pairing again to get a new one.",

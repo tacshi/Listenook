@@ -369,6 +369,24 @@ async fn clean_up(store: Store, id: &str) {
     let Some(key) = secrets::read(provider.secret()) else {
         return;
     };
-    provider.cleanup(job.remote_transcription_id.as_deref(), job.remote_file_id.as_deref(), &key).await;
-    store.update_job(id, |job| job.cleanup_state = CleanupState::Complete);
+    if provider.cleanup(job.remote_transcription_id.as_deref(), job.remote_file_id.as_deref(), &key).await {
+        store.update_job(id, |job| job.cleanup_state = CleanupState::Complete);
+    } else {
+        // Left pending: the media is still with the provider, and the next start tries again.
+        log::warn!("job {id}: the provider's copy could not be deleted yet");
+    }
+}
+
+/// Deletes what finished jobs left with a provider when deleting it failed before, such as
+/// when the network was down as a job ended.
+pub(crate) fn clean_up_left(store: Store) {
+    let left: Vec<String> = store
+        .jobs()
+        .iter()
+        .filter(|job| job.cleanup_state == CleanupState::Pending && job.status.is_terminal())
+        .map(|job| job.id.clone())
+        .collect();
+    for id in left {
+        store.run(async move { clean_up(store, &id).await });
+    }
 }

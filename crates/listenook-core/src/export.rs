@@ -142,8 +142,12 @@ fn cues(document: &Document, options: &ExportOptions, vtt: bool) -> String {
             cue_time(segment.start_ms, separator),
             cue_time(segment.end_ms, separator)
         ));
-        let speaker = speaker_name(document, segment.speaker.as_deref(), options);
-        let content = segment.content(options.content_mode);
+        // WebVTT reads `<` and `&` as markup, so text that has them is escaped.
+        let escaped = |text: String| {
+            if vtt { text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;") } else { text }
+        };
+        let speaker = escaped(speaker_name(document, segment.speaker.as_deref(), options));
+        let content = escaped(segment.content(options.content_mode));
         if speaker.is_empty() {
             out.push_str(&content);
         } else {
@@ -319,6 +323,17 @@ mod tests {
         job.document.as_mut().unwrap().segments[0].skipped = true;
         let options = ExportOptions { format: ExportFormat::Srt, ..Default::default() };
         assert_eq!(export_transcript(&job, &options), "1\n00:00:02,000 --> 00:00:03,250\nBye.");
+    }
+
+    #[test]
+    fn vtt_escapes_what_it_would_read_as_markup() {
+        let mut job = job();
+        job.document.as_mut().unwrap().segments[0].text = "x < y & <laughs>".into();
+        let options = ExportOptions { format: ExportFormat::WebVtt, show_speakers: true, ..Default::default() };
+        let vtt = export_transcript(&job, &options);
+        assert!(vtt.contains("<v Speaker 1>x &lt; y &amp; &lt;laughs&gt;"), "{vtt}");
+        let srt = export_transcript(&job, &ExportOptions { format: ExportFormat::Srt, ..Default::default() });
+        assert!(srt.contains("x < y & <laughs>"), "{srt}");
     }
 
     #[test]

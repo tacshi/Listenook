@@ -7,7 +7,7 @@ use core::arch::x86_64::*;
 /// # Safety
 /// Uses AVX2 intrinsics; `dst` must hold at least `src.len()` elements.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 pub unsafe fn bf16_to_f32_buf(dst: &mut [f32], src: &[u16]) {
     let n = src.len();
     let mut i = 0usize;
@@ -28,7 +28,7 @@ pub unsafe fn bf16_to_f32_buf(dst: &mut [f32], src: &[u16]) {
 
 /// Convert 8 BF16 values (in a __m128i) to 8 f32 values (in a __m256).
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[inline]
 unsafe fn bf16x8_to_f32(raw: __m128i) -> __m256 {
     // Zero-extend u16 -> u32, shift left 16 to put BF16 bits in f32 position
@@ -39,7 +39,7 @@ unsafe fn bf16x8_to_f32(raw: __m128i) -> __m256 {
 
 /// Horizontal sum of __m256 -> f32
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[inline]
 unsafe fn hsum_ps(v: __m256) -> f32 {
     // Add high 128 to low 128
@@ -315,7 +315,7 @@ pub unsafe fn dot_f32(a: &[f32], b: &[f32], n: usize) -> f32 {
 /// # Safety
 /// Uses AVX2 intrinsics; `dst` must have at least `n` elements.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 pub unsafe fn vec_scale_inplace(dst: &mut [f32], scale: f32, n: usize) {
     let mut i = 0usize;
     let s = _mm256_set1_ps(scale);
@@ -653,7 +653,7 @@ pub unsafe fn gelu_inplace(x: &mut [f32], n: usize) {
 
 /// Horizontal sum of 8×i32 -> i32 (exact; grouping is irrelevant).
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[inline]
 unsafe fn hsum_epi32(v: __m256i) -> i32 {
     let s = _mm_add_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1));
@@ -664,7 +664,7 @@ unsafe fn hsum_epi32(v: __m256i) -> i32 {
 
 /// Horizontal max of 8×f32 -> f32.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[inline]
 unsafe fn hmax_ps(v: __m256) -> f32 {
     let s = _mm_max_ps(_mm256_castps256_ps128(v), _mm256_extractf128_ps(v, 1));
@@ -677,7 +677,7 @@ unsafe fn hmax_ps(v: __m256) -> f32 {
 /// Exact AVX2 analogue of the NEON `sdot_s32` helper: sign-extend both
 /// operands to i16 and use `_mm256_madd_epi16` (exact i32 pairwise sums).
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[inline]
 unsafe fn sdot32(acc: __m256i, x: *const i8, w: *const i8) -> __m256i {
     let xv = _mm256_loadu_si256(x as *const __m256i);
@@ -703,7 +703,7 @@ unsafe fn sdot32(acc: __m256i, x: *const i8, w: *const i8) -> __m256i {
 /// # Safety
 /// w_bf16 must point to at least out_dim * in_dim valid bf16 values.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 pub unsafe fn quantize_bf16_to_int8(w_bf16: *const u16, out_dim: usize, in_dim: usize) -> (Vec<i8>, Vec<f32>) {
     let mut int8_data = vec![0i8; out_dim * in_dim];
     let mut scales = vec![0.0f32; out_dim];
@@ -774,7 +774,7 @@ pub unsafe fn quantize_bf16_to_int8(w_bf16: *const u16, out_dim: usize, in_dim: 
 /// # Safety
 /// Uses AVX2 intrinsics; pointers must be valid for the stated ranges.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[allow(clippy::too_many_arguments)] // hot kernel entry point; params mirror the C-style ABI
 pub unsafe fn matvec_int8(
     y: &mut [f32],
@@ -866,7 +866,7 @@ pub unsafe fn matvec_int8(
 /// # Safety
 /// Uses AVX2 intrinsics. in_dim should be a multiple of 32 for best perf.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 pub unsafe fn argmax_int8_range(
     x_int8: *const i8,
     x_scale: f32,
@@ -991,7 +991,7 @@ pub unsafe fn argmax_int8_range(
 /// to the per-row math of [`matvec_int8`] (both its 2-row and 1-row-tail
 /// paths); mirrors the NEON `int8_row_dot_f32`.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[inline]
 unsafe fn int8_row_dot_f32(w_row: *const i8, x_int8: *const i8, x_scale: f32, w_scale: f32, in_dim: usize) -> f32 {
     let mut acc0 = _mm256_setzero_si256();
@@ -1021,7 +1021,7 @@ unsafe fn int8_row_dot_f32(w_row: *const i8, x_int8: *const i8, x_scale: f32, w_
 /// dec_hidden = 1024) and to its 2-row path in general. Mirrors the NEON
 /// `int8_row_dot_argmax`.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[inline]
 unsafe fn int8_row_dot_argmax(w_row: *const i8, x_int8: *const i8, x_scale: f32, w_scale: f32, in_dim: usize) -> f32 {
     let mut acc0 = _mm256_setzero_si256();
@@ -1054,7 +1054,7 @@ unsafe fn int8_row_dot_argmax(w_row: *const i8, x_int8: *const i8, x_scale: f32,
 /// # Safety
 /// All pointers must be valid for the stated ranges; slices have length `b`.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn matvec_int8_batched(
     b: usize,
@@ -1087,7 +1087,7 @@ pub unsafe fn matvec_int8_batched(
 /// # Safety
 /// All pointers must be valid for the stated ranges; slices have length `b`.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn swiglu_int8_batched(
     b: usize,
@@ -1122,7 +1122,7 @@ pub unsafe fn swiglu_int8_batched(
 /// # Safety
 /// All pointers must be valid for the stated ranges; slices have length `b`.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn argmax_int8_batched(
     b: usize,

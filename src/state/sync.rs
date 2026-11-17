@@ -248,9 +248,9 @@ impl SyncState {
         });
         let busy = store.busy_ids();
         store.run(async move {
-            let address = peer.address;
+            let (address, id) = (peer.address, peer.device.id.clone());
             let work = progress.clone();
-            let outcome = blocking(move || service::sync_with(address, busy, &work, false, true)).await;
+            let outcome = blocking(move || service::sync_with(address, &id, busy, &work, false, true)).await;
             state.take_in();
             state.progress.replace(None);
             state.mates.set(service::mates());

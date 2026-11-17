@@ -92,6 +92,9 @@ pub(crate) struct Store {
     catalog: Signal<LibraryCatalog>,
     monitor: Signal<MonitorFile>,
     last_scan: Stored<BTreeMap<String, Seen>>,
+    /// Whether a walk of the watched folder is running: a slow folder takes longer than the
+    /// time between scans, and walks must not pile up.
+    scanning: Stored<bool>,
     place: Signal<Place>,
     filter: Signal<Filter>,
     open_job: Signal<Option<String>>,
@@ -195,6 +198,7 @@ impl Store {
             catalog: signal(library_catalog),
             monitor: signal(root_monitor),
             last_scan: stored(BTreeMap::new()),
+            scanning: stored(false),
             place: signal(Place::default()),
             filter: signal(Filter::default()),
             settings_open: signal(false),
@@ -250,13 +254,19 @@ impl Store {
             store.settings.with_untracked(|s| s.extra.get("sidebar_hidden").and_then(|v| v.as_bool()).unwrap_or(false)),
         );
         if let Some(temporary) = store.data_root().map(|root| root.join("temporary")) {
+            // What work in progress writes, left by a run that ended mid-way; the made
+            // playable copies and loudness maps are kept.
             for entry in std::fs::read_dir(temporary).into_iter().flatten().flatten() {
-                if entry.file_name().to_string_lossy().starts_with("player-") {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let left = ["player-", "speech-"].iter().any(|start| name.starts_with(start))
+                    || [".part", "-local.wav"].iter().any(|end| name.ends_with(end));
+                if left {
                     let _ = std::fs::remove_file(entry.path());
                 }
             }
         }
         global::<Handle>().set(Handle(Some(store)));
+        crate::services::transcribe::clean_up_left(store);
         store.configure_sync();
         let root = store.data_root();
         cleanup(move || crate::services::sync::release(&root));
@@ -739,6 +749,7 @@ impl Store {
         }
         if let (Some(root), Some(job)) = (self.data_root(), self.job_now(id))
             && std::path::Path::new(&job.source_path).starts_with(root.join("media"))
+            && !persist::climbs(std::path::Path::new(&job.source_path))
         {
             let _ = std::fs::remove_file(&job.source_path);
         }
@@ -947,13 +958,15 @@ impl Store {
 
     pub(crate) fn scan_watched_folder(&self) {
         let config = self.monitor();
-        if config.folder_path.is_empty() || config.paused {
+        if config.folder_path.is_empty() || config.paused || self.scanning.replace(true) {
             return;
         }
         let store = *self;
         self.run(async move {
             let folder = PathBuf::from(config.folder_path);
-            let Ok(Some(now)) = blocking(move || monitor::scan(&folder)).await else {
+            let scanned = blocking(move || monitor::scan(&folder)).await;
+            store.scanning.replace(false);
+            let Ok(Some(now)) = scanned else {
                 return;
             };
             let last = store.last_scan.replace(now.clone());
@@ -1074,6 +1087,17 @@ impl Store {
         listenook_core::sync::rehome(&mut job, map);
         let name = job.file_name();
         let brought = root.join("media").join(listenook_core::sync::media_file_name(&job.id, &job.file_name()));
+        // The plan was made when the sync started; an edit made here since then is newer than
+        // what arrived, so it stays and goes to the other device next time. Media that came
+        // with it is still taken in.
+        if let Some(existing) = &existing
+            && listenook_core::sync::edited_after(&existing.updated_at, &job.updated_at)
+        {
+            if brought.is_file() {
+                self.adopt_media(&job.id, &brought);
+            }
+            return;
+        }
         let mut removed = persist::load_removed(&root);
         if let Some(at) = removed.get(&job.id) {
             if listenook_core::sync::removal_stands(at, &job.updated_at) {
@@ -1085,12 +1109,15 @@ impl Store {
                 log::error!("saving the removed recordings: {error}");
             }
         }
-        let kept = existing.as_ref().map(|existing| existing.source_path.clone()).filter(|path| is_file(path));
-        if let Some(path) = kept {
-            job.source_path = path;
-        } else if brought.is_file() {
-            job.source_path = brought.to_string_lossy().into_owned();
-        }
+        // The path the other device sent names a file on that device. It is never kept: this
+        // device reads and deletes what a recording's path names, so a path chosen by a peer
+        // could reach any file here. The media is the copy this device has, or the one sync
+        // brings into `media`.
+        let here = existing.as_ref().map(|existing| existing.source_path.clone()).filter(|path| !path.is_empty());
+        job.source_path = match here {
+            Some(path) if is_file(&path) || !brought.is_file() => path,
+            _ => brought.to_string_lossy().into_owned(),
+        };
         listenook_core::sync::keep_title(&mut job, &name);
         found_again(&mut job);
         self.save(&job);
@@ -1110,7 +1137,11 @@ impl Store {
     pub(crate) fn adopt_media(&self, id: &str, path: &std::path::Path) {
         let mut changed = None;
         self.jobs.update(|jobs| {
-            if let Some(job) = jobs.iter_mut().find(|job| job.id == id).filter(|job| !is_file(&job.source_path)) {
+            if let Some(job) = jobs
+                .iter_mut()
+                .find(|job| job.id == id)
+                .filter(|job| !is_file(&job.source_path) || std::path::Path::new(&job.source_path) == path)
+            {
                 let job = Rc::make_mut(job);
                 let name = job.file_name();
                 job.source_path = path.to_string_lossy().into_owned();
