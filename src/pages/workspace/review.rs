@@ -49,8 +49,8 @@ impl Span {
 /// What happens when playback reaches the end of what is playing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Edge {
-    /// A sentence played once: stop.
-    Stop,
+    /// A sentence played once: stop, back at its start when it is known.
+    Stop(Option<usize>),
     /// A repeat: back to its first sentence.
     Loop(usize),
     /// A Mimic pass over this sentence: pause for the learner to say it.
@@ -155,6 +155,9 @@ pub(super) struct Review {
     scroll: Stored<ListScroll>,
     pub(super) looping: Signal<bool>,
     pub(super) revealed: Signal<Option<String>>,
+    /// The sentences typed right in Type answer: shown from then on, blind
+    /// or not.
+    pub(super) answered: Signal<std::collections::BTreeSet<String>>,
     pub(super) editing: Signal<Option<Editing>>,
     pub(super) draft: Signal<String>,
     pub(super) translation_draft: Signal<String>,
@@ -170,9 +173,15 @@ pub(super) struct Review {
     pub(super) reps: Signal<u32>,
     pub(super) waiting: Signal<bool>,
     pub(super) stop_at: Signal<Option<i64>>,
+    /// Type answer with auto replay on: the sentence to play again after
+    /// each time it ends, until it is answered.
+    pub(super) relisten: Signal<Option<usize>>,
     wait: Stored<Option<Spawned<()>>>,
     /// The player is muted while a seek is in flight.
     pub(super) hushed: Signal<bool>,
+    /// A sentence was cut off with a pause: the player plays on, muted,
+    /// until the seek back lands, and pauses then.
+    pub(super) holding: Signal<bool>,
     /// The seek in flight: from where, to where.
     landing: Stored<Option<(i64, i64)>>,
     unhush: Stored<Option<Spawned<()>>>,
@@ -285,7 +294,7 @@ impl Review {
                     .collect()
             })
         });
-        Review {
+        let review = Review {
             store,
             id: stored(id.to_owned()),
             job,
@@ -319,6 +328,7 @@ impl Review {
             scroll: stored(ListScroll::default()),
             looping: signal(false),
             revealed: signal(None),
+            answered: signal(std::collections::BTreeSet::new()),
             editing: signal(None),
             draft: signal(String::new()),
             translation_draft: signal(String::new()),
@@ -346,8 +356,10 @@ impl Review {
             reps: signal(0),
             waiting: signal(false),
             stop_at: signal(None),
+            relisten: signal(None),
             wait: stored(None),
             hushed: signal(false),
+            holding: signal(false),
             landing: stored(None),
             unhush: stored(None),
             edge_timer: stored(None),
@@ -358,7 +370,18 @@ impl Review {
             scrub,
             scrubbed,
             shown,
-        }
+        };
+        // A player kept muted through a pause sounds again once it plays,
+        // unless a seek it waits for is still in flight.
+        effect(move || {
+            let playing = !review.paused.get();
+            untracked(|| {
+                if playing && review.landing.with(|landing| landing.is_none()) && review.hushed.get() {
+                    review.hushed.set(false);
+                }
+            });
+        });
+        review
     }
 
     pub(super) fn id(&self) -> String {
@@ -537,6 +560,13 @@ impl Review {
         self.blind_listening() || (self.side.get() == Side::Practice && self.practice.get() == Practice::Dictation)
     }
 
+    /// Whether sentence `id` shows while listening blind: revealed for now,
+    /// or answered right in Type answer.
+    pub(super) fn unveiled(&self, id: &str) -> bool {
+        self.revealed.with(|revealed| revealed.as_deref() == Some(id))
+            || self.answered.with(|answered| answered.contains(id))
+    }
+
     pub(super) fn blind_listening(&self) -> bool {
         self.store.setting(|s| s.blind_listening_enabled)
     }
@@ -577,11 +607,13 @@ impl Review {
     }
 
     /// Whether the player reports where it is every 50 ms rather than every
-    /// 500 ms: in the foreground, or while the end of a sentence is watched.
+    /// 500 ms: in the foreground, or while the end of a sentence is watched
+    /// (Type answer stops at each one).
     pub(super) fn ticks_often(&self) -> bool {
         lifecycle() != nsh_core::element::Lifecycle::Background
             || self.repeating.with(Option::is_some)
             || self.stop_at.with(Option::is_some)
+            || self.practice.with(|practice| *practice == Practice::Dictation)
     }
 
     /// Moves playback to `position_ms`. Until a seek lands the player goes on
@@ -615,18 +647,39 @@ impl Review {
         self.player.seek(position_ms as f64 / 1000.0);
     }
 
-    /// The seek in flight landed (or is no longer waited for): sound again.
+    /// The seek in flight landed (or is no longer waited for): sound again,
+    /// once it plays. A sentence cut off with a pause stays muted until then:
+    /// AVPlayer can play on for over half a second after a pause that comes
+    /// with a seek, past the time a seek alone takes.
     fn settle(&self) {
         if let Some(fallback) = self.unhush.replace(None) {
             fallback.cancel();
         }
         self.landing.with(|landing| *landing = None);
-        if self.hushed.get_untracked() {
+        if self.holding.get_untracked() {
+            self.holding.set(false);
+        }
+        if self.hushed.get_untracked() && !self.paused.get_untracked() {
             self.hushed.set(false);
         }
     }
 
     pub(super) fn toggle_play(&self) {
+        if self.practice.get_untracked() == Practice::Dictation {
+            // Type answer plays one sentence at a time: from its start, or
+            // not at all while it waits to play again.
+            let waited = self.waiting.get_untracked();
+            self.cancel_wait();
+            let target = untracked(|| self.target());
+            match (self.paused.get_untracked(), target) {
+                (true, Some(index)) if !waited => self.replay_once(index),
+                _ => batch(|| {
+                    self.stop_at.set(None);
+                    self.paused.set(true);
+                }),
+            }
+            return;
+        }
         self.cancel_wait();
         self.stop_at.set(None);
         self.paused.set(!self.paused.get_untracked());
@@ -966,13 +1019,18 @@ impl Review {
     /// Where what is playing ends, and what happens there.
     fn edge(&self) -> Option<(i64, Edge)> {
         if let Some(end) = self.stop_at.get_untracked() {
-            return Some((end, Edge::Stop));
+            return Some((end, Edge::Stop(self.current.get_untracked())));
         }
         let range = untracked(|| self.repeat_range());
         if let Some((first, _)) = range
             && self.practice.get_untracked() == Practice::Mimic
         {
             return Some((self.play_end(first)?, Edge::Mimic(first)));
+        }
+        if range.is_none() && self.practice.get_untracked() == Practice::Dictation {
+            // Type answer never plays on into the next sentence.
+            let current = self.current.get_untracked()?;
+            return Some((self.play_end(current)?, Edge::Stop(Some(current))));
         }
         if let Some(skip) = self.skip_edge(range) {
             return Some(skip);
@@ -995,7 +1053,7 @@ impl Review {
             (Some((_, last)), Some(next)) if next <= last => Edge::Skip(next),
             (Some((first, _)), _) => Edge::Loop(self.next_kept(first).unwrap_or(first)),
             (None, Some(next)) => Edge::Skip(next),
-            (None, None) => Edge::Stop,
+            (None, None) => Edge::Stop(None),
         };
         Some((self.play_end(current)?, edge))
     }
@@ -1032,12 +1090,29 @@ impl Review {
             self.sent_cut.with(|cut| *cut = Some(sent));
         }
         match edge {
-            Edge::Stop => batch(|| {
-                self.stop_at.set(None);
-                self.paused.set(true);
-            }),
+            Edge::Stop(sentence) => {
+                if let Some(index) = sentence {
+                    self.rewind(index);
+                }
+                batch(|| {
+                    self.stop_at.set(None);
+                    self.paused.set(true);
+                });
+                self.relisten_later();
+            }
             Edge::Loop(first) | Edge::Skip(first) => self.jump(self.play_start(first), true),
             Edge::Mimic(index) => self.end_mimic_pass(index),
+        }
+    }
+
+    /// Cuts a sentence off at its end the way a repeat does: a quiet jump
+    /// back to its start, the player playing on until it lands. Paused at the
+    /// same time as the seek, AVPlayer plays on half a second into the next
+    /// sentence, muted or not; a seek alone lands in some 70 ms.
+    fn rewind(&self, index: usize) {
+        self.jump(self.play_start(index), true);
+        if self.landing.with(|landing| landing.is_some()) {
+            self.holding.set(true);
         }
     }
 
@@ -1055,6 +1130,35 @@ impl Review {
         }
     }
 
+    /// After a sentence that Type answer plays again ends: a pause to type,
+    /// then once more, unless something else was played or it was answered.
+    fn relisten_later(&self) {
+        let Some(index) = self.relisten.get_untracked() else {
+            return;
+        };
+        if self.current.get_untracked() != Some(index) {
+            return;
+        }
+        let Some(segment) = self.segment_now(index) else {
+            return;
+        };
+        let pause_ms =
+            dictation::replay_pause_ms(segment.end_ms - segment.start_ms, f64::from(self.rate.get_untracked()));
+        self.waiting.set(true);
+        let review = *self;
+        let wait = spawn(async move {
+            timer(Duration::from_millis(pause_ms as u64)).await;
+            review.waiting.set(false);
+            review.wait.replace(None);
+            if review.relisten.get_untracked() == Some(index) && review.paused.get_untracked() {
+                review.replay_once(index);
+            }
+        });
+        if let Some(earlier) = self.wait.replace(Some(wait)) {
+            earlier.cancel();
+        }
+    }
+
     fn end_mimic_pass(&self, index: usize) {
         let Some(segment) = self.segment_now(index) else {
             return;
@@ -1067,6 +1171,7 @@ impl Review {
             f64::from(self.rate.get_untracked()),
             self.store.settings().mimic_pause_seconds,
         );
+        self.rewind(index);
         batch(|| {
             self.reps.set(reps);
             self.paused.set(true);
