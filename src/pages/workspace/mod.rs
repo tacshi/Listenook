@@ -41,7 +41,13 @@ pub(crate) fn reader(id: &str) -> impl IntoElement {
         .into_element()
 }
 
-const PRACTICE_HEIGHT: f32 = 340.0;
+/// Practice docked at the bottom of the reader: about a third of the
+/// window, within these.
+const ANSWER_MIN: f32 = 200.0;
+const ANSWER_MAX: f32 = 360.0;
+/// A keyboard taller than this is the software one (a hardware keyboard
+/// leaves only its shortcut bar).
+const SOFT_KEYBOARD: f32 = 120.0;
 
 fn opened(id: &str) -> impl IntoElement {
     let review = Review::new(id);
@@ -291,12 +297,20 @@ fn opened(id: &str) -> impl IntoElement {
         });
 
     let side = move || review.side.get();
-    let narrow = move || crate::shell::page_stacks() && side() != Side::None && !review.fullscreen.get();
+    let dock = move || review.docked();
+    let narrow = move || (crate::shell::page_stacks() && side() != Side::None && !review.fullscreen.get()) || dock();
     let on_top = move || {
         has_video && side() == Side::Video && !review.fullscreen.get() && (review.video_on_top.get() || narrow())
     };
     let stacked = move || on_top() || narrow();
     let typing = move || crate::platform::is_phone() && keyboard_height().0 > 0.0;
+    let soft_keyboard = move || crate::platform::is_phone() && keyboard_height().0 > SOFT_KEYBOARD;
+    // Docked on a touch device, the answer sits on the keyboard: the reader
+    // ends where it starts (the root's padding already keeps the home
+    // indicator's inset).
+    let lift = move || {
+        if dock() && crate::platform::is_phone() { (keyboard_height().0 - safe_area().bottom.0).max(0.0) } else { 0.0 }
+    };
     let hud = signal(true);
     let wait = std::rc::Rc::new(std::cell::RefCell::new(None::<Spawned<()>>));
     let wake = move || {
@@ -325,10 +339,16 @@ fn opened(id: &str) -> impl IntoElement {
         .style_with(move |s| match (review.fullscreen.get(), side()) {
             (true, _) => s.flex_1(),
             (false, Side::None) => s.w(px(0.0)),
-            (false, Side::Video) if narrow() => s.w_full().h(px(crate::shell::page_width() * 9.0 / 16.0)).border_b_1(),
-            (false, Side::Practice) if narrow() => {
-                s.w_full().h(px((window().height.0 * 0.45).min(PRACTICE_HEIGHT))).border_t_1()
+            (false, Side::Practice) if dock() => {
+                let room = window().height.0;
+                let height = if soft_keyboard() {
+                    ((room - keyboard_height().0) * 0.55).max(ANSWER_MIN)
+                } else {
+                    (room / 3.0).clamp(ANSWER_MIN, ANSWER_MAX)
+                };
+                s.w_full().h(px(height))
             }
+            (false, Side::Video) if narrow() => s.w_full().h(px(crate::shell::page_width() * 9.0 / 16.0)).border_b_1(),
             (false, _) if narrow() => s.w_full().h(px(window().height.0 * 0.45)).border_t_1(),
             (false, _) if on_top() => s.w_full().h(px(review.video_height.get())).border_b_1(),
             (false, _) => s.w(px(review.side_width.get())).border_l_1(),
@@ -336,7 +356,11 @@ fn opened(id: &str) -> impl IntoElement {
         .flex_shrink_0()
         .overflow_hidden()
         .border_color(|| theme().border)
-        .bg(move || if review.fullscreen.get() { tokens::stage() } else { theme().card })
+        .bg(move || match (review.fullscreen.get(), dock()) {
+            (true, _) => tokens::stage(),
+            (false, true) => theme().background,
+            (false, false) => theme().card,
+        })
         .child(
             view()
                 .style_with(move |s| {
@@ -418,6 +442,7 @@ fn opened(id: &str) -> impl IntoElement {
 
     view()
         .flex_1()
+        .pb(move || px(lift()))
         .on_mouse_move(move |_: &MouseEvent| wake())
         .style_with(move |s| if review.fullscreen.get() && !hud.get() { s.cursor(Cursor::None) } else { s })
         .child(when(move || !review.fullscreen.get(), move || header(review, export, rename, translate)))
@@ -446,7 +471,7 @@ fn opened(id: &str) -> impl IntoElement {
                     move || when(on_top, move || divider(review, true)).otherwise(move || divider(review, false)),
                 ))),
         )
-        .child(transport(review, hud))
+        .child(when(move || !(dock() && soft_keyboard()), move || transport(review, hud)))
         .child(export_dialog(export))
         .child(rename_dialog(rename))
         .child(translate_dialog(review, translate))
@@ -504,7 +529,7 @@ fn side_toggle(review: Review, side: Side, glyph: Icon, name: &'static str) -> i
             true => Side::None,
         };
         match next {
-            Side::Practice => practice::start(review, Practice::Mimic),
+            Side::Practice => practice::start(review, practice::last_mode(review)),
             _ => {
                 if review.side.get_untracked() == Side::Practice {
                     practice::stop(review);
@@ -592,7 +617,9 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
         )))
         .child(side_toggle(review, Side::Practice, Icon::Practice, "Practice"))
         .child(side_toggle(review, Side::Brief, Icon::Sparkles, "AI Brief"))
-        .child(when(move || review.has_video, move || video_toggle(review)))
+        // Practice has the bottom of the reader and no picture: no video
+        // toggle while it is open.
+        .child(when(move || review.has_video && review.side.get() != Side::Practice, move || video_toggle(review)))
         .child(when(
             move || review.has_video && review.side.get() == Side::Video && !crate::shell::page_stacks(),
             move || {

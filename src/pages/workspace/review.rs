@@ -173,9 +173,9 @@ pub(super) struct Review {
     pub(super) reps: Signal<u32>,
     pub(super) waiting: Signal<bool>,
     pub(super) stop_at: Signal<Option<i64>>,
-    /// Type answer with auto replay on: the sentence to play again after
-    /// each time it ends, until it is answered.
-    pub(super) relisten: Signal<Option<usize>>,
+    /// Counts the times a sentence played on its own ends (Type answer
+    /// plays it again after).
+    pub(super) ended: Signal<u64>,
     wait: Stored<Option<Spawned<()>>>,
     /// The player is muted while a seek is in flight.
     pub(super) hushed: Signal<bool>,
@@ -356,7 +356,7 @@ impl Review {
             reps: signal(0),
             waiting: signal(false),
             stop_at: signal(None),
-            relisten: signal(None),
+            ended: signal(0),
             wait: stored(None),
             hushed: signal(false),
             holding: signal(false),
@@ -558,6 +558,12 @@ impl Review {
 
     pub(super) fn blind(&self) -> bool {
         self.blind_listening() || (self.side.get() == Side::Practice && self.practice.get() == Practice::Dictation)
+    }
+
+    /// Practice is open, docked across the bottom of the reader under the
+    /// transcript (the other panels take the side column).
+    pub(super) fn docked(&self) -> bool {
+        self.side.get() == Side::Practice && !self.fullscreen.get()
     }
 
     /// Whether sentence `id` shows while listening blind: revealed for now,
@@ -1097,8 +1103,8 @@ impl Review {
                 batch(|| {
                     self.stop_at.set(None);
                     self.paused.set(true);
+                    self.ended.update(|ended| *ended += 1);
                 });
-                self.relisten_later();
             }
             Edge::Loop(first) | Edge::Skip(first) => self.jump(self.play_start(first), true),
             Edge::Mimic(index) => self.end_mimic_pass(index),
@@ -1127,35 +1133,6 @@ impl Review {
         }
         if let Some(measured) = playback::lag(sent.from_ms, sent.waited_ms, position_ms, sent.rate) {
             self.lag_ms.with(|lag| *lag = playback::adjusted_lag(*lag, measured));
-        }
-    }
-
-    /// After a sentence that Type answer plays again ends: a pause to type,
-    /// then once more, unless something else was played or it was answered.
-    fn relisten_later(&self) {
-        let Some(index) = self.relisten.get_untracked() else {
-            return;
-        };
-        if self.current.get_untracked() != Some(index) {
-            return;
-        }
-        let Some(segment) = self.segment_now(index) else {
-            return;
-        };
-        let pause_ms =
-            dictation::replay_pause_ms(segment.end_ms - segment.start_ms, f64::from(self.rate.get_untracked()));
-        self.waiting.set(true);
-        let review = *self;
-        let wait = spawn(async move {
-            timer(Duration::from_millis(pause_ms as u64)).await;
-            review.waiting.set(false);
-            review.wait.replace(None);
-            if review.relisten.get_untracked() == Some(index) && review.paused.get_untracked() {
-                review.replay_once(index);
-            }
-        });
-        if let Some(earlier) = self.wait.replace(Some(wait)) {
-            earlier.cancel();
         }
     }
 

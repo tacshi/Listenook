@@ -43,9 +43,23 @@ wins) and the place left in each episode (the one saved last wins); whether
 this device can be found is set in that dialog, where it matters.
 
 The reader has one transport and one side panel showing one thing at a time:
-Practice (mimic or dictation), the AI Brief, or the video. A setting is made
-where it is used: how to transcribe in the Library's options, what a
-transcript shows in the reader's menu, accounts and defaults in Settings.
+Practice, the AI Brief, or the video. Practice is not a side column: it docks
+as a composer card across the bottom third of the reader, under the
+full-width transcript, centered and at most 720pt wide on a desktop, the
+whole width on a phone or tablet, where it sits on the software keyboard and
+the transport steps aside while that is up. Its top row switches between
+Type answer and Mimic, in that order (understand, then say it), and holds the
+mode's own controls; Practice opens in the mode used last, Type answer at
+first. Type answer has no
+options or Replay button: until it is answered, the sentence plays again
+1.5 s after each time it ends (typing holds that off until 1.5 s after the
+last key), the transport's play button plays it from its start, a wrong
+check plays it at once, and a right one moves to the next sentence after
+1.5 s. The header's video toggle hides while Practice is open.
+
+A setting is made where it is used: how to transcribe in the Library's
+options, what a transcript shows in the reader's menu, accounts and defaults
+in Settings.
 
 ## Targets
 
@@ -81,7 +95,8 @@ Colors live in `theme.json` and are read through `nsh_base::theme()` and
   dialogs. Full circles only for status dots, switch thumbs and artwork-less
   avatars.
 - **Type:** the platform UI font. `text-lg` page titles, `text-lg`
-  transcript text, `text-sm` interface text, `text-xs` metadata. Two weights:
+  transcript text, `text-2xl` practice sentences and answers, `text-sm` interface text,
+  `text-xs` metadata. Two weights:
   regular and medium/semibold. Times use tabular figures.
 - **Spacing:** Tailwind's 4pt scale. 24pt page inset shared by every region
   of a page (`ui::PAGE_INSET`); 4 / 8 / 12 / 16 / 24 for parts of a control,
@@ -176,7 +191,8 @@ With reduced motion, presses do not scale, entrances land at once
 | A side panel opens or changes | Its toolbar toggle's fill cross-fades, `FAST`; the panel takes its width at once | Instant |
 | Position | No motion: the slider follows playback 10 times a second and the thumb 1:1 while dragged | — |
 | Search opens | The search bar drops in from the header | Appears |
-| Dictation checked | Right: the verdict rises in. Wrong: it shakes once | Appears |
+| Practice opens or changes mode | The composer card rises in at the bottom of the reader, `FadeInUp` | Appears |
+| Dictation checked | The typed words turn into green and red marks in place. Right: the marks rise in. Wrong: they shake once, and the first word typed wrong comes selected | Appears |
 | Mimic between passes | The reps badge turns to the accent while it is the user's turn | Same |
 | AI Brief generating | Progress bar, indeterminate for a single request | Static |
 | Evidence chip pressed | Wash; the transcript scrolls to the sentence | Jumps |
