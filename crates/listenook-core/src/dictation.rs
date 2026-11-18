@@ -64,6 +64,37 @@ pub fn compare(reference: &str, answer: &str) -> Vec<DictationWord> {
         }
     }
     out.reverse();
+    run_together(out)
+}
+
+/// Words run together or apart compared as the same: `the right` typed for a transcript's
+/// `theright` (a provider can leave a space out), or `theright` for `the right`. They count as
+/// matching, with the words as typed, one mark per word typed.
+fn run_together(words: Vec<DictationWord>) -> Vec<DictationWord> {
+    use DictationWord::{Different, Extra, Matching, Missing};
+    let joins = |a: &str, b: &str, whole: &str| format!("{}{}", normalized(a), normalized(b)) == normalized(whole);
+    let mut out: Vec<DictationWord> = Vec::with_capacity(words.len());
+    let mut words = words.into_iter().peekable();
+    while let Some(word) = words.next() {
+        let merged = match (&word, words.peek()) {
+            (Different(whole, a), Some(Extra(b))) | (Extra(a), Some(Different(whole, b))) if joins(a, b, whole) => {
+                Some(vec![Matching(a.clone()), Matching(b.clone())])
+            }
+            (Different(first, typed), Some(Missing(second))) | (Missing(first), Some(Different(second, typed)))
+                if joins(first, second, typed) =>
+            {
+                Some(vec![Matching(typed.clone())])
+            }
+            _ => None,
+        };
+        match merged {
+            Some(merged) => {
+                words.next();
+                out.extend(merged);
+            }
+            None => out.push(word),
+        }
+    }
     out
 }
 
@@ -156,6 +187,22 @@ mod tests {
         assert_eq!(fix("Welcome back to the show.", "back to the show"), Some(0..0));
         assert_eq!(fix("Welcome back.", "welcome back now"), Some(13..16));
         assert_eq!(fix("Welcome back.", "welcome back"), None);
+    }
+
+    #[test]
+    fn words_run_together_or_apart_still_match() {
+        let reference = "you send it to the left or theright, or the middle";
+        let answer = "you send it to the left or the right or the middle";
+        let marks = compare(reference, answer);
+        assert!(is_correct(&marks), "{marks:?}");
+        assert_eq!(marks.len(), words(answer).len(), "a mark for each word typed");
+        assert_eq!(first_fix(answer, &marks), None);
+        let joined = compare("Turn to the right now.", "turn to theright now");
+        assert!(is_correct(&joined), "{joined:?}");
+        assert_eq!(joined.len(), 4, "one mark for the one word typed");
+        assert!(!is_correct(&compare("It's all right.", "it's alright")), "not the same letters");
+        let typo = compare("the right one", "the rite one");
+        assert!(!is_correct(&typo), "a word typed wrong is still wrong");
     }
 
     #[test]

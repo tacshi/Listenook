@@ -229,7 +229,60 @@ fn join_optional(left: Option<&str>, right: Option<&str>) -> Option<String> {
     }
 }
 
+/// Where a space belongs that a transcript left out, as char offsets into `text` (the space
+/// goes before the char there): after a comma, semicolon, colon, question or exclamation
+/// mark between two words (`money,right`), and after a full stop between a lowercase letter
+/// and a capital (`end.Next`). Numbers (`1,500`, `10:30`, `3.5`), abbreviations (`U.S.`) and
+/// scripts written without spaces are left as they are.
+pub fn missing_spaces(text: &str) -> Vec<u32> {
+    let latin = |c: char| c.is_alphabetic() && (c.is_ascii() || ('\u{00C0}'..='\u{024F}').contains(&c));
+    let chars: Vec<char> = text.chars().collect();
+    chars
+        .windows(3)
+        .enumerate()
+        .filter(|(_, three)| {
+            let [before, mark, after] = [three[0], three[1], three[2]];
+            match mark {
+                ',' | ';' | ':' | '?' | '!' => latin(before) && latin(after),
+                '.' => latin(before) && before.is_lowercase() && latin(after) && after.is_uppercase(),
+                _ => false,
+            }
+        })
+        .map(|(at, _)| at as u32 + 2)
+        .collect()
+}
+
+/// Puts in the spaces a transcript left out ([`missing_spaces`]), moving highlights after
+/// each along; whether any went in. Some providers send a word without its space.
+pub fn tidy_spacing(document: &mut Document) -> bool {
+    let mut changed = false;
+    for segment in &mut document.segments {
+        let at = missing_spaces(&segment.text);
+        if at.is_empty() {
+            continue;
+        }
+        let mut text = String::with_capacity(segment.text.len() + at.len());
+        for (index, c) in segment.text.chars().enumerate() {
+            if at.contains(&(index as u32)) {
+                text.push(' ');
+            }
+            text.push(c);
+        }
+        let before = |offset: u32, inclusive: bool| {
+            at.iter().filter(|&&space| if inclusive { space <= offset } else { space < offset }).count() as u32
+        };
+        for highlight in &mut segment.highlights {
+            highlight.start += before(highlight.start, true);
+            highlight.end += before(highlight.end, false);
+        }
+        segment.text = text;
+        changed = true;
+    }
+    changed
+}
+
 pub fn normalize_segments(document: &mut Document) {
+    tidy_spacing(document);
     document.segments.retain(|s| !s.text.trim().is_empty());
     if document.segments.len() < 2 {
         return;
@@ -282,6 +335,36 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_space_left_out_after_punctuation_goes_back_in() {
+        let tidied = |text: &str| {
+            let segment = Segment { text: text.into(), ..Segment::default() };
+            let mut document = Document { segments: vec![segment], ..Document::default() };
+            tidy_spacing(&mut document);
+            document.segments.remove(0).text
+        };
+        assert_eq!(tidied("It's too scary to lose money,right?"), "It's too scary to lose money, right?");
+        assert_eq!(tidied("Really?Yes!Go;now:here"), "Really? Yes! Go; now: here");
+        assert_eq!(tidied("That's the end.Next one."), "That's the end. Next one.");
+        for kept in ["1,500 people at 10:30", "Pi is 3.14", "the U.S.A. and Mr. Smith", "e.g. this", "你好,世界"] {
+            assert_eq!(tidied(kept), kept);
+        }
+    }
+
+    #[test]
+    fn highlights_move_with_the_spaces_put_in() {
+        let text = "lose money,right now";
+        let money = crate::models::Highlight { start: 5, end: 11 };
+        let right = crate::models::Highlight { start: 11, end: 16 };
+        let segment = Segment { text: text.into(), highlights: vec![money, right], ..Segment::default() };
+        let mut document = Document { segments: vec![segment], ..Document::default() };
+        assert!(tidy_spacing(&mut document));
+        let segment = &document.segments[0];
+        let words: Vec<&str> = segment.highlights.iter().map(|h| crate::highlights::slice(&segment.text, *h)).collect();
+        assert_eq!(words, ["money,", "right"]);
+        assert!(!tidy_spacing(&mut document), "once is enough");
+    }
 
     fn token(text: &str, start: i64, end: i64, speaker: &str) -> Value {
         json!({"text": text, "start_ms": start, "end_ms": end, "speaker": speaker})
