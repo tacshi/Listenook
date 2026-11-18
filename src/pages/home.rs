@@ -222,9 +222,7 @@ fn refresh_followed() {
         if fetched.is_some_and(|at| at >= stale) {
             continue;
         }
-        spawn(async move {
-            let _ = podcasts::load_feed(&followed.feed_url).await;
-        });
+        spawn(podcasts::refresh(followed.feed_url));
     }
 }
 

@@ -146,9 +146,7 @@ impl PodcastState {
             log::error!("saving listening progress: {error}");
         }
         for url in missing {
-            spawn(async move {
-                let _ = crate::services::podcasts::load_feed(&url).await;
-            });
+            spawn(crate::services::podcasts::refresh(url));
         }
     }
 

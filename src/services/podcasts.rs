@@ -53,6 +53,39 @@ pub(crate) async fn load_feed(url: &str) -> Result<Feed, &'static str> {
     Ok(feed)
 }
 
+/// Refreshes the followed show at `url`. One saved at an address that is no
+/// feed (early versions saved a show's website) moves to its feed, found by
+/// its name and author, once a run.
+pub(crate) async fn refresh(url: String) {
+    if load_feed(&url).await != Err("podcast_invalid_feed") {
+        return;
+    }
+    thread_local! {
+        static TRIED: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+    }
+    if !TRIED.with(|tried| tried.borrow_mut().insert(url.clone())) {
+        return;
+    }
+    let podcasts = store().podcast;
+    let Some(followed) = podcasts.followed().into_iter().find(|followed| followed.feed_url == url) else {
+        return;
+    };
+    let Ok(found) = search(&followed.title).await else {
+        return;
+    };
+    let Some(show) = podcast::same_show_in(&followed, &found) else {
+        log::warn!("no feed found for the followed show {:?} at {url}", followed.title);
+        return;
+    };
+    let Ok(feed) = load_feed(&show.feed_url).await else {
+        return;
+    };
+    podcasts.set_followed(&feed, true);
+    if podcasts.is_followed(&url) {
+        podcasts.set_followed(&Feed { feed_url: url, ..Feed::default() }, false);
+    }
+}
+
 pub(crate) fn job_of(episode_id: &str) -> Option<String> {
     store()
         .jobs()

@@ -175,15 +175,30 @@ impl Catalog {
 }
 
 fn same_show(a: &Followed, b: &Followed) -> bool {
+    a.feed_url != b.feed_url && same_name((&a.title, a.author.as_deref()), (&b.title, b.author.as_deref()))
+}
+
+/// Whether two shows go by the same title and, where both name one, the
+/// same author, case and spacing aside.
+fn same_name(a: (&str, Option<&str>), b: (&str, Option<&str>)) -> bool {
     let plain = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
-    let author = |followed: &Followed| followed.author.as_deref().map(plain).filter(|author| !author.is_empty());
-    a.feed_url != b.feed_url
-        && !plain(&a.title).is_empty()
-        && plain(&a.title) == plain(&b.title)
-        && match (author(a), author(b)) {
+    let author = |author: Option<&str>| author.map(plain).filter(|author| !author.is_empty());
+    !plain(a.0).is_empty()
+        && plain(a.0) == plain(b.0)
+        && match (author(a.1), author(b.1)) {
             (Some(a), Some(b)) => a == b,
             _ => true,
         }
+}
+
+/// The show among `found` (a search's) that `followed` is, at another
+/// address: what to follow instead when its own address is no feed.
+pub fn same_show_in<'a>(followed: &Followed, found: &'a [ShowSummary]) -> Option<&'a ShowSummary> {
+    found.iter().find(|show| {
+        !show.feed_url.is_empty()
+            && show.feed_url != followed.feed_url
+            && same_name((&followed.title, followed.author.as_deref()), (&show.title, Some(&show.author)))
+    })
 }
 
 pub fn moved_to(before: &[ListenProgress], after: &[ListenProgress], episode_id: &str) -> Option<i64> {
@@ -687,6 +702,30 @@ mod tests {
             "the dropped follow is unfollowed, so syncing does not bring it back"
         );
         assert!(!catalog.drop_duplicate_follows("2026-11-18T10:00:01.000Z"), "a second pass changes nothing");
+    }
+
+    #[test]
+    fn a_show_saved_at_its_website_is_found_by_its_name_and_author() {
+        let followed = Followed {
+            feed_url: "https://chriswillx.com/books".into(),
+            title: "Modern Wisdom".into(),
+            author: Some("Chris Williamson".into()),
+            ..Default::default()
+        };
+        let show = |title: &str, author: &str, url: &str| ShowSummary {
+            title: title.into(),
+            author: author.into(),
+            feed_url: url.into(),
+            ..Default::default()
+        };
+        let found = [
+            show("Modern Wisdom Clips", "Chris Williamson", "https://feeds.example/clips"),
+            show("Modern Wisdom", "Someone Else", "https://feeds.example/other"),
+            show("modern  wisdom", "Chris Williamson", "https://feeds.example/modern-wisdom"),
+        ];
+        let moved = same_show_in(&followed, &found).map(|show| show.feed_url.as_str());
+        assert_eq!(moved, Some("https://feeds.example/modern-wisdom"));
+        assert_eq!(same_show_in(&followed, &found[..2]), None, "no other show is taken for it");
     }
 
     #[test]
