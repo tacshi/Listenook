@@ -9,8 +9,8 @@ use super::review::{Practice, Review, Side};
 use crate::{
     state::{l, store, tr},
     ui::{
-        self, Icon, Size, Status, Variant, badge, field, hint, icon, icon_text_button, segmented, select, text_area,
-        tokens,
+        self, Icon, Size, Status, Variant, badge, checkbox, field, hint, icon, icon_text_button, segmented, select,
+        text_area, tokens,
     },
 };
 
@@ -79,6 +79,9 @@ pub(super) fn practice_panel(review: Review) -> impl IntoElement {
     )
 }
 
+/// How long a correct answer stays up before Auto next moves on.
+const AUTO_NEXT_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
+
 fn dictation_panel(review: Review) -> impl IntoElement {
     let answer = signal(String::new());
     let result = signal(None::<Vec<DictationWord>>);
@@ -109,33 +112,109 @@ fn dictation_panel(review: Review) -> impl IntoElement {
             }
         });
     });
-    let check = move || {
-        let (Some(segment), true) = (untracked(target), untracked(supported)) else {
-            return;
-        };
-        if answer.with_untracked(|a| a.trim().is_empty()) {
-            return;
-        }
-        store().activity.touch();
-        let words = dictation::compare(&segment.text, &answer.get_untracked());
-        batch(|| {
-            review.paused.set(true);
-            if dictation::is_correct(&words) {
-                review.revealed.set(Some(segment.id.clone()));
+    let solved = move || result.with(|r| r.as_ref().is_some_and(|words| dictation::is_correct(words)));
+    let auto_replay = move || store().setting(|s| s.dictation_auto_replay);
+    let auto_next = move || store().setting(|s| s.dictation_auto_next);
+    effect(move || {
+        let relisten = pinned.get().filter(|_| auto_replay() && !solved());
+        untracked(|| {
+            if review.relisten.get() != relisten {
+                review.relisten.set(relisten);
             }
-            result.set(Some(words));
         });
-    };
+    });
+    cleanup(move || review.relisten.set(None));
+    let advance = stored(None::<Spawned<()>>);
+    cleanup(move || {
+        if let Some(task) = advance.replace(None) {
+            task.cancel();
+        }
+    });
     let next = move || {
+        if let Some(task) = advance.replace(None) {
+            task.cancel();
+        }
         let next = review.next_kept(pinned.get_untracked().map_or(0, |index| index + 1));
         if let Some(next) = next {
             begin(next);
             review.replay_once(next);
         }
     };
+    let field = element_ref();
+    // The answer as checked, and the caret put after the check: typing or
+    // moving the caret takes the marks off.
+    let checked_text = stored(String::new());
+    let placed = stored(None::<u32>);
+    let refocus = stored(false);
+    let check = move || {
+        let (Some(segment), true) = (untracked(target), untracked(supported)) else {
+            return;
+        };
+        let typed = answer.get_untracked();
+        if typed.trim().is_empty() {
+            return;
+        }
+        store().activity.touch();
+        let words = dictation::compare(&segment.text, &typed);
+        let correct = dictation::is_correct(&words);
+        let again = !correct && untracked(auto_replay);
+        let at = dictation::first_fix(&typed, &words).unwrap_or(typed.len());
+        let caret = typed[..at].encode_utf16().count() as u32;
+        checked_text.with(|text| *text = typed);
+        placed.with(|placed| *placed = Some(caret));
+        refocus.with(|once| *once = true);
+        batch(|| {
+            if !again {
+                review.paused.set(true);
+            }
+            if correct {
+                review.answered.update(|answered| {
+                    answered.insert(segment.id.clone());
+                });
+            }
+            result.set(Some(words));
+        });
+        field.focus();
+        field.set_selection(caret, caret);
+        if again && let Some(index) = pinned.get_untracked() {
+            review.replay_once(index);
+        }
+        if correct && untracked(auto_next) {
+            let at = pinned.get_untracked();
+            let task = spawn(async move {
+                timer(AUTO_NEXT_AFTER).await;
+                advance.replace(None);
+                if pinned.get_untracked() == at && untracked(solved) {
+                    next();
+                }
+            });
+            if let Some(earlier) = advance.replace(Some(task)) {
+                earlier.cancel();
+            }
+        }
+    };
+    let checked = computed(move || result.with(Option::is_some));
+    // Back to typing where the caret is: the marks go until the next check.
+    let edit = move || {
+        if !untracked(|| checked.get()) {
+            return;
+        }
+        if let Some(task) = advance.replace(None) {
+            task.cancel();
+        }
+        result.set(None);
+    };
+    effect(move || {
+        let changed = answer.with(|typed| checked_text.with(|text| text != typed));
+        if changed {
+            untracked(edit);
+        }
+    });
     let submit = move || {
-        if result.with_untracked(|r| r.as_ref().is_some_and(|words| dictation::is_correct(words))) {
+        if untracked(solved) {
             next();
+        } else if untracked(|| checked.get()) {
+            edit();
         } else {
             check();
         }
@@ -146,13 +225,51 @@ fn dictation_panel(review: Review) -> impl IntoElement {
     view()
         .gap_3()
         .child(
-            text_area(answer, l("Type what you hear"))
-                .auto_correct(false)
-                .auto_capitalize(AutoCapitalize::None)
-                .submit_behavior(SubmitBehavior::Submit)
-                .return_key_type(ReturnKeyType::Done)
-                .on_submit(move |_: &str| submit())
-                .auto_focus(true),
+            // One input throughout, keeping its focus and caret; checked, it
+            // goes see-through over its words marked under it (covered, UIKit
+            // can take the keyboard focus off it).
+            view()
+                .child(
+                    text_area(answer, l("Type what you hear"))
+                        .element_ref(&field)
+                        .auto_correct(false)
+                        .auto_capitalize(AutoCapitalize::None)
+                        .submit_behavior(SubmitBehavior::Submit)
+                        .return_key_type(ReturnKeyType::Done)
+                        .on_submit(move |_: &str| submit())
+                        .on_blur(move |_: &()| {
+                            // Lost as the marks come (UIKit's focus engine on
+                            // an iPad with a keyboard): back, once a check.
+                            if untracked(|| checked.get()) && refocus.with(std::mem::take) {
+                                field.focus();
+                            }
+                        })
+                        .on_selection_change(move |selection: &Selection| {
+                            let moved = placed.with(|placed| *placed != Some(selection.start))
+                                || selection.end != selection.start;
+                            if moved {
+                                edit();
+                            }
+                        })
+                        .text_base()
+                        .text_color(move || theme().foreground.opacity(if checked.get() { 0.0 } else { 1.0 }))
+                        .caret(move || !checked.get())
+                        .style_when(
+                            move || checked.get(),
+                            |s| {
+                                s.absolute()
+                                    .inset_0()
+                                    .z_index(1)
+                                    .bg(AdaptiveColor::TRANSPARENT)
+                                    .border_color(AdaptiveColor::TRANSPARENT)
+                            },
+                        )
+                        .auto_focus(true),
+                )
+                .child(dynamic(move || {
+                    let words = result.get()?;
+                    Some(untracked(|| marked_answer(&words).into_element()))
+                })),
         )
         .child(
             view()
@@ -172,6 +289,26 @@ fn dictation_panel(review: Review) -> impl IntoElement {
                 }))
                 .child(icon_text_button(Variant::Ghost, Size::Md, Icon::SkipForward, l("Next")).on_press(next)),
         )
+        .child(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap_4()
+                .child(checkbox(l("Auto replay"), auto_replay, move |on| {
+                    store().update_settings(|s| s.dictation_auto_replay = on);
+                    if on
+                        && review.paused.get_untracked()
+                        && !untracked(solved)
+                        && let Some(index) = pinned.get_untracked()
+                    {
+                        review.replay_once(index);
+                    }
+                }))
+                .child(checkbox(l("Auto next"), auto_next, move |on| {
+                    store().update_settings(|s| s.dictation_auto_next = on);
+                })),
+        )
         .child(when(move || !supported(), || hint(l("Word checking supports English only."))))
         .child(dynamic(move || {
             let Some(words) = result.get() else {
@@ -183,12 +320,10 @@ fn dictation_panel(review: Review) -> impl IntoElement {
 
 fn verdict(words: &[DictationWord]) -> impl IntoElement {
     let correct = dictation::is_correct(words);
-    let entrance = motion().entering(if correct { MotionPreset::FadeInUp } else { MotionPreset::Shake });
-    let word = |label: String, wrong: bool| {
-        text(label).text_sm().text_color(move || if wrong { theme().destructive } else { theme().foreground })
-    };
     view()
-        .bind_motion(&entrance)
+        .flex_row()
+        .flex_wrap()
+        .items_center()
         .gap_2()
         .child(
             view()
@@ -203,24 +338,106 @@ fn verdict(words: &[DictationWord]) -> impl IntoElement {
                         .font_weight(FontWeight::MEDIUM),
                 ),
         )
-        .child(when(move || !correct, {
-            let words = words.to_vec();
-            move || {
-                view().flex_row().flex_wrap().gap_1().children(words.iter().map(|w| match w {
-                    DictationWord::Matching(expected) => word(expected.clone(), false).into_element(),
-                    DictationWord::Different(_, actual) => word(actual.clone(), true).underline().into_element(),
-                    DictationWord::Missing(_) => word("…".into(), true).font_weight(FontWeight::BOLD).into_element(),
-                    DictationWord::Extra(actual) => word(actual.clone(), true).line_through().into_element(),
-                }))
+        .child(when(move || !correct, || hint(l("Type to fix it: the caret is at the first mistake."))))
+}
+
+/// The checked answer over the input, word by word: each in a green or red
+/// box, a missing word as a dashed "…" (the sentence stays hidden), an extra
+/// one struck through. Presses go through to the input under it.
+fn marked_answer(words: &[DictationWord]) -> impl IntoElement {
+    let correct = dictation::is_correct(words);
+    let entrance = motion().entering(if correct { MotionPreset::FadeInUp } else { MotionPreset::Shake });
+    let tone = move || if correct { tokens::success() } else { theme().destructive };
+    let caret = words.iter().position(|word| !matches!(word, DictationWord::Matching(_))).map(|at| {
+        let after = !matches!(words[at], DictationWord::Missing(_));
+        (at, after)
+    });
+    view()
+        .label(tr("Checked answer"))
+        .pointer_events(PointerEvents::None)
+        .bind_motion(&entrance)
+        .flex_row()
+        .flex_wrap()
+        .items_start()
+        // A space between words as the input sets them, so each word stays
+        // about where it was typed; a little between lines keeps the boxes
+        // of one off the next.
+        .gap_x(px(WORD_SPACE))
+        .gap_y(px(4.0))
+        .min_h(px(72.0))
+        .px_3()
+        .py_2()
+        .rounded(tokens::radius)
+        .border_1()
+        .border_color(tone)
+        .bg(|| theme().card)
+        .children(words.iter().enumerate().map(|(index, word)| {
+            let chip = match word {
+                DictationWord::Matching(expected) => mark(expected.clone(), Mark::Right),
+                DictationWord::Different(_, actual) => mark(actual.clone(), Mark::Wrong),
+                DictationWord::Missing(_) => mark("…".into(), Mark::Missing),
+                DictationWord::Extra(actual) => mark(actual.clone(), Mark::Extra),
+            };
+            match caret {
+                Some((at, after)) if at == index => with_caret(chip, after),
+                _ => chip,
             }
         }))
+}
+
+/// The input's caret, drawn where it is under the marks: after the first
+/// word typed wrong, or before the first missing one.
+fn with_caret(chip: AnyElement, after: bool) -> AnyElement {
+    let on = signal(true);
+    set_interval(std::time::Duration::from_millis(530), move || on.update(|on| *on = !*on));
+    let bar = view()
+        .absolute()
+        .top(px(2.0))
+        .bottom(px(2.0))
+        .w(px(2.0))
+        .rounded_full()
+        .bg(|| theme().primary)
+        .opacity(move || if on.get() { 1.0_f32 } else { 0.0 });
+    let bar = if after { bar.right(px(0.5)) } else { bar.left(px(0.5)) };
+    view().child(chip).child(bar).into_element()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    Right,
+    Wrong,
+    Missing,
+    Extra,
+}
+
+/// About the width of a space at the body size.
+const WORD_SPACE: f32 = 4.5;
+
+fn mark(label: String, kind: Mark) -> AnyElement {
+    let right = kind == Mark::Right;
+    let tone = move || if right { tokens::success() } else { theme().destructive };
+    let word = text(label).text_base().text_color(|| theme().foreground);
+    let word = if kind == Mark::Extra { word.line_through() } else { word };
+    // The box reaches out around the word: up and down without moving it,
+    // so the words sit on the lines typed; sideways moving it a little.
+    let chip = view()
+        .px(px(5.0))
+        .mx(px(-2.0))
+        .py(px(2.0))
+        .my(px(-2.0))
+        .rounded(tokens::radius_sm)
+        .border_1()
+        .border_color(tone)
+        .bg(move || tone().opacity(0.08))
+        .child(word);
+    if kind == Mark::Missing { chip.border_dashed().into_element() } else { chip.into_element() }
 }
 
 fn mimic_panel(review: Review) -> impl IntoElement {
     let store = review.store;
     let target = move || review.target().and_then(|index| review.segment(index));
     let goal = move || store.setting(|s| s.mimic_rep_goal);
-    let hidden = move || review.blind() && target().is_none_or(|segment| review.revealed.get() != Some(segment.id));
+    let hidden = move || review.blind() && target().is_none_or(|segment| !review.unveiled(&segment.id));
     view()
         .gap_4()
         .child(ui::veil(hidden, move || {

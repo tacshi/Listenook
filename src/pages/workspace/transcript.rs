@@ -187,7 +187,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
             words.partition_point(|(_, start, _)| *start <= position).checked_sub(1)
         })
     });
-    let hidden = move || review.blind() && (id().is_none() || review.revealed.get() != id());
+    let hidden = move || review.blind() && id().is_none_or(|id| !review.unveiled(&id));
     let mode = move || review.mode.get();
     let translated = move || segment.with(|s| s.as_ref().is_some_and(Segment::has_translation));
     let shows_original = move || mode() != ContentMode::Translated || !translated();

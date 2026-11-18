@@ -258,7 +258,7 @@ fn opened(id: &str) -> impl IntoElement {
     });
     let media = video(move || source.get())
         .element_ref(&review.player)
-        .paused(move || review.paused.get())
+        .paused(move || review.paused.get() && !review.holding.get())
         .muted(move || review.hushed.get())
         .rate(move || review.rate.get())
         .audio_session(|| nsh_core::AudioSession::Playback)
@@ -1087,7 +1087,7 @@ fn set_fullscreen(review: Review, on: bool) {
 fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let index = move || review.target();
     let current = move || index().and_then(|index| review.segment(index));
-    let hidden = move || review.blind() && current().is_none_or(|segment| review.revealed.get() != Some(segment.id));
+    let hidden = move || review.blind() && current().is_none_or(|segment| !review.unveiled(&segment.id));
     let words = computed(move || {
         index().and_then(|index| review.words(index)).map(|words| {
             caption::tidy(&words)

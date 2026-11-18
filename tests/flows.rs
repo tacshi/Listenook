@@ -644,10 +644,38 @@ fn dictation_checks_the_answer_without_showing_the_sentence() {
     it.app.type_text("text:Type what you hear", "welcome to the show").unwrap();
     it.app.press("role:button[Check]").unwrap();
     it.app.wait_for("Listen again and retry.").unwrap();
+    it.app.wait_for("label:Checked answer").unwrap();
+    assert!(it.app.shows("…"), "the missing word is marked without showing it");
     it.app.clear("text:welcome to the show").unwrap();
+    it.app.wait_for_gone("label:Checked answer", GONE).unwrap();
     it.app.type_text("text:Type what you hear", "welcome back to the show").unwrap();
     it.app.press("role:button[Check]").unwrap();
     it.app.wait_for("Matches transcript").unwrap();
+}
+
+#[test]
+fn dictation_checks_on_return_and_moves_on_by_itself() {
+    let mut it = open_sample("dictation-return");
+    it.app.press("label:Practice").unwrap();
+    it.app.press("Type answer").unwrap();
+    it.app.wait_for("text:/^Sentence 1 ·/").unwrap();
+    it.app.wait_for("label:Hidden sentence >> nth=4").unwrap();
+    it.app.type_text("text:Type what you hear", "welcome to the show").unwrap();
+    it.app.submit("text:welcome to the show").unwrap();
+    it.app.wait_for("Listen again and retry.").unwrap();
+    it.app.wait_for("label:Checked answer").unwrap();
+    it.app.submit("text:welcome to the show").unwrap();
+    it.app.wait_for_gone("label:Checked answer", GONE).unwrap();
+    it.app.press("Auto next").unwrap();
+    it.app.clear("text:welcome to the show").unwrap();
+    it.app.type_text("text:Type what you hear", "welcome back to the show").unwrap();
+    it.app.submit("text:welcome back to the show").unwrap();
+    it.app.wait_for("Matches transcript").unwrap();
+    it.app.wait_for("text:/^Sentence 2 ·/").unwrap();
+    it.app.wait_for("text:Type what you hear").unwrap();
+    // The sentence typed right stays shown: four of the five are hidden.
+    it.app.wait_for_gone("label:Hidden sentence >> nth=4", GONE).unwrap();
+    it.app.wait_for("label:Hidden sentence >> nth=3").unwrap();
 }
 
 #[test]
