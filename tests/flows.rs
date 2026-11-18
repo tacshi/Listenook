@@ -654,7 +654,19 @@ fn dictation_checks_the_answer_without_showing_the_sentence() {
     it.app.type_text("text:Type what you hear", "welcome back to a show").unwrap();
     it.app.press("role:button[Check]").unwrap();
     it.app.wait_for("Type to replace the first mistake.").unwrap();
+    // Missed twice: a hint, first letters then the word, and slower.
+    it.app.wait_for("Playing slower: 0.75×").unwrap();
+    it.app.press("role:button[Hint]").unwrap();
+    it.app.wait_for("Hint: t••").unwrap();
+    it.app.press("role:button[Show word]").unwrap();
+    it.app.wait_for("Hint: the").unwrap();
     it.app.clear("text:welcome back to a show").unwrap();
+    it.app.wait_for_gone("label:Checked answer", GONE).unwrap();
+    // A letter off is close, not wrong.
+    it.app.type_text("text:Type what you hear", "welcome bak to the show").unwrap();
+    it.app.press("role:button[Check]").unwrap();
+    it.app.wait_for("Close: check the spelling, and type to replace it.").unwrap();
+    it.app.clear("text:welcome bak to the show").unwrap();
     it.app.wait_for_gone("label:Checked answer", GONE).unwrap();
     it.app.type_text("text:Type what you hear", "welcome back to the show").unwrap();
     it.app.press("role:button[Check]").unwrap();

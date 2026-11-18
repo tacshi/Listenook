@@ -31,8 +31,12 @@ takes files of up to 5 hours.
   podcasts you follow.
 - **Listen and read:** synchronized audio/video playback, timestamp seeking,
   transcript search, sentence repetition, and blind listening.
-- **Practice:** type what you hear and compare your answer with the transcript,
-  or mimic each sentence for a chosen number of repetitions before automatically
+- **Practice:** in a card at the bottom of the reader, type what you hear and
+  check it against the transcript, word by word. The sentence plays again a
+  moment after it ends until you get it; a wrong word comes selected to type
+  over, a word a letter off is marked as close, and after two misses it plays
+  slower and offers a hint. **⌘R** / **Ctrl+R** plays it again while you type.
+  Or mimic each sentence for a chosen number of repetitions before automatically
   moving to the next. Choose an automatic pause or a fixed one of 1, 2, 3, 5,
   or 10 seconds. Automatic pauses match the sentence at the selected speed,
   plus half a second, with a 1.5-second minimum. Click a sentence to practice
