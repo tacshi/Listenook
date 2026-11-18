@@ -475,17 +475,20 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                             view()
                                 .flex_row()
                                 .gap_1()
-                                .child(when(picked, move || {
-                                    ui::toggle_button(
-                                        Variant::Ghost,
-                                        Icon::Bold,
-                                        tr("Highlight"),
-                                        Size::Sm,
-                                        move || review.picked_marked(),
-                                        move || review.toggle_highlight(),
-                                    )
-                                    .self_start()
-                                }))
+                                .child(when(
+                                    move || picked() && !crate::platform::is_phone(),
+                                    move || {
+                                        ui::toggle_button(
+                                            Variant::Ghost,
+                                            Icon::Bold,
+                                            tr("Highlight"),
+                                            Size::Sm,
+                                            move || review.picked_marked(),
+                                            move || review.toggle_highlight(),
+                                        )
+                                        .self_start()
+                                    },
+                                ))
                                 .child(
                                     ui::toggle_button(
                                         Variant::Ghost,
