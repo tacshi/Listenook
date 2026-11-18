@@ -570,8 +570,14 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
         .child(when(
             move || has_translation(review),
             move || {
-                view().window_drag(false).child(
+                let picker = if touch {
+                    let open = signal(false);
+                    ui::menu_with(open, ui::menu_trigger(Icon::Languages, tr("Language"), Size::Sm, open))
+                } else {
                     menu(ui::icon_text_button(Variant::Ghost, Size::Sm, Icon::Languages, mode_label))
+                };
+                view().window_drag(false).child(
+                    picker
                         .child(mode_item(ContentMode::Original, "Original"))
                         .child(mode_item(ContentMode::Translated, "Translated"))
                         .child(mode_item(ContentMode::Bilingual, "Bilingual")),

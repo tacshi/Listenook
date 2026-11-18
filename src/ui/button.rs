@@ -12,6 +12,7 @@ pub enum Variant {
     Default,
     Outline,
     Ghost,
+    Danger,
     Picture,
 }
 
@@ -84,6 +85,10 @@ fn dressed(element: ButtonElement, variant: Variant, size: Size, square: bool) -
             .text_color(|| theme().foreground)
             .hover(|s| s.bg(|| theme().accent))
             .active(move |s| s.bg(|| theme().input).scale(scale)),
+        Variant::Danger => element
+            .text_color(|| theme().destructive)
+            .hover(|s| s.bg(|| theme().destructive.opacity(0.1)))
+            .active(move |s| s.bg(|| theme().destructive.opacity(0.18)).scale(scale)),
         Variant::Picture => element
             .text_color(|| theme().foreground.dark)
             .hover(|s| s.bg(|| theme().foreground.dark.opacity(0.14)))

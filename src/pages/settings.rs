@@ -360,7 +360,7 @@ fn key_field(
                             test(key, status);
                         }),
                 )
-                .child(button(Variant::Ghost, Size::Md, l("Remove")).disabled(move || !saved.get()).on_press(
+                .child(button(Variant::Danger, Size::Md, l("Remove")).disabled(move || !saved.get()).on_press(
                     move || {
                         if secrets::write(secret, "").is_ok() {
                             saved.set(false);
@@ -518,7 +518,7 @@ fn model_row(title: &'static str, about: &'static str, models: &'static [Model])
                         when(
                             move || state() == ModelState::Ready,
                             move || {
-                                button(Variant::Ghost, Size::Sm, l("Remove")).on_press(move || {
+                                button(Variant::Danger, Size::Sm, l("Remove")).on_press(move || {
                                     confirm_destructive(
                                         format!("{} {}?", tr("Remove"), tr(title)),
                                         tr("The download is deleted. You can download it again later."),
