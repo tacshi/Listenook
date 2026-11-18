@@ -261,7 +261,9 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             }));
         });
     }
-    on_key("space", move |_| paused.set(!paused.get_untracked()));
+    on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, move |_| {
+        paused.set(!paused.get_untracked())
+    });
     on_key("left", move |_| step(false));
     on_key("right", move |_| step(true));
     on_key("r", move |_| repeating.set(!repeating.get_untracked()));

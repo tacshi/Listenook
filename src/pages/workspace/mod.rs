@@ -124,7 +124,7 @@ fn opened(id: &str) -> impl IntoElement {
         });
     }
     cleanup(move || leaving.set(false));
-    on_key("space", move |_| review.toggle_play());
+    on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, move |_| review.toggle_play());
     on_key("left", move |_| review.step(-1));
     on_key("right", move |_| review.step(1));
     on_key("alt+left", move |_| review.step(-1));
