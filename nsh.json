@@ -27,9 +27,6 @@
       "UIBackgroundModes": [
         "audio"
       ],
-      "UIRequiredDeviceCapabilities": [
-        "arm64"
-      ],
       "ITSAppUsesNonExemptEncryption": false
     }
   },

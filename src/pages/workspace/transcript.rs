@@ -1,6 +1,9 @@
 use listenook_core::{ContentMode, Segment, format::clock, highlights};
 use nsh_base::theme;
-use nsh_core::{element::Position, prelude::*};
+use nsh_core::{
+    element::{Position, desktop::MenuItem},
+    prelude::*,
+};
 
 use super::{
     review::{Editing, Practice, Review},
@@ -510,7 +513,14 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
         })
     };
     if crate::platform::is_phone() {
-        return view().items_center().child(area().child(line)).into_element();
+        let actions = move || {
+            if !picked() {
+                return Vec::new();
+            }
+            let label = if review.picked_marked() { tr("Remove highlight") } else { tr("Highlight") };
+            vec![MenuItem::new(label.to_string()).on_select(move || review.toggle_highlight())]
+        };
+        return view().items_center().child(area().selection_menu(actions).child(line)).into_element();
     }
     view()
         .items_center()
