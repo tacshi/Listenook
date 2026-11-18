@@ -692,7 +692,7 @@ fn type_answer_remembers_the_sentences_missed_and_goes_back_over_them() {
     it.app.type_text("text:Type what you hear", "welcome to the show").unwrap();
     it.app.submit("text:welcome to the show").unwrap();
     it.app.wait_for("Missed 1").unwrap();
-    it.app.wait_for("text:/· 0\\/1 first try$/").unwrap();
+    it.app.wait_for("Sentence 1 · 0/1 first try").unwrap();
     assert!(saved().contains("\"to_review\": true"), "the miss is saved");
     // Right after a miss, it stays to review; the next one comes.
     it.app.clear("text:welcome  to the show").unwrap();

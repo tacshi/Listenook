@@ -166,13 +166,26 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
     let tally = signal(Tally::default());
     let only_missed = signal(false);
     let finished = signal(false);
+    let slowed = signal(None::<(f32, f32)>);
+    // Leaving: the count in a toast, and the speed as it was. The panel's
+    // signals are gone by the time it is cleaned up, so what that needs is
+    // kept outside them.
+    let kept = std::rc::Rc::new(std::cell::RefCell::new((Tally::default(), None::<(f32, f32)>)));
+    effect({
+        let kept = kept.clone();
+        move || *kept.borrow_mut() = (tally.get(), slowed.get())
+    });
     cleanup(move || {
-        let tally = tally.get_untracked();
+        let (tally, slowed) = kept.take();
+        if let Some((before, slower)) = slowed
+            && review.rate.try_get() == Some(slower)
+        {
+            review.rate.try_set(before);
+        }
         if tally.checked > 0 {
             toast(Tone::Info, tally.summary());
         }
     });
-    let slowed = signal(None::<(f32, f32)>);
     let unslow = move || {
         if let Some((before, slower)) = slowed.get_untracked() {
             slowed.set(None);
@@ -182,7 +195,6 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             }
         }
     };
-    cleanup(unslow);
     let begin = move |index: usize| {
         unslow();
         batch(|| {
@@ -209,12 +221,8 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
         });
     });
     let solved = move || result.with(|r| r.as_ref().is_some_and(|words| dictation::is_correct(words)));
+    // Its tasks end with the panel (as the replay's below do).
     let advance = stored(None::<Spawned<()>>);
-    cleanup(move || {
-        if let Some(task) = advance.replace(None) {
-            task.cancel();
-        }
-    });
     let field = element_ref();
     let next = move || {
         if let Some(task) = advance.replace(None) {
@@ -286,11 +294,6 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             }
         })));
     };
-    cleanup(move || {
-        if let Some(task) = again_at.replace(None) {
-            task.cancel();
-        }
-    });
     let ends_seen = stored(untracked(|| review.ended.get()));
     effect(move || {
         let ended = review.ended.get();
@@ -467,18 +470,19 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
         .gap_2()
         .child(practice_bar(
             review,
+            // With a tally, the sentence's time gives way to it, so it fits.
             move || -> SharedString {
-                let heading = heading();
                 let (first_try, checked) = tally.with(|tally| (tally.first_try, tally.checked));
-                if checked == 0 {
-                    heading
-                } else {
-                    format!("{heading} · {first_try}/{checked} {}", tr("first try")).into()
+                match pinned.get() {
+                    Some(index) if checked > 0 => {
+                        format!("{} {} · {first_try}/{checked} {}", tr("Sentence"), index + 1, tr("first try")).into()
+                    }
+                    _ => heading(),
                 }
             },
             view()
                 .child(when(
-                    move || only_missed.get() || review.left_to_review() > 0,
+                    move || review.left_to_review() > 0,
                     move || {
                         chip(
                             move || -> SharedString { format!("{} {}", tr("Missed"), review.left_to_review()).into() },
@@ -542,7 +546,9 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
                         // whatever its color, and the input's words sit a
                         // little off the marks), yet still taking presses
                         // ([`hidden_input`]).
-                        .opacity(move || if checked.get() { hidden_input() } else { 1.0 })
+                        // Hidden at the end too: a native text view draws over
+                        // the summary laid on it.
+                        .opacity(move || if checked.get() || finished.get() { hidden_input() } else { 1.0 })
                         .auto_focus(true),
                 )
                 // At the end, what this time round came to, over the box.
