@@ -187,9 +187,11 @@ pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoE
             .items_center()
             .gap_2()
             .child(chart::swatch(color))
-            .child(text(l(name)).flex_1().text_sm().text_color(|| theme().muted_foreground))
+            .child(text(l(name)).flex_shrink_0().number_of_lines(1).text_sm().text_color(|| theme().muted_foreground))
             .child(
                 text(move || SharedString::from(minutes(secs(today.get()))))
+                    .flex_1()
+                    .text_right()
                     .text_sm()
                     .tabular_nums()
                     .font_weight(FontWeight::MEDIUM)
@@ -249,7 +251,7 @@ pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoE
         .flex_row()
         .items_center()
         .justify_between()
-        .min_h(px(28.0))
+        .min_h(px(Size::Sm.height()))
         .child(
             text(l("Today"))
                 .text_base()
@@ -286,8 +288,8 @@ pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoE
                         view()
                             .flex_row()
                             .items_center()
-                            .gap_4()
-                            .child(chart::goal_ring(shares, 104.0, 10.0, ring_label, center(true)))
+                            .gap_3()
+                            .child(chart::goal_ring(shares, 96.0, 10.0, ring_label, center(true)))
                             .child(view().flex_1().min_w(px(0.0)).child(keys())),
                     )
                     .child(status_line())

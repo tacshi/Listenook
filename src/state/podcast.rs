@@ -37,8 +37,9 @@ pub(crate) fn rate_label(rate: f32) -> SharedString {
 }
 
 impl PodcastState {
-    pub(super) fn new(catalog: Catalog, listened: Vec<ListenProgress>) -> Self {
-        Self {
+    pub(super) fn new(mut catalog: Catalog, listened: Vec<ListenProgress>) -> Self {
+        let repaired = catalog.drop_duplicate_follows(&now_iso());
+        let state = Self {
             catalog: signal(catalog),
             playing: signal(None),
             paused: signal(true),
@@ -51,7 +52,11 @@ impl PodcastState {
             seek: signal((0, 0)),
             listened: signal(listened),
             reports: stored(0),
+        };
+        if repaired {
+            state.save();
         }
+        state
     }
 
     fn save(&self) {
@@ -103,6 +108,7 @@ impl PodcastState {
                         unseen_episode_count: 0,
                     },
                 );
+                catalog.drop_duplicate_follows(&now_iso());
             }
         });
         self.save();
@@ -140,9 +146,7 @@ impl PodcastState {
             log::error!("saving listening progress: {error}");
         }
         for url in missing {
-            spawn(async move {
-                let _ = crate::services::podcasts::load_feed(&url).await;
-            });
+            spawn(crate::services::podcasts::refresh(url));
         }
     }
 

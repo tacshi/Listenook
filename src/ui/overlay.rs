@@ -13,7 +13,7 @@ use super::{
 };
 
 fn anchored() -> bool {
-    (crate::platform::is_phone() || std::env::var_os("LISTENOOK_TABLET_MENUS").is_some())
+    (cfg!(target_os = "android") || std::env::var_os("LISTENOOK_TABLET_MENUS").is_some())
         && !untracked(crate::platform::compact)
 }
 
@@ -106,8 +106,8 @@ pub fn context_menu(target: impl IntoElement) -> Menu {
         let open = signal(false);
         let held = nsh_base::context_menu()
             .open(|| Some(false))
-            .on_open_change(move |event: &nsh_base::MenuEvent| {
-                if let nsh_base::MenuEvent::OpenChange(true, _) = event {
+            .on_open_change(move |event: &nsh_base::ContextMenuEvents| {
+                if let nsh_base::ContextMenuEvents::OpenChange(true, _) = event {
                     open.set(true);
                 }
             })

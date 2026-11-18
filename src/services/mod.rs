@@ -1,5 +1,6 @@
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod apple;
+pub(crate) mod artwork;
 pub(crate) mod audio;
 pub(crate) mod blas;
 pub(crate) mod llm;

@@ -210,6 +210,7 @@ pub fn merge_podcasts(catalog: &mut Catalog, listened: &mut Vec<ListenProgress>,
     catalog
         .followed
         .retain(|followed| unfollowed.get(&followed.feed_url).is_none_or(|at| later(&followed.followed_at, at)));
+    catalog.drop_duplicate_follows(&crate::models::now_iso());
     catalog.followed.sort_by_key(|followed| std::cmp::Reverse(millis(&followed.followed_at)));
 
     let at = |entry: &ListenProgress| entry.updated_at.as_deref().map_or(i64::MIN, millis);

@@ -965,7 +965,9 @@ fn mini_player() -> impl IntoElement {
     let dragging = signal(None::<f64>);
     let on_track = computed(move || track_position(player.position_ms(), player.duration_ms()));
     let second = computed(move || player.position_ms() / 1000 * 1000);
-    on_key("space", move |_| player.set_paused(!player.paused()));
+    on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, move |_| {
+        player.set_paused(!player.paused())
+    });
     view()
         .bind_motion(&entrance)
         .h(px(64.0))

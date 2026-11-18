@@ -124,7 +124,7 @@ fn opened(id: &str) -> impl IntoElement {
         });
     }
     cleanup(move || leaving.set(false));
-    on_key("space", move |_| review.toggle_play());
+    on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, move |_| review.toggle_play());
     on_key("left", move |_| review.step(-1));
     on_key("right", move |_| review.step(1));
     on_key("alt+left", move |_| review.step(-1));
@@ -570,8 +570,14 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
         .child(when(
             move || has_translation(review),
             move || {
-                view().window_drag(false).child(
+                let picker = if touch {
+                    let open = signal(false);
+                    ui::menu_with(open, ui::menu_trigger(Icon::Languages, tr("Language"), Size::Sm, open))
+                } else {
                     menu(ui::icon_text_button(Variant::Ghost, Size::Sm, Icon::Languages, mode_label))
+                };
+                view().window_drag(false).child(
+                    picker
                         .child(mode_item(ContentMode::Original, "Original"))
                         .child(mode_item(ContentMode::Translated, "Translated"))
                         .child(mode_item(ContentMode::Bilingual, "Bilingual")),
