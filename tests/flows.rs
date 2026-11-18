@@ -728,6 +728,11 @@ fn dictation_checks_on_return_and_moves_on_by_itself() {
     it.app.type_text("text:Type what you hear", "welcome back to the show").unwrap();
     it.app.submit("text:welcome back to the show").unwrap();
     it.app.wait_for("Matches transcript").unwrap();
+    // The return repeated a moment later (iPadOS does, 0.6 s on) leaves the
+    // marks up: the next sentence comes by itself.
+    it.app.wait(Duration::from_millis(700)).unwrap();
+    it.app.submit("text:welcome back to the show").unwrap();
+    assert!(it.app.shows("Matches transcript"), "a repeated return does not skip the marks");
     it.app.wait_for("text:/^Sentence 2 ·/").unwrap();
     it.app.wait_for("text:Type what you hear").unwrap();
     // The sentence typed right stays shown: four of the five are hidden.
