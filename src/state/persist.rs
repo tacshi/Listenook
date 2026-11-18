@@ -117,6 +117,7 @@ pub(crate) fn load_jobs(root: &Path) -> Vec<Job> {
         .flatten()
         .filter_map(|entry| read_json::<Job>(&entry.path().join("manifest.json")))
         .filter(|job| Job::is_valid_id(&job.id))
+        .map(tidied)
         .collect();
     jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     jobs
@@ -126,7 +127,16 @@ pub(crate) fn load_job(root: &Path, id: &str) -> Option<Job> {
     if !Job::is_valid_id(id) {
         return None;
     }
-    read_json::<Job>(&root.join("jobs").join(id).join("manifest.json")).filter(|job| job.id == id)
+    read_json::<Job>(&root.join("jobs").join(id).join("manifest.json")).filter(|job| job.id == id).map(tidied)
+}
+
+/// A transcript saved before its left-out spaces were put back gets them as it loads
+/// ([`listenook_core::parser::tidy_spacing`]); it is saved so with its next change.
+fn tidied(mut job: Job) -> Job {
+    if let Some(document) = job.document.as_mut() {
+        listenook_core::parser::tidy_spacing(document);
+    }
+    job
 }
 
 pub(crate) fn save_job(root: &Path, job: &Job) -> io::Result<()> {

@@ -9,8 +9,8 @@ use super::review::{Practice, Review, Side};
 use crate::{
     state::{l, store, tr},
     ui::{
-        self, Icon, Size, Status, Variant, badge, composer_dock, hint, icon, icon_text_button, segmented, select,
-        text_area, tokens,
+        self, Icon, Size, Status, Variant, badge, composer_dock, hint, icon, icon_text_button, key_cap, segmented,
+        select, text_area, tokens,
     },
 };
 
@@ -114,6 +114,13 @@ const HIDDEN_INPUT: f32 = 0.02;
 const MARKS_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
 /// How long a correct answer stays up before the next sentence comes.
 const AUTO_NEXT_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Wrong checks of one sentence before a hint is offered and it plays
+/// slower.
+const MISSES_TO_HELP: u32 = 2;
+/// How much slower a sentence plays once it was missed that often, and the
+/// slowest it goes.
+const SLOWER: f32 = 0.75;
+const SLOWEST: f32 = 0.5;
 /// How long after the sentence ends, or after the last key typed, it plays
 /// again.
 const REPLAY_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
@@ -130,12 +137,30 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
     let supported = move || {
         target().is_some_and(|segment| dictation::supports_dictation(&segment.text, segment.language.as_deref()))
     };
+    // Missed twice, a sentence plays slower (the rate before, and the slower
+    // one) and a hint is offered, its first letters then the word.
+    let misses = signal(0_u32);
+    let hinted = signal(0_u8);
+    let slowed = signal(None::<(f32, f32)>);
+    let unslow = move || {
+        if let Some((before, slower)) = slowed.get_untracked() {
+            slowed.set(None);
+            // Unless the speed was changed by hand meanwhile.
+            if review.rate.get_untracked() == slower {
+                review.rate.set(before);
+            }
+        }
+    };
+    cleanup(unslow);
     let begin = move |index: usize| {
+        unslow();
         batch(|| {
             pinned.set(Some(index));
             answer.set(String::new());
             result.set(None);
             review.revealed.set(None);
+            misses.set(0);
+            hinted.set(0);
         });
     };
     effect(move || {
@@ -231,6 +256,18 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
         let correct = dictation::is_correct(&words);
         // Wrong, it plays again at once; right, the next one comes.
         let again = !correct;
+        if correct {
+            unslow();
+        } else {
+            misses.update(|misses| *misses += 1);
+        }
+        hinted.set(0);
+        let before = review.rate.get_untracked();
+        let slower = ((before * SLOWER * 20.0).round() / 20.0).max(SLOWEST);
+        if again && misses.get_untracked() >= MISSES_TO_HELP && slowed.get_untracked().is_none() && slower < before {
+            slowed.set(Some((before, slower)));
+            review.rate.set(slower);
+        }
         if let Some(task) = again_at.replace(None) {
             task.cancel();
         }
@@ -322,6 +359,12 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             check();
         }
     };
+    // Space types a space: this plays the sentence again from the box.
+    on_key_with("mod+r", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
+        if let Some(index) = pinned.get_untracked() {
+            review.replay_once(index);
+        }
+    });
     on_key_with("mod+enter", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
         check()
     });
@@ -333,6 +376,10 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             review,
             heading,
             view()
+                .child(when(
+                    || !crate::platform::is_phone(),
+                    || view().flex_row().items_center().gap_1().child(key_cap("mod+r")).child(hint(l("Replay"))),
+                ))
                 .child(
                     icon_text_button(Variant::Primary, Size::Sm, Icon::Check, l("Check"))
                         .disabled(move || !supported() || answer.with(|a| a.trim().is_empty()))
@@ -396,14 +443,63 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             };
             untracked(|| verdict(&words).into_element())
         }))
+        .child(dynamic(move || {
+            let words = result.get()?;
+            if dictation::is_correct(&words) || misses.get() < MISSES_TO_HELP {
+                return None;
+            }
+            let first = words.iter().find(|word| !matches!(word, DictationWord::Matching(_))).cloned()?;
+            Some(untracked(|| help(first, hinted, slowed).into_element()))
+        }))
+}
+
+/// Help once a sentence was missed twice: a hint for its first mistake (the
+/// first letters, then the word; an extra word is named) and the slower
+/// speed it plays at.
+fn help(first: DictationWord, hinted: Signal<u8>, slowed: Signal<Option<(f32, f32)>>) -> impl IntoElement {
+    let said = move || -> SharedString {
+        match &first {
+            DictationWord::Different(word, _) | DictationWord::Missing(word) => {
+                format!("{} {}", tr("Hint:"), dictation::hint(word, hinted.get() >= 2)).into()
+            }
+            DictationWord::Extra(word) | DictationWord::Matching(word) => {
+                format!("{} “{word}”", tr("Not said:")).into()
+            }
+        }
+    };
+    view()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap_2()
+        .child(when(
+            move || hinted.get() == 0,
+            move || icon_text_button(Variant::Outline, Size::Sm, Icon::Info, l("Hint")).on_press(move || hinted.set(1)),
+        ))
+        .child(when(
+            move || hinted.get() >= 1,
+            move || text(said.clone()).text_sm().font_weight(FontWeight::MEDIUM).text_color(|| theme().foreground),
+        ))
+        .child(when(
+            move || hinted.get() == 1,
+            move || ui::button(Variant::Ghost, Size::Sm, l("Show word")).on_press(move || hinted.set(2)),
+        ))
+        .child(when(
+            move || slowed.get().is_some(),
+            move || {
+                hint(move || -> SharedString {
+                    let slower = slowed.get().map_or(1.0, |(_, slower)| slower);
+                    format!("{} {}×", tr("Playing slower:"), slower).into()
+                })
+            },
+        ))
 }
 
 fn verdict(words: &[DictationWord]) -> impl IntoElement {
     let correct = dictation::is_correct(words);
-    let missing = matches!(
-        words.iter().find(|word| !matches!(word, DictationWord::Matching(_))),
-        Some(DictationWord::Missing(_))
-    );
+    let first = words.iter().find(|word| !matches!(word, DictationWord::Matching(_)));
+    let missing = matches!(first, Some(DictationWord::Missing(_)));
+    let near = matches!(first, Some(DictationWord::Different(expected, typed)) if dictation::is_near(expected, typed));
     view()
         .flex_row()
         .flex_wrap()
@@ -427,6 +523,8 @@ fn verdict(words: &[DictationWord]) -> impl IntoElement {
             move || {
                 hint(if missing {
                     l("Type the missing word where the caret is.")
+                } else if near {
+                    l("Close: check the spelling, and type to replace it.")
                 } else {
                     l("Type to replace the first mistake.")
                 })
@@ -465,6 +563,9 @@ fn marked_answer(words: &[DictationWord]) -> impl IntoElement {
             let selected = first == Some(index);
             match word {
                 DictationWord::Matching(expected) => mark(expected.clone(), Mark::Right, false),
+                DictationWord::Different(expected, actual) if dictation::is_near(expected, actual) => {
+                    mark(actual.clone(), Mark::Near, selected)
+                }
                 DictationWord::Different(_, actual) => mark(actual.clone(), Mark::Wrong, selected),
                 DictationWord::Missing(_) if selected => with_caret(mark("…".into(), Mark::Missing, false)),
                 DictationWord::Missing(_) => mark("…".into(), Mark::Missing, false),
@@ -492,6 +593,8 @@ fn with_caret(chip: AnyElement) -> AnyElement {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mark {
     Right,
+    /// Typed a letter off (amber): spelling, not hearing.
+    Near,
     Wrong,
     Missing,
     Extra,
@@ -508,8 +611,11 @@ const MARK_LINE: f32 = 28.0;
 const MARK_REACH: f32 = 2.5;
 
 fn mark(label: String, kind: Mark, selected: bool) -> AnyElement {
-    let right = kind == Mark::Right;
-    let tone = move || if right { tokens::success() } else { theme().destructive };
+    let tone = move || match kind {
+        Mark::Right => tokens::success(),
+        Mark::Near => tokens::warning(),
+        _ => theme().destructive,
+    };
     let word = text(label)
         .text_2xl()
         .line_height(nsh_core::LineHeight::Points(px(MARK_LINE)))

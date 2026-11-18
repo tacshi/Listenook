@@ -64,6 +64,37 @@ pub fn compare(reference: &str, answer: &str) -> Vec<DictationWord> {
         }
     }
     out.reverse();
+    run_together(out)
+}
+
+/// Words run together or apart compared as the same: `the right` typed for a transcript's
+/// `theright` (a provider can leave a space out), or `theright` for `the right`. They count as
+/// matching, with the words as typed, one mark per word typed.
+fn run_together(words: Vec<DictationWord>) -> Vec<DictationWord> {
+    use DictationWord::{Different, Extra, Matching, Missing};
+    let joins = |a: &str, b: &str, whole: &str| format!("{}{}", normalized(a), normalized(b)) == normalized(whole);
+    let mut out: Vec<DictationWord> = Vec::with_capacity(words.len());
+    let mut words = words.into_iter().peekable();
+    while let Some(word) = words.next() {
+        let merged = match (&word, words.peek()) {
+            (Different(whole, a), Some(Extra(b))) | (Extra(a), Some(Different(whole, b))) if joins(a, b, whole) => {
+                Some(vec![Matching(a.clone()), Matching(b.clone())])
+            }
+            (Different(first, typed), Some(Missing(second))) | (Missing(first), Some(Different(second, typed)))
+                if joins(first, second, typed) =>
+            {
+                Some(vec![Matching(typed.clone())])
+            }
+            _ => None,
+        };
+        match merged {
+            Some(merged) => {
+                words.next();
+                out.extend(merged);
+            }
+            None => out.push(word),
+        }
+    }
     out
 }
 
@@ -94,6 +125,68 @@ pub fn room_for_missing(answer: &str, at: usize) -> (String, usize) {
     let mut text = answer.to_owned();
     text.insert(at, ' ');
     (text, if at == 0 { 0 } else { at + 1 })
+}
+
+/// `word` as a hint: its first letter (two for a word of six letters or more) and a dot for
+/// each letter after, apostrophes and hyphens kept; `whole`, the word itself.
+pub fn hint(word: &str, whole: bool) -> String {
+    if whole {
+        return word.to_owned();
+    }
+    let letters = word.chars().filter(|c| c.is_alphanumeric()).count();
+    let shown = if letters >= 6 { 2 } else { 1 };
+    let mut seen = 0;
+    word.chars()
+        .map(|c| {
+            if !c.is_alphanumeric() {
+                return c;
+            }
+            seen += 1;
+            if seen <= shown { c } else { '•' }
+        })
+        .collect()
+}
+
+/// Whether `typed` is close to `expected`: the same but for apostrophes (`dont`), or a letter
+/// off (`thing`, `swalow`; two in a word of eight letters or more). Still a mistake, but one
+/// of spelling, not of hearing.
+pub fn is_near(expected: &str, typed: &str) -> bool {
+    let bare = |word: &str| normalized(word).chars().filter(|c| c.is_alphanumeric()).collect::<Vec<char>>();
+    let (a, b) = (bare(expected), bare(typed));
+    if a == b {
+        return true;
+    }
+    let longest = a.len().max(b.len());
+    let allowed = if longest >= 8 {
+        2
+    } else if longest >= 3 {
+        1
+    } else {
+        0
+    };
+    allowed > 0 && a.len().abs_diff(b.len()) <= allowed && edits(&a, &b) <= allowed
+}
+
+/// The fewest letters added, removed, changed or swapped with the next to turn `a` into `b`
+/// (`jsut` is one swap from `just`).
+fn edits(a: &[char], b: &[char]) -> usize {
+    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let changed = d[i - 1][j - 1] + usize::from(a[i - 1] != b[j - 1]);
+            d[i][j] = changed.min(d[i - 1][j] + 1).min(d[i][j - 1] + 1);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+            }
+        }
+    }
+    d[a.len()][b.len()]
 }
 
 pub fn is_correct(result: &[DictationWord]) -> bool {
@@ -159,6 +252,22 @@ mod tests {
     }
 
     #[test]
+    fn words_run_together_or_apart_still_match() {
+        let reference = "you send it to the left or theright, or the middle";
+        let answer = "you send it to the left or the right or the middle";
+        let marks = compare(reference, answer);
+        assert!(is_correct(&marks), "{marks:?}");
+        assert_eq!(marks.len(), words(answer).len(), "a mark for each word typed");
+        assert_eq!(first_fix(answer, &marks), None);
+        let joined = compare("Turn to the right now.", "turn to theright now");
+        assert!(is_correct(&joined), "{joined:?}");
+        assert_eq!(joined.len(), 4, "one mark for the one word typed");
+        assert!(!is_correct(&compare("It's all right.", "it's alright")), "not the same letters");
+        let typo = compare("the right one", "the rite one");
+        assert!(!is_correct(&typo), "a word typed wrong is still wrong");
+    }
+
+    #[test]
     fn a_missing_word_gets_its_own_space_to_type_into() {
         let typed = |answer: &str, at: usize, word: &str| {
             let (mut text, caret) = room_for_missing(answer, at);
@@ -172,6 +281,27 @@ mod tests {
         let answer = "each task that you do are things you have to swallow right";
         let fix = first_fix(answer, &compare(reference, answer)).unwrap();
         assert!(is_correct(&compare(reference, &typed(answer, fix.start, "that"))));
+    }
+
+    #[test]
+    fn a_hint_shows_the_first_letters_then_the_word() {
+        assert_eq!(hint("swallow", false), "sw•••••");
+        assert_eq!(hint("that", false), "t•••");
+        assert_eq!(hint("don't", false), "d••'•");
+        assert_eq!(hint("left-right", false), "le••-•••••");
+        assert_eq!(hint("that", true), "that");
+    }
+
+    #[test]
+    fn a_letter_off_is_near_a_different_word_is_not() {
+        for (expected, typed) in
+            [("don't", "dont"), ("things", "thing"), ("swallow", "swalow"), ("envision", "envisoin"), ("just", "jsut")]
+        {
+            assert!(is_near(expected, typed), "{typed} for {expected}");
+        }
+        for (expected, typed) in [("right", "rite"), ("the", "a"), ("to", "so"), ("things", "rings!x")] {
+            assert!(!is_near(expected, typed), "{typed} for {expected}");
+        }
     }
 
     #[test]

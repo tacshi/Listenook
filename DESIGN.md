@@ -55,7 +55,11 @@ options or Replay button: until it is answered, the sentence plays again
 1.5 s after each time it ends (typing holds that off until 1.5 s after the
 last key), the transport's play button plays it from its start, a wrong
 check plays it at once, and a right one moves to the next sentence after
-1.5 s. The header's video toggle hides while Practice is open.
+1.5 s. ⌘R plays it again while typing. A word a letter off (or a swap, or an
+apostrophe) is marked amber, close rather than wrong; words run together or
+apart (`theright`, `the right`) match. Missed twice, the sentence plays at
+0.75× until it is answered or left, and a Hint shows the first mistake's first
+letters, then the word. The header's video toggle hides while Practice is open.
 
 A setting is made where it is used: how to transcribe in the Library's
 options, what a transcript shows in the reader's menu, accounts and defaults

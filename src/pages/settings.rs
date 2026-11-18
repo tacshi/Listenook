@@ -779,6 +779,7 @@ fn shortcuts() -> impl IntoElement {
             vec![
                 ("mod+f", "Search transcript"),
                 ("mod+enter", "Save an edit, or check your answer"),
+                ("mod+r", "Play the sentence again while typing"),
                 ("mod+z", "Undo the last sentence change"),
                 ("escape", "Cancel an edit, close search, or go back"),
             ],
