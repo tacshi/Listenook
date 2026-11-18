@@ -61,6 +61,19 @@ pub(super) fn set_dock_icon(visible: bool) {
     });
 }
 
+/// How long sound takes from the player to the ears on the current route: a
+/// few milliseconds on the speaker, 150 or more on Bluetooth headphones.
+#[cfg(target_os = "ios")]
+pub(super) fn output_latency_ms() -> f64 {
+    unsafe {
+        let session = send(class(c"AVAudioSession"), c"sharedInstance");
+        if session.is_null() {
+            return 0.0;
+        }
+        (get_f64(session, c"outputLatency") * 1000.0).max(0.0)
+    }
+}
+
 pub(super) fn take() -> Vec<Command> {
     QUEUE.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default()
 }

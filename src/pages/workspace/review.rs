@@ -930,7 +930,10 @@ impl Review {
         let Some((end, edge)) = self.edge() else {
             return;
         };
-        let lag_ms = self.lag_ms.with(|lag| *lag);
+        // The sound already on its way to the listener plays on after the
+        // cut, so the cut goes ahead of the end by that too.
+        let heard_ms = crate::services::output_latency_ms();
+        let lag_ms = self.lag_ms.with(|lag| *lag) + heard_ms;
         match playback::time_to_end(position_ms, end, self.rate.get_untracked(), lag_ms) {
             Some(wait) if wait.is_zero() => self.reach(edge),
             Some(wait) => self.arm(wait, (end, edge)),

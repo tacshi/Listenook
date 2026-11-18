@@ -97,13 +97,33 @@ impl Loudness {
 
     /// The middle of the quietest frame from `from_ms` to `to_ms`, when it
     /// is a pause: clearly quieter than the loudest frame there.
-    pub fn pause_between(&self, from_ms: i64, to_ms: i64) -> Option<i64> {
+    ///
+    /// A sentence marked to start at `next_ms` often has a stop in its first
+    /// word ("It got", "Each", "I turned"), as quiet as the pause before it
+    /// under background music. A frame past `next_ms` with a word's sound
+    /// between it and the quietest frame before `next_ms` is that stop, so
+    /// the pause is the frame before.
+    pub fn pause_between(&self, from_ms: i64, to_ms: i64, next_ms: i64) -> Option<i64> {
         let first = usize::try_from(from_ms.max(0) / FRAME_MS).ok()?;
         let last = usize::try_from(to_ms / FRAME_MS).ok()?.min(self.frames.len().checked_sub(1)?);
         let frames = self.frames.get(first..=last).filter(|frames| !frames.is_empty())?;
-        let (quietest, level) = frames.iter().enumerate().min_by_key(|(_, level)| **level)?;
-        let loudest = frames.iter().max()?;
-        (loudest.saturating_sub(*level) >= PAUSE_DIP).then(|| (first + quietest) as i64 * FRAME_MS + FRAME_MS / 2)
+        let quietest = |frames: &[u8]| frames.iter().enumerate().min_by_key(|(_, level)| **level).map(|(at, _)| at);
+        let loudest = *frames.iter().max()?;
+        let pause = |at: usize| {
+            (loudest.saturating_sub(frames[at]) >= PAUSE_DIP).then(|| (first + at) as i64 * FRAME_MS + FRAME_MS / 2)
+        };
+        let at = quietest(frames)?;
+        let Some(next) = usize::try_from(next_ms.max(0) / FRAME_MS).ok().and_then(|next| next.checked_sub(first))
+        else {
+            return pause(at);
+        };
+        if at <= next {
+            return pause(at);
+        }
+        let before = quietest(&frames[..=next])?;
+        let word_between =
+            frames[before + 1..at].iter().max().is_some_and(|level| *level >= frames[before].saturating_add(PAUSE_DIP));
+        pause(if word_between { before } else { at })
     }
 }
 
@@ -191,10 +211,10 @@ mod tests {
         samples.extend(tone(200.0, 30.0, 60));
         samples.extend(tone(5000.0, 3000.0, 200));
         let loudness = Loudness::measure(&samples, 16_000);
-        let pause = loudness.pause_between(200, 450).unwrap();
+        let pause = loudness.pause_between(200, 450, i64::MAX).unwrap();
         assert!((300..360).contains(&pause), "{pause}");
-        assert_eq!(loudness.pause_between(0, 250), None, "no pause inside a vowel");
-        assert_eq!(loudness.pause_between(600, 900), None, "past the end");
+        assert_eq!(loudness.pause_between(0, 250, i64::MAX), None, "no pause inside a vowel");
+        assert_eq!(loudness.pause_between(600, 900, i64::MAX), None, "past the end");
     }
 
     #[test]

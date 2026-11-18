@@ -327,12 +327,13 @@ impl Document {
     /// its own side of the middle.
     fn pause_after(&self, index: usize, loudness: &Loudness) -> Option<i64> {
         let end = self.segments.get(index)?.end_ms;
+        let next_ms = self.segments.get(index + 1).map_or(i64::MAX, |next| next.start_ms);
         let to = match self.segments.get(index + 1) {
             Some(next) if next.start_ms - end <= PAUSE_REACH_MS => next.start_ms + PAUSE_INTO_NEXT_MS,
             Some(next) => (end + PAUSE_REACH_MS).min((end + next.start_ms) / 2),
             None => end + PAUSE_REACH_MS,
         };
-        loudness.pause_between(end - PAUSE_BEFORE_END_MS, to)
+        loudness.pause_between(end - PAUSE_BEFORE_END_MS, to, next_ms)
     }
 
     fn pause_before(&self, index: usize, loudness: &Loudness) -> Option<i64> {
@@ -342,7 +343,7 @@ impl Document {
             Some(before) => (start - PAUSE_REACH_MS).max((before.end_ms + start) / 2),
             None => start - PAUSE_REACH_MS,
         };
-        loudness.pause_between(from.max(0), start + PAUSE_INTO_NEXT_MS)
+        loudness.pause_between(from.max(0), start + PAUSE_INTO_NEXT_MS, start)
     }
 
     /// The first sentence at or after `index` that is not skipped.
@@ -1162,6 +1163,24 @@ mod tests {
         assert_eq!(document.play_start(2, loudness), Some(2905));
         assert_eq!(document.play_end(2, loudness), Some(4000), "no pause: the marked end");
         assert_eq!(document.play_start(3, loudness), Some(4000));
+    }
+
+    #[test]
+    fn a_stop_in_the_next_sentences_first_word_is_not_its_pause() {
+        let segment = |start_ms, end_ms| Segment { start_ms, end_ms, ..Default::default() };
+        // "…all the time." then "It got to…", over background music: the
+        // pause after "time" (109 at 66 290 ms) is shallower than the "t" of
+        // "It" (98 at 66 390 ms), which comes after the sound of "It".
+        let document =
+            Document { segments: vec![segment(63_090, 66_210), segment(66_330, 71_610)], ..Default::default() };
+        let mut frames = vec![140_u8; 6650];
+        frames[6617..=6648].copy_from_slice(&[
+            142, 139, 135, 136, 133, 131, 131, 126, 119, 115, 114, 112, 109, 118, 128, 135, 137, 137, 136, 121, 112,
+            103, 98, 114, 123, 131, 137, 141, 146, 146, 145, 143,
+        ]);
+        let loudness = Loudness::from_frames(frames);
+        assert_eq!(document.play_end(0, Some(&loudness)), Some(66_295), "before \"It\", not inside it");
+        assert_eq!(document.play_start(1, Some(&loudness)), Some(66_295));
     }
 
     #[test]
