@@ -328,7 +328,7 @@ pub(crate) fn home() -> impl IntoElement {
                         .max_w(px(960.0))
                         .self_center()
                         .px(px(ui::PAGE_INSET))
-                        .pt_2()
+                        .pt(px(ui::PAGE_INSET))
                         .pb(px(ui::PAGE_INSET))
                         .gap_6()
                         .child(when(searching, move || results(found)).otherwise(move || {
@@ -391,7 +391,7 @@ pub(crate) fn home() -> impl IntoElement {
 type Link = (&'static str, Rc<dyn Fn()>);
 
 fn section(title: &'static str, link: Option<Link>, content: impl IntoElement) -> View {
-    let header = view().flex_row().items_center().justify_between().min_h(px(28.0)).child(
+    let header = view().flex_row().items_center().justify_between().min_h(px(Size::Sm.height())).child(
         text(l(title))
             .text_base()
             .font_weight(FontWeight::SEMIBOLD)
