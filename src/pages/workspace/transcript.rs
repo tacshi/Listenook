@@ -618,7 +618,8 @@ fn editor(review: Review) -> impl IntoElement {
     let can_retranslate = move || {
         translation()
             && !review.job.with(|job| {
-                job.as_ref().is_some_and(|job| job.translation_state.status == listenook_core::TranslationStatus::Translating)
+                job.as_ref()
+                    .is_some_and(|job| job.translation_state.status == listenook_core::TranslationStatus::Translating)
             })
             && store.setting(|s| s.llm_provider_settings.validate().is_none())
     };
