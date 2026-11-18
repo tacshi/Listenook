@@ -102,20 +102,125 @@ fn make(source: &Path, folder: &Path, video: bool, at_ms: i64) -> Option<String>
         }
     }
     if video {
-        #[cfg(target_vendor = "apple")]
-        {
-            let path = folder.join("cover.jpg");
-            if frame::grab(source, &path, at_ms) {
-                return Some(path.to_string_lossy().into_owned());
-            }
+        if let Some(path) = frame::grab(source, folder, at_ms) {
+            return Some(path.to_string_lossy().into_owned());
         }
-        if cfg!(not(target_vendor = "apple")) {
-            let _ = at_ms;
+        if !frame::SUPPORTED {
             return None;
         }
     }
     let _ = std::fs::write(folder.join(NONE), b"");
     None
+}
+
+#[cfg(not(any(target_vendor = "apple", windows)))]
+mod frame {
+    use std::path::{Path, PathBuf};
+
+    pub(super) const SUPPORTED: bool = false;
+
+    pub(super) fn grab(_source: &Path, _folder: &Path, _at_ms: i64) -> Option<PathBuf> {
+        None
+    }
+}
+
+#[cfg(windows)]
+mod frame {
+    use std::path::{Path, PathBuf};
+
+    use windows::{
+        Win32::{
+            Foundation::SIZE,
+            Graphics::Gdi::{
+                BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
+                GetObjectW, HBITMAP, HGDIOBJ, ReleaseDC,
+            },
+            System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize},
+            UI::Shell::{
+                IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK, SIIGBF_THUMBNAILONLY,
+            },
+        },
+        core::HSTRING,
+    };
+
+    pub(super) const SUPPORTED: bool = true;
+
+    const LONGEST_SIDE: i32 = 640;
+
+    /// Saves the system's thumbnail of the video at `source` (the frame
+    /// Explorer shows) as `cover.png` in `folder`.
+    pub(super) fn grab(source: &Path, folder: &Path, _at_ms: i64) -> Option<PathBuf> {
+        let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+        let pixels = thumbnail(source);
+        if initialized {
+            unsafe { CoUninitialize() };
+        }
+        let (width, height, rgba) = pixels?;
+        let path = folder.join("cover.png");
+        let file = std::io::BufWriter::new(std::fs::File::create(&path).ok()?);
+        let mut encoder = png::Encoder::new(file, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let written = encoder.write_header().and_then(|mut writer| writer.write_image_data(&rgba)).is_ok();
+        if written {
+            Some(path)
+        } else {
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+    }
+
+    fn thumbnail(source: &Path) -> Option<(u32, u32, Vec<u8>)> {
+        let path = HSTRING::from(source.as_os_str());
+        let factory: IShellItemImageFactory = unsafe { SHCreateItemFromParsingName(&path, None) }.ok()?;
+        let size = SIZE { cx: LONGEST_SIDE, cy: LONGEST_SIDE };
+        let bitmap = unsafe { factory.GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK) }.ok()?;
+        let pixels = read(bitmap);
+        let _ = unsafe { DeleteObject(HGDIOBJ(bitmap.0)) };
+        pixels
+    }
+
+    /// The bitmap's pixels, top row first, as RGBA.
+    fn read(bitmap: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
+        let mut info = BITMAP::default();
+        let size = std::mem::size_of::<BITMAP>() as i32;
+        if unsafe { GetObjectW(HGDIOBJ(bitmap.0), size, Some((&mut info as *mut BITMAP).cast())) } == 0 {
+            return None;
+        }
+        let (width, height) = (info.bmWidth, info.bmHeight.abs());
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        let mut header = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut pixels = vec![0_u8; width as usize * height as usize * 4];
+        let screen = unsafe { GetDC(None) };
+        let lines = unsafe {
+            GetDIBits(screen, bitmap, 0, height as u32, Some(pixels.as_mut_ptr().cast()), &mut header, DIB_RGB_COLORS)
+        };
+        unsafe { ReleaseDC(None, screen) };
+        if lines != height {
+            return None;
+        }
+        let no_alpha = pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0);
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2);
+            if no_alpha {
+                pixel[3] = 255;
+            }
+        }
+        Some((width as u32, height as u32, pixels))
+    }
 }
 
 fn embedded(source: &Path) -> Option<(Vec<u8>, &'static str)> {
@@ -149,7 +254,7 @@ mod frame {
 
     use std::{
         ffi::{CString, c_char, c_void},
-        path::Path,
+        path::{Path, PathBuf},
         ptr::{null, null_mut},
     };
 
@@ -232,15 +337,19 @@ mod frame {
         send(class("NSURL"), sel("fileURLWithPath:"), path)
     }
 
+    pub(super) const SUPPORTED: bool = true;
+
     /// Saves a frame of the video at `source`, `at_ms` in (else its first),
-    /// as a JPEG at `target`, turned as the video shows.
-    pub(super) fn grab(source: &Path, target: &Path, at_ms: i64) -> bool {
-        unsafe {
+    /// as `cover.jpg` in `folder`, turned as the video shows.
+    pub(super) fn grab(source: &Path, folder: &Path, at_ms: i64) -> Option<PathBuf> {
+        let target = folder.join("cover.jpg");
+        let saved = unsafe {
             let pool = objc_autoreleasePoolPush();
-            let saved = grab_in_pool(source, target, at_ms);
+            let saved = grab_in_pool(source, &target, at_ms);
             objc_autoreleasePoolPop(pool);
             saved
-        }
+        };
+        saved.then_some(target)
     }
 
     unsafe fn grab_in_pool(source: &Path, target: &Path, at_ms: i64) -> bool {

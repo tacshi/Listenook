@@ -2265,6 +2265,7 @@ dependencies = [
  "nsh-platform-windows",
  "nsh-testing",
  "nsh-updater",
+ "png 0.18.1",
  "qwen-asr",
  "rcgen",
  "ring",
@@ -2277,6 +2278,7 @@ dependencies = [
  "tokio",
  "ureq 2.12.1",
  "uuid",
+ "windows",
  "zip 2.6.1",
 ]
 
