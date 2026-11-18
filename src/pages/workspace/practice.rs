@@ -127,6 +127,9 @@ fn hidden_input() -> f32 {
 /// How long after a check the input's caret moves are its own settling,
 /// not the user's: far less than anyone takes to press or type again.
 const MARKS_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long after the card opens a lost focus is the platform's, not the
+/// user's: the input takes it back.
+const OPEN_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
 /// How long a correct answer stays up before the next sentence comes.
 const AUTO_NEXT_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
 /// Wrong checks of one sentence before a hint is offered and it plays
@@ -333,6 +336,9 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
     // a new text, then the placed selection) are not the user's.
     let marked_at = stored(None::<std::time::Instant>);
     let refocus = stored(false);
+    // When the card opened: the input's focus lost just after (UIKit's
+    // focus engine on an iPad with a keyboard, as the card comes) goes back.
+    let opened_at = stored(Some(std::time::Instant::now()));
     let check = move || {
         let (Some(segment), true) = (untracked(target), untracked(supported)) else {
             return;
@@ -458,10 +464,14 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             untracked(edit);
         }
     });
+    // Right, return does nothing: the next sentence comes by itself. iPadOS
+    // can repeat the return that checked it (seen 0.6 s on), and that
+    // would skip the marks.
     let submit = move || {
         if untracked(solved) {
-            next();
-        } else if untracked(|| checked.get()) {
+            return;
+        }
+        if untracked(|| checked.get()) {
             edit();
         } else {
             check();
@@ -538,8 +548,10 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
                         .on_submit(move |_: &str| submit())
                         .on_blur(move |_: &()| {
                             // Lost as the marks come (UIKit's focus engine on
-                            // an iPad with a keyboard): back, once a check.
-                            if untracked(|| checked.get()) && refocus.with(std::mem::take) {
+                            // an iPad with a keyboard): back, once a check,
+                            // and once as the card opens.
+                            let opening = opened_at.with(Option::take).is_some_and(|at| at.elapsed() < OPEN_SETTLE);
+                            if opening || (untracked(|| checked.get()) && refocus.with(std::mem::take)) {
                                 field.focus();
                             }
                         })
