@@ -83,6 +83,9 @@ pub(super) fn practice_panel(review: Review) -> impl IntoElement {
     })
 }
 
+/// How much faster the sentence takes the top row's room than the controls.
+const SENTENCE_GROWS: f32 = 1000.0;
+
 /// The card's top row: the mode, the sentence, then the mode's own controls.
 /// It wraps on a narrow card, the controls on a line of their own.
 fn practice_bar(review: Review, heading: impl Fn() -> SharedString + 'static, controls: View) -> View {
@@ -101,9 +104,18 @@ fn practice_bar(review: Review, heading: impl Fn() -> SharedString + 'static, co
             },
         ))
         .child(
-            text(heading).flex_1().min_w(px(96.0)).number_of_lines(1).text_sm().text_color(|| theme().muted_foreground),
+            text(heading)
+                .flex_1()
+                .flex_grow(SENTENCE_GROWS)
+                .min_w(px(96.0))
+                .number_of_lines(1)
+                .text_sm()
+                .text_color(|| theme().muted_foreground),
         )
-        .child(controls.flex_row().items_center().gap_2())
+        // Growing far less than the sentence: on its line the sentence takes
+        // the room; wrapped to a line of their own (a narrow card, a long
+        // sentence), the controls still sit at the right.
+        .child(controls.flex_row().items_center().justify_end().gap_2().flex_grow(1.0))
 }
 
 /// The input's opacity over the marks: none on a Mac (AppKit takes clicks
@@ -493,7 +505,9 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
                 ))
                 .child(when(
                     || !crate::platform::is_phone(),
-                    || view().flex_row().items_center().gap_1().child(key_cap("mod+r")).child(hint(l("Replay"))),
+                    // The key alone, named by its tooltip, leaving the row's
+                    // room to the sentence and its count.
+                    || key_cap("mod+r").label(tr("Replay")).tooltip(ui::tip(tr("Replay"))),
                 ))
                 .child(
                     icon_text_button(Variant::Primary, Size::Sm, Icon::Check, l("Check"))
