@@ -36,6 +36,10 @@ takes files of up to 5 hours.
   moment after it ends until you get it; a wrong word comes selected to type
   over, a word a letter off is marked as close, and after two misses it plays
   slower and offers a hint. **⌘R** / **Ctrl+R** plays it again while you type.
+  Sentences missed at the first try are kept to review, with the recording, until
+  you type them right at the first try; **Missed** goes through only those, and
+  the end of a round shows how many you got first time and the words to listen
+  for.
   Or mimic each sentence for a chosen number of repetitions before automatically
   moving to the next. Choose an automatic pause or a fixed one of 1, 2, 3, 5,
   or 10 seconds. Automatic pauses match the sentence at the selected speed,

@@ -235,6 +235,11 @@ pub struct Segment {
     /// it: bringing it back undoes nothing but this.
     #[serde(skip_serializing_if = "is_false")]
     pub skipped: bool,
+    /// Typed wrong at its first check in Type answer: to practice again until
+    /// it is typed right at the first try. Kept with the recording, so it
+    /// lasts and syncs.
+    #[serde(skip_serializing_if = "is_false")]
+    pub to_review: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -349,6 +354,18 @@ impl Document {
     /// The first sentence at or after `index` that is not skipped.
     pub fn next_kept(&self, index: usize) -> Option<usize> {
         (index..self.segments.len()).find(|&at| !self.segments[at].skipped)
+    }
+
+    /// The first sentence to review ([`Segment::to_review`]) at or after
+    /// `index`, else the first from the start; `None` when none is left.
+    pub fn next_to_review(&self, index: usize) -> Option<usize> {
+        let due = |at: &usize| !self.segments[*at].skipped && self.segments[*at].to_review;
+        (index..self.segments.len()).find(due).or_else(|| (0..index.min(self.segments.len())).find(due))
+    }
+
+    /// How many sentences are left to review.
+    pub fn left_to_review(&self) -> usize {
+        self.segments.iter().filter(|segment| !segment.skipped && segment.to_review).count()
     }
 
     /// The last sentence at or before `index` that is not skipped.
@@ -1058,6 +1075,23 @@ pub fn language_name(code: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_next_sentence_to_review_comes_round_from_the_start() {
+        let mut document = skipping(&[false, false, true, false, false]);
+        for at in [1, 2, 4] {
+            document.segments[at].to_review = true;
+        }
+        assert_eq!(document.left_to_review(), 2, "a skipped one is not reviewed");
+        assert_eq!(document.next_to_review(0), Some(1));
+        assert_eq!(document.next_to_review(2), Some(4));
+        assert_eq!(document.next_to_review(5), Some(1), "round from the start");
+        document.segments[1].to_review = false;
+        document.segments[4].to_review = false;
+        assert_eq!(document.next_to_review(0), None);
+        let saved = serde_json::to_string(&document.segments[0]).unwrap();
+        assert!(!saved.contains("to_review"), "not written while false");
+    }
 
     fn skipping(skipped: &[bool]) -> Document {
         let segments = skipped

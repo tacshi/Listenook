@@ -682,6 +682,36 @@ fn dictation_checks_the_answer_without_showing_the_sentence() {
 }
 
 #[test]
+fn type_answer_remembers_the_sentences_missed_and_goes_back_over_them() {
+    let mut it = open_sample("dictation-review");
+    it.app.press("label:Practice").unwrap();
+    it.app.press("Type answer").unwrap();
+    it.app.wait_for("text:/^Sentence 1 ·/").unwrap();
+    let saved = || std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    // Wrong at the first check: to review, kept with the recording.
+    it.app.type_text("text:Type what you hear", "welcome to the show").unwrap();
+    it.app.submit("text:welcome to the show").unwrap();
+    it.app.wait_for("Missed 1").unwrap();
+    it.app.wait_for("Sentence 1 · 0/1 first try").unwrap();
+    assert!(saved().contains("\"to_review\": true"), "the miss is saved");
+    // Right after a miss, it stays to review; the next one comes.
+    it.app.clear("text:welcome  to the show").unwrap();
+    it.app.type_text("text:Type what you hear", "welcome back to the show").unwrap();
+    it.app.submit("text:welcome back to the show").unwrap();
+    it.app.wait_for("text:/^Sentence 2 ·/").unwrap();
+    assert!(it.app.shows("Missed 1"));
+    // Missed only: back to it; right at the first try now, it is done with.
+    it.app.press("Missed 1").unwrap();
+    it.app.wait_for("text:/^Sentence 1 ·/").unwrap();
+    it.app.type_text("text:Type what you hear", "welcome back to the show").unwrap();
+    it.app.submit("text:welcome back to the show").unwrap();
+    it.app.wait_for("That's all to review.").unwrap();
+    it.app.wait_for("Right at the first try: 1/2").unwrap();
+    it.app.wait_for_gone("Missed 1", GONE).unwrap();
+    assert!(!saved().contains("to_review"), "done with, it is no longer saved as missed");
+}
+
+#[test]
 fn dictation_checks_on_return_and_moves_on_by_itself() {
     let mut it = open_sample("dictation-return");
     it.app.press("label:Practice").unwrap();

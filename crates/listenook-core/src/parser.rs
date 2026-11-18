@@ -62,6 +62,7 @@ fn segment_of(tokens: &[&Token]) -> Option<Segment> {
         preserve_boundary_before: false,
         highlights: Vec::new(),
         skipped: false,
+        to_review: false,
     })
 }
 

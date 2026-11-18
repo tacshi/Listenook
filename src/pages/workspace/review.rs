@@ -425,6 +425,31 @@ impl Review {
         self.job.with_untracked(|job| f(job.as_ref()?.document.as_ref()?))
     }
 
+    /// The next sentence to review after `after` (from the start with none),
+    /// round from the start, never `after` itself.
+    pub(super) fn next_to_review(&self, after: Option<usize>) -> Option<usize> {
+        let from = after.map_or(0, |index| index + 1);
+        self.document_now(|document| document.next_to_review(from)).filter(|&at| Some(at) != after)
+    }
+
+    /// How many sentences are left to review in Type answer.
+    pub(super) fn left_to_review(&self) -> usize {
+        self.job.with(|job| job.as_ref().and_then(|job| job.document.as_ref()).map_or(0, Document::left_to_review))
+    }
+
+    /// Marks sentence `id` to review, or done with, saving only a change.
+    pub(super) fn set_to_review(&self, id: &str, due: bool) {
+        let now = self.document_now(|document| document.segments.iter().find(|s| s.id == id).map(|s| s.to_review));
+        if now.is_none_or(|now| now == due) {
+            return;
+        }
+        self.store.update_document(&self.id(), |document| {
+            if let Some(segment) = document.segments.iter_mut().find(|s| s.id == id) {
+                segment.to_review = due;
+            }
+        });
+    }
+
     /// The first sentence at or after `index` that is not skipped.
     pub(super) fn next_kept(&self, index: usize) -> Option<usize> {
         self.document_now(|document| document.next_kept(index))
