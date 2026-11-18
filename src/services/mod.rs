@@ -47,6 +47,15 @@ pub(crate) fn set_dock_icon(visible: bool) {
     let _ = visible;
 }
 
+/// How far behind the player the listener hears it: what has reached the
+/// headphones plays on after a pause or a seek.
+pub(crate) fn output_latency_ms() -> f64 {
+    #[cfg(target_os = "ios")]
+    return apple::output_latency_ms();
+    #[cfg(not(target_os = "ios"))]
+    0.0
+}
+
 pub(crate) fn pick_documents() -> bool {
     #[cfg(target_os = "ios")]
     {
