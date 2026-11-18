@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{
     platform,
-    services::{podcasts, transcribe},
+    services::{artwork, podcasts, transcribe},
     shell::{page_narrow, system_header, top_bar},
     state::{Filter, Place, Shelf, l, store, tr},
     ui::{
@@ -33,13 +33,28 @@ const NEW_FOR_DAYS: i64 = 14;
 const FEED_STALE_MS: i64 = 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq)]
+enum Art {
+    Url(String),
+    File(artwork::File),
+}
+
+impl Art {
+    fn get(&self) -> String {
+        match self {
+            Art::Url(url) => url.clone(),
+            Art::File(file) => file.cover(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum Resume {
     Recording {
         id: String,
         title: String,
         glyph: Icon,
         show: Option<String>,
-        artwork: String,
+        artwork: Art,
         position: i64,
         duration: i64,
         at: String,
@@ -423,7 +438,7 @@ fn removable(shelf: Shelf, id: String, target: impl IntoElement) -> impl IntoEle
     ui::context_menu(target).child(ui::menu_action(Icon::Close, l(label), move || take_off(shelf, id.clone())))
 }
 
-fn tile_icon(glyph: Icon, artwork: String, size: f32) -> View {
+fn tile_icon(glyph: Icon, artwork: Art, size: f32) -> View {
     let tile = view()
         .size(px(size))
         .flex_shrink_0()
@@ -434,7 +449,14 @@ fn tile_icon(glyph: Icon, artwork: String, size: f32) -> View {
         .bg(|| theme().muted)
         .text_color(|| theme().muted_foreground)
         .child(icon(glyph, size * 0.42).absolute());
-    if artwork.is_empty() { tile } else { tile.child(image(artwork).size(px(size)).object_fit(ResizeMode::Cover)) }
+    let shown = artwork.clone();
+    tile.child(when(
+        move || !shown.get().is_empty(),
+        move || {
+            let artwork = artwork.clone();
+            image(move || artwork.get()).size(px(size)).object_fit(ResizeMode::Cover)
+        },
+    ))
 }
 
 fn job_tile(job: &Job) -> View {
@@ -442,15 +464,20 @@ fn job_tile(job: &Job) -> View {
     tile_icon(glyph, artwork, 36.0)
 }
 
-fn job_glyph(job: &Job) -> (Icon, String) {
+fn job_glyph(job: &Job) -> (Icon, Art) {
     let glyph = kind_icon(job);
-    (glyph, if glyph == Icon::Podcast { podcasts::artwork_of(job) } else { String::new() })
+    let artwork = match glyph {
+        Icon::Podcast => Art::Url(podcasts::artwork_of(job)),
+        Icon::Film | Icon::Headphones => Art::File(artwork::File::of(job)),
+        _ => Art::Url(String::new()),
+    };
+    (glyph, artwork)
 }
 
-fn resume_glyph(item: &Resume) -> (Icon, String) {
+fn resume_glyph(item: &Resume) -> (Icon, Art) {
     match item {
         Resume::Recording { glyph, artwork, .. } => (*glyph, artwork.clone()),
-        Resume::Episode { artwork, .. } => (Icon::Podcast, artwork.clone()),
+        Resume::Episode { artwork, .. } => (Icon::Podcast, Art::Url(artwork.clone())),
     }
 }
 
@@ -720,7 +747,7 @@ fn fresh_list(fresh: Memo<Vec<Fresh>>) -> impl IntoElement {
                         .on_press(move || open_show(&feed_url))
                         .flex_1()
                         .min_w(px(0.0))
-                        .child(tile_icon(Icon::Podcast, artwork, 40.0))
+                        .child(tile_icon(Icon::Podcast, Art::Url(artwork), 40.0))
                         .child(
                             view()
                                 .flex_1()
