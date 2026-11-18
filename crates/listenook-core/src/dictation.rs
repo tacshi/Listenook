@@ -67,20 +67,33 @@ pub fn compare(reference: &str, answer: &str) -> Vec<DictationWord> {
     out
 }
 
-/// Where to start fixing `answer` after `result` (its comparison): the byte offset just
-/// after the first word typed wrong or not wanted, or where the first missing word goes
-/// (after the word typed before it). `None` when it is all right.
-pub fn first_fix(answer: &str, result: &[DictationWord]) -> Option<usize> {
-    let ends: Vec<usize> = WORD.find_iter(answer).map(|m| m.end()).collect();
+/// What to fix first in `answer` after `result` (its comparison), in bytes: the first word
+/// typed wrong or not wanted, so typing replaces it, or an empty range where the first
+/// missing word goes (after the word typed before it). `None` when it is all right.
+pub fn first_fix(answer: &str, result: &[DictationWord]) -> Option<std::ops::Range<usize>> {
+    let spans: Vec<std::ops::Range<usize>> = WORD.find_iter(answer).map(|m| m.range()).collect();
     let mut typed = 0;
     for word in result {
         match word {
             DictationWord::Matching(_) => typed += 1,
-            DictationWord::Different(..) | DictationWord::Extra(_) => return ends.get(typed).copied(),
-            DictationWord::Missing(_) => return Some(typed.checked_sub(1).map_or(0, |before| ends[before])),
+            DictationWord::Different(..) | DictationWord::Extra(_) => return spans.get(typed).cloned(),
+            DictationWord::Missing(_) => {
+                let at = typed.checked_sub(1).map_or(0, |before| spans[before].end);
+                return Some(at..at);
+            }
         }
     }
     None
+}
+
+/// `answer` with room to type a missing word at byte `at` ([`first_fix`]'s empty range),
+/// and where the caret goes: a space is added there, and the caret is on the side the word
+/// goes (after the word before it, before the first one at the start), so typing the word
+/// alone puts it between its neighbours.
+pub fn room_for_missing(answer: &str, at: usize) -> (String, usize) {
+    let mut text = answer.to_owned();
+    text.insert(at, ' ');
+    (text, if at == 0 { 0 } else { at + 1 })
 }
 
 pub fn is_correct(result: &[DictationWord]) -> bool {
@@ -100,14 +113,6 @@ pub fn mimic_pause_ms(sentence_ms: i64, speed: f64, fixed_seconds: u32) -> i64 {
     }
     let spoken = (sentence_ms.max(0) as f64 / speed.max(0.1)).round() as i64;
     (spoken + 500).max(1500)
-}
-
-/// The gap before a sentence plays again while it is typed: typing takes
-/// longer than saying it, so twice the time it plays for, at least 2 s and
-/// at most 10 s.
-pub fn replay_pause_ms(sentence_ms: i64, speed: f64) -> i64 {
-    let spoken = (sentence_ms.max(0) as f64 / speed.max(0.1)).round() as i64;
-    (spoken * 2).clamp(2000, 10_000)
 }
 
 #[cfg(test)]
@@ -143,14 +148,30 @@ mod tests {
     }
 
     #[test]
-    fn a_fix_starts_after_the_first_word_typed_wrong_or_where_one_is_missing() {
+    fn a_fix_is_the_first_word_typed_wrong_or_where_one_is_missing() {
         let fix = |reference: &str, answer: &str| first_fix(answer, &compare(reference, answer));
-        assert_eq!(fix("I envision a digestive system.", "I envision a digestive systemm"), Some(30));
-        assert_eq!(fix("Don’t stop the music, please.", "dont stop music now please"), Some(4));
-        assert_eq!(fix("Welcome back to the show.", "welcome to the show"), Some(7));
-        assert_eq!(fix("Welcome back to the show.", "back to the show"), Some(0));
-        assert_eq!(fix("Welcome back.", "welcome back now"), Some(16));
+        assert_eq!(fix("I envision a digestive system.", "I envision a digestive systemm"), Some(23..30));
+        assert_eq!(fix("Don’t stop the music, please.", "dont stop music now please"), Some(0..4));
+        assert_eq!(fix("Welcome back to the show.", "welcome to the show"), Some(7..7));
+        assert_eq!(fix("Welcome back to the show.", "back to the show"), Some(0..0));
+        assert_eq!(fix("Welcome back.", "welcome back now"), Some(13..16));
         assert_eq!(fix("Welcome back.", "welcome back"), None);
+    }
+
+    #[test]
+    fn a_missing_word_gets_its_own_space_to_type_into() {
+        let typed = |answer: &str, at: usize, word: &str| {
+            let (mut text, caret) = room_for_missing(answer, at);
+            text.insert_str(caret, word);
+            text
+        };
+        assert_eq!(typed("things you have", 6, "that"), "things that you have");
+        assert_eq!(typed("back to the show", 0, "welcome"), "welcome back to the show");
+        assert_eq!(typed("swallow", 7, "right"), "swallow right");
+        let reference = "Each task that you do are things that you have to swallow, right?";
+        let answer = "each task that you do are things you have to swallow right";
+        let fix = first_fix(answer, &compare(reference, answer)).unwrap();
+        assert!(is_correct(&compare(reference, &typed(answer, fix.start, "that"))));
     }
 
     #[test]
@@ -167,9 +188,5 @@ mod tests {
         assert_eq!(mimic_pause_ms(4000, 2.0, 0), 2500);
         assert_eq!(mimic_pause_ms(300, 1.0, 0), 1500);
         assert_eq!(mimic_pause_ms(4000, 1.0, 3), 3000);
-        assert_eq!(replay_pause_ms(3000, 1.0), 6000);
-        assert_eq!(replay_pause_ms(3000, 2.0), 3000);
-        assert_eq!(replay_pause_ms(500, 1.0), 2000);
-        assert_eq!(replay_pause_ms(9000, 1.0), 10_000);
     }
 }

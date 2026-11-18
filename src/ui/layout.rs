@@ -195,3 +195,32 @@ pub fn chip(
                 .text_color(move || if selected() { theme().primary } else { theme().muted_foreground }),
         )
 }
+
+/// How wide a composer card grows on a desktop: a comfortable measure for
+/// the large answer text.
+const COMPOSER_WIDTH: f32 = 720.0;
+
+/// A typing surface docked at the bottom of a page, like a chat's composer:
+/// a card filling the height it is given, centred and at most
+/// [`COMPOSER_WIDTH`] wide on a desktop, the whole width on a phone or
+/// tablet (where it sits on the keyboard) or in a compact window.
+pub fn composer_dock(content: impl IntoElement) -> View {
+    let roomy = || !crate::platform::is_phone() && !crate::platform::compact();
+    view()
+        .flex_1()
+        .w_full()
+        .min_h(px(0.0))
+        .items_center()
+        .style_with(move |s| if roomy() { s.px(px(PAGE_INSET)).pb_3() } else { s.px_2().pb_2() })
+        .child(
+            card()
+                .flex_1()
+                .w_full()
+                .min_h(px(0.0))
+                .p_3()
+                .gap_2()
+                .style_when(roomy, |s| s.max_w(px(COMPOSER_WIDTH)))
+                .bind_motion(&motion().entering(MotionPreset::FadeInUp))
+                .child(content),
+        )
+}

@@ -16,7 +16,8 @@ pub(crate) use form::{
 };
 pub(crate) use icons::{Icon, icon, icon_of, tray_icon_url};
 pub(crate) use layout::{
-    PAGE_INSET, Status, badge, card, chip, empty_state, key_cap, list_row, section, separator, spinner, veil,
+    PAGE_INSET, Status, badge, card, chip, composer_dock, empty_state, key_cap, list_row, section, separator, spinner,
+    veil,
 };
 pub(crate) use overlay::{
     Menu, Tone, confirm_destructive, context_menu, menu, menu_action, menu_choice, menu_danger, menu_divider,

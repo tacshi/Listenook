@@ -459,6 +459,9 @@ pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible
     state.asking = None;
     state.session = None;
     state.starting = None;
+    // Devices seen are found again by the next set-up's own listening: kept,
+    // one that answered for another library could be synced with here.
+    state.peers.clear();
     let turn = state.turn;
     drop(state);
     if was_visible {
@@ -2467,10 +2470,14 @@ mod tests {
         let progress = Progress::default();
         progress.turn.store(state().turn, Ordering::Relaxed);
         state().starting = Some(1);
+        let seen =
+            Peer { device: Device { id: "other".into(), ..Device::default() }, address: ([127, 0, 0, 1], 9).into() };
+        state().peers.insert("other".into(), (seen, Instant::now()));
         assert!(!progress.halted(), "a sync of this set-up goes on");
         configure(None, String::new(), String::new(), false);
         assert!(progress.halted(), "turning sync off ends it");
         assert_eq!(state().starting, None, "and what it marked as running");
+        assert!(state().peers.is_empty(), "and the devices it saw, found again by the next");
         let _ = fs::remove_dir_all(root);
     }
 

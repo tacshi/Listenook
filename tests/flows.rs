@@ -646,11 +646,27 @@ fn dictation_checks_the_answer_without_showing_the_sentence() {
     it.app.wait_for("Listen again and retry.").unwrap();
     it.app.wait_for("label:Checked answer").unwrap();
     assert!(it.app.shows("…"), "the missing word is marked without showing it");
-    it.app.clear("text:welcome to the show").unwrap();
+    it.app.wait_for("Type the missing word where the caret is.").unwrap();
+    // The missing word gets a space of its own to be typed into.
+    it.app.clear("text:welcome  to the show").unwrap();
+    it.app.wait_for_gone("label:Checked answer", GONE).unwrap();
+    // A word typed wrong comes selected, to type over.
+    it.app.type_text("text:Type what you hear", "welcome back to a show").unwrap();
+    it.app.press("role:button[Check]").unwrap();
+    it.app.wait_for("Type to replace the first mistake.").unwrap();
+    it.app.clear("text:welcome back to a show").unwrap();
     it.app.wait_for_gone("label:Checked answer", GONE).unwrap();
     it.app.type_text("text:Type what you hear", "welcome back to the show").unwrap();
     it.app.press("role:button[Check]").unwrap();
     it.app.wait_for("Matches transcript").unwrap();
+    // Mimic shares the card, and Practice opens in the mode used last.
+    it.app.press("Mimic").unwrap();
+    it.app.wait_for("Reps").unwrap();
+    it.app.wait_for_gone("text:Type what you hear", GONE).unwrap();
+    it.app.press("label:Practice").unwrap();
+    it.app.wait_for_gone("Reps", GONE).unwrap();
+    it.app.press("label:Practice").unwrap();
+    it.app.wait_for("Reps").unwrap();
 }
 
 #[test]
@@ -664,10 +680,9 @@ fn dictation_checks_on_return_and_moves_on_by_itself() {
     it.app.submit("text:welcome to the show").unwrap();
     it.app.wait_for("Listen again and retry.").unwrap();
     it.app.wait_for("label:Checked answer").unwrap();
-    it.app.submit("text:welcome to the show").unwrap();
+    it.app.submit("text:welcome  to the show").unwrap();
     it.app.wait_for_gone("label:Checked answer", GONE).unwrap();
-    it.app.press("Auto next").unwrap();
-    it.app.clear("text:welcome to the show").unwrap();
+    it.app.clear("text:welcome  to the show").unwrap();
     it.app.type_text("text:Type what you hear", "welcome back to the show").unwrap();
     it.app.submit("text:welcome back to the show").unwrap();
     it.app.wait_for("Matches transcript").unwrap();
