@@ -9,8 +9,8 @@ use super::review::{Practice, Review, Side};
 use crate::{
     state::{l, store, tr},
     ui::{
-        self, Icon, Size, Status, Variant, badge, composer_dock, hint, icon, icon_text_button, key_cap, segmented,
-        select, text_area, tokens,
+        self, Icon, Size, Status, Tone, Variant, badge, chip, composer_dock, hint, icon, icon_text_button, key_cap,
+        segmented, select, text_area, toast, tokens,
     },
 };
 
@@ -106,9 +106,12 @@ fn practice_bar(review: Review, heading: impl Fn() -> SharedString + 'static, co
         .child(controls.flex_row().items_center().gap_2())
 }
 
-/// The input's opacity over the marks: unseen, yet over UIKit's 1% floor
-/// for taking touches.
-const HIDDEN_INPUT: f32 = 0.02;
+/// The input's opacity over the marks: none on a Mac (AppKit takes clicks
+/// whatever a view's opacity), elsewhere just over UIKit's 1% floor for
+/// taking touches, where its text hardly shows.
+fn hidden_input() -> f32 {
+    if cfg!(target_os = "macos") { 0.0 } else { 0.011 }
+}
 /// How long after a check the input's caret moves are its own settling,
 /// not the user's: far less than anyone takes to press or type again.
 const MARKS_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -124,6 +127,21 @@ const SLOWEST: f32 = 0.5;
 /// How long after the sentence ends, or after the last key typed, it plays
 /// again.
 const REPLAY_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Type answer this time round: sentences checked, those right at the first
+/// check, and the words missed at a first check (as the transcript has them).
+#[derive(Clone, Default, PartialEq)]
+struct Tally {
+    checked: u32,
+    first_try: u32,
+    missed: Vec<String>,
+}
+
+impl Tally {
+    fn summary(&self) -> SharedString {
+        format!("{} {}/{}", tr("Right at the first try:"), self.first_try, self.checked).into()
+    }
+}
 
 fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static) -> impl IntoElement {
     let answer = signal(String::new());
@@ -141,6 +159,19 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
     // one) and a hint is offered, its first letters then the word.
     let misses = signal(0_u32);
     let hinted = signal(0_u8);
+    // Whether this sentence was checked yet (its first check is the one
+    // remembered), this time round's tally, going through only the sentences
+    // to review, and the end reached.
+    let tried = signal(false);
+    let tally = signal(Tally::default());
+    let only_missed = signal(false);
+    let finished = signal(false);
+    cleanup(move || {
+        let tally = tally.get_untracked();
+        if tally.checked > 0 {
+            toast(Tone::Info, tally.summary());
+        }
+    });
     let slowed = signal(None::<(f32, f32)>);
     let unslow = move || {
         if let Some((before, slower)) = slowed.get_untracked() {
@@ -161,6 +192,8 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             review.revealed.set(None);
             misses.set(0);
             hinted.set(0);
+            tried.set(false);
+            finished.set(false);
         });
     };
     effect(move || {
@@ -170,6 +203,8 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             let replaying = review.stop_at.get().is_some();
             if untouched && !replaying && live != pinned.get() {
                 pinned.set(live);
+                finished.set(false);
+                tried.set(false);
             }
         });
     });
@@ -180,14 +215,55 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             task.cancel();
         }
     });
+    let field = element_ref();
     let next = move || {
         if let Some(task) = advance.replace(None) {
             task.cancel();
         }
-        let next = review.next_kept(pinned.get_untracked().map_or(0, |index| index + 1));
-        if let Some(next) = next {
-            begin(next);
-            review.replay_once(next);
+        let after = pinned.get_untracked();
+        let next = if only_missed.get_untracked() {
+            review.next_to_review(after)
+        } else {
+            review.next_kept(after.map_or(0, |index| index + 1))
+        };
+        match next {
+            Some(next) => {
+                begin(next);
+                review.replay_once(next);
+            }
+            // The end, or none left to review: what this time round came to.
+            None => {
+                unslow();
+                batch(|| {
+                    answer.set(String::new());
+                    result.set(None);
+                    finished.set(true);
+                });
+                field.blur();
+            }
+        }
+    };
+    // From the end: through the sentences to review, or the recording again.
+    let restart = move |missed: bool| {
+        only_missed.set(missed);
+        let at = if missed { review.next_to_review(None) } else { review.next_kept(0) };
+        if let Some(at) = at {
+            begin(at);
+            review.replay_once(at);
+            field.focus();
+        }
+    };
+    let toggle_missed = move || {
+        let on = !only_missed.get_untracked();
+        only_missed.set(on);
+        let here = pinned.get_untracked();
+        let due = here.and_then(|index| untracked(|| review.segment(index))).is_some_and(|s| s.to_review);
+        if on
+            && !due
+            && let Some(at) = review.next_to_review(here)
+        {
+            begin(at);
+            review.replay_once(at);
         }
     };
     // Until it is answered, the sentence plays again a moment after each
@@ -234,7 +310,6 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             untracked(again_later);
         }
     });
-    let field = element_ref();
     // The answer as checked, and the caret put after the check: typing or
     // moving the caret takes the marks off.
     let checked_text = stored(String::new());
@@ -254,6 +329,24 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
         store().activity.touch();
         let words = dictation::compare(&segment.text, &typed);
         let correct = dictation::is_correct(&words);
+        // A sentence's first check is remembered: wrong, it is to review;
+        // right, it is done with (as it is when reviewed).
+        if !tried.get_untracked() {
+            tried.set(true);
+            review.set_to_review(&segment.id, !correct);
+            let missed = dictation::missed_words(&words);
+            tally.update(|tally| {
+                tally.checked += 1;
+                if correct {
+                    tally.first_try += 1;
+                }
+                for word in missed {
+                    if !tally.missed.iter().any(|seen| seen.eq_ignore_ascii_case(&word)) {
+                        tally.missed.push(word);
+                    }
+                }
+            });
+        }
         // Wrong, it plays again at once; right, the next one comes.
         let again = !correct;
         if correct {
@@ -374,8 +467,26 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
         .gap_2()
         .child(practice_bar(
             review,
-            heading,
+            move || -> SharedString {
+                let heading = heading();
+                let (first_try, checked) = tally.with(|tally| (tally.first_try, tally.checked));
+                if checked == 0 {
+                    heading
+                } else {
+                    format!("{heading} · {first_try}/{checked} {}", tr("first try")).into()
+                }
+            },
             view()
+                .child(when(
+                    move || only_missed.get() || review.left_to_review() > 0,
+                    move || {
+                        chip(
+                            move || -> SharedString { format!("{} {}", tr("Missed"), review.left_to_review()).into() },
+                            move || only_missed.get(),
+                            toggle_missed,
+                        )
+                    },
+                ))
                 .child(when(
                     || !crate::platform::is_phone(),
                     || view().flex_row().items_center().gap_1().child(key_cap("mod+r")).child(hint(l("Replay"))),
@@ -429,12 +540,16 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
                         // its text, caret, focus ring or selection (drawn on
                         // the chip instead; AppKit draws a selection at 30%,
                         // whatever its color, and the input's words sit a
-                        // little off the marks). Barely there rather than
-                        // gone, so it still takes presses (UIKit passes
-                        // over a view under 1%).
-                        .opacity(move || if checked.get() { HIDDEN_INPUT } else { 1.0 })
+                        // little off the marks), yet still taking presses
+                        // ([`hidden_input`]).
+                        .opacity(move || if checked.get() { hidden_input() } else { 1.0 })
                         .auto_focus(true),
-                ),
+                )
+                // At the end, what this time round came to, over the box.
+                .child(when(
+                    move || finished.get(),
+                    move || the_end(review, tally, only_missed.get_untracked(), restart),
+                )),
         )
         .child(when(move || !supported(), || hint(l("Word checking supports English only."))))
         .child(dynamic(move || {
@@ -451,6 +566,53 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             let first = words.iter().find(|word| !matches!(word, DictationWord::Matching(_))).cloned()?;
             Some(untracked(|| help(first, hinted, slowed).into_element()))
         }))
+}
+
+/// The end of the recording, or of the sentences to review: how many were
+/// right at the first try, the words to listen for, and where to go on.
+fn the_end(review: Review, tally: Signal<Tally>, missed_only: bool, restart: impl Fn(bool) + Copy + 'static) -> View {
+    let tally = tally.get_untracked();
+    let listen_for = (!tally.missed.is_empty()).then(|| {
+        format!("{} {}", tr("Listen for:"), tally.missed.iter().take(12).cloned().collect::<Vec<_>>().join(", "))
+    });
+    view()
+        .absolute()
+        .inset_0()
+        .p_4()
+        .gap_3()
+        .justify_center()
+        .rounded(tokens::radius)
+        .border_1()
+        .border_color(|| theme().border)
+        .bg(|| theme().card)
+        .bind_motion(&motion().entering(MotionPreset::FadeInUp))
+        .child(
+            text(if missed_only { tr("That's all to review.") } else { tr("That's the end.") })
+                .text_lg()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(|| theme().foreground),
+        )
+        .children((tally.checked > 0).then(|| text(tally.summary()).text_base().text_color(|| theme().foreground)))
+        .children(listen_for.map(hint))
+        .child(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .gap_2()
+                .child(when(
+                    move || review.left_to_review() > 0,
+                    move || {
+                        icon_text_button(Variant::Primary, Size::Sm, Icon::Repeat, move || -> SharedString {
+                            format!("{} ({})", tr("Review missed"), review.left_to_review()).into()
+                        })
+                        .on_press(move || restart(true))
+                    },
+                ))
+                .child(
+                    icon_text_button(Variant::Outline, Size::Sm, Icon::SkipBack, l("Start over"))
+                        .on_press(move || restart(false)),
+                ),
+        )
 }
 
 /// Help once a sentence was missed twice: a hint for its first mistake (the

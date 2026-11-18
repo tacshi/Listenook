@@ -189,6 +189,18 @@ fn edits(a: &[char], b: &[char]) -> usize {
     d[a.len()][b.len()]
 }
 
+/// The words of the transcript a check found typed wrong or left out, as the transcript has
+/// them: what to listen for again.
+pub fn missed_words(result: &[DictationWord]) -> Vec<String> {
+    result
+        .iter()
+        .filter_map(|word| match word {
+            DictationWord::Different(expected, _) | DictationWord::Missing(expected) => Some(expected.clone()),
+            DictationWord::Matching(_) | DictationWord::Extra(_) => None,
+        })
+        .collect()
+}
+
 pub fn is_correct(result: &[DictationWord]) -> bool {
     !result.is_empty() && result.iter().all(|word| matches!(word, DictationWord::Matching(_)))
 }
@@ -302,6 +314,12 @@ mod tests {
         for (expected, typed) in [("right", "rite"), ("the", "a"), ("to", "so"), ("things", "rings!x")] {
             assert!(!is_near(expected, typed), "{typed} for {expected}");
         }
+    }
+
+    #[test]
+    fn the_words_missed_are_the_transcript_s() {
+        let result = compare("Each task is a thing to swallow, right?", "each task is thing to swalow right extra");
+        assert_eq!(missed_words(&result), ["a", "swallow"]);
     }
 
     #[test]

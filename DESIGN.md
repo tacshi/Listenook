@@ -59,7 +59,13 @@ check plays it at once, and a right one moves to the next sentence after
 apostrophe) is marked amber, close rather than wrong; words run together or
 apart (`theright`, `the right`) match. Missed twice, the sentence plays at
 0.75× until it is answered or left, and a Hint shows the first mistake's first
-letters, then the word. The header's video toggle hides while Practice is open.
+letters, then the word. A sentence typed wrong at its first check is kept to
+review, with the recording (so it lasts and syncs), until it is typed right at
+the first try; the card's top row counts this time round (right at the first
+try out of those checked) and a Missed chip goes through only those. At the end
+of the recording, or of those to review, the box shows what the time round came
+to, the words to listen for, and Review missed or Start over; leaving Type
+answer says the count in a toast. The header's video toggle hides while Practice is open.
 
 A setting is made where it is used: how to transcribe in the Library's
 options, what a transcript shows in the reader's menu, accounts and defaults
