@@ -185,7 +185,12 @@ fn discover(page: Page) -> impl IntoElement {
         .flex_1()
         .child(
             top_bar()
-                .child(search_field_ref(query, l("Search podcasts"), &search_input).flex_1().max_w(px(420.0)).window_drag(false))
+                .child(
+                    search_field_ref(query, l("Search podcasts"), &search_input)
+                        .flex_1()
+                        .max_w(px(420.0))
+                        .window_drag(false),
+                )
                 .child(when(
                     || !crate::shell::system_header(),
                     move || {

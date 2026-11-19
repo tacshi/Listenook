@@ -159,7 +159,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
     let segment = computed(move || index.get().and_then(|index| review.segment(index)));
     let read = move |f: fn(&Segment) -> SharedString| segment.with(|s| s.as_ref().map(f).unwrap_or_default());
     let id = move || segment.with(|s| s.as_ref().map(|s| s.id.clone()));
-    let is_current = move || index.get().is_some() && index.get() == review.scrubbed.get().or_else(|| review.target());
+    let is_current = move || index.get().is_some() && index.get() == review.scrubbed.get().or_else(|| review.spoken());
     let is_repeating = move || index.get().is_some_and(|index| review.repeats(index));
     let range = move || review.repeat_range();
     let opens_loop = move || range().zip(index.get()).is_some_and(|((first, _), index)| index == first);
