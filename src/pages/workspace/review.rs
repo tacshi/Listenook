@@ -193,6 +193,8 @@ pub(super) struct Review {
     /// long after it, at what speed.
     sent_cut: Stored<Option<SentCut>>,
     pub(super) current: Memo<Option<usize>>,
+    /// The sentence being said, as [`Document::segment_heard_at`] has it.
+    heard: Memo<Option<usize>>,
     pub(super) scrub: Signal<Option<i64>>,
     pub(super) scrubbed: Memo<Option<usize>>,
     pub(super) shown: Memo<Vec<usize>>,
@@ -252,6 +254,12 @@ impl Review {
             })
         };
         let current = computed(move || segment_at(position_ms.get()));
+        let heard = computed(move || {
+            let position = position_ms.get();
+            loudness.with(|loudness| {
+                job.with(|job| job.as_ref()?.document.as_ref()?.segment_heard_at(position, loudness.as_deref()))
+            })
+        });
         let scrub = signal(None::<i64>);
         let scrubbed = computed(move || segment_at(scrub.get()?));
         // The pauses between sentences, from the recording itself, measured
@@ -365,6 +373,7 @@ impl Review {
             lag_ms: stored(playback::DEFAULT_LAG_MS),
             sent_cut: stored(None),
             current,
+            heard,
             scrub,
             scrubbed,
             shown,
@@ -625,6 +634,15 @@ impl Review {
             let document = job.as_ref()?.document.as_ref()?;
             document.next_kept(target).or_else(|| document.prev_kept(target))
         })
+    }
+
+    /// The sentence shown as being said, in the transcript and over the
+    /// video: [`Self::target`], but none once the sentence playing has been
+    /// said and a long pause follows it.
+    pub(super) fn spoken(&self) -> Option<usize> {
+        let target = self.target()?;
+        let done = self.current.get() == Some(target) && self.heard.get().is_none();
+        (!done).then_some(target)
     }
 
     pub(super) fn target_or_first(&self) -> Option<usize> {

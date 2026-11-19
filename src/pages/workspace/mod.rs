@@ -1102,7 +1102,7 @@ fn set_fullscreen(review: Review, on: bool) {
 }
 
 fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
-    let index = move || review.target();
+    let index = move || review.spoken();
     let current = move || index().and_then(|index| review.segment(index));
     let hidden = move || review.blind() && current().is_none_or(|segment| !review.unveiled(&segment.id));
     let words = computed(move || {

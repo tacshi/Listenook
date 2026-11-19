@@ -430,7 +430,30 @@ impl Document {
         }
         Some(current)
     }
+
+    /// The sentence being said at `position_ms`: the one playing there
+    /// ([`Self::segment_at`]) until a little past its last sound. In a long
+    /// pause after it there is none: it has been said and the next one has
+    /// yet to start ("はい。" answered, then seconds of a scene). Through a
+    /// short pause it stays, rather than blink off and on, and it stays when
+    /// its end is not known.
+    pub fn segment_heard_at(&self, position_ms: i64, loudness: Option<&Loudness>) -> Option<usize> {
+        let index = self.segment_at(position_ms, loudness)?;
+        let segment = &self.segments[index];
+        if segment.end_ms <= segment.start_ms {
+            return Some(index);
+        }
+        let end = self.play_end(index, loudness)?;
+        let bridged = self.play_start(index + 1, loudness).is_some_and(|next| next - end <= HEARD_THROUGH_MS);
+        (bridged || position_ms < end + HEARD_AFTER_MS).then_some(index)
+    }
 }
+
+/// How long a sentence is still heard after its last sound.
+const HEARD_AFTER_MS: i64 = 500;
+
+/// The longest pause a sentence is heard through, until the next one starts.
+const HEARD_THROUGH_MS: i64 = 1500;
 
 pub const LEAD_IN_MS: i64 = 250;
 
@@ -1175,6 +1198,27 @@ mod tests {
         assert_eq!(document.segment_at(9650, None), Some(2));
         assert_eq!(document.segment_at(11950, None), Some(3));
         assert_eq!(Document::default().segment_at(100, None), None);
+    }
+
+    #[test]
+    fn a_sentence_lets_go_in_a_long_pause_after_it() {
+        let segment = |start_ms, end_ms| Segment { start_ms, end_ms, ..Default::default() };
+        // A short pause after the first sentence, a long one after the
+        // second ("はい。" at 01:59, the next at 02:06), then the last.
+        let document = Document {
+            segments: vec![segment(0, 1000), segment(2200, 3000), segment(10_000, 10_500)],
+            ..Default::default()
+        };
+        assert_eq!(document.segment_heard_at(1900, None), Some(0), "heard through a short pause");
+        assert_eq!(document.segment_heard_at(1950, None), Some(1));
+        assert_eq!(document.segment_heard_at(3499, None), Some(1), "a moment past its last sound");
+        assert_eq!(document.segment_heard_at(3500, None), None, "then the long pause");
+        assert_eq!(document.segment_at(3500, None), Some(1), "still the sentence playing");
+        assert_eq!(document.segment_heard_at(9749, None), None);
+        assert_eq!(document.segment_heard_at(9750, None), Some(2), "the next from where it plays");
+        assert_eq!(document.segment_heard_at(11_000, None), None, "and past the last");
+        let untimed = Document { segments: vec![segment(0, 0)], ..Default::default() };
+        assert_eq!(untimed.segment_heard_at(60_000, None), Some(0), "no end to let go at");
     }
 
     #[test]

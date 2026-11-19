@@ -219,8 +219,7 @@ pub(super) fn detail(job: &Job) -> SharedString {
 
 fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: Dialogs) -> ui::Menu {
     let store = store();
-    menu
-        .child(menu_action(Icon::Pencil, l("Rename…"), move || dialogs.rename.show(&id())))
+    menu.child(menu_action(Icon::Pencil, l("Rename…"), move || dialogs.rename.show(&id())))
         .child(menu_action(Icon::Folder, l("Group…"), move || dialogs.group.show(&id())))
         .child(menu_action(Icon::Tag, l("Tags…"), move || dialogs.tags.show(&id())))
         .child(menu_action(Icon::Export, l("Export…"), move || {
@@ -280,8 +279,7 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
             let Some(job) = store.job_now(&id) else {
                 return;
             };
-            let owned =
-                store.data_root().is_some_and(|root| std::path::Path::new(&job.source_path).starts_with(root));
+            let owned = store.data_root().is_some_and(|root| std::path::Path::new(&job.source_path).starts_with(root));
             if !job.has_transcript() && !owned && !job.status.is_active() {
                 store.remove_job(&id);
                 return;
