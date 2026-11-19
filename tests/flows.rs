@@ -229,6 +229,20 @@ fn open_sample(name: &str) -> App {
 }
 
 #[test]
+fn the_sleep_timer_shows_what_is_left_until_it_is_turned_off() {
+    let mut it = open_sample("sleep");
+    it.app.press("label:Sleep timer").unwrap();
+    it.app.press("15 minutes").unwrap();
+    it.app.wait_for("15:00").unwrap();
+    it.app.press("label:Sleep timer").unwrap();
+    it.app.press("When this recording ends").unwrap();
+    it.app.wait_for_gone("15:00", GONE).unwrap();
+    it.app.press("label:Sleep timer").unwrap();
+    it.app.press("Off").unwrap();
+    assert!(!it.app.shows("15:00"));
+}
+
+#[test]
 fn home_resumes_what_was_played_last_and_lists_what_was_added() {
     let mut it = start(
         "home",

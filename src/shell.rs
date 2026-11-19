@@ -1,6 +1,7 @@
 use listenook_core::{
     format::{clock, track_position},
     l10n::Lang,
+    sleep::Sleep,
 };
 use nsh_base::{nav_page, nav_stack, theme};
 use nsh_core::{
@@ -912,6 +913,12 @@ fn podcast_player() -> impl IntoElement {
         media::Command::Previous => player.seek_to(player.position_ms() - 15_000),
         media::Command::Seek(position_ms) => player.seek_to(position_ms),
     }));
+    let sleeps = untracked(|| store.sleep.stops());
+    effect(move || {
+        if store.sleep.stops() != sleeps {
+            untracked(|| player.set_paused(true));
+        }
+    });
     let beat = computed(move || player.position_ms() / 5000);
     effect(move || {
         beat.get();
@@ -951,9 +958,13 @@ fn podcast_player() -> impl IntoElement {
             player.report((progress.current_time * 1000.0) as i64, (progress.duration * 1000.0) as i64);
             if !untracked(|| player.paused()) {
                 store.activity.note(listenook_core::activity::Kind::Listen);
+                store.sleep.heard();
             }
         })
-        .on_end(move || player.set_paused(true))
+        .on_end(move || {
+            store.sleep.ended();
+            player.set_paused(true);
+        })
         .absolute()
         .size(px(1.0))
         .opacity(0.0)
@@ -1027,6 +1038,7 @@ fn mini_player() -> impl IntoElement {
                 store().save_rate("podcast_rate", rate);
             },
         ))
+        .child(sleep_menu(Variant::Ghost, "When the episode ends"))
         .child(icon_button(Icon::Close, tr("Close player"), Size::Md, move || player.stop()))
 }
 
@@ -1077,6 +1089,28 @@ pub(crate) fn rate_menu(
             ui::menu_choice(rate_label(option), move || (rate() - option).abs() < 0.001, move || set(option))
         }),
     )
+}
+
+const SLEEP_AFTER: &[(i64, &str)] =
+    &[(5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (45, "45 minutes"), (60, "1 hour")];
+
+/// The sleep timer's button, showing the time left while it counts, and its
+/// choices; `end` names stopping when what plays ends.
+pub(crate) fn sleep_menu(variant: Variant, end: &'static str) -> impl IntoElement {
+    let sleep = store().sleep;
+    let left = move || sleep.timer().left_ms().map(|ms| SharedString::from(clock(ms)));
+    let trigger = ui::glyph_label_button(variant, Size::Sm, Icon::Sleep, left, move || sleep.timer().is_on())
+        .accessibility_label(tr("Sleep timer"));
+    menu(trigger)
+        .child(ui::menu_choice(l("Off"), move || !sleep.timer().is_on(), move || sleep.set(Sleep::Off)))
+        .children(SLEEP_AFTER.iter().map(move |&(minutes, label)| {
+            ui::menu_choice(
+                l(label),
+                move || sleep.timer().minutes_chosen() == Some(minutes),
+                move || sleep.set(Sleep::minutes(minutes)),
+            )
+        }))
+        .child(ui::menu_choice(l(end), move || sleep.timer() == Sleep::AtEnd, move || sleep.set(Sleep::AtEnd)))
 }
 
 pub(crate) fn top_bar() -> View {

@@ -716,6 +716,15 @@ impl Review {
         self.paused.set(!self.paused.get_untracked());
     }
 
+    /// Stops playing, and any wait to play again: the sleep timer is up.
+    pub(super) fn pause(&self) {
+        self.cancel_wait();
+        batch(|| {
+            self.stop_at.set(None);
+            self.paused.set(true);
+        });
+    }
+
     pub(super) fn play_from(&self, index: usize) {
         self.go_to(index, true);
     }
@@ -1007,6 +1016,7 @@ impl Review {
         self.position_ms.set(position_ms);
         self.last_tick.with(|last| *last = Some((Instant::now(), position_ms)));
         self.store.activity.note(Kind::Listen);
+        self.store.sleep.heard();
         self.disarm();
         if self.out_of_skipped(position_ms) {
             return;
