@@ -82,6 +82,31 @@ fn paired_on_port(port: u16) -> impl FnOnce(&Path) {
     }
 }
 
+/// A body that gives what it holds, then fails as a connection that drops does, once `pause`
+/// has let this device read what was sent.
+struct Breaks {
+    held: std::io::Cursor<&'static [u8]>,
+    pause: Duration,
+}
+
+impl Breaks {
+    fn after(held: &'static [u8], pause: Duration) -> Breaks {
+        Breaks { held: std::io::Cursor::new(held), pause }
+    }
+}
+
+impl std::io::Read for Breaks {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self.held.read(buffer)? {
+            0 => {
+                std::thread::sleep(self.pause);
+                Err(std::io::Error::other("the connection dropped"))
+            }
+            read => Ok(read),
+        }
+    }
+}
+
 fn other_device(port: u16) -> serde_json::Value {
     json!({"app": "listenook", "protocol": PROTOCOL, "id": "other", "name": "Studio Mac", "platform": "macos", "port": port})
 }
@@ -1443,21 +1468,11 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
     it.app.press("Sync").unwrap();
     it.app.wait_for("Syncing with Studio Mac…").unwrap();
 
-    /// Gives what it holds, then fails as a connection that drops does.
-    struct Breaks(std::io::Cursor<&'static [u8]>);
-    impl std::io::Read for Breaks {
-        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-            match self.0.read(buffer)? {
-                0 => Err(std::io::Error::other("the connection dropped")),
-                read => Ok(read),
-            }
-        }
-    }
     let broken = other(&it.root)
         .put(&format!("{base}/media/from-other/m4a"))
         .set("X-Listenook-Token", &token)
         .set("Content-Length", "1000")
-        .send(Breaks(std::io::Cursor::new(b"half")));
+        .send(Breaks::after(b"half", Duration::from_millis(500)));
     assert!(broken.is_err());
     it.app.wait_for_within("The sync did not finish", Duration::from_secs(20)).unwrap();
     assert!(it.app.shows("The connection was lost. What was copied is kept; sync again to finish."));
@@ -1498,6 +1513,29 @@ fn a_sync_being_answered_shows_and_ends_when_the_other_device_is_lost() {
 }
 
 #[test]
+fn a_sync_ends_when_a_call_is_lost_before_it_is_read() {
+    let mut it = start("sync-lost-early", paired_on_port(47949), Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Sync").unwrap();
+    it.app.wait_for("My devices").unwrap();
+
+    let base = "https://127.0.0.1:47949/listenook";
+    let hello = json!({"device": other_device(47949), "catalog": {"version": 1, "groups": [], "tags": []}});
+    let welcome = hello_to(&it.root, base, hello).unwrap();
+    let token = welcome["token"].as_str().unwrap().to_owned();
+    it.app.wait_for("Syncing with Studio Mac…").unwrap();
+
+    // Given up on at once: on Windows the reset can take the request with it, unread.
+    let broken = other(&it.root)
+        .put(&format!("{base}/media/sample/m4a"))
+        .set("X-Listenook-Token", &token)
+        .set("Content-Length", "1000")
+        .send(Breaks::after(b"", Duration::ZERO));
+    assert!(broken.is_err());
+    it.app.wait_for_within("The sync did not finish", Duration::from_secs(20)).unwrap();
+}
+
+#[test]
 fn a_path_sent_by_the_other_device_never_names_a_file_here() {
     let mut it = start("sync-path", paired_on_port(47948), Vec::new());
     it.app.wait_for("Learning languages").unwrap();
@@ -1526,7 +1564,7 @@ fn a_path_sent_by_the_other_device_never_names_a_file_here() {
 
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(manifest(&it.root, "probe")).unwrap()).unwrap();
-    let kept = it.root.join("media/sync-probe.m4a");
+    let kept = it.root.join("media").join("sync-probe.m4a");
     assert_eq!(saved["source_path"].as_str(), kept.to_str(), "the recording waits for its media in the app's folder");
     let served = other(&it.root).get(&format!("{base}/media/probe")).set("X-Listenook-Token", &token).call();
     assert!(matches!(served, Err(ureq::Error::Status(404, _))), "the file the path named is not sent");
