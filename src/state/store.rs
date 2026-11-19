@@ -500,8 +500,13 @@ impl Store {
     }
 
     pub(crate) fn adopt_shelves(&self, theirs: &listenook_core::sync::Shelves) {
-        let marks = self.settings.with_untracked(|settings| settings.shelf_marks.clone());
-        let mut mine = listenook_core::sync::Shelves::of(&self.positions.get(), &self.played.get_untracked(), &marks);
+        let (marks, goal) = self.settings.with_untracked(|settings| {
+            (settings.shelf_marks.clone(), listenook_core::sync::Goal::of_settings(settings))
+        });
+        let mut mine = listenook_core::sync::Shelves {
+            goal,
+            ..listenook_core::sync::Shelves::of(&self.positions.get(), &self.played.get_untracked(), &marks)
+        };
         if !listenook_core::sync::merge_shelves(&mut mine, theirs) {
             return;
         }
@@ -522,6 +527,10 @@ impl Store {
                     }
                 }
                 settings.shelf_marks = mine.marks;
+                if let Some(goal) = mine.goal {
+                    settings.daily_goal_minutes = goal.minutes;
+                    settings.daily_goal_set_at = goal.at;
+                }
             });
         });
     }
@@ -1037,7 +1046,11 @@ impl Store {
     }
 
     pub(crate) fn set_daily_goal_minutes(&self, minutes: u32) {
-        self.update_settings(|s| s.daily_goal_minutes = minutes);
+        self.update_settings(|s| {
+            s.daily_goal_minutes = minutes;
+            s.daily_goal_set_at = listenook_core::now_iso();
+        });
+        persist::changed();
     }
 
     fn configure_sync(&self) {

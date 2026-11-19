@@ -988,6 +988,10 @@ pub struct Settings {
     #[serde(default = "truthy")]
     pub auto_align_transcripts: bool,
     pub daily_goal_minutes: u32,
+    /// When the goal was last chosen here or on another device; empty for
+    /// one never chosen since this was kept. Sync keeps the later choice.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub daily_goal_set_at: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -1016,6 +1020,7 @@ impl Default for Settings {
             brief_anchors: BTreeMap::new(),
             auto_align_transcripts: true,
             daily_goal_minutes: DAILY_GOAL_MINUTES,
+            daily_goal_set_at: String::new(),
             extra: Map::new(),
         }
     }
