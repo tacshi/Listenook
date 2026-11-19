@@ -96,6 +96,31 @@ pub struct Shelves {
     pub positions: BTreeMap<String, Position>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub marks: BTreeMap<String, Mark>,
+    /// The daily goal shown on Home beside the shelves; older peers send none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<Goal>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Goal {
+    pub minutes: u32,
+    /// Empty for a goal chosen before the time was kept: any timed choice wins over it.
+    pub at: String,
+}
+
+impl Goal {
+    /// The goal `settings` hold, unless it is the default and was never chosen,
+    /// so a device left alone does not undo the choice made on another.
+    pub fn of_settings(settings: &crate::models::Settings) -> Option<Goal> {
+        let chosen =
+            !settings.daily_goal_set_at.is_empty() || settings.daily_goal_minutes != crate::models::DAILY_GOAL_MINUTES;
+        chosen.then(|| Goal { minutes: settings.daily_goal_minutes, at: settings.daily_goal_set_at.clone() })
+    }
+
+    fn is_valid(&self) -> bool {
+        (1..=240).contains(&self.minutes)
+    }
 }
 
 impl Shelves {
@@ -111,7 +136,7 @@ impl Shelves {
         for (id, position) in positions {
             kept.entry(id.clone()).or_insert_with(|| Position { position_ms: Some(*position), at: String::new() });
         }
-        Shelves { positions: kept, marks: marks.clone() }
+        Shelves { positions: kept, marks: marks.clone(), goal: None }
     }
 
     pub fn of_settings(settings: &crate::models::Settings) -> Shelves {
@@ -123,7 +148,10 @@ impl Shelves {
                 marks.entry(format!("{shelf}:{id}")).or_insert(unmarked);
             }
         }
-        Shelves::of(&settings.playback_positions_ms, &settings.playback_played_at, &marks)
+        Shelves {
+            goal: Goal::of_settings(settings),
+            ..Shelves::of(&settings.playback_positions_ms, &settings.playback_played_at, &marks)
+        }
     }
 
     pub fn positions(&self) -> (BTreeMap<String, i64>, BTreeMap<String, String>) {
@@ -150,6 +178,16 @@ pub fn merge_shelves(mine: &mut Shelves, theirs: &Shelves) -> bool {
     for (key, other) in &theirs.marks {
         if mine.marks.get(key).is_none_or(|known| later(&other.at, &known.at)) {
             mine.marks.insert(key.clone(), other.clone());
+            changed = true;
+        }
+    }
+    if let Some(other) = theirs.goal.as_ref().filter(|goal| goal.is_valid()) {
+        let take = match &mine.goal {
+            None => true,
+            Some(known) => later(&other.at, &known.at),
+        };
+        if take && mine.goal.as_ref() != Some(other) {
+            mine.goal = Some(other.clone());
             changed = true;
         }
     }
@@ -848,6 +886,7 @@ mod tests {
             ]
             .into(),
             marks: [("continue:a".to_owned(), mark(true, EARLY))].into(),
+            goal: None,
         };
         let theirs = Shelves {
             positions: [
@@ -858,6 +897,7 @@ mod tests {
             ]
             .into(),
             marks: [("continue:a".to_owned(), mark(false, LATE)), ("recent:d".to_owned(), mark(true, EARLY))].into(),
+            goal: None,
         };
         assert!(merge_shelves(&mut mine, &theirs));
         let (positions, played) = mine.positions();
@@ -878,6 +918,30 @@ mod tests {
             Shelves { marks: [("continue:old".to_owned(), mark(false, EARLY))].into(), ..Shelves::default() };
         merge_shelves(&mut newer, &sent);
         assert!(!newer.marks["continue:old"].hidden, "and any real change wins over it");
+    }
+
+    #[test]
+    fn the_daily_goal_chosen_last_wins_and_an_unchosen_default_is_not_sent() {
+        use crate::models::Settings;
+        let goal = |minutes: u32, at: &str| Some(Goal { minutes, at: at.into() });
+        let shelves = |goal: Option<Goal>| Shelves { goal, ..Shelves::default() };
+        assert_eq!(Shelves::of_settings(&Settings::default()).goal, None, "a goal left alone is not sent");
+        let untimed = Settings { daily_goal_minutes: 30, ..Settings::default() };
+        assert_eq!(Shelves::of_settings(&untimed).goal, goal(30, ""), "one chosen before times were kept is");
+
+        let mut mine = shelves(None);
+        assert!(merge_shelves(&mut mine, &shelves(goal(30, ""))), "a device with none takes any");
+        assert!(merge_shelves(&mut mine, &shelves(goal(10, EARLY))), "a timed choice beats an untimed one");
+        assert!(merge_shelves(&mut mine, &shelves(goal(45, LATE))));
+        assert!(!merge_shelves(&mut mine, &shelves(goal(15, EARLY))), "an older choice loses");
+        assert!(!merge_shelves(&mut mine, &shelves(None)), "a peer without one changes nothing");
+        assert!(!merge_shelves(&mut mine, &shelves(goal(0, "2099-01-01T00:00:00.000Z"))), "nor does a broken one");
+        assert_eq!(mine.goal, goal(45, LATE));
+
+        let sent: Shelves = serde_json::from_str(&serde_json::to_string(&mine).unwrap()).unwrap();
+        assert_eq!(sent.goal, goal(45, LATE));
+        let older: Shelves = serde_json::from_str(r#"{"marks": {}}"#).unwrap();
+        assert_eq!(older.goal, None);
     }
 
     #[test]
