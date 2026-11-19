@@ -139,7 +139,6 @@ pub(super) struct Review {
     pub(super) rate: Signal<f32>,
     pub(super) has_video: bool,
     pub(super) side: Signal<Side>,
-    pub(super) video_wanted: Signal<bool>,
     pub(super) mode: Signal<ContentMode>,
     pub(super) searching: Signal<bool>,
     pub(super) query: Signal<String>,
@@ -313,7 +312,6 @@ impl Review {
             } else {
                 Side::None
             }),
-            video_wanted: signal(video_wanted),
             mode: signal(if has_translation { ContentMode::Bilingual } else { ContentMode::Original }),
             searching,
             query,
@@ -726,15 +724,6 @@ impl Review {
     }
 
     pub(super) fn play_from(&self, index: usize) {
-        self.go_to(index, true);
-    }
-
-    pub(super) fn jump_to(&self, index: usize) {
-        let playing = !self.paused.get_untracked() || self.waiting.get_untracked();
-        self.go_to(index, playing);
-    }
-
-    fn go_to(&self, index: usize, play: bool) {
         let Some(index) = self.kept_near(index, true) else {
             return;
         };
@@ -751,8 +740,8 @@ impl Review {
             }
             self.revealed.set(None);
         });
-        self.jump(self.play_start(index), play);
-        self.paused.set(!play);
+        self.jump(self.play_start(index), true);
+        self.paused.set(false);
     }
 
     pub(super) fn step(&self, by: isize) {

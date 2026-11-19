@@ -477,11 +477,14 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             check();
         }
     };
-    // Space types a space: this plays the sentence again from the box.
-    on_key_with("mod+r", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
+    let replay = move || {
         if let Some(index) = pinned.get_untracked() {
             review.replay_once(index);
         }
+    };
+    // Space types a space: this plays the sentence again from the box.
+    on_key_with("mod+r", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
+        replay();
     });
     on_key_with("mod+enter", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
         check()
@@ -513,12 +516,25 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
                         )
                     },
                 ))
-                .child(when(
-                    || !crate::platform::is_phone(),
-                    // The key alone, named by its tooltip, leaving the row's
-                    // room to the sentence and its count.
-                    || key_cap("mod+r").label(tr("Replay")).tooltip(ui::tip(tr("Replay"))),
-                ))
+                .child(
+                    when(
+                        || !crate::platform::is_phone(),
+                        // The key alone, named by its tooltip, leaving the row's
+                        // room to the sentence and its count; pressing it replays too.
+                        move || {
+                            view().tooltip(ui::tip(tr("Replay"))).child(
+                                nsh_base::button()
+                                    .accessibility_label(tr("Replay"))
+                                    .on_press(replay)
+                                    .rounded(tokens::radius_sm)
+                                    .hover(|s| s.opacity(0.8))
+                                    .focus_visible(tokens::focus_ring)
+                                    .child(key_cap("mod+r")),
+                            )
+                        },
+                    )
+                    .otherwise(move || ui::icon_button(Icon::Refresh, tr("Replay"), Size::Sm, replay)),
+                )
                 .child(
                     icon_text_button(Variant::Primary, Size::Sm, Icon::Check, l("Check"))
                         .disabled(move || !supported() || answer.with(|a| a.trim().is_empty()))

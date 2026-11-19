@@ -116,7 +116,7 @@ pub(crate) fn deep_listen(episode: &Episode, feed: &Feed) {
         if store.job_now(&existing).is_some_and(|job| job.has_transcript()) {
             store.open_transcript(&existing);
         } else {
-            toast(Tone::Info, tr("This episode is already in your Library."));
+            store.show(crate::state::Filter::All);
         }
         return;
     }

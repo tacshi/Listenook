@@ -8,7 +8,7 @@ use nsh_core::prelude::*;
 use super::review::{BriefPart, Review, Side};
 use crate::{
     services::llm,
-    state::{error_text, l, tr},
+    state::{SettingsTab, error_text, l, tr},
     ui::{
         Icon, Size, Tone, Variant, button, card, checkbox, empty_state, field, hint, icon, icon_button,
         icon_text_button, modal, modal_actions, progress_bar, section, select, text_area, text_field, toast,
@@ -103,7 +103,7 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                     .into_element()
                             } else {
                                 button(Variant::Default, Size::Md, l("Open Settings"))
-                                    .on_press(move || store.settings_open().set(true))
+                                    .on_press(move || store.open_settings(SettingsTab::Ai))
                                     .into_element()
                             }
                         })

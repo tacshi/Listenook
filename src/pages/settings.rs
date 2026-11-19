@@ -11,7 +11,7 @@ use crate::{
         updater::{self, UpdateState},
     },
     state::{
-        error_text, l,
+        SettingsTab as Tab, error_text, l,
         secrets::{self, Secret},
         store, tr,
     },
@@ -21,26 +21,15 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tab {
-    General,
-    Transcription,
-    Ai,
-    Shortcuts,
-    About,
-}
+const TABS: [Tab; 5] = [Tab::General, Tab::Transcription, Tab::Ai, Tab::Shortcuts, Tab::About];
 
-impl Tab {
-    const ALL: [Tab; 5] = [Tab::General, Tab::Transcription, Tab::Ai, Tab::Shortcuts, Tab::About];
-
-    fn key(self) -> &'static str {
-        match self {
-            Tab::General => "General",
-            Tab::Transcription => "Transcription",
-            Tab::Ai => "AI",
-            Tab::Shortcuts => "Shortcuts",
-            Tab::About => "About",
-        }
+fn tab_key(tab: Tab) -> &'static str {
+    match tab {
+        Tab::General => "General",
+        Tab::Transcription => "Transcription",
+        Tab::Ai => "AI",
+        Tab::Shortcuts => "Shortcuts",
+        Tab::About => "About",
     }
 }
 
@@ -51,7 +40,7 @@ pub(crate) const VERSION: &str = match option_env!("LISTENOOK_VERSION") {
 
 pub(crate) fn settings_dialog() -> impl IntoElement {
     let open = store().settings_open();
-    let tab = signal(Tab::General);
+    let tab = store().settings_tab();
     effect(move || {
         if store().update_check().get() {
             tab.set(Tab::About);
@@ -68,14 +57,14 @@ pub(crate) fn settings_dialog() -> impl IntoElement {
                 .child(
                     when(crate::platform::compact, move || {
                         scroll().horizontal().scrollbar(false).child(segmented(
-                            Tab::ALL.iter().map(|tab| (*tab, tab.key())).collect(),
+                            TABS.iter().map(|tab| (*tab, tab_key(*tab))).collect(),
                             move || tab.get(),
                             move |next| tab.set(next),
                         ))
                     })
                     .otherwise(move || {
                         segmented(
-                            Tab::ALL.iter().map(|tab| (*tab, tab.key())).collect(),
+                            TABS.iter().map(|tab| (*tab, tab_key(*tab))).collect(),
                             move || tab.get(),
                             move |next| tab.set(next),
                         )

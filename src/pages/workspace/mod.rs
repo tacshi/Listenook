@@ -15,7 +15,7 @@ use super::dialogs::{ExportDialog, JobDialog, export_dialog, rename_dialog};
 use crate::{
     services::{llm, media, playable, podcasts},
     shell::{rate_menu, sleep_menu, time_text, top_bar},
-    state::{error_text, l, store, tr},
+    state::{SettingsTab, error_text, l, store, tr},
     ui::{
         self, Icon, Size, Tone, Variant, button, checkbox, empty_state, field, hint, icon_button, menu, menu_action,
         menu_divider, menu_toggle, modal, modal_actions, progress_bar, select, toast, toggle_icon_button,
@@ -198,6 +198,13 @@ fn opened(id: &str) -> impl IntoElement {
             review.editing.set(None);
         } else if review.searching.get_untracked() {
             review.searching.set(false);
+        } else if review.repeating.get_untracked().is_some() && review.practice.get_untracked() != Practice::Mimic {
+            review.repeating.set(None);
+        } else if matches!(review.side.get_untracked(), Side::Practice | Side::Brief) {
+            if review.side.get_untracked() == Side::Practice {
+                practice::stop(review);
+            }
+            review.side.set(Side::None);
         } else {
             store.close_reader();
         }
@@ -309,7 +316,6 @@ fn opened(id: &str) -> impl IntoElement {
         has_video && side() == Side::Video && !review.fullscreen.get() && (review.video_on_top.get() || narrow())
     };
     let stacked = move || on_top() || narrow();
-    let typing = move || crate::platform::is_phone() && keyboard_height().0 > 0.0;
     let soft_keyboard = move || crate::platform::is_phone() && keyboard_height().0 > SOFT_KEYBOARD;
     // Docked on a touch device, the answer sits on the keyboard: the reader
     // ends where it starts (the root's padding already keeps the home
@@ -378,11 +384,7 @@ fn opened(id: &str) -> impl IntoElement {
                         .bg(move || if review.fullscreen.get() { tokens::stage() } else { theme().muted })
                         .style_with(move |s| match (has_video, side(), review.fullscreen.get()) {
                             (true, Side::Video, _) | (true, _, true) => s.flex_1(),
-                            (true, _, false) if narrow() || typing() || !review.video_wanted.get() => {
-                                s.h(px(1.0)).opacity(0.0)
-                            }
-                            (true, _, false) => s.h(px(review.side_width.get() * 9.0 / 16.0)),
-                            (false, ..) => s.h(px(1.0)).opacity(0.0),
+                            _ => s.h(px(1.0)).opacity(0.0),
                         })
                         .child(media.flex_1())
                         .child(when(move || review.fullscreen.get(), move || subtitle(review, hud)))
@@ -493,47 +495,16 @@ fn has_translation(review: Review) -> bool {
     })
 }
 
-fn video_toggle(review: Review) -> impl IntoElement {
-    let on = move || match review.side.get() {
-        Side::Video => true,
-        Side::None => false,
-        Side::Practice | Side::Brief => review.video_wanted.get() && !crate::shell::page_stacks(),
-    };
-    view().window_drag(false).child(ui::toggle_button(
-        Variant::Ghost,
-        Icon::Film,
-        tr("Video"),
-        Size::Sm,
-        on,
-        move || {
-            let showing = untracked(on);
-            review.video_wanted.set(!showing);
-            review.store.update_settings(|s| {
-                s.extra.insert("reader_video_wanted".into(), (!showing).into());
-            });
-            let side = review.side.get_untracked();
-            let next = match (showing, side) {
-                (true, Side::Video) => Side::None,
-                (false, _) if side == Side::None || crate::shell::page_stacks() => Side::Video,
-                _ => return,
-            };
-            if side == Side::Practice {
-                practice::stop(review);
-            }
-            review.side.set(next);
-        },
-    ))
-}
-
 fn side_toggle(review: Review, side: Side, glyph: Icon, name: &'static str) -> impl IntoElement {
     let on = move || review.side.get() == side;
     view().window_drag(false).child(ui::toggle_button(Variant::Ghost, glyph, tr(name), Size::Sm, on, move || {
         let closing = untracked(on);
-        let next = match closing {
-            false => side,
-            true if review.has_video && review.video_wanted.get_untracked() => Side::Video,
-            true => Side::None,
-        };
+        let next = if closing { Side::None } else { side };
+        if side == Side::Video {
+            review.store.update_settings(|s| {
+                s.extra.insert("reader_video_wanted".into(), (!closing).into());
+            });
+        }
         match next {
             Side::Practice => practice::start(review, practice::last_mode(review)),
             _ => {
@@ -623,9 +594,7 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
         )))
         .child(side_toggle(review, Side::Practice, Icon::Practice, "Practice"))
         .child(side_toggle(review, Side::Brief, Icon::Sparkles, "AI Brief"))
-        // Practice has the bottom of the reader and no picture: no video
-        // toggle while it is open.
-        .child(when(move || review.has_video && review.side.get() != Side::Practice, move || video_toggle(review)))
+        .child(when(move || review.has_video, move || side_toggle(review, Side::Video, Icon::Film, "Video")))
         .child(when(
             move || review.has_video && review.side.get() == Side::Video && !crate::shell::page_stacks(),
             move || {
@@ -678,7 +647,7 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                         llm::start_ad_scan(&review.id());
                     } else {
                         toast(Tone::Info, tr("Set up AI in Settings to find ads."));
-                        store.settings_open().set(true);
+                        store.open_settings(SettingsTab::Ai);
                     }
                 }))
                 .child(menu_action(Icon::Copy, l("Copy transcript"), move || {
@@ -1270,7 +1239,17 @@ fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
                                 .into()
                         })
                     })
-                    .otherwise(|| hint(l("Configure the AI provider in Settings before translating."))),
+                    .otherwise(move || {
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(hint(l("Configure the AI provider in Settings before translating.")).flex_1())
+                            .child(button(Variant::Outline, Size::Sm, l("Settings")).on_press(move || {
+                                open.set(false);
+                                store.open_settings(SettingsTab::Ai);
+                            }))
+                    }),
                 )
                 .into_element()
         },

@@ -47,6 +47,16 @@ impl Filter {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SettingsTab {
+    #[default]
+    General,
+    Transcription,
+    Ai,
+    Shortcuts,
+    About,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Shelf {
     Continue,
@@ -104,6 +114,7 @@ pub(crate) struct Store {
     players: Signal<usize>,
     video_only: Signal<bool>,
     settings_open: Signal<bool>,
+    settings_tab: Signal<SettingsTab>,
     home_search: Signal<bool>,
     update_check: Signal<bool>,
     immersive: Signal<bool>,
@@ -204,6 +215,7 @@ impl Store {
             place: signal(Place::default()),
             filter: signal(Filter::default()),
             settings_open: signal(false),
+            settings_tab: signal(SettingsTab::default()),
             home_search: signal(false),
             update_check: signal(false),
             immersive: signal(false),
@@ -433,13 +445,27 @@ impl Store {
         self.settings_open
     }
 
+    pub(crate) fn settings_tab(&self) -> Signal<SettingsTab> {
+        self.settings_tab
+    }
+
+    pub(crate) fn open_settings(&self, tab: SettingsTab) {
+        batch(|| {
+            self.settings_tab.set(tab);
+            self.settings_open.set(true);
+        });
+    }
+
     pub(crate) fn update_check(&self) -> Signal<bool> {
         self.update_check
     }
 
     pub(crate) fn check_for_updates(&self) {
-        self.update_check.set(true);
-        self.settings_open.set(true);
+        batch(|| {
+            self.update_check.set(true);
+            self.settings_tab.set(SettingsTab::About);
+            self.settings_open.set(true);
+        });
     }
 
     pub(crate) fn settings(&self) -> Settings {

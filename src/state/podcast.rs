@@ -80,6 +80,12 @@ impl PodcastState {
         self.catalog.with(|catalog| catalog.feeds.iter().find(|f| f.feed_url == feed_url).cloned())
     }
 
+    pub(crate) fn feed_url_of(&self, episode_id: &str) -> Option<String> {
+        self.catalog.with(|catalog| {
+            catalog.feeds.iter().find(|f| f.episodes.iter().any(|e| e.id == episode_id)).map(|f| f.feed_url.clone())
+        })
+    }
+
     pub(crate) fn cache_feed(&self, feed: Feed) {
         let heard = self.listened.get_untracked();
         self.catalog.update(|catalog| catalog.cache(feed, &heard));

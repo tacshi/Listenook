@@ -65,7 +65,7 @@ the first try; the card's top row counts this time round (right at the first
 try out of those checked) and a Missed chip goes through only those. At the end
 of the recording, or of those to review, the box shows what the time round came
 to, the words to listen for, and Review missed or Start over; leaving Type
-answer says the count in a toast. The header's video toggle hides while Practice is open.
+answer says the count in a toast.
 
 A setting is made where it is used: how to transcribe in the Library's
 options, what a transcript shows in the reader's menu, accounts and defaults

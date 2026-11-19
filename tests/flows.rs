@@ -661,12 +661,10 @@ fn the_arrow_keys_move_between_sentences() {
 }
 
 #[test]
-fn tapping_a_sentence_while_paused_moves_there_without_playing() {
-    let mut it = open_sample("tap-paused");
+fn tapping_a_sentence_plays_from_there() {
+    let mut it = open_sample("tap-plays");
     it.app.press("Listening every day matters more than studying hard once a week.").unwrap();
     it.app.wait_for("00:05").unwrap();
-    it.app.wait_for("role:button[Play]").unwrap();
-    it.app.press("role:button[Play]").unwrap();
     it.app.wait_for("role:button[Pause]").unwrap();
     it.app.press("So, what should a beginner do first?").unwrap();
     it.app.wait_for("00:08").unwrap();
