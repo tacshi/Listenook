@@ -1092,7 +1092,7 @@ fn handle(stream: TcpStream, from: IpAddr) -> io::Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     let identity = state().identity.clone().ok_or_else(|| io::Error::other("this device has no key"))?;
     let (wire, peer) = identity.accept(stream)?;
-    let mut call = read_call(wire, from, peer)?;
+    let mut call = read_call(wire, from, peer.clone()).inspect_err(|_| lost(&peer))?;
     // A token is good only on connections of the device it was given to.
     if state().session.as_ref().is_some_and(|session| session.token == call.token && session.peer != call.peer) {
         call.token.clear();
@@ -1118,6 +1118,15 @@ fn handle(stream: TcpStream, from: IpAddr) -> io::Result<()> {
         });
     }
     result
+}
+
+/// A connection from the device being synced with that fails before its call is read breaks
+/// the sync as one that fails midway does. On Windows a connection the other side gives up on
+/// is reset, and the reset takes the request this side had not yet read with it.
+fn lost(peer: &str) {
+    if let Some(session) = state().session.as_mut().filter(|session| session.peer == peer) {
+        session.broken = Some(Instant::now());
+    }
 }
 
 fn route(call: &mut Call) -> io::Result<()> {
