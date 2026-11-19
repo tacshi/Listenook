@@ -15,6 +15,7 @@ use super::{
     monitor::{self, MonitorConfig, MonitorFile, Seen},
     persist,
     podcast::PodcastState,
+    sleep::SleepState,
     sync::SyncState,
 };
 
@@ -116,6 +117,7 @@ pub(crate) struct Store {
     pub(crate) podcast: PodcastState,
     pub(crate) sync: SyncState,
     pub(crate) activity: ActivityState,
+    pub(crate) sleep: SleepState,
 }
 
 #[derive(Clone, Default)]
@@ -220,6 +222,7 @@ impl Store {
             podcast: PodcastState::new(catalog, root_listened),
             sync: SyncState::new(),
             activity: ActivityState::new(root_activity),
+            sleep: SleepState::new(),
         };
         match std::env::var("LISTENOOK_START").as_deref() {
             Ok("reader") => {

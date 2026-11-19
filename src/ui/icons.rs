@@ -24,6 +24,7 @@ pub enum Icon {
     SkipBack,
     SkipForward,
     Repeat,
+    Sleep,
     Search,
     Plus,
     Close,
@@ -104,6 +105,9 @@ impl Icon {
             Icon::SkipForward => r#"<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/>"#,
             Icon::Repeat => {
                 r#"<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>"#
+            }
+            Icon::Sleep => {
+                r#"<path d="M9 7a5 5 0 0 0 7.5 7.5 7.5 7.5 0 1 1-7.5-7.5Z"/><path d="M14 2h5.5l-5.5 5.5h5.5"/><path d="M19 10.5h3.5L19 14h3.5"/>"#
             }
             Icon::Search => r#"<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>"#,
             Icon::Plus => r#"<path d="M5 12h14"/><path d="M12 5v14"/>"#,

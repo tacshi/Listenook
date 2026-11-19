@@ -156,6 +156,8 @@ With reduced motion, presses do not scale, entrances land at once
 | Page changes | The new page fades in (sibling sections cross-fade) | Instant |
 | Podcast starts playing | The mini player rises in from the bottom edge | Appears |
 | Play ↔ pause | Glyph swap on the button; the button presses to 0.94 | No scale |
+| Sleep timer set or off (mini player and reader transport) | The moon-zzz button's tint cross-fades, `INSTANT`; the time left appears beside it and counts down in place, only while something plays | Instant |
+| The sleep timer runs out | Every player pauses; the button turns back to the plain glyph | Same |
 | A toast arrives / leaves | Rises 16pt and fades in, `BASE`; fades and shrinks out | Instant |
 | A sync runs or ends | The status beside Sync in the sidebar changes in place | Same |
 

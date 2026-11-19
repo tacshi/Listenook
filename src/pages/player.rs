@@ -119,6 +119,12 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     let media = element_ref();
     let (paused, rate) = (signal(false), signal(store.saved_rate("playback_rate")));
     let (position_ms, duration_ms) = (signal(start_at), signal(0_i64));
+    let sleeps = untracked(|| store.sleep.stops());
+    effect(move || {
+        if store.sleep.stops() != sleeps {
+            paused.set(true);
+        }
+    });
     let dragging = signal(None::<f64>);
     let fullscreen = signal(false);
     let tracks = signal(Vec::<Track>::new());
@@ -311,6 +317,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             let position = (progress.current_time * 1000.0) as i64;
             if !paused.get_untracked() {
                 store.activity.note(listenook_core::activity::Kind::Listen);
+                store.sleep.heard();
             }
             let again = repeating.get_untracked().then(|| {
                 cues.with_untracked(|cues| {
@@ -333,7 +340,10 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                 None => position_ms.set(position),
             }
         })
-        .on_end(move || paused.set(true))
+        .on_end(move || {
+            store.sleep.ended();
+            paused.set(true);
+        })
         .on_error(move |_: &str| {
             if waiting_for_source.get_untracked() {
                 waiting_for_source.set(false);

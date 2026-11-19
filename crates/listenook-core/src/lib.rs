@@ -14,6 +14,7 @@ pub mod models;
 pub mod parser;
 pub mod playback;
 pub mod podcast;
+pub mod sleep;
 pub mod structure;
 pub mod subtitles;
 pub mod sync;

@@ -14,7 +14,7 @@ use review::{Practice, Review, Side};
 use super::dialogs::{ExportDialog, JobDialog, export_dialog, rename_dialog};
 use crate::{
     services::{llm, media, playable, podcasts},
-    shell::{rate_menu, time_text, top_bar},
+    shell::{rate_menu, sleep_menu, time_text, top_bar},
     state::{error_text, l, store, tr},
     ui::{
         self, Icon, Size, Tone, Variant, button, checkbox, empty_state, field, hint, icon_button, menu, menu_action,
@@ -218,6 +218,12 @@ fn opened(id: &str) -> impl IntoElement {
         media::Command::Previous => review.step(-1),
         media::Command::Seek(position_ms) => review.seek(position_ms),
     }));
+    let sleeps = untracked(|| store.sleep.stops());
+    effect(move || {
+        if store.sleep.stops() != sleeps {
+            untracked(|| review.pause());
+        }
+    });
     let beat = computed(move || review.position_ms.get() / 5000);
     effect(move || {
         beat.get();
@@ -284,7 +290,7 @@ fn opened(id: &str) -> impl IntoElement {
         })
         .repeat(move || review.looping.get())
         .on_end(move || {
-            if !review.looping.get_untracked() {
+            if review.store.sleep.ended() || !review.looping.get_untracked() {
                 review.paused.set(true);
             }
         })
@@ -980,6 +986,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             move || review.looping.set(!review.looping.get_untracked()),
         )
     };
+    let sleep = move |picture: bool| sleep_menu(variant(picture), "When this recording ends");
     let rate = move |picture: bool| {
         rate_menu(
             variant(picture),
@@ -1016,6 +1023,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             .child(length(picture))
             .child(repeat(picture))
             .child(rate(picture))
+            .child(sleep(picture))
             .child(screen(picture))
     };
     let narrow = move |picture: bool| {
@@ -1035,7 +1043,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                     .h(px(56.0))
                     .flex_row()
                     .items_center()
-                    .child(view().flex_1().flex_row().items_center().child(rate(picture)))
+                    .child(view().flex_1().flex_row().items_center().gap_1().child(rate(picture)).child(sleep(picture)))
                     .child(skip(Size::Md, picture))
                     .child(
                         view()

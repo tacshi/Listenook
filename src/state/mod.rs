@@ -3,6 +3,7 @@ pub(crate) mod monitor;
 pub(crate) mod persist;
 pub(crate) mod podcast;
 pub(crate) mod secrets;
+pub(crate) mod sleep;
 mod store;
 pub(crate) mod sync;
 
