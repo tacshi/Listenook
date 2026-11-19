@@ -66,6 +66,12 @@ impl Sleep {
             _ => None,
         }
     }
+
+    /// The countdown in minutes and seconds, an hour as "60:00", so it stays
+    /// as narrow as the button it shows in.
+    pub fn countdown(self) -> Option<String> {
+        self.left_ms().map(|ms| format!("{:02}:{:02}", ms / 60_000, ms / 1000 % 60))
+    }
 }
 
 #[cfg(test)]
@@ -99,6 +105,14 @@ mod tests {
         assert_eq!(Sleep::After { minutes: 1, left_ms: 59_001 }.left_ms(), Some(60_000));
         assert_eq!(Sleep::After { minutes: 1, left_ms: 60_000 }.left_ms(), Some(60_000));
         assert_eq!(Sleep::AtEnd.left_ms(), None);
+    }
+
+    #[test]
+    fn the_countdown_keeps_to_minutes() {
+        assert_eq!(Sleep::minutes(60).countdown().as_deref(), Some("60:00"));
+        assert_eq!(Sleep::After { minutes: 15, left_ms: 14 * 60_000 + 57_400 }.countdown().as_deref(), Some("14:58"));
+        assert_eq!(Sleep::After { minutes: 5, left_ms: 9_000 }.countdown().as_deref(), Some("00:09"));
+        assert_eq!(Sleep::AtEnd.countdown(), None);
     }
 
     #[test]

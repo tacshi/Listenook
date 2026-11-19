@@ -200,13 +200,15 @@ pub fn toggle_button(
 }
 
 /// A button showing `glyph`, with `label` beside it while there is one, lit
-/// while `on`: a timer's button showing what is left.
+/// while `on`: a timer's button showing what is left. While `crowded`, the
+/// label shows in place of the glyph.
 pub fn glyph_label_button(
     variant: Variant,
     size: Size,
     glyph: Icon,
     label: impl Fn() -> Option<SharedString> + Copy + 'static,
     on: impl Fn() -> bool + Copy + 'static,
+    crowded: impl Fn() -> bool + Copy + 'static,
 ) -> ButtonElement {
     let lit = move || if variant == Variant::Picture { theme().primary.dark } else { color(theme().primary) };
     dressed(nsh_base::button(), variant, size, false)
@@ -214,10 +216,14 @@ pub fn glyph_label_button(
         .min_w(px(size.height()))
         .selected(on)
         .selected_style(move |s| s.bg(move || lit().opacity(0.16)).text_color(lit))
-        .child(icon(glyph, size.icon()))
+        .child(when(move || label().is_none() || !crowded(), move || icon(glyph, size.icon())))
         .child(when(
             move || label().is_some(),
-            move || label_text(move || label().unwrap_or_default(), size).tabular_nums().pr(px(2.0)),
+            move || {
+                label_text(move || label().unwrap_or_default(), size)
+                    .tabular_nums()
+                    .style_when(move || !crowded(), |s| s.pr(px(2.0)))
+            },
         ))
 }
 
