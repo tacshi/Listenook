@@ -6,6 +6,11 @@ use mp4::{
     SampleFreqIndex, TrackConfig,
 };
 
+mod avi;
+mod h264;
+
+pub use avi::{avi_fits_mov, avi_to_mov};
+
 const VIDEO_TIMESCALE: u64 = 90_000;
 const AVC: &str = "V_MPEG4/ISO/AVC";
 const AAC: &str = "A_AAC";

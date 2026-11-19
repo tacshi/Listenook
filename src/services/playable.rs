@@ -10,14 +10,18 @@ pub(crate) fn needs_help(path: &str) -> bool {
 }
 
 pub(crate) fn keeps_picture(path: &str) -> bool {
-    subtitles::extension(path) == "mkv" && std::fs::File::open(path).is_ok_and(container::mkv_fits_mp4)
+    match subtitles::extension(path).as_str() {
+        "mkv" => std::fs::File::open(path).is_ok_and(container::mkv_fits_mp4),
+        "avi" => std::fs::File::open(path).is_ok_and(container::avi_fits_mov),
+        _ => false,
+    }
 }
 
 fn cache(id: &str, extension: &str) -> Option<PathBuf> {
     Some(persist::data_root()?.join("temporary").join(format!("{id}-playable.{extension}")))
 }
 
-const KINDS: [&str; 3] = ["mp4", "mp3", "wav"];
+const KINDS: [&str; 4] = ["mp4", "mov", "mp3", "wav"];
 
 /// Recordings being made playable. An id is marked for as long as the work on it runs, not
 /// for as long as someone waits for it: a page left mid-way drops its wait, but the work goes
@@ -46,8 +50,13 @@ pub(crate) fn forget(id: &str) {
     }
 }
 
-pub(crate) fn made(id: &str) -> Option<PathBuf> {
-    KINDS.iter().filter_map(|kind| cache(id, kind)).find(|path| path.is_file())
+/// The playable file already made for a recording. A sound-only one doesn't count once its
+/// source can keep its picture: AVI files were all made sound-only before their pictures
+/// could be kept.
+pub(crate) fn made(id: &str, source: &str) -> Option<PathBuf> {
+    let path = KINDS.iter().filter_map(|kind| cache(id, kind)).find(|path| path.is_file())?;
+    let sound_only = path.extension().is_some_and(|extension| extension == "mp3" || extension == "wav");
+    (!sound_only || !keeps_picture(source)).then_some(path)
 }
 
 pub(crate) fn avi_sound_file(source: &Path, stem: &Path) -> Option<PathBuf> {
@@ -68,11 +77,27 @@ pub(crate) fn avi_sound_file(source: &Path, stem: &Path) -> Option<PathBuf> {
 }
 
 fn make(id: &str, source: &Path) -> Option<PathBuf> {
+    forget(id);
     let stem = cache(id, "x")?.with_extension("");
     std::fs::create_dir_all(stem.parent()?).ok()?;
     let part = stem.with_extension("part");
     if source.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("avi")) {
-        return avi_sound_file(source, &stem);
+        let movie = std::fs::File::open(source)
+            .and_then(|input| Ok((input, std::fs::File::create(&part)?)))
+            .map_err(|error| error.to_string())
+            .and_then(|(input, out)| container::avi_to_mov(input, out));
+        return match movie {
+            Ok(()) => {
+                let path = stem.with_extension("mov");
+                std::fs::rename(&part, &path).ok()?;
+                Some(path)
+            }
+            Err(reason) => {
+                log::info!("{}: {reason}; playing its sound", source.display());
+                let _ = std::fs::remove_file(&part);
+                avi_sound_file(source, &stem)
+            }
+        };
     }
     let video = std::fs::File::create(&part)
         .map_err(|error| error.to_string())
@@ -97,7 +122,7 @@ fn make(id: &str, source: &Path) -> Option<PathBuf> {
 
 pub(crate) async fn prepare(id: String, source: String) -> Option<PathBuf> {
     loop {
-        if let Some(path) = made(&id) {
+        if let Some(path) = made(&id, &source) {
             return Some(path);
         }
         if making().insert(id.clone()) {

@@ -85,7 +85,7 @@ fn opened(id: &str) -> impl IntoElement {
                 return;
             }
             let job_id = review.job.with(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
-            if playable::made(&job_id).is_none() {
+            if playable::made(&job_id, &path).is_none() {
                 toast(Tone::Info, tr("Preparing this recording for playback…"));
             }
             spawn(async move {
