@@ -670,7 +670,12 @@ fn processing_section(processing: Memo<Vec<Rc<Job>>>, waiting: Memo<usize>) -> i
 
 fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
     let store = store();
-    view().grid().grid_template_columns("repeat(auto-fill, minmax(176px, 1fr))").gap_3().child(each(
+    // Tiles across on a wide page; on a phone a card spans the page, so
+    // one a row with the words beside the icon.
+    let columns = || -> SharedString {
+        if page_narrow() { "1fr".into() } else { "repeat(auto-fill, minmax(176px, 1fr))".into() }
+    };
+    view().grid().grid_template_columns(columns).gap_3().child(each(
         move || recent.get(),
         |job| job.id.clone(),
         move |job, _| {
@@ -682,9 +687,12 @@ fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
                     .on_press(move || if readable { store.open_transcript(&opened) } else { store.show(Filter::All) })
                     .gap_3()
                     .p_3()
+                    .style_with(|s| if page_narrow() { s.flex_row().items_center() } else { s })
                     .child(job.with_untracked(|job| job_tile(job)))
                     .child(
                         view()
+                            .flex_1()
+                            .min_w(px(0.0))
                             .gap_0p5()
                             .child(
                                 text(move || job.with(|job| SharedString::from(job.title())))

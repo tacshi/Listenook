@@ -330,11 +330,9 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                             },
                         ))
                         .child(when(editing, move || editor(review)).otherwise(move || {
-                            nsh_base::button()
-                                .on_press(tap)
-                                .rounded(tokens::radius_sm)
-                                .focus_visible(tokens::focus_ring)
-                                .child(ui::veil(hidden, move || {
+                            nsh_base::button().on_press(tap).rounded(tokens::radius_sm).child(ui::veil(
+                                hidden,
+                                move || {
                                     view()
                                         .items_start()
                                         .gap_1()
@@ -458,7 +456,8 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                     }
                                                 })
                                         }))
-                                }))
+                                },
+                            ))
                         })),
                 )
                 .child(

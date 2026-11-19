@@ -8,7 +8,7 @@ use nsh_base::theme;
 use nsh_core::prelude::*;
 
 use crate::{
-    shell::{page_narrow, page_width},
+    shell::page_width,
     state::{l, store, tr},
     ui::{
         self, Icon, Size, card,
@@ -19,7 +19,11 @@ use crate::{
 
 pub(crate) const GOALS: &[u32] = &[10, 15, 20, 30, 45, 60];
 const HEAT_WEEKS: u32 = 20;
-const HEAT_WEEKS_NARROW: u32 = 12;
+/// The fewest weeks the calendar shows when it stacks under the bars, and
+/// the most: a year.
+const HEAT_WEEKS_STACKED: (u32, u32) = (12, 52);
+/// The card's padding and border on both sides.
+const CARD_INSET: f32 = 2.0 * (16.0 + 1.0);
 /// Below this content width, the activity's bars and calendar stack.
 const SIDE_BY_SIDE: f32 = 760.0;
 /// From this content width, Today stands beside Continue.
@@ -145,6 +149,12 @@ fn days_words(days: u32) -> String {
 /// The width of a calendar of `weeks` columns.
 fn calendar_width(weeks: u32) -> f32 {
     weeks as f32 * (chart::HEAT_CELL + chart::HEAT_GAP) - chart::HEAT_GAP
+}
+
+/// As many weeks as fit `width`, so a stacked calendar spans the card.
+fn weeks_fitting(width: f32) -> u32 {
+    let (fewest, most) = HEAT_WEEKS_STACKED;
+    (((width + chart::HEAT_GAP) / (chart::HEAT_CELL + chart::HEAT_GAP)).floor() as u32).clamp(fewest, most)
 }
 
 fn goal_s() -> u32 {
@@ -433,7 +443,8 @@ pub(crate) fn activity_card() -> impl IntoElement {
                 .otherwise(legend),
             ),
         );
-    let heat_weeks = move || if page_narrow() { HEAT_WEEKS_NARROW } else { HEAT_WEEKS };
+    let side_by_side = move || content_width() >= SIDE_BY_SIDE;
+    let heat_weeks = move || if side_by_side() { HEAT_WEEKS } else { weeks_fitting(content_width() - CARD_INSET) };
     let calendar = dynamic(move || {
         let (weeks, today, goal_s) = (heat_weeks(), today.get(), goal.get() * 60);
         let log = store.activity.log();
@@ -498,7 +509,6 @@ pub(crate) fn activity_card() -> impl IntoElement {
         .child(stat("Days learned", |(learned, _, _)| learned))
         .child(stat("Days at goal", |(_, at_goal, _)| at_goal))
         .child(stat("Best streak", |(_, _, best)| best));
-    let side_by_side = move || content_width() >= SIDE_BY_SIDE;
     // As wide as the calendar, whatever its caption says, so nothing beside
     // it moves.
     let calendar_column = view()
