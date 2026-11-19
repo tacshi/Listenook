@@ -13,7 +13,7 @@ use crate::{
     state::{error_text, l, store, tr},
     ui::{
         self, Icon, Size, Status, Variant, badge, button, chip, field, hint, icon, icon_button, list_row, modal,
-        modal_actions, search_field, section, spinner, text_field_with, toggle_icon_button,
+        modal_actions, search_field_ref, section, spinner, text_field_with, toggle_icon_button,
         tokens::{self, motion},
     },
     util::file_url,
@@ -179,11 +179,13 @@ fn discover(page: Page) -> impl IntoElement {
         });
     });
     let store = store();
+    let search_input = element_ref();
+    on_key("mod+f", move |_| search_input.focus());
     view()
         .flex_1()
         .child(
             top_bar()
-                .child(search_field(query, l("Search podcasts")).flex_1().max_w(px(420.0)).window_drag(false))
+                .child(search_field_ref(query, l("Search podcasts"), &search_input).flex_1().max_w(px(420.0)).window_drag(false))
                 .child(when(
                     || !crate::shell::system_header(),
                     move || {
@@ -506,6 +508,20 @@ fn episode_row(page: Page, episodes: Memo<Vec<Episode>>, at: Position) -> impl I
             parts.join(" · ").into()
         })
     };
+    let toggle_play = move || {
+        let Some(episode) = episode.get_untracked() else {
+            return;
+        };
+        if player.is_current(&episode.id) {
+            player.set_paused(!player.paused());
+            return;
+        }
+        let local = untracked(job).filter(|job| std::path::Path::new(&job.source_path).exists());
+        let source = local.map_or_else(|| episode.enclosure_url.clone(), |job| file_url(&job.source_path));
+        let show =
+            page.feed.with_untracked(|f| f.as_ref().map(|f| SharedString::from(f.title.clone())).unwrap_or_default());
+        player.play(episode, show, source);
+    };
     view()
         .flex_row()
         .items_center()
@@ -524,27 +540,16 @@ fn episode_row(page: Page, episodes: Memo<Vec<Episode>>, at: Position) -> impl I
                 Variant::Default,
                 Size::Md,
             )
-            .on_press(move || {
-                let Some(episode) = episode.get_untracked() else {
-                    return;
-                };
-                if player.is_current(&episode.id) {
-                    player.set_paused(!player.paused());
-                    return;
-                }
-                let local = untracked(job).filter(|job| std::path::Path::new(&job.source_path).exists());
-                let source = local.map_or_else(|| episode.enclosure_url.clone(), |job| file_url(&job.source_path));
-                let show = page
-                    .feed
-                    .with_untracked(|f| f.as_ref().map(|f| SharedString::from(f.title.clone())).unwrap_or_default());
-                player.play(episode, show, source);
-            }),
+            .on_press(toggle_play),
         )
         .child(
-            view()
+            nsh_base::button()
+                .on_press(toggle_play)
                 .flex_1()
                 .min_w(px(0.0))
                 .gap_0p5()
+                .rounded(tokens::radius_sm)
+                .focus_visible(tokens::focus_ring)
                 .child(
                     text(move || {
                         episode.with(|e| e.as_ref().map(|e| SharedString::from(e.title.clone())).unwrap_or_default())

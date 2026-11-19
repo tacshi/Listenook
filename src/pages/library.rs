@@ -13,10 +13,10 @@ use crate::{
     platform,
     services::{llm, local, podcasts, transcribe},
     shell::top_bar,
-    state::{Filter, error_text, l, secrets, store, tr},
+    state::{Filter, SettingsTab, error_text, l, secrets, store, tr},
     ui::{
         self, Icon, Size, Status, Variant, button, confirm_destructive, empty_state, field, hint, icon_of,
-        icon_text_button, menu_action, menu_danger, menu_divider, popover, progress_bar, search_field, select,
+        icon_text_button, menu_action, menu_danger, menu_divider, popover, progress_bar, search_field_ref, select,
         separator, switch, text_area, text_field,
         tokens::{self, motion},
     },
@@ -53,44 +53,35 @@ pub(crate) fn library() -> impl IntoElement {
             .collect::<Vec<Rc<Job>>>()
     });
     let waiting = move || store.jobs().iter().filter(|job| job.status.is_transcribable()).count();
+    let search_input = element_ref();
     on_key("mod+enter", move |_| transcribe::start_ready());
+    on_key("mod+f", move |_| search_input.focus());
+    let options_open = signal(false);
     view()
         .flex_1()
         .child(
             top_bar()
-                .child(search_field(query, l("Search your library")).flex_1().min_w(px(96.0)).max_w(px(420.0)).window_drag(false))
+                .child(
+                    search_field_ref(query, l("Search your library"), &search_input)
+                        .flex_1()
+                        .min_w(px(96.0))
+                        .max_w(px(420.0))
+                        .window_drag(false),
+                )
                 .child(view().style_with(|s| if crate::shell::page_narrow() { s } else { s.flex_1() }))
                 .child(when(
                     move || waiting() > 0,
                     move || {
-                        view()
-                            .flex_row()
-                            .items_center()
-                            .gap_1()
-                            .window_drag(false)
-                            .child(
-                                icon_text_button(Variant::Primary, Size::Sm, Icon::Transcribe, move || -> SharedString {
-                                    if crate::shell::page_narrow() {
-                                        waiting().to_string().into()
-                                    } else {
-                                        format!("{} ({})", tr("Transcribe all"), waiting()).into()
-                                    }
-                                })
-                                .on_press(transcribe::start_ready),
-                            )
-                            .child({
-                                let open = signal(false);
-                                popover(
-                                    ui::menu_trigger(Icon::Tune, tr("Transcription options"), Size::Sm, open),
-                                    || options().into_element(),
-                                )
-                                .open(move || Some(open.get()))
-                                .on_open_change(move |event: &nsh_base::PopoverEvent| {
-                                    if let nsh_base::PopoverEvent::OpenChange(next, _) = event {
-                                        open.set(*next);
-                                    }
-                                })
+                        view().flex_row().items_center().gap_1().window_drag(false).child(
+                            icon_text_button(Variant::Primary, Size::Sm, Icon::Transcribe, move || -> SharedString {
+                                if crate::shell::page_narrow() {
+                                    waiting().to_string().into()
+                                } else {
+                                    format!("{} ({})", tr("Transcribe all"), waiting()).into()
+                                }
                             })
+                            .on_press(transcribe::start_ready),
+                        )
                     },
                 ))
                 .child(
@@ -99,6 +90,18 @@ pub(crate) fn library() -> impl IntoElement {
                         .items_center()
                         .gap_1()
                         .window_drag(false)
+                        .child(
+                            popover(
+                                ui::menu_trigger(Icon::Tune, tr("Transcription options"), Size::Sm, options_open),
+                                || options().into_element(),
+                            )
+                            .open(move || Some(options_open.get()))
+                            .on_open_change(move |event: &nsh_base::PopoverEvent| {
+                                if let nsh_base::PopoverEvent::OpenChange(next, _) = event {
+                                    options_open.set(*next);
+                                }
+                            }),
+                        )
                         .child(when(
                             || !crate::shell::system_header(),
                             || ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, util::pick_media),
@@ -214,6 +217,89 @@ pub(super) fn detail(job: &Job) -> SharedString {
     parts.join(" · ").into()
 }
 
+fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: Dialogs) -> ui::Menu {
+    let store = store();
+    menu
+        .child(menu_action(Icon::Pencil, l("Rename…"), move || dialogs.rename.show(&id())))
+        .child(menu_action(Icon::Folder, l("Group…"), move || dialogs.group.show(&id())))
+        .child(menu_action(Icon::Tag, l("Tags…"), move || dialogs.tags.show(&id())))
+        .child(menu_action(Icon::Export, l("Export…"), move || {
+            if store.job_now(&id()).is_some_and(|job| job.has_transcript()) {
+                dialogs.export.show(&id());
+            } else {
+                ui::toast(ui::Tone::Info, tr("There is no transcript to export yet."));
+            }
+        }))
+        .child(when(
+            || !platform::is_phone(),
+            move || menu_action(Icon::Languages, l("Use a subtitle file…"), move || util::attach_subtitles(id())),
+        ))
+        .child(when(
+            move || {
+                store
+                    .job(&id())
+                    .is_some_and(|job| job.status == listenook_core::JobStatus::Completed && local::can_align(&job))
+            },
+            move || menu_action(Icon::Wave, l("Time the words"), move || transcribe::align(&id())),
+        ))
+        .child(when(
+            || !platform::is_phone(),
+            move || {
+                menu_action(
+                    Icon::Open,
+                    l(if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in folder" }),
+                    move || {
+                        if let Some(job) = store.job_now(&id()) {
+                            util::reveal(job.source_path.clone());
+                        }
+                    },
+                )
+            },
+        ))
+        .child(when(
+            || !platform::is_phone() || cfg!(target_os = "ios"),
+            move || menu_action(Icon::Refresh, l("Relink media…"), move || util::relink(id())),
+        ))
+        .child(when(
+            move || {
+                store.job(&id()).is_some_and(|job| {
+                    job.source_origin == JobSourceOrigin::Podcast && std::path::Path::new(&job.source_path).exists()
+                })
+            },
+            move || {
+                menu_action(Icon::Export, l("Save episode as…"), move || {
+                    if let Some(job) = store.job_now(&id()) {
+                        util::save_copy(job.source_path.clone());
+                    }
+                })
+            },
+        ))
+        .child(menu_divider())
+        .child(menu_danger(Icon::Trash, l("Remove…"), move || {
+            let id = id();
+            let Some(job) = store.job_now(&id) else {
+                return;
+            };
+            let owned =
+                store.data_root().is_some_and(|root| std::path::Path::new(&job.source_path).starts_with(root));
+            if !job.has_transcript() && !owned && !job.status.is_active() {
+                store.remove_job(&id);
+                return;
+            }
+            confirm_destructive(
+                format!("{} “{}”?", tr("Remove"), job.title()),
+                tr(if owned {
+                    "Its transcript, translation and AI Brief are deleted, and so is Listenook’s copy of the media."
+                } else {
+                    "Its transcript, translation and AI Brief are deleted. The media file stays where it is."
+                }),
+                tr("Cancel"),
+                tr("Remove"),
+                move || store.remove_job(&id),
+            );
+        }))
+}
+
 fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoElement {
     let store = store();
     let job = computed(move || shown.with(|jobs| jobs.get(at.index()).cloned()));
@@ -229,7 +315,7 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         store.catalog().tags.into_iter().filter(|tag| carried.contains(&tag.id)).map(|tag| tag.name).collect::<Vec<_>>()
     });
     let more_open = signal(false);
-    view()
+    let content = view()
         .flex_row()
         .items_center()
         .gap_1()
@@ -359,87 +445,16 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                 })
             },
         ))
-        .child(
-            ui::menu_with(more_open, ui::menu_trigger(Icon::More, tr("More actions"), Size::Sm, more_open))
-            .child(menu_action(Icon::Pencil, l("Rename…"), move || dialogs.rename.show(&id())))
-            .child(menu_action(Icon::Folder, l("Group…"), move || dialogs.group.show(&id())))
-            .child(menu_action(Icon::Tag, l("Tags…"), move || dialogs.tags.show(&id())))
-            .child(menu_action(Icon::Export, l("Export…"), move || {
-                if store.job_now(&id()).is_some_and(|job| job.has_transcript()) {
-                    dialogs.export.show(&id());
-                } else {
-                    ui::toast(ui::Tone::Info, tr("There is no transcript to export yet."));
-                }
-            }))
-            .child(when(
-                || !platform::is_phone(),
-                move || menu_action(Icon::Languages, l("Use a subtitle file…"), move || util::attach_subtitles(id())),
-            ))
-            .child(when(
-                move || {
-                    store
-                        .job(&id())
-                        .is_some_and(|job| job.status == listenook_core::JobStatus::Completed && local::can_align(&job))
-                },
-                move || menu_action(Icon::Wave, l("Time the words"), move || transcribe::align(&id())),
-            ))
-            .child(when(
-                || !platform::is_phone(),
-                move || {
-                    menu_action(
-                        Icon::Open,
-                        l(if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in folder" }),
-                        move || {
-                            if let Some(job) = store.job_now(&id()) {
-                                util::reveal(job.source_path.clone());
-                            }
-                        },
-                    )
-                },
-            ))
-            .child(when(
-                || !platform::is_phone() || cfg!(target_os = "ios"),
-                move || menu_action(Icon::Refresh, l("Relink media…"), move || util::relink(id())),
-            ))
-            .child(when(
-                move || {
-                    store.job(&id()).is_some_and(|job| {
-                        job.source_origin == JobSourceOrigin::Podcast && std::path::Path::new(&job.source_path).exists()
-                    })
-                },
-                move || {
-                    menu_action(Icon::Export, l("Save episode as…"), move || {
-                        if let Some(job) = store.job_now(&id()) {
-                            util::save_copy(job.source_path.clone());
-                        }
-                    })
-                },
-            ))
-            .child(menu_divider())
-            .child(menu_danger(Icon::Trash, l("Remove…"), move || {
-                let id = id();
-                let Some(job) = store.job_now(&id) else {
-                    return;
-                };
-                let owned =
-                    store.data_root().is_some_and(|root| std::path::Path::new(&job.source_path).starts_with(root));
-                if !job.has_transcript() && !owned && !job.status.is_active() {
-                    store.remove_job(&id);
-                    return;
-                }
-                confirm_destructive(
-                    format!("{} “{}”?", tr("Remove"), job.title()),
-                    tr(if owned {
-                        "Its transcript, translation and AI Brief are deleted, and so is Listenook’s copy of the media."
-                    } else {
-                        "Its transcript, translation and AI Brief are deleted. The media file stays where it is."
-                    }),
-                    tr("Cancel"),
-                    tr("Remove"),
-                    move || store.remove_job(&id),
-                );
-            })),
-        )
+        .child(row_menu(
+            ui::menu_with(more_open, ui::menu_trigger(Icon::More, tr("More actions"), Size::Sm, more_open)),
+            id,
+            dialogs,
+        ));
+    if platform::is_phone() {
+        content.into_element()
+    } else {
+        row_menu(ui::context_menu(content), id, dialogs).into_element()
+    }
 }
 
 fn options() -> impl IntoElement {
@@ -502,7 +517,7 @@ fn options() -> impl IntoElement {
                         )
                         .child(
                             button(Variant::Outline, Size::Sm, l("Settings"))
-                                .on_press(move || store.settings_open().set(true)),
+                                .on_press(move || store.open_settings(SettingsTab::Transcription)),
                         )
                 },
             )),

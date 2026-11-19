@@ -202,7 +202,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
     };
     let press = move || {
         if let Some(index) = index.get_untracked() {
-            review.jump_to(index);
+            review.play_from(index);
         }
     };
     let toggle_repeat = move || {
@@ -234,7 +234,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
         if let Some(index) = index.get_untracked()
             && !review.finish_skip(index)
         {
-            review.jump_to(index);
+            review.play_from(index);
         }
     };
     let found_ad = move || index.get().is_some_and(|index| review.found_ad(index));

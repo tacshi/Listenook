@@ -971,7 +971,8 @@ fn podcast_player() -> impl IntoElement {
 }
 
 fn mini_player() -> impl IntoElement {
-    let player = store().podcast;
+    let store = store();
+    let player = store.podcast;
     let entrance = motion().entering(MotionPreset::FadeInUp);
     let dragging = signal(None::<f64>);
     let on_track = computed(move || track_position(player.position_ms(), player.duration_ms()));
@@ -979,67 +980,124 @@ fn mini_player() -> impl IntoElement {
     on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, move |_| {
         player.set_paused(!player.paused())
     });
+    let track_slider = move || {
+        slider(
+            "Position",
+            move || dragging.get().unwrap_or_else(|| on_track.get() as f64),
+            move || player.duration_ms() as f64,
+            move |value| dragging.set(Some(value)),
+            move |value| {
+                player.seek_to(value as i64);
+                dragging.set(None);
+            },
+        )
+        .flex_1()
+    };
+    let open_show = move || {
+        if let Some(playing) = player.playing()
+            && let Some(feed_url) = player.feed_url_of(&playing.episode.id)
+        {
+            store.go(Place::Podcasts);
+            player.open_show.set(Some(feed_url));
+        }
+    };
     view()
         .bind_motion(&entrance)
-        .h(px(64.0))
         .flex_shrink_0()
-        .flex_row()
-        .items_center()
-        .gap_3()
-        .px(px(ui::PAGE_INSET))
         .border_t_1()
         .border_color(|| theme().border)
         .bg(|| theme().card)
-        .child(artwork_toggle())
+        .child(when(platform::compact, move || {
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .px(px(ui::PAGE_INSET))
+                .pt_2()
+                .child(time_text(move || dragging.get().map_or_else(|| second.get(), |ms| ms as i64)))
+                .child(track_slider())
+                .child(time_text(move || player.duration_ms()))
+        }))
         .child(
             view()
-                .w(px(220.0))
-                .flex_shrink(1.0)
-                .min_w(px(0.0))
-                .style_when(platform::compact, |s| s.flex_grow(1.0))
-                .child(
-                    text(move || player.playing().map(|p| SharedString::from(p.episode.title)).unwrap_or_default())
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .number_of_lines(1)
-                        .text_color(|| theme().foreground),
-                )
-                .child(
-                    text(move || player.playing().map(|p| p.show_title).unwrap_or_default())
-                        .text_xs()
-                        .number_of_lines(1)
-                        .text_color(|| theme().muted_foreground),
-                ),
-        )
-        .child(time_text(move || dragging.get().map_or_else(|| second.get(), |ms| ms as i64)))
-        .child(when(platform::compact, || view().size(px(3.0)).rounded_full().bg(|| theme().foreground)))
-        .child(when(
-            || !platform::compact(),
-            move || {
-                slider(
-                    "Position",
-                    move || dragging.get().unwrap_or_else(|| on_track.get() as f64),
-                    move || player.duration_ms() as f64,
-                    move |value| dragging.set(Some(value)),
-                    move |value| {
-                        player.seek_to(value as i64);
-                        dragging.set(None);
+                .h(px(64.0))
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .px(px(ui::PAGE_INSET))
+                .child(artwork_toggle())
+                .child(when(
+                    || !platform::compact(),
+                    move || {
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .child(icon_button(Icon::SkipBack, tr("Back 15 seconds"), Size::Sm, move || {
+                                player.seek_to(player.position_ms() - 15_000)
+                            }))
+                            .child(icon_button(Icon::SkipForward, tr("Forward 30 seconds"), Size::Sm, move || {
+                                player.seek_to(player.position_ms() + 30_000)
+                            }))
                     },
+                ))
+                .child(
+                    nsh_base::button()
+                        .accessibility_label(tr("Open show"))
+                        .on_press(open_show)
+                        .w(px(220.0))
+                        .flex_shrink(1.0)
+                        .min_w(px(0.0))
+                        .py_1()
+                        .px_1p5()
+                        .mx(px(-6.0))
+                        .rounded(tokens::radius)
+                        .transition_colors()
+                        .duration(motion::INSTANT)
+                        .hover(|s| s.bg(tokens::hover_wash))
+                        .active(|s| s.bg(|| theme().accent))
+                        .focus_visible(tokens::focus_ring)
+                        .style_when(platform::compact, |s| s.flex_grow(1.0))
+                        .child(
+                            text(move || {
+                                player.playing().map(|p| SharedString::from(p.episode.title)).unwrap_or_default()
+                            })
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .number_of_lines(1)
+                            .text_color(|| theme().foreground),
+                        )
+                        .child(
+                            text(move || player.playing().map(|p| p.show_title).unwrap_or_default())
+                                .text_xs()
+                                .number_of_lines(1)
+                                .text_color(|| theme().muted_foreground),
+                        ),
                 )
-                .flex_1()
-            },
-        ))
-        .child(time_text(move || player.duration_ms()))
-        .child(rate_menu(
-            Variant::Ghost,
-            move || player.rate(),
-            move |rate| {
-                player.set_rate(rate);
-                store().save_rate("podcast_rate", rate);
-            },
-        ))
-        .child(sleep_menu(Variant::Ghost, "When the episode ends"))
-        .child(icon_button(Icon::Close, tr("Close player"), Size::Md, move || player.stop()))
+                .child(when(
+                    || !platform::compact(),
+                    move || {
+                        view()
+                            .flex_1()
+                            .flex_row()
+                            .items_center()
+                            .gap_3()
+                            .child(time_text(move || dragging.get().map_or_else(|| second.get(), |ms| ms as i64)))
+                            .child(track_slider())
+                            .child(time_text(move || player.duration_ms()))
+                    },
+                ))
+                .child(rate_menu(
+                    Variant::Ghost,
+                    move || player.rate(),
+                    move |rate| {
+                        player.set_rate(rate);
+                        store.save_rate("podcast_rate", rate);
+                    },
+                ))
+                .child(sleep_menu(Variant::Ghost, "When the episode ends"))
+                .child(icon_button(Icon::Close, tr("Close player"), Size::Md, move || player.stop())),
+        )
 }
 
 fn artwork_toggle() -> impl IntoElement {

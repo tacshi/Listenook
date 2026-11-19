@@ -514,6 +514,20 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         }
     });
     let shown = move |s: nsh_core::element::StyleRefinement| s.opacity(if hud.get() { 1.0 } else { 0.0 });
+    let tap_surface = {
+        let wake = wake.clone();
+        move || {
+            if crate::platform::is_phone() {
+                if hud.get_untracked() {
+                    hud.set(false);
+                } else {
+                    wake();
+                }
+            } else {
+                paused.set(!paused.get_untracked());
+            }
+        }
+    };
     view()
         .flex_1()
         .bg(tokens::stage)
@@ -524,7 +538,14 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                 .flex_1()
                 .min_h(px(0.0))
                 .child(video_view.flex_1())
-                .child(view().absolute().inset_0().window_drag(own_window))
+                .child(
+                    view()
+                        .absolute()
+                        .inset_0()
+                        .window_drag(own_window)
+                        .label(tr("Play or pause"))
+                        .on_press(tap_surface),
+                )
                 .child(subtitle_line),
         )
         .child(when(

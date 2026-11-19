@@ -96,15 +96,38 @@ pub fn text_area(value: Signal<String>, placeholder: impl Fn() -> SharedString +
     .min_h(px(72.0))
 }
 
-pub fn search_field(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> View {
-    search_field_with(value, placeholder, false)
+pub fn search_field_ref(
+    value: Signal<String>,
+    placeholder: impl Fn() -> SharedString + 'static,
+    input_ref: &ElementRef,
+) -> View {
+    search_field_with(value, placeholder, false, Some(*input_ref))
 }
 
 pub fn focused_search_field(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> View {
-    search_field_with(value, placeholder, true)
+    search_field_with(value, placeholder, true, None)
 }
 
-fn search_field_with(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static, focused: bool) -> View {
+fn search_field_with(
+    value: Signal<String>,
+    placeholder: impl Fn() -> SharedString + 'static,
+    focused: bool,
+    input_ref: Option<ElementRef>,
+) -> View {
+    let field = input()
+        .value(move || value.get())
+        .on_change(move |text: &str| value.set(text.to_owned()))
+        .placeholder(move || placeholder().to_string())
+        .placeholder_color(|| color(theme().muted_foreground))
+        .caret_color(|| color(theme().primary))
+        .auto_focus(focused)
+        .flex_1()
+        .text_sm()
+        .text_color(|| theme().foreground);
+    let field = match input_ref {
+        Some(target) => field.element_ref(&target),
+        None => field,
+    };
     view()
         .flex_row()
         .items_center()
@@ -118,18 +141,7 @@ fn search_field_with(value: Signal<String>, placeholder: impl Fn() -> SharedStri
         .text_color(|| theme().muted_foreground)
         .focus_within(|s| s.border_color(|| theme().ring))
         .child(icon(Icon::Search, Size::Md.icon()))
-        .child(
-            input()
-                .value(move || value.get())
-                .on_change(move |text: &str| value.set(text.to_owned()))
-                .placeholder(move || placeholder().to_string())
-                .placeholder_color(|| color(theme().muted_foreground))
-                .caret_color(|| color(theme().primary))
-                .auto_focus(focused)
-                .flex_1()
-                .text_sm()
-                .text_color(|| theme().foreground),
-        )
+        .child(field)
 }
 
 pub fn field(label: impl IntoReactive<SharedString>, control: impl IntoElement) -> View {
