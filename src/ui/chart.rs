@@ -205,8 +205,15 @@ pub fn heatmap(
 ) -> View {
     const CELL: f32 = HEAT_CELL;
     const GAP: f32 = HEAT_GAP;
-    view().flex_row().gap(px(GAP)).label(label).on_mouse_leave(move |_: &MouseEvent| on_hover(None)).children(
-        weeks.into_iter().map(move |week| {
+    // Spread over any width it is given beyond its weeks, so the last
+    // column meets the edge.
+    view()
+        .flex_row()
+        .justify_between()
+        .gap(px(GAP))
+        .label(label)
+        .on_mouse_leave(move |_: &MouseEvent| on_hover(None))
+        .children(weeks.into_iter().map(move |week| {
             view().gap(px(GAP)).children(week.into_iter().map(move |day| {
                 let cell = view().size(px(CELL)).rounded(tokens::radius_sm_small);
                 match day {
@@ -218,8 +225,7 @@ pub fn heatmap(
                         .on_mouse_enter(move |_: &MouseEvent| on_hover(Some(caption.clone()))),
                 }
             }))
-        }),
-    )
+        }))
 }
 
 /// The key under a heatmap: from nothing to the goal met.
