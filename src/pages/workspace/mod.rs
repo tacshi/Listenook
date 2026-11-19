@@ -1043,11 +1043,24 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                     .h(px(56.0))
                     .flex_row()
                     .items_center()
-                    .child(view().flex_1().flex_row().items_center().gap_1().child(rate(picture)).child(sleep(picture)))
+                    // Each side keeps its share, but never less than its
+                    // buttons need: a running countdown can push the transport
+                    // over rather than overlap it.
+                    .child(
+                        view()
+                            .flex_1()
+                            .min_w(Length::Auto)
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .child(rate(picture))
+                            .child(sleep(picture)),
+                    )
                     .child(skip(Size::Md, picture))
                     .child(
                         view()
                             .flex_1()
+                            .min_w(Length::Auto)
                             .flex_row()
                             .items_center()
                             .justify_end()

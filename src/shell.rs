@@ -1094,12 +1094,14 @@ pub(crate) fn rate_menu(
 const SLEEP_AFTER: &[(i64, &str)] =
     &[(5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (45, "45 minutes"), (60, "1 hour")];
 
-/// The sleep timer's button, showing the time left while it counts, and its
-/// choices; `end` names stopping when what plays ends.
+/// The sleep timer's button, showing the time left while it counts (in place
+/// of the moon on a narrow page), and its choices; `end` names stopping when
+/// what plays ends.
 pub(crate) fn sleep_menu(variant: Variant, end: &'static str) -> impl IntoElement {
     let sleep = store().sleep;
-    let left = move || sleep.timer().left_ms().map(|ms| SharedString::from(clock(ms)));
-    let trigger = ui::glyph_label_button(variant, Size::Sm, Icon::Sleep, left, move || sleep.timer().is_on())
+    let left = move || sleep.timer().countdown().map(SharedString::from);
+    let on = move || sleep.timer().is_on();
+    let trigger = ui::glyph_label_button(variant, Size::Sm, Icon::Sleep, left, on, page_narrow)
         .accessibility_label(tr("Sleep timer"));
     menu(trigger)
         .child(ui::menu_choice(l("Off"), move || !sleep.timer().is_on(), move || sleep.set(Sleep::Off)))
