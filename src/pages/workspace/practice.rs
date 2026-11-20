@@ -38,7 +38,7 @@ pub(super) fn start(review: Review, practice: Practice) {
     match (practice, target) {
         (Practice::Mimic, Some(index)) => {
             if review.repeating.get_untracked().is_none() {
-                review.toggle_repeat(index);
+                review.repeat_from_start(index);
             } else {
                 review.repeat_one(index);
             }

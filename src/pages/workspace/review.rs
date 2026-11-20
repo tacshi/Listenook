@@ -788,17 +788,31 @@ impl Review {
             self.repeating.set(None);
             return;
         }
-        self.start_repeat(index, segment);
+        self.start_repeat(index, segment, false);
     }
 
-    /// Loops sentence `index` alone, playing it from its start.
-    fn start_repeat(&self, index: usize, segment: Segment) {
+    /// Loops sentence `index` alone, from its start (Mimic counts each pass
+    /// through it).
+    pub(super) fn repeat_from_start(&self, index: usize) {
+        if let Some(segment) = self.segment_now(index) {
+            self.cancel_wait();
+            self.start_repeat(index, segment, true);
+        }
+    }
+
+    /// Loops sentence `index` alone. Unless `restart`, a sentence already
+    /// playing plays on to its end and loops from there; another one plays
+    /// from its start.
+    fn start_repeat(&self, index: usize, segment: Segment, restart: bool) {
+        let here = self.current.get_untracked() == Some(index);
         batch(|| {
             self.repeating.set(Some(Span::one(segment.id)));
             self.reps.set(0);
             self.stop_at.set(None);
         });
-        self.jump(self.play_start(index), true);
+        if restart || !here {
+            self.jump(self.play_start(index), true);
+        }
         self.paused.set(false);
     }
 
@@ -860,7 +874,7 @@ impl Review {
         };
         self.cancel_wait();
         self.drag_anchor.set(Some(segment.id.clone()));
-        self.start_repeat(index, segment);
+        self.start_repeat(index, segment, false);
         self.drag.with(|drag| *drag = Drag::default());
         let (list, drag) = (self.list, self.drag);
         spawn(async move {
