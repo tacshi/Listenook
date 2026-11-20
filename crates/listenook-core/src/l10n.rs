@@ -121,8 +121,6 @@ const ZH: &[(&str, &str)] = &[
     ("Word checking supports English only.", "单词检查仅支持英语。"),
     ("Repeat sentence", "重复播放此句"),
     ("Repeat through here", "重复播放到此句"),
-    ("Repeat one more sentence", "多重复一句"),
-    ("Repeat one sentence less", "少重复一句"),
     ("Stop repeating sentence", "停止重复此句"),
     ("Repeat all", "循环播放全部"),
     ("Sleep timer", "睡眠定时"),

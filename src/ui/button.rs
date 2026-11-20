@@ -137,23 +137,6 @@ pub fn icon_button_as(
     )
 }
 
-pub fn icon_button_while(
-    glyph: Icon,
-    name: impl Into<SharedString>,
-    size: Size,
-    enabled: impl Fn() -> bool + 'static,
-    on_press: impl Fn() + 'static,
-) -> View {
-    let name: SharedString = name.into();
-    view().flex_shrink_0().tooltip(tip(name.clone())).child(
-        dressed(nsh_base::button(), Variant::Ghost, size, true)
-            .accessibility_label(name)
-            .disabled(move || !enabled())
-            .on_press(on_press)
-            .child(icon(glyph, size.icon())),
-    )
-}
-
 pub fn header_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn() + 'static) -> ButtonElement {
     dressed(nsh_base::button(), Variant::Ghost, Size::Md, true)
         .accessibility_label(name.into())

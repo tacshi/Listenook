@@ -145,8 +145,9 @@ pub(super) struct Review {
     pub(super) repeating: Signal<Option<Span>>,
     /// The first sentence of a stretch to skip, while its last is picked.
     pub(super) skip_from: Signal<Option<String>>,
-    pub(super) handle_at: Signal<Option<String>>,
-    pub(super) handle_cell: Signal<Option<u64>>,
+    /// The sentence a drag on a repeat button started from, while the
+    /// finger picks the other end of the repeat.
+    pub(super) drag_anchor: Signal<Option<String>>,
     rows: Stored<Vec<Row>>,
     row_count: Stored<u64>,
     drag: Stored<Drag>,
@@ -329,8 +330,7 @@ impl Review {
             query,
             repeating: signal(None),
             skip_from: signal(None),
-            handle_at: signal(None),
-            handle_cell: signal(None),
+            drag_anchor: signal(None),
             rows: stored(Vec::new()),
             row_count: stored(0),
             drag: stored(Drag::default()),
@@ -783,8 +783,13 @@ impl Review {
             self.repeating.set(None);
             return;
         }
+        self.start_repeat(index, segment);
+    }
+
+    /// Loops sentence `index` alone, playing it from its start.
+    fn start_repeat(&self, index: usize, segment: Segment) {
         batch(|| {
-            self.repeating.set(Some(Span::one(segment.id.clone())));
+            self.repeating.set(Some(Span::one(segment.id)));
             self.reps.set(0);
             self.stop_at.set(None);
         });
@@ -798,14 +803,6 @@ impl Review {
             return;
         };
         self.set_repeat(first.min(index), last.max(index));
-    }
-
-    pub(super) fn move_repeat_end(&self, by: isize) {
-        if let Some((first, last)) = untracked(|| self.repeat_range()) {
-            let last = (last as isize + by).clamp(first as isize, self.count().saturating_sub(1) as isize) as usize;
-            let last = self.kept_near(last, by >= 0).filter(|last| *last >= first).unwrap_or(first);
-            self.set_repeat(first, last);
-        }
     }
 
     pub(super) fn repeat_one(&self, index: usize) {
@@ -842,20 +839,23 @@ impl Review {
     }
 
     pub(super) fn dragging(&self) -> bool {
-        self.handle_at.with(Option::is_some)
+        self.drag_anchor.with(Option::is_some)
     }
 
-    pub(super) fn begin_end_drag(&self, cell: u64) {
-        let Some((_, last)) = untracked(|| self.repeat_range()) else {
+    fn anchor(&self) -> Option<usize> {
+        let anchor = self.drag_anchor.get_untracked()?;
+        self.index_of(&anchor)
+    }
+
+    /// A drag on sentence `index`'s repeat button: the repeat starts there,
+    /// and the finger picks the sentence it reaches to, above or below.
+    pub(super) fn begin_repeat_drag(&self, index: usize) {
+        let Some(segment) = self.segment_now(index) else {
             return;
         };
-        let Some(segment) = self.segment_now(last) else {
-            return;
-        };
-        batch(|| {
-            self.handle_at.set(Some(segment.id));
-            self.handle_cell.set(Some(cell));
-        });
+        self.cancel_wait();
+        self.drag_anchor.set(Some(segment.id.clone()));
+        self.start_repeat(index, segment);
         self.drag.with(|drag| *drag = Drag::default());
         let (list, drag) = (self.list, self.drag);
         spawn(async move {
@@ -904,13 +904,20 @@ impl Review {
         }
         self.scroll.with(|s| s.offset = to);
         self.list.scroll_to_offset(px(to), false);
-        self.drag_end_to(finger);
+        self.drag_to(finger);
         true
     }
 
     fn measure_rows(&self) {
-        let Some((_, last)) = untracked(|| self.repeat_range()) else {
+        let Some(anchor) = self.anchor() else {
             return;
+        };
+        // The rows are chained out from the end the finger moves, which stays
+        // in view while the anchor may have scrolled away.
+        let moving = match untracked(|| self.repeat_range()) {
+            Some((first, _)) if first < anchor => first,
+            Some((_, last)) => last,
+            None => anchor,
         };
         let rows = self.rows.with(|rows| rows.clone());
         let (drag, scroll) = (self.drag, self.scroll);
@@ -926,23 +933,27 @@ impl Review {
                     found.insert(index, (top, top + measure.frame.size.height.0));
                 }
             }
-            let zones = chain(&found, last);
+            let zones = chain(&found, moving);
             if zones.is_empty() {
                 return;
             }
             drag.try_with(|drag| drag.zones = zones);
             if let Some(finger) = drag.try_with(|drag| drag.finger).flatten() {
-                review.drag_end_to(finger);
+                review.drag_to(finger);
             }
         });
     }
 
-    pub(super) fn drag_end_to(&self, y: f32) {
+    /// The finger of a repeat drag is at `y`: the repeat becomes the anchor
+    /// through the sentence under it, made anew on each move, so a sentence the
+    /// finger passed and came back from drops out again, and the repeat kept is
+    /// the one under the finger when it lifts.
+    pub(super) fn drag_to(&self, y: f32) {
         if !self.dragging() {
             return;
         }
         self.drag.with(|drag| drag.finger = Some(y));
-        let Some((first, _)) = untracked(|| self.repeat_range()) else {
+        let Some(anchor) = self.anchor() else {
             return;
         };
         let at = y + self.scroll.with(|s| s.offset);
@@ -957,18 +968,15 @@ impl Review {
             drag.zones.iter().find(|(_, top, bottom)| (*top..*bottom).contains(&at)).map(|(index, ..)| *index)
         });
         if let Some(under) = under {
-            self.set_repeat(first, under.max(first));
+            self.set_repeat(anchor.min(under), anchor.max(under));
         }
     }
 
-    pub(super) fn finish_end_drag(&self) {
+    pub(super) fn finish_repeat_drag(&self) {
         if let Some(task) = self.drag_task.replace(None) {
             task.cancel();
         }
-        batch(|| {
-            self.handle_at.set(None);
-            self.handle_cell.set(None);
-        });
+        self.drag_anchor.set(None);
         self.drag.with(|drag| *drag = Drag::default());
     }
 
