@@ -281,7 +281,6 @@ pub(crate) fn home() -> impl IntoElement {
         }
     });
     on_key("mod+f", move |_| open.set(true));
-    on_key("escape", move |_| open.set(false));
     let searching = move || query.with(|q| !q.trim().is_empty());
     let bare = move || {
         store.jobs().is_empty() && store.podcast.followed().is_empty() && continued.with(|items| items.is_empty())
@@ -305,6 +304,13 @@ pub(crate) fn home() -> impl IntoElement {
         .child(when(
             move || open.get(),
             move || {
+                // Escape is a key text inputs keep, so the default binding would not reach
+                // past the focused search field; bind it only while the bar is open.
+                on_key_with(
+                    "escape",
+                    KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() },
+                    move |_| open.set(false),
+                );
                 view()
                     .flex_row()
                     .items_center()

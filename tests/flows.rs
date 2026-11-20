@@ -262,7 +262,7 @@ fn home_resumes_what_was_played_last_and_lists_what_was_added() {
     it.app.press("label:Search").unwrap();
     it.app.type_text("text:Search your library", "nothing like this").unwrap();
     it.app.wait_for("No recordings match your search.").unwrap();
-    it.app.press("role:button[Cancel]").unwrap();
+    it.app.press_key("escape").unwrap();
     it.app.wait_for("Recently added").unwrap();
     it.app.press("label:Resume Learning languages").unwrap();
     it.app.wait_for("Welcome back to the show.").unwrap();
