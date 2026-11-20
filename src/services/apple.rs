@@ -590,3 +590,144 @@ pub(super) fn keep_keys() {
         }
     });
 }
+
+/// The screen's brightness and the system volume (0..1, as `f32` bits) the
+/// main thread last read, `u32::MAX` before it has: what a swipe on a video
+/// starts from.
+#[cfg(target_os = "ios")]
+static LEVELS: [std::sync::atomic::AtomicU32; 2] =
+    [std::sync::atomic::AtomicU32::new(u32::MAX), std::sync::atomic::AtomicU32::new(u32::MAX)];
+
+/// The `MPVolumeView` whose slider sets the system volume, in the window while
+/// a swipe lasts (which keeps the system's own volume indicator away).
+#[cfg(target_os = "ios")]
+static VOLUME_VIEW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+#[cfg(target_os = "ios")]
+#[repr(C)]
+struct Rect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[cfg(target_os = "ios")]
+unsafe fn first_window() -> Id {
+    unsafe {
+        let count: unsafe extern "C" fn(Id, Sel) -> usize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let asks: unsafe extern "C" fn(Id, Sel, Sel) -> bool =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let app = send(class(c"UIApplication"), c"sharedApplication");
+        let scenes = send(send(app, c"connectedScenes"), c"allObjects");
+        for index in 0..count(scenes, sel(c"count")) {
+            let scene = send_usize(scenes, c"objectAtIndex:", index);
+            if !asks(scene, sel(c"respondsToSelector:"), sel(c"windows")) {
+                continue;
+            }
+            let windows = send(scene, c"windows");
+            if count(windows, sel(c"count")) > 0 {
+                return send_usize(windows, c"objectAtIndex:", 0);
+            }
+        }
+        std::ptr::null_mut()
+    }
+}
+
+/// The slider inside the volume view.
+#[cfg(target_os = "ios")]
+unsafe fn volume_slider(view: Id) -> Id {
+    unsafe {
+        let count: unsafe extern "C" fn(Id, Sel) -> usize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let is_kind: unsafe extern "C" fn(Id, Sel, Id) -> bool =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        send(view, c"layoutIfNeeded");
+        let children = send(view, c"subviews");
+        for index in 0..count(children, sel(c"count")) {
+            let child = send_usize(children, c"objectAtIndex:", index);
+            if is_kind(child, sel(c"isKindOfClass:"), class(c"UISlider")) {
+                return child;
+            }
+        }
+        std::ptr::null_mut()
+    }
+}
+
+/// A swipe that may change the brightness or the volume begins: reads both
+/// and puts the volume view in the window.
+#[cfg(target_os = "ios")]
+pub(super) fn begin_levels() {
+    on_main(|| unsafe {
+        let screen = send(class(c"UIScreen"), c"mainScreen");
+        LEVELS[0].store((get_f64(screen, c"brightness") as f32).to_bits(), Ordering::Release);
+        let session = send(class(c"AVAudioSession"), c"sharedInstance");
+        if !session.is_null() {
+            let volume: unsafe extern "C" fn(Id, Sel) -> f32 =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            LEVELS[1].store(volume(session, sel(c"outputVolume")).to_bits(), Ordering::Release);
+        }
+        let mut view = VOLUME_VIEW.load(Ordering::Acquire);
+        if view.is_null() {
+            let make: unsafe extern "C" fn(Id, Sel, Rect) -> Id =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let allocated = send(class(c"MPVolumeView"), c"alloc");
+            if allocated.is_null() {
+                return;
+            }
+            view = make(allocated, sel(c"initWithFrame:"), Rect { x: -200.0, y: -200.0, width: 100.0, height: 40.0 });
+            send_f64(view, c"setAlpha:", 0.01);
+            VOLUME_VIEW.store(view, Ordering::Release);
+        }
+        let window = first_window();
+        if !window.is_null() {
+            send_id(window, c"addSubview:", view);
+        }
+    });
+}
+
+/// The brightness and the volume [`begin_levels`] read, once it has.
+#[cfg(target_os = "ios")]
+pub(super) fn levels() -> Option<(f32, f32)> {
+    let read = |at: usize| {
+        let bits = LEVELS[at].load(Ordering::Acquire);
+        (bits != u32::MAX).then(|| f32::from_bits(bits))
+    };
+    Some((read(0)?, read(1)?))
+}
+
+#[cfg(target_os = "ios")]
+pub(super) fn set_brightness(value: f32) {
+    on_main(move || unsafe {
+        send_f64(send(class(c"UIScreen"), c"mainScreen"), c"setBrightness:", value as f64);
+    });
+}
+
+#[cfg(target_os = "ios")]
+pub(super) fn set_volume(value: f32) {
+    on_main(move || unsafe {
+        let view = VOLUME_VIEW.load(Ordering::Acquire);
+        if view.is_null() {
+            return;
+        }
+        let slider = volume_slider(view);
+        if slider.is_null() {
+            return;
+        }
+        let set: unsafe extern "C" fn(Id, Sel, f32, bool) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        set(slider, sel(c"setValue:animated:"), value, false);
+        // UIControlEventValueChanged.
+        send_usize(slider, c"sendActionsForControlEvents:", 1 << 12);
+    });
+}
+
+/// The swipe ended: the volume view leaves the window, so the volume buttons
+/// show the system's indicator again.
+#[cfg(target_os = "ios")]
+pub(super) fn end_levels() {
+    on_main(|| unsafe {
+        let view = VOLUME_VIEW.load(Ordering::Acquire);
+        if !view.is_null() {
+            send(view, c"removeFromSuperview");
+        }
+    });
+}

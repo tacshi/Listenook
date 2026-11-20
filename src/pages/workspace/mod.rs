@@ -275,11 +275,13 @@ fn opened(id: &str) -> impl IntoElement {
             current_window().set_mode(WindowMode::Normal);
         }
     });
+    let (boost, volume) = (signal(false), signal(1.0_f32));
     let media = video(move || source.get())
         .element_ref(&review.player)
         .paused(move || review.paused.get() && !review.holding.get())
         .muted(move || review.hushed.get())
-        .rate(move || review.rate.get())
+        .volume(move || volume.get())
+        .rate(move || if boost.get() { super::gestures::BOOST } else { review.rate.get() })
         .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(move || if review.ticks_often() { 50.0_f32 } else { 500.0 })
         .on_load(move |info: &VideoInfo| {
@@ -426,17 +428,36 @@ fn opened(id: &str) -> impl IntoElement {
                                     )
                             },
                         ))
-                        .child(when(move || review.fullscreen.get() && crate::platform::is_phone(), {
-                            let wake = wake.clone();
+                        .child(when(
                             move || {
+                                crate::platform::is_phone()
+                                    && has_video
+                                    && (review.fullscreen.get() || side() == Side::Video)
+                            },
+                            {
                                 let wake = wake.clone();
-                                view()
-                                    .absolute()
-                                    .inset_0()
-                                    .label("Controls")
-                                    .on_press(move || if hud.get_untracked() { hud.set(false) } else { wake() })
-                            }
-                        })),
+                                move || {
+                                    let wake = wake.clone();
+                                    // Full screen a tap shows or hides the controls; beside the transcript it plays or pauses.
+                                    super::gestures::layer(super::gestures::Video {
+                                        position: std::rc::Rc::new(move || review.position_ms.get_untracked()),
+                                        duration: std::rc::Rc::new(move || review.duration_ms.get_untracked()),
+                                        seek: std::rc::Rc::new(move |ms| review.seek(ms)),
+                                        tap: std::rc::Rc::new(move || {
+                                            if !review.fullscreen.get_untracked() {
+                                                review.toggle_play();
+                                            } else if hud.get_untracked() {
+                                                hud.set(false);
+                                            } else {
+                                                wake();
+                                            }
+                                        }),
+                                        boost,
+                                        volume,
+                                    })
+                                }
+                            },
+                        )),
                 )
                 .child(dynamic(move || {
                     let side = if review.fullscreen.get() { Side::Video } else { side() };

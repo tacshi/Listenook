@@ -57,6 +57,48 @@ pub(crate) fn output_latency_ms() -> f64 {
     0.0
 }
 
+/// A swipe on a video that may change the screen's brightness or the system
+/// volume begins: reads where they are ([`levels`]). False where the app
+/// cannot change them (it then dims the picture and turns the player down).
+pub(crate) fn begin_levels() -> bool {
+    #[cfg(target_os = "ios")]
+    {
+        apple::begin_levels();
+        true
+    }
+    #[cfg(not(target_os = "ios"))]
+    false
+}
+
+/// The screen's brightness and the system volume, 0..1, once [`begin_levels`]
+/// has read them.
+pub(crate) fn levels() -> Option<(f32, f32)> {
+    #[cfg(target_os = "ios")]
+    return apple::levels();
+    #[cfg(not(target_os = "ios"))]
+    None
+}
+
+pub(crate) fn set_brightness(value: f32) {
+    #[cfg(target_os = "ios")]
+    apple::set_brightness(value.clamp(0.0, 1.0));
+    #[cfg(not(target_os = "ios"))]
+    let _ = value;
+}
+
+pub(crate) fn set_volume(value: f32) {
+    #[cfg(target_os = "ios")]
+    apple::set_volume(value.clamp(0.0, 1.0));
+    #[cfg(not(target_os = "ios"))]
+    let _ = value;
+}
+
+/// The swipe that [`begin_levels`] began ended.
+pub(crate) fn end_levels() {
+    #[cfg(target_os = "ios")]
+    apple::end_levels();
+}
+
 pub(crate) fn pick_documents() -> bool {
     #[cfg(target_os = "ios")]
     {
