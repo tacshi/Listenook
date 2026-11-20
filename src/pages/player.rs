@@ -222,6 +222,14 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         if fullscreen.get_untracked() == on {
             return;
         }
+        // A phone or tablet has no window to make full screen: the page takes the whole screen itself.
+        if crate::platform::is_phone() {
+            batch(|| {
+                fullscreen.set(on);
+                store.set_immersive(on);
+            });
+            return;
+        }
         if on {
             batch(|| {
                 fullscreen.set(true);
@@ -358,12 +366,15 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     });
 
     let hud = signal(true);
+    // Full screen, the page reaches past the safe area (the root drops its padding): what floats
+    // on the picture keeps clear of it.
+    let edge = move |side: fn(EdgeInsets) -> f32| if fullscreen.get() { side(safe_area()) } else { 0.0 };
     let subtitle_line = view()
         .pointer_events(nsh_core::PointerEvents::None)
         .absolute()
-        .left(px(0.0))
-        .right(px(0.0))
-        .bottom(move || px(if hud.get() { 80.0 } else { 28.0 }))
+        .left(move || px(edge(|edges| edges.left.0)))
+        .right(move || px(edge(|edges| edges.right.0)))
+        .bottom(move || px(edge(|edges| edges.bottom.0) + if hud.get() { 80.0 } else { 28.0 }))
         .items_center()
         .px_8()
         .child(when(
@@ -614,9 +625,9 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .child(
             view()
                 .absolute()
-                .left(px(12.0))
-                .right(px(12.0))
-                .bottom(px(12.0))
+                .left(move || px(12.0 + edge(|edges| edges.left.0)))
+                .right(move || px(12.0 + edge(|edges| edges.right.0)))
+                .bottom(move || px(12.0 + edge(|edges| edges.bottom.0)))
                 .px_3()
                 .rounded(tokens::radius_lg)
                 .style_with(tokens::glass)

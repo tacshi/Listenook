@@ -1050,10 +1050,11 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
         .duration(motion::BASE)
         .style_with(move |s| {
             if review.fullscreen.get() {
+                let edge = safe_area();
                 s.absolute()
-                    .left(px(16.0))
-                    .right(px(16.0))
-                    .bottom(px(16.0))
+                    .left(px(16.0 + edge.left.0))
+                    .right(px(16.0 + edge.right.0))
+                    .bottom(px(16.0 + edge.bottom.0))
                     .rounded(tokens::radius_lg)
                     .border_1()
                     .border_color(|| theme().foreground.dark.opacity(0.16))
@@ -1127,9 +1128,9 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let shows_translation = move || review.mode.get() != ContentMode::Original && translated();
     view()
         .absolute()
-        .left(px(0.0))
-        .right(px(0.0))
-        .bottom(move || px(if hud.get() { 88.0 } else { 32.0 }))
+        .left(move || px(safe_area().left.0))
+        .right(move || px(safe_area().right.0))
+        .bottom(move || px(safe_area().bottom.0 + if hud.get() { 88.0 } else { 32.0 }))
         .items_center()
         .px_8()
         .child(when(
