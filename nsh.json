@@ -1,7 +1,7 @@
 {
   "name": "Listenook",
   "id": "app.capyvibe.listenook",
-  "version": "2.2.4",
+  "version": "2.2.5",
   "build": 1,
   "appearance": "system",
   "theme": "theme.json",
