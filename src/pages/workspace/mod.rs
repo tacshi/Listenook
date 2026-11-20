@@ -275,11 +275,13 @@ fn opened(id: &str) -> impl IntoElement {
             current_window().set_mode(WindowMode::Normal);
         }
     });
+    let (boost, volume) = (signal(false), signal(1.0_f32));
     let media = video(move || source.get())
         .element_ref(&review.player)
         .paused(move || review.paused.get() && !review.holding.get())
         .muted(move || review.hushed.get())
-        .rate(move || review.rate.get())
+        .volume(move || volume.get())
+        .rate(move || if boost.get() { super::gestures::BOOST } else { review.rate.get() })
         .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(move || if review.ticks_often() { 50.0_f32 } else { 500.0 })
         .on_load(move |info: &VideoInfo| {
@@ -426,17 +428,36 @@ fn opened(id: &str) -> impl IntoElement {
                                     )
                             },
                         ))
-                        .child(when(move || review.fullscreen.get() && crate::platform::is_phone(), {
-                            let wake = wake.clone();
+                        .child(when(
                             move || {
+                                crate::platform::is_phone()
+                                    && has_video
+                                    && (review.fullscreen.get() || side() == Side::Video)
+                            },
+                            {
                                 let wake = wake.clone();
-                                view()
-                                    .absolute()
-                                    .inset_0()
-                                    .label("Controls")
-                                    .on_press(move || if hud.get_untracked() { hud.set(false) } else { wake() })
-                            }
-                        })),
+                                move || {
+                                    let wake = wake.clone();
+                                    // Full screen a tap shows or hides the controls; beside the transcript it plays or pauses.
+                                    super::gestures::layer(super::gestures::Video {
+                                        position: std::rc::Rc::new(move || review.position_ms.get_untracked()),
+                                        duration: std::rc::Rc::new(move || review.duration_ms.get_untracked()),
+                                        seek: std::rc::Rc::new(move |ms| review.seek(ms)),
+                                        tap: std::rc::Rc::new(move || {
+                                            if !review.fullscreen.get_untracked() {
+                                                review.toggle_play();
+                                            } else if hud.get_untracked() {
+                                                hud.set(false);
+                                            } else {
+                                                wake();
+                                            }
+                                        }),
+                                        boost,
+                                        volume,
+                                    })
+                                }
+                            },
+                        )),
                 )
                 .child(dynamic(move || {
                     let side = if review.fullscreen.get() { Side::Video } else { side() };
@@ -527,7 +548,16 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
         ContentMode::Bilingual => tr("Bilingual"),
     };
     let mode_item = move |mode: ContentMode, label: &'static str| {
-        ui::menu_choice(l(label), move || review.mode.get() == mode, move || review.mode.set(mode))
+        ui::menu_choice(
+            l(label),
+            move || review.mode.get() == mode,
+            move || {
+                review.mode.set(mode);
+                store.update_settings(|s| {
+                    s.extra.insert("reader_content_mode".into(), mode.as_str().into());
+                });
+            },
+        )
     };
     let touch = crate::platform::is_phone();
     let lead = if touch {
@@ -1050,10 +1080,11 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
         .duration(motion::BASE)
         .style_with(move |s| {
             if review.fullscreen.get() {
+                let edge = safe_area();
                 s.absolute()
-                    .left(px(16.0))
-                    .right(px(16.0))
-                    .bottom(px(16.0))
+                    .left(px(16.0 + edge.left.0))
+                    .right(px(16.0 + edge.right.0))
+                    .bottom(px(16.0 + edge.bottom.0))
                     .rounded(tokens::radius_lg)
                     .border_1()
                     .border_color(|| theme().foreground.dark.opacity(0.16))
@@ -1127,9 +1158,9 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let shows_translation = move || review.mode.get() != ContentMode::Original && translated();
     view()
         .absolute()
-        .left(px(0.0))
-        .right(px(0.0))
-        .bottom(move || px(if hud.get() { 88.0 } else { 32.0 }))
+        .left(move || px(safe_area().left.0))
+        .right(move || px(safe_area().right.0))
+        .bottom(move || px(safe_area().bottom.0 + if hud.get() { 88.0 } else { 32.0 }))
         .items_center()
         .px_8()
         .child(when(

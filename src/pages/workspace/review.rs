@@ -243,6 +243,10 @@ impl Review {
             && store
                 .setting(|s| s.extra.get("reader_video_wanted").and_then(serde_json::Value::as_bool))
                 .unwrap_or(true);
+        // The language the reader was last shown in, for a transcript that has a translation.
+        let remembered_mode = store
+            .setting(|s| s.extra.get("reader_content_mode").and_then(serde_json::Value::as_str).map(ContentMode::parse))
+            .unwrap_or(ContentMode::Bilingual);
         let brief_open =
             store.setting(|s| s.extra.get("reader_brief_open").and_then(serde_json::Value::as_bool)).unwrap_or(false);
         let query = signal(String::new());
@@ -320,7 +324,7 @@ impl Review {
             } else {
                 Side::None
             }),
-            mode: signal(if has_translation { ContentMode::Bilingual } else { ContentMode::Original }),
+            mode: signal(if has_translation { remembered_mode } else { ContentMode::Original }),
             searching,
             query,
             repeating: signal(None),

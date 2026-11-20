@@ -1,4 +1,5 @@
 mod dialogs;
+mod gestures;
 mod home;
 mod home_stats;
 mod library;

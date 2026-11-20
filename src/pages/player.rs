@@ -12,6 +12,7 @@ use nsh_core::{
     prelude::*,
 };
 
+use super::gestures;
 use crate::{
     services::{media, playable},
     state::{
@@ -127,6 +128,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     });
     let dragging = signal(None::<f64>);
     let fullscreen = signal(false);
+    let (boost, volume) = (signal(false), signal(1.0_f32));
     let tracks = signal(Vec::<Track>::new());
     let chosen = signal(remembered.as_ref().and_then(|entry| entry.subtitle_id.clone()));
     let repeating = signal(false);
@@ -222,6 +224,14 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         if fullscreen.get_untracked() == on {
             return;
         }
+        // A phone or tablet has no window to make full screen: the page takes the whole screen itself.
+        if crate::platform::is_phone() {
+            batch(|| {
+                fullscreen.set(on);
+                store.set_immersive(on);
+            });
+            return;
+        }
         if on {
             batch(|| {
                 fullscreen.set(true);
@@ -304,7 +314,8 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     let video_view = video(move || source.get())
         .element_ref(&media)
         .paused(move || paused.get())
-        .rate(move || rate.get())
+        .rate(move || if boost.get() { gestures::BOOST } else { rate.get() })
+        .volume(move || volume.get())
         .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(100.0)
         .on_load(move |info: &VideoInfo| {
@@ -358,12 +369,15 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     });
 
     let hud = signal(true);
+    // Full screen, the page reaches past the safe area (the root drops its padding): what floats
+    // on the picture keeps clear of it.
+    let edge = move |side: fn(EdgeInsets) -> f32| if fullscreen.get() { side(safe_area()) } else { 0.0 };
     let subtitle_line = view()
         .pointer_events(nsh_core::PointerEvents::None)
         .absolute()
-        .left(px(0.0))
-        .right(px(0.0))
-        .bottom(move || px(if hud.get() { 80.0 } else { 28.0 }))
+        .left(move || px(edge(|edges| edges.left.0)))
+        .right(move || px(edge(|edges| edges.right.0)))
+        .bottom(move || px(edge(|edges| edges.bottom.0) + if hud.get() { 80.0 } else { 28.0 }))
         .items_center()
         .px_8()
         .child(when(
@@ -514,40 +528,32 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         }
     });
     let shown = move |s: nsh_core::element::StyleRefinement| s.opacity(if hud.get() { 1.0 } else { 0.0 });
-    let tap_surface = {
+    let surface = if crate::platform::is_phone() {
         let wake = wake.clone();
-        move || {
-            if crate::platform::is_phone() {
-                if hud.get_untracked() {
-                    hud.set(false);
-                } else {
-                    wake();
-                }
-            } else {
-                paused.set(!paused.get_untracked());
-            }
-        }
+        gestures::layer(gestures::Video {
+            position: Rc::new(move || position_ms.get_untracked()),
+            duration: Rc::new(move || duration_ms.get_untracked()),
+            seek: Rc::new(seek),
+            tap: Rc::new(move || if hud.get_untracked() { hud.set(false) } else { wake() }),
+            boost,
+            volume,
+        })
+        .into_element()
+    } else {
+        view()
+            .absolute()
+            .inset_0()
+            .window_drag(own_window)
+            .label(tr("Play or pause"))
+            .on_press(move || paused.set(!paused.get_untracked()))
+            .into_element()
     };
     view()
         .flex_1()
         .bg(tokens::stage)
         .on_mouse_move(move |_: &MouseEvent| wake())
         .style_with(move |s| if !hud.get() { s.cursor(Cursor::None) } else { s })
-        .child(
-            view()
-                .flex_1()
-                .min_h(px(0.0))
-                .child(video_view.flex_1())
-                .child(
-                    view()
-                        .absolute()
-                        .inset_0()
-                        .window_drag(own_window)
-                        .label(tr("Play or pause"))
-                        .on_press(tap_surface),
-                )
-                .child(subtitle_line),
-        )
+        .child(view().flex_1().min_h(px(0.0)).child(video_view.flex_1()).child(surface).child(subtitle_line))
         .child(when(
             move || !fullscreen.get(),
             move || {
@@ -614,9 +620,9 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .child(
             view()
                 .absolute()
-                .left(px(12.0))
-                .right(px(12.0))
-                .bottom(px(12.0))
+                .left(move || px(12.0 + edge(|edges| edges.left.0)))
+                .right(move || px(12.0 + edge(|edges| edges.right.0)))
+                .bottom(move || px(12.0 + edge(|edges| edges.bottom.0)))
                 .px_3()
                 .rounded(tokens::radius_lg)
                 .style_with(tokens::glass)

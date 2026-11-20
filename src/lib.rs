@@ -53,9 +53,10 @@ pub fn App() -> impl IntoElement {
     effect(move || set_color_scheme(if store.immersive() { Appearance::Dark } else { store.appearance() }));
     view()
         .flex_1()
-        .style_when(|| !shell::stack_reaches_top(), |s| s.pt_safe_area())
-        .px_safe_area()
-        .style_when(|| !shell::tab_bar_shown(), |s| s.pb_safe_area())
+        // Full screen, the picture reaches every edge: the pages keep their own controls clear of them.
+        .style_when(move || !shell::stack_reaches_top() && !store.immersive(), |s| s.pt_safe_area())
+        .style_when(move || !store.immersive(), |s| s.px_safe_area())
+        .style_when(move || !shell::tab_bar_shown() && !store.immersive(), |s| s.pb_safe_area())
         .bg(move || if store.immersive() { ui::tokens::stage() } else { theme().background })
         .text_color(move || theme().foreground)
         .child(shell::shell())

@@ -369,6 +369,7 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
             |page: &(Lang, Pushed)| format!("{page:?}"),
             move |page, _| {
                 let screen = nav_page()
+                    .status_bar(move || StatusBarSetting::default().hidden(store.immersive()))
                     .hides_bottom_bar_when_pushed(true)
                     .pop_on_swipe(platform::compact)
                     .bg(|| theme().background);
@@ -422,7 +423,7 @@ pub(crate) fn stack_reaches_top() -> bool {
 
 fn below_status_bar(page: impl IntoElement) -> View {
     let view = view().flex_1().child(page);
-    if stack_reaches_top() { view.pt_safe_area() } else { view }
+    if stack_reaches_top() { view.style_when(|| !store().immersive(), |s| s.pt_safe_area()) } else { view }
 }
 
 pub(crate) fn tab_bar_shown() -> bool {
