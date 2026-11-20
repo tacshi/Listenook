@@ -548,7 +548,16 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
         ContentMode::Bilingual => tr("Bilingual"),
     };
     let mode_item = move |mode: ContentMode, label: &'static str| {
-        ui::menu_choice(l(label), move || review.mode.get() == mode, move || review.mode.set(mode))
+        ui::menu_choice(
+            l(label),
+            move || review.mode.get() == mode,
+            move || {
+                review.mode.set(mode);
+                store.update_settings(|s| {
+                    s.extra.insert("reader_content_mode".into(), mode.as_str().into());
+                });
+            },
+        )
     };
     let touch = crate::platform::is_phone();
     let lead = if touch {
