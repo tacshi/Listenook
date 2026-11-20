@@ -8,7 +8,8 @@ use listenook_core::{ContentMode, Document, Job, Segment, dictation, highlights,
 use nsh_core::prelude::*;
 
 use crate::{
-    state::{Store, store, tr},
+    services::llm,
+    state::{Store, error_text, store, tr},
     ui::{Tone, toast_with_action},
 };
 
@@ -161,6 +162,9 @@ pub(super) struct Review {
     pub(super) editing: Signal<Option<Editing>>,
     pub(super) draft: Signal<String>,
     pub(super) translation_draft: Signal<String>,
+    /// The sentences translated again on their own, waiting for the reply:
+    /// one entry a request, so a second edit keeps it waiting.
+    pub(super) retranslating: Signal<Vec<String>>,
     pub(super) caret: Signal<u32>,
     pub(super) side_width: Signal<f32>,
     pub(super) brief_editing: Signal<Option<BriefPart>>,
@@ -342,6 +346,7 @@ impl Review {
             editing: signal(None),
             draft: signal(String::new()),
             translation_draft: signal(String::new()),
+            retranslating: signal(Vec::new()),
             caret: signal(0),
             brief_editing: signal(None),
             brief_items: stored(Vec::new()),
@@ -1332,17 +1337,22 @@ impl Review {
             return;
         }
         let translation = self.translation_draft.get_untracked().trim().to_owned();
+        let mut stale = None;
         self.change("Sentence updated", |document| {
             let Some(segment) = document.segments.iter_mut().find(|s| s.id == editing.segment_id) else {
                 return false;
             };
             let mut changed = false;
+            let wanted = (!translation.is_empty()).then_some(translation);
             if editing.original && segment.text != text {
                 segment.highlights = highlights::reanchor(&segment.text, &text, &segment.highlights);
+                // A corrected sentence whose translation nobody touched still
+                // carries the translation of what it used to say.
+                stale = (segment.has_translation() && (!editing.translation || segment.translated_text == wanted))
+                    .then(|| text.clone());
                 segment.text = text;
                 changed = true;
             }
-            let wanted = (!translation.is_empty()).then_some(translation);
             if editing.translation && segment.translated_text != wanted {
                 segment.translated_text = wanted;
                 changed = true;
@@ -1350,6 +1360,67 @@ impl Review {
             changed
         });
         self.editing.set(None);
+        if let Some(source) = stale.filter(|_| self.can_translate()) {
+            self.retranslate(editing.segment_id, source);
+        }
+    }
+
+    /// Whether the AI is set up to translate a sentence.
+    pub(super) fn can_translate(&self) -> bool {
+        self.store.setting(|s| s.llm_provider_settings.validate().is_none())
+    }
+
+    /// Translates sentence `segment_id` again on its own, from `source`,
+    /// what it reads now, apart from the recording's translation. The reply
+    /// lands only while the sentence still reads `source`: an undo, another
+    /// edit or a delete in the meantime drops it.
+    pub(super) fn retranslate(&self, segment_id: String, source: String) {
+        let Some(mut waiting) = self.retranslating.try_get() else {
+            return;
+        };
+        waiting.push(segment_id.clone());
+        self.retranslating.set(waiting);
+        let (review, id, target) = (*self, self.id(), self.translation_target());
+        self.store.run(async move {
+            let result = llm::translate_line(&source, &target).await;
+            if let Some(mut waiting) = review.retranslating.try_get() {
+                if let Some(at) = waiting.iter().position(|waits| *waits == segment_id) {
+                    waiting.remove(at);
+                }
+                review.retranslating.try_set(waiting);
+            }
+            let line = match result {
+                Ok(line) => line,
+                Err(code) => {
+                    toast_with_action(Tone::Error, error_text(&code), tr("Retry"), move || {
+                        review.retranslate(segment_id.clone(), source.clone())
+                    });
+                    return;
+                }
+            };
+            let mut old = None;
+            review.store.update_document(&id, |document| {
+                if let Some(segment) = document.segments.iter_mut().find(|s| s.id == segment_id && s.text == source) {
+                    old = segment.translated_text.replace(line.clone());
+                }
+            });
+            // An editor opened on the sentence meanwhile shows the new
+            // translation, unless its box was changed by hand.
+            let open_here = review.editing.try_get().flatten().is_some_and(|e| e.segment_id == segment_id);
+            if open_here && old.is_some_and(|old| review.translation_draft.get_untracked().trim() == old) {
+                review.translation_draft.set(line);
+            }
+        });
+    }
+
+    /// The language this recording is translated into.
+    pub(super) fn translation_target(&self) -> String {
+        let target = self.store.job_now(&self.id()).map(|job| job.translation_state.target_language.clone());
+        target
+            .filter(|t| !t.is_empty())
+            .or_else(|| Some(self.store.setting(|s| s.translation_preferences.target_language.clone())))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "en".into())
     }
 
     pub(super) fn skip_editing(&self) {
@@ -1422,10 +1493,31 @@ impl Review {
     }
 
     pub(super) fn merge_editing(&self) {
-        let Some(index) = self.editing.get_untracked().and_then(|editing| self.index_of(&editing.segment_id)) else {
+        let Some(editing) = self.editing.get_untracked() else {
             return;
         };
-        if self.change("Sentences merged", |document| listenook_core::structure::merge_with_next(document, index)) {
+        let Some(index) = self.index_of(&editing.segment_id) else {
+            return;
+        };
+        let text = editing.original.then(|| self.draft.get_untracked().trim().to_owned()).filter(|t| !t.is_empty());
+        let translation = editing.translation.then(|| self.translation_draft.get_untracked().trim().to_owned());
+        let merged = self.change("Sentences merged", |document| {
+            let mut trial = document.clone();
+            let segment = &mut trial.segments[index];
+            if let Some(text) = &text {
+                segment.highlights = highlights::reanchor(&segment.text, text, &segment.highlights);
+                segment.text = text.clone();
+            }
+            if let Some(translation) = &translation {
+                segment.translated_text = (!translation.is_empty()).then(|| translation.clone());
+            }
+            let merged = listenook_core::structure::merge_with_next(&mut trial, index);
+            if merged {
+                *document = trial;
+            }
+            merged
+        });
+        if merged {
             self.editing.set(None);
         }
     }

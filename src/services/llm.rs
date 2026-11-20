@@ -247,6 +247,16 @@ pub(crate) fn start_translation(id: &str, target: &str, only: Option<Vec<String>
     });
 }
 
+/// One sentence translated on its own, for the editor to show before anything is saved.
+pub(crate) async fn translate_line(text: &str, target: &str) -> Result<String, String> {
+    let settings = store().settings().llm_provider_settings;
+    let prompt = translate::user_prompt(&[text.to_owned()], target).map_err(str::to_owned)?;
+    let reply = complete(&settings, translate::SYSTEM_PROMPT, &prompt, false)
+        .await
+        .map_err(|failure| recoded(failure, "translation_"))?;
+    translate::parse_reply(&reply, 1).pop().flatten().ok_or_else(|| "translation_incomplete_response".into())
+}
+
 pub(crate) fn cancel_translation(id: &str) {
     let store = store();
     if store.cancel_work(&translation_key(id)) {

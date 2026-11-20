@@ -5,15 +5,13 @@ use nsh_core::{
     prelude::*,
 };
 
-use super::{
-    review::{Editing, Review},
-    search_bar,
-};
+use super::{review::Review, search_bar};
 use crate::{
     services::llm,
-    state::{l, tr},
+    state::{error_text, l, tr},
     ui::{
-        self, Icon, Size, Variant, button, field, icon_button, modal, modal_actions, text_area, text_field_with,
+        self, Icon, Size, Tone, Variant, button, field, icon_button, modal, modal_actions, text_area, text_field_with,
+        toast,
         tokens::{self, motion},
     },
 };
@@ -184,6 +182,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
     let translated = move || segment.with(|s| s.as_ref().is_some_and(Segment::has_translation));
     let shows_original = move || mode() != ContentMode::Translated || !translated();
     let shows_translation = move || mode() != ContentMode::Original && translated();
+    let retranslating = move || id().is_some_and(|id| review.retranslating.with(|waiting| waiting.contains(&id)));
     let speaker_name = move || {
         segment.with(|s| {
             let speaker = s.as_ref()?.speaker.as_deref()?;
@@ -429,23 +428,38 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                             })
                                         }))
                                         .child(when(shows_translation, move || {
-                                            text(move || read(|s| s.translated_text.clone().unwrap_or_default().into()))
-                                                .select_none()
-                                                .line_height(nsh_core::LineHeight::Multiple(1.5))
-                                                .style_with(move |s| {
-                                                    if mode() == ContentMode::Translated {
-                                                        s.text_base()
-                                                    } else {
-                                                        s.text_sm()
-                                                    }
-                                                })
-                                                .text_color(move || {
-                                                    if mode() == ContentMode::Translated {
-                                                        theme().foreground
-                                                    } else {
-                                                        theme().muted_foreground
-                                                    }
-                                                })
+                                            view()
+                                                .flex_row()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(
+                                                    text(move || {
+                                                        read(|s| s.translated_text.clone().unwrap_or_default().into())
+                                                    })
+                                                    .select_none()
+                                                    .flex_shrink(1.0)
+                                                    .line_height(nsh_core::LineHeight::Multiple(1.5))
+                                                    .style_with(move |s| {
+                                                        if mode() == ContentMode::Translated {
+                                                            s.text_base()
+                                                        } else {
+                                                            s.text_sm()
+                                                        }
+                                                    })
+                                                    .text_color(move || {
+                                                        if mode() == ContentMode::Translated {
+                                                            theme().foreground
+                                                        } else {
+                                                            theme().muted_foreground
+                                                        }
+                                                    })
+                                                    .transition_opacity()
+                                                    .duration(motion::INSTANT)
+                                                    .opacity(move || if retranslating() { 0.45_f32 } else { 1.0 }),
+                                                )
+                                                .child(when(retranslating, || {
+                                                    view().label("Translating").child(ui::spinner(12.0))
+                                                }))
                                         }))
                                 },
                             ))
@@ -576,23 +590,36 @@ fn repeat_grip(
 }
 
 fn editor(review: Review) -> impl IntoElement {
-    let store = review.store;
     on_key_with("escape", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
         review.editing.set(None)
     });
     on_key_with("mod+enter", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
         review.save_edit()
     });
-    let editing = move || review.editing.get_untracked();
     let original = move || review.editing.with(|e| e.as_ref().is_some_and(|e| e.original));
     let translation = move || review.editing.with(|e| e.as_ref().is_some_and(|e| e.translation));
-    let can_retranslate = move || {
-        translation()
-            && !review.job.with(|job| {
-                job.as_ref()
-                    .is_some_and(|job| job.translation_state.status == listenook_core::TranslationStatus::Translating)
-            })
-            && store.setting(|s| s.llm_provider_settings.validate().is_none())
+    let translating = signal(false);
+    // Fills the translation box from the sentence as it reads in the editor
+    // now, and leaves saving to Save.
+    let translate = move || {
+        let source = review.draft.get_untracked().trim().to_owned();
+        if translating.get_untracked() || source.is_empty() {
+            return;
+        }
+        let (target, before) = (review.translation_target(), review.translation_draft.get_untracked());
+        translating.set(true);
+        // Owned by the store: the button that starts it gives way to a spinner.
+        review.store.run(async move {
+            let result = llm::translate_line(&source, &target).await;
+            if !translating.try_set(false) {
+                return;
+            }
+            match result {
+                Ok(line) if review.translation_draft.get_untracked() == before => review.translation_draft.set(line),
+                Ok(_) => {}
+                Err(code) => toast(Tone::Error, error_text(&code)),
+            }
+        });
     };
     view()
         .gap_2()
@@ -603,10 +630,27 @@ fn editor(review: Review) -> impl IntoElement {
                 .test_id("segment-editor")
         }))
         .child(when(translation, move || {
-            text_area(review.translation_draft, SharedString::default)
-                .auto_focus(!untracked(original))
-                .text_sm()
-                .test_id("translation-editor")
+            view()
+                .child(
+                    text_area(review.translation_draft, SharedString::default)
+                        .auto_focus(!untracked(original))
+                        .text_sm()
+                        .pr(px(40.0))
+                        .test_id("translation-editor"),
+                )
+                .child(when(
+                    move || translating.get() || review.can_translate(),
+                    move || {
+                        view().absolute().top(px(4.0)).right(px(4.0)).child(
+                            when(translating, || {
+                                view().size(px(32.0)).items_center().justify_center().child(ui::spinner(14.0))
+                            })
+                            .otherwise(move || {
+                                icon_button(Icon::Languages, tr("Translate again"), Size::Sm, translate)
+                            }),
+                        )
+                    },
+                ))
         }))
         .child(
             view()
@@ -628,38 +672,16 @@ fn editor(review: Review) -> impl IntoElement {
                                 .on_press(move || review.merge_editing()),
                         )
                 }))
-                .child(when(
-                    move || original() || can_retranslate(),
-                    move || {
-                        let open = signal(false);
-                        ui::menu_with(open, ui::menu_trigger(Icon::More, tr("More sentence actions"), Size::Sm, open))
-                            .child(when(can_retranslate, move || {
-                                ui::menu_action(Icon::Languages, l("Translate again"), move || {
-                                    if let Some(Editing { segment_id, .. }) = editing() {
-                                        let target = store
-                                            .job_now(&review.id())
-                                            .map(|job| job.translation_state.target_language.clone());
-                                        let target = target.filter(|t| !t.is_empty()).unwrap_or_else(|| "en".into());
-                                        llm::start_translation(&review.id(), &target, Some(vec![segment_id]));
-                                        review.editing.set(None);
-                                    }
-                                })
-                            }))
-                            .child(when(move || original() && can_retranslate(), ui::menu_divider))
-                            .child(when(original, move || {
-                                ui::menu_action(Icon::Scissors, l("Skip this sentence"), move || review.skip_editing())
-                            }))
-                            .child(when(original, move || {
-                                ui::menu_action(Icon::Scissors, l("Skip from here…"), move || {
-                                    review.skip_editing_onward()
-                                })
-                            }))
-                            .child(when(original, ui::menu_divider))
-                            .child(when(original, move || {
-                                ui::menu_danger(Icon::Trash, l("Delete sentence"), move || review.delete_editing())
-                            }))
-                    },
-                ))
+                .child(when(original, move || {
+                    let open = signal(false);
+                    ui::menu_with(open, ui::menu_trigger(Icon::More, tr("More sentence actions"), Size::Sm, open))
+                        .child(ui::menu_action(Icon::Scissors, l("Skip this sentence"), move || review.skip_editing()))
+                        .child(ui::menu_action(Icon::Scissors, l("Skip from here…"), move || {
+                            review.skip_editing_onward()
+                        }))
+                        .child(ui::menu_divider())
+                        .child(ui::menu_danger(Icon::Trash, l("Delete sentence"), move || review.delete_editing()))
+                }))
                 // Grows from its own width, so on a narrow screen Cancel and Save wrap
                 // together to the right of a line of their own rather than squeezing.
                 .child(
