@@ -1123,8 +1123,10 @@ fn two_sentences_are_merged_from_the_editor() {
     it.app.press("role:button[Bilingual]").unwrap();
     it.app.press("Original").unwrap();
     it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.clear("id:segment-editor").unwrap();
+    it.app.type_text("id:segment-editor", "Welcome to the show.").unwrap();
     it.app.press("role:button[Merge with next]").unwrap();
-    it.app.wait_for("Welcome back to the show. Today we are talking about how people learn languages.").unwrap();
+    it.app.wait_for("Welcome to the show. Today we are talking about how people learn languages.").unwrap();
     let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
     assert!(!saved.contains("\"segment-2\""), "the second sentence is gone from the manifest");
 }
@@ -1808,9 +1810,115 @@ fn the_editor_actions_sit_on_one_row_with_the_rest_in_a_menu() {
     let middle = |b: &nsh_core::Bounds<nsh_core::Points>| b.origin.y + b.size.height * 0.5;
     assert_eq!(middle(&split), middle(&save), "Split {split:?} and Save {save:?} share a row");
     assert!(split.origin.x < more.origin.x && more.origin.x < save.origin.x, "Split, More, then Save");
-    assert!(!it.app.shows("Translate again"), "it waits in the menu");
+    let again = bounds("label:Translate again");
+    let box_ = nodes.iter().find(|node| node.id == screen.id("id:translation-editor").unwrap()).unwrap().bounds;
+    assert!(
+        again.origin.x > box_.origin.x + box_.size.width * 0.5 && again.origin.y < box_.origin.y + box_.size.height,
+        "Translate again {again:?} sits in the translation box {box_:?}"
+    );
     it.app.press("label:More sentence actions").unwrap();
-    it.app.wait_for("Translate again").unwrap();
-    assert!(it.app.shows("Skip from here…"));
+    it.app.wait_for("Skip from here…").unwrap();
     assert!(it.app.shows("Delete sentence"));
+}
+
+fn translation_box(it: &mut App, wanted: &str) {
+    let wanted = wanted.to_owned();
+    it.app
+        .wait_until("the translation box to fill", Duration::from_secs(5), move |screen| {
+            screen.input_text("id:translation-editor").ok().flatten() == Some(wanted.as_str())
+        })
+        .unwrap();
+}
+
+#[test]
+fn translate_again_fills_the_box_from_the_edited_sentence_and_waits_for_save() {
+    let routes = llm_routes("1. 欢迎收听节目。");
+    let mut it = start(
+        "translate-draft",
+        |root| {
+            seed_transcript(root);
+            llm(root, "");
+        },
+        routes,
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.wait_for("id:translation-editor").unwrap();
+    it.app.clear("id:segment-editor").unwrap();
+    it.app.type_text("id:segment-editor", "Welcome to the programme.").unwrap();
+    it.app.press("label:Translate again").unwrap();
+    translation_box(&mut it, "欢迎收听节目。");
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(!saved.contains("欢迎收听节目。"), "nothing is saved before Save");
+    it.app.press("role:button[Save]").unwrap();
+    it.app.wait_for("欢迎收听节目。").unwrap();
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(saved.contains("Welcome to the programme.") && saved.contains("欢迎收听节目。"));
+}
+
+#[test]
+fn a_sentence_waits_in_place_for_its_translation_and_an_undo_drops_a_late_one() {
+    let mut routes = llm_routes("1. 欢迎收听节目。");
+    routes[0].1.delay = Duration::from_millis(1000);
+    let mut it = start(
+        "translate-late",
+        |root| {
+            seed_transcript(root);
+            llm(root, "");
+        },
+        routes,
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("欢迎回到节目。").unwrap();
+    it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.wait_for("id:translation-editor").unwrap();
+    it.app.clear("id:segment-editor").unwrap();
+    it.app.type_text("id:segment-editor", "Welcome to the programme.").unwrap();
+    it.app.press("role:button[Save]").unwrap();
+    it.app.wait_for("label:Translating").unwrap();
+    assert!(it.app.shows("欢迎回到节目。"), "the old translation stays while it waits");
+    it.app.press("role:button[Undo]").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.wait_for_gone("label:Translating", GONE).unwrap();
+    it.app.wait(Duration::from_millis(300)).unwrap();
+    assert!(!it.app.shows("欢迎收听节目。"), "the reply was for the undone text");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(manifest(&it.root, "sample")).unwrap()).unwrap();
+    assert_eq!(saved["document"]["segments"][0]["translated_text"], "欢迎回到节目。");
+}
+
+#[test]
+fn a_corrected_sentence_with_its_translation_untouched_is_translated_again_on_save() {
+    let routes = llm_routes("1. 欢迎收听节目。");
+    let mut it = start(
+        "translate-on-save",
+        |root| {
+            seed_transcript(root);
+            llm(root, "");
+        },
+        routes,
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("欢迎回到节目。").unwrap();
+    it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.wait_for("id:translation-editor").unwrap();
+    it.app.clear("id:segment-editor").unwrap();
+    it.app.type_text("id:segment-editor", "Welcome to the programme.").unwrap();
+    it.app.press("role:button[Save]").unwrap();
+    it.app.wait_for("欢迎收听节目。").unwrap();
+    assert!(!it.app.shows("欢迎回到节目。"), "the old translation is replaced");
+    assert!(!it.app.shows("label:Translating"), "the sentence is done waiting");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(manifest(&it.root, "sample")).unwrap()).unwrap();
+    assert_eq!(saved["document"]["segments"][0]["text"], "Welcome to the programme.");
+    assert_eq!(saved["document"]["segments"][0]["translated_text"], "欢迎收听节目。");
+    assert_ne!(
+        saved["translation_state"]["status"], "translating",
+        "one sentence leaves the recording's translation alone"
+    );
+    assert_ne!(saved["translation_state"]["total_segments"], 1);
 }
