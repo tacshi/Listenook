@@ -528,7 +528,6 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
                                     .on_press(replay)
                                     .rounded(tokens::radius_sm)
                                     .hover(|s| s.opacity(0.8))
-                                    .focus_visible(tokens::focus_ring)
                                     .child(key_cap("mod+r")),
                             )
                         },

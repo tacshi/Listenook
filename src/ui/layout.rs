@@ -123,7 +123,6 @@ pub fn list_row(selected: impl Fn() -> bool + 'static) -> nsh_base::ButtonElemen
         .active(|s| s.bg(|| theme().input))
         .selected_style(|s| s.bg(|| theme().accent))
         .disabled_style(|s| s.bg(|| theme().background.opacity(0.0)))
-        .focus_visible(tokens::focus_ring)
 }
 
 pub fn key_cap(keystroke: &'static str) -> View {
@@ -187,7 +186,6 @@ pub fn chip(
         .duration(motion::INSTANT)
         .hover(|s| s.bg(tokens::hover_wash))
         .active(|s| s.bg(|| theme().accent))
-        .focus_visible(tokens::focus_ring)
         .child(
             text(label)
                 .text_sm()

@@ -492,7 +492,6 @@ fn pressable() -> nsh_base::ButtonElement {
         .duration(motion::INSTANT)
         .hover(|s| s.bg(tokens::hover_wash))
         .active(|s| s.bg(|| theme().accent))
-        .focus_visible(tokens::focus_ring)
 }
 
 fn continue_section(continued: Memo<Vec<Resume>>) -> impl IntoElement {

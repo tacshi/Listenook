@@ -310,7 +310,6 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                 })
                                                 .rounded(tokens::radius_sm)
                                                 .hover(|s| s.opacity(0.7))
-                                                .focus_visible(tokens::focus_ring)
                                                 .child(
                                                     text(move || speaker_name().unwrap_or_default())
                                                         .text_xs()

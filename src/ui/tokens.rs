@@ -143,10 +143,6 @@ pub fn popup_surface(s: StyleRefinement) -> StyleRefinement {
 pub const POPUP_STARTING: &str = "opacity-0 scale-95 transition-all duration-200 ease-out";
 pub const POPUP_ENDING: &str = "opacity-0 scale-95 transition-all duration-150 ease-in";
 
-pub fn focus_ring(s: StyleRefinement) -> StyleRefinement {
-    s.outline(px(2.0)).outline_color(|| theme().ring).outline_offset(px(2.0))
-}
-
 pub fn sidebar_material() -> MacOsBackdrop {
     let mut backdrop = MacOsBackdrop::default();
     backdrop.material = MacOsBackdropMaterial::Sidebar;

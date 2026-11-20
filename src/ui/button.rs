@@ -54,7 +54,6 @@ fn dressed(element: ButtonElement, variant: Variant, size: Size, square: bool) -
         .transition_all()
         .duration(motion::INSTANT)
         .ease_out()
-        .focus_visible(tokens::focus_ring)
         .disabled_style(|s| s.opacity(0.45));
     let element = if square {
         element.w(px(size.height()))
@@ -158,7 +157,6 @@ pub fn bar_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn(
         .transition_all()
         .duration(motion::INSTANT)
         .active(|s| s.scale(tokens::press_scale(true)).opacity(0.7))
-        .focus_visible(tokens::focus_ring)
         .child(icon(glyph, 24.0))
 }
 
@@ -229,7 +227,6 @@ pub fn menu_trigger(glyph: Icon, name: impl Into<SharedString>, size: Size, open
         .bg(move || if open.get() { theme().accent } else { theme().accent.opacity(0.0) })
         .hover(|s| s.bg(|| theme().accent))
         .active(move |s| s.bg(|| theme().input).scale(scale))
-        .focus_visible(tokens::focus_ring)
         .child(icon(glyph, size.icon()))
 }
 

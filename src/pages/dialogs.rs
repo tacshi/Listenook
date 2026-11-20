@@ -198,7 +198,6 @@ fn part_card(
             .transition_colors()
             .duration(motion::INSTANT)
             .hover(|s| s.bg(tokens::hover_wash))
-            .focus_visible(tokens::focus_ring)
             .indicator_style(|s| {
                 s.size(px(18.0))
                     .items_center()

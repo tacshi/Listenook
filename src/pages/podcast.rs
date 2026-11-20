@@ -329,7 +329,6 @@ fn show_card(page: Page, show: impl Fn() -> ShowSummary + Copy + 'static) -> imp
         .duration(motion::INSTANT)
         .hover(|s| s.bg(tokens::hover_wash))
         .active(|s| s.bg(|| theme().accent))
-        .focus_visible(tokens::focus_ring)
         .child(
             view()
                 .aspect_square()
@@ -554,7 +553,6 @@ fn episode_row(page: Page, episodes: Memo<Vec<Episode>>, at: Position) -> impl I
                 .min_w(px(0.0))
                 .gap_0p5()
                 .rounded(tokens::radius_sm)
-                .focus_visible(tokens::focus_ring)
                 .child(
                     text(move || {
                         episode.with(|e| e.as_ref().map(|e| SharedString::from(e.title.clone())).unwrap_or_default())

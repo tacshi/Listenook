@@ -184,7 +184,6 @@ pub fn switch(
                 .duration(motion::FAST)
                 .checked(|s| s.translate_x(px(16.0)))
         })
-        .focus_visible(tokens::focus_ring)
         .disabled_style(|s| s.opacity(0.45))
         .child(text(label).text_sm().flex_1().min_w(px(0.0)).text_color(|| theme().foreground))
 }
@@ -211,7 +210,6 @@ pub fn checkbox(
                 .checked(|s| s.bg(|| theme().primary).border_color(|| theme().primary))
         })
         .indicator(when(checked, || icon(Icon::Check, 12.0)))
-        .focus_visible(tokens::focus_ring)
         .child(text(label).text_sm().text_color(|| theme().foreground))
 }
 
@@ -266,7 +264,6 @@ pub fn select(
                 .transition_colors()
                 .duration(motion::INSTANT)
                 .hover(|s| s.bg(|| theme().muted))
-                .focus_visible(tokens::focus_ring)
                 .child(text(shown).text_sm().number_of_lines(1).text_color(|| theme().foreground))
                 .child(icon(Icon::ChevronDown, Size::Md.icon())),
         )
@@ -296,7 +293,6 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 .items_center()
                 .justify_center()
                 .rounded(tokens::radius_sm)
-                .focus_visible(tokens::focus_ring)
                 .child(
                     text(crate::state::l(label))
                         .text_sm()
@@ -353,7 +349,6 @@ fn slider_in(
         .h(px(20.0))
         .justify_center()
         .rounded_full()
-        .focus_visible(tokens::focus_ring)
         .track_style(move |s| s.h(px(4.0)).rounded_full().bg(track))
         .indicator_style(|s| s.h(px(4.0)))
         .range_style(move |s| s.h(px(4.0)).rounded_full().bg(fill))

@@ -600,7 +600,6 @@ fn row(
         .hover(|s| s.bg(tokens::hover_wash))
         .active(|s| s.bg(|| theme().input))
         .selected_style(|s| s.bg(|| theme().sidebar_accent))
-        .focus_visible(tokens::focus_ring)
         .text_color(move || if chosen() { theme().foreground } else { theme().muted_foreground })
         .child(view().w(px(slot)).items_center().child(icon(glyph, glyph_size)))
         .child(if touch { label.text_base() } else { label.text_sm() })
@@ -1057,7 +1056,6 @@ fn mini_player() -> impl IntoElement {
                         .duration(motion::INSTANT)
                         .hover(|s| s.bg(tokens::hover_wash))
                         .active(|s| s.bg(|| theme().accent))
-                        .focus_visible(tokens::focus_ring)
                         .style_when(platform::compact, |s| s.flex_grow(1.0))
                         .child(
                             text(move || {
@@ -1116,7 +1114,6 @@ fn artwork_toggle() -> impl IntoElement {
         .items_center()
         .justify_center()
         .bg(|| theme().muted)
-        .focus_visible(tokens::focus_ring)
         .child(image(move || artwork.get()).absolute().inset_0().size(px(SIZE)).object_fit(ResizeMode::Cover))
         .child(
             view()
