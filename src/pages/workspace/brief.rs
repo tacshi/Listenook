@@ -292,7 +292,6 @@ fn evidence(review: Review, ids: &[String]) -> impl IntoElement {
             .duration(motion::INSTANT)
             .hover(|s| s.bg(|| theme().accent))
             .active(|s| s.bg(|| theme().input))
-            .focus_visible(tokens::focus_ring)
             .child(icon(Icon::Play, 12.0))
             .child(text(clock(start_ms)).text_xs().tabular_nums())
     }))

@@ -6,7 +6,7 @@ use nsh_core::{
 };
 
 use super::{
-    review::{Editing, Practice, Review},
+    review::{Editing, Review},
     search_bar,
 };
 use crate::{
@@ -22,7 +22,7 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
     let speaker = signal(None::<String>);
     let viewable = signal(None::<(usize, usize)>);
     let reveal = move |segment: usize, animated: bool| {
-        if review.editing.get_untracked().is_some() || review.handle_at.get_untracked().is_some() {
+        if review.editing.get_untracked().is_some() || untracked(|| review.dragging()) {
             return;
         }
         if let Some(row) = review.shown.with_untracked(|shown| shown.iter().position(|index| *index == segment)) {
@@ -165,15 +165,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
     let opens_loop = move || range().zip(index.get()).is_some_and(|((first, _), index)| index == first);
     let closes_loop = move || range().zip(index.get()).is_some_and(|((_, last), index)| index == last);
     let row_ref = element_ref();
-    let cell = review.track_row(index, row_ref);
-    let shows_handle = move || match review.handle_at.get() {
-        Some(at) => id().is_some_and(|id| id == at),
-        None => closes_loop(),
-    };
-    let holds_handle = move || match review.handle_cell.get() {
-        Some(holder) => holder == cell,
-        None => closes_loop(),
-    };
+    review.track_row(index, row_ref);
     let picked = move || review.picked_in(id().as_deref());
     let editing = move || review.editing.with(|e| e.as_ref().is_some_and(|e| Some(&e.segment_id) == id().as_ref()));
     let words = computed(move || if is_current() { index.get().and_then(|index| review.words(index)) } else { None });
@@ -318,7 +310,6 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                 })
                                                 .rounded(tokens::radius_sm)
                                                 .hover(|s| s.opacity(0.7))
-                                                .focus_visible(tokens::focus_ring)
                                                 .child(
                                                     text(move || speaker_name().unwrap_or_default())
                                                         .text_xs()
@@ -466,9 +457,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                         .gap_1()
                         .transition_opacity()
                         .duration(motion::INSTANT)
-                        .opacity(move || {
-                            if is_current() || is_repeating() || picked() || shows_handle() { 1.0_f32 } else { 0.0 }
-                        })
+                        .opacity(move || if is_current() || is_repeating() || picked() { 1.0_f32 } else { 0.0 })
                         .group_hover(|s| s.opacity(1.0))
                         .child(
                             view()
@@ -488,23 +477,9 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                         .self_start()
                                     },
                                 ))
-                                .child(
-                                    ui::toggle_button(
-                                        Variant::Ghost,
-                                        Icon::Repeat,
-                                        tr("Repeat sentence"),
-                                        Size::Sm,
-                                        is_repeating,
-                                        toggle_repeat,
-                                    )
-                                    .self_start(),
-                                )
+                                .child(repeat_grip(review, index, is_repeating, toggle_repeat))
                                 .child(icon_button(Icon::Pencil, tr("Edit"), Size::Sm, edit).self_start()),
-                        )
-                        .child(when(
-                            move || holds_handle() && review.practice.get() != Practice::Mimic,
-                            move || loop_handle(review, cell, shows_handle),
-                        )),
+                        ),
                 ),
         );
     let area = move || {
@@ -568,51 +543,35 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
         .into_element()
 }
 
-fn loop_handle(review: Review, cell: u64, shown: impl Fn() -> bool + 'static) -> impl IntoElement {
-    let range = move || review.repeat_range();
-    let count = move || range().map_or(1, |(first, last)| last - first + 1);
-    let at_end = move || {
-        range().is_some_and(|(_, last)| {
-            review.job.with(|job| {
-                job.as_ref().and_then(|job| job.document.as_ref()).is_none_or(|d| last + 1 >= d.segments.len())
-            })
-        })
-    };
+/// The repeat button: a tap loops the sentence (or ends the loop it is in),
+/// and a drag up or down from it loops every sentence the finger passes.
+fn repeat_grip(
+    review: Review,
+    index: Memo<Option<usize>>,
+    is_repeating: impl Fn() -> bool + Copy + 'static,
+    toggle_repeat: impl Fn() + Copy + 'static,
+) -> impl IntoElement {
     view()
-        .flex_row()
-        .items_center()
+        .self_start()
         .rounded(tokens::radius)
-        .bg(move || theme().primary.opacity(if review.handle_at.get().is_some() { 0.24 } else { 0.12 }))
-        .test_id("repeat-handle")
+        .test_id("repeat-grip")
         .claim_touches(TouchClaim::on_pan(PanActivation::vertical(px(4.0), px(12.0))))
         .keep_touches(true)
-        .opacity(move || if shown() { 1.0_f32 } else { 0.0 })
-        .on_responder_grant(move |_: &ResponderEvent| review.begin_end_drag(cell))
-        .on_responder_move(move |event: &ResponderEvent| review.drag_end_to(event.gesture.position.y.0))
-        .on_responder_release(move |_: &ResponderEvent| review.finish_end_drag())
-        .on_responder_terminate(move |_: &ResponderEvent| review.finish_end_drag())
-        .child(ui::icon_button_while(
-            Icon::ChevronUp,
-            tr("Repeat one sentence less"),
+        .on_responder_grant(move |_: &ResponderEvent| {
+            if let Some(index) = index.get_untracked() {
+                review.begin_repeat_drag(index);
+            }
+        })
+        .on_responder_move(move |event: &ResponderEvent| review.drag_to(event.gesture.position.y.0))
+        .on_responder_release(move |_: &ResponderEvent| review.finish_repeat_drag())
+        .on_responder_terminate(move |_: &ResponderEvent| review.finish_repeat_drag())
+        .child(ui::toggle_button(
+            Variant::Ghost,
+            Icon::Repeat,
+            tr("Repeat sentence"),
             Size::Sm,
-            move || count() > 1,
-            move || review.move_repeat_end(-1),
-        ))
-        .child(
-            text(move || SharedString::from(count().to_string()))
-                .text_xs()
-                .tabular_nums()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(|| theme().primary)
-                .select_none()
-                .test_id("repeat-count"),
-        )
-        .child(ui::icon_button_while(
-            Icon::ChevronDown,
-            tr("Repeat one more sentence"),
-            Size::Sm,
-            move || !at_end(),
-            move || review.move_repeat_end(1),
+            is_repeating,
+            toggle_repeat,
         ))
 }
 

@@ -33,7 +33,6 @@ pub enum Icon {
     ChevronLeft,
     Back,
     ChevronDown,
-    ChevronUp,
     More,
     Trash,
     Export,
@@ -121,7 +120,6 @@ impl Icon {
             Icon::ChevronLeft => r#"<path d="m15 18-6-6 6-6"/>"#,
             Icon::ChevronRight => r#"<path d="m9 18 6-6-6-6"/>"#,
             Icon::ChevronDown => r#"<path d="m6 9 6 6 6-6"/>"#,
-            Icon::ChevronUp => r#"<path d="m18 15-6-6-6 6"/>"#,
             Icon::More => {
                 r#"<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>"#
             }

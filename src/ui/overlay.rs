@@ -168,7 +168,6 @@ fn menu_row(
             .text_color(ink)
             .hover(|s| s.bg(|| theme().accent))
             .active(|s| s.bg(|| theme().input))
-            .focus_visible(tokens::focus_ring)
             .child(mark)
             .child(label)
             .into_element();

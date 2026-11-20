@@ -413,7 +413,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             .text_color(move || if chosen.get().is_some() { lit() } else { ink() })
             .hover(|s| s.bg(|| ink().opacity(0.14)))
             .active(|s| s.bg(|| ink().opacity(0.24)))
-            .focus_visible(tokens::focus_ring)
             .child(ui::icon(Icon::Captions, 18.0)),
     )
     .child(menu_toggle(l("Subtitles off"), move || chosen.get().is_none(), move || chosen.set(None)))
@@ -662,7 +661,6 @@ fn stage_button(
             .text_color(move || if on() { lit() } else { ink() })
             .hover(|s| s.bg(|| ink().opacity(0.14)))
             .active(|s| s.bg(|| ink().opacity(0.24)))
-            .focus_visible(tokens::focus_ring)
             .child(ui::icon_of(glyph, 18.0)),
     )
 }
@@ -676,7 +674,6 @@ fn window_button(name: &'static str, color: fn() -> AdaptiveColor, on_press: imp
             .rounded_full()
             .bg(color)
             .hover(|s| s.opacity(0.8))
-            .active(|s| s.opacity(0.6))
-            .focus_visible(tokens::focus_ring),
+            .active(|s| s.opacity(0.6)),
     )
 }

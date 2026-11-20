@@ -8,7 +8,7 @@ pub(crate) mod tokens;
 
 pub(crate) use button::{
     Size, Variant, bar_button, button, glyph_label_button, header_button, icon_button, icon_button_as,
-    icon_button_while, icon_text_button, menu_trigger, tip, toggle_button, toggle_icon_button,
+    icon_text_button, menu_trigger, tip, toggle_button, toggle_icon_button,
 };
 pub(crate) use form::{
     bound_field, bound_field_with, checkbox, field, focused_search_field, hint, progress_bar, search_field_ref,
