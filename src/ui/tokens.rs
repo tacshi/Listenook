@@ -120,14 +120,7 @@ pub fn menu_surface(s: StyleRefinement) -> StyleRefinement {
     if !crate::platform::is_phone() {
         return popup_surface(s);
     }
-    s.px_2()
-        .pt_2()
-        .pb(px(28.0))
-        .rounded(radius_lg)
-        .border_1()
-        .border_color(|| theme().border)
-        .bg(|| theme().popover)
-        .shadow_xl()
+    s.p_2().rounded(radius_lg).border_1().border_color(|| theme().border).bg(|| theme().popover).shadow_xl()
 }
 
 pub fn popup_surface(s: StyleRefinement) -> StyleRefinement {
