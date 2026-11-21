@@ -381,7 +381,35 @@ fn a_transcript_opens_from_the_library_and_search_filters_it() {
     it.app.press("label:Search transcript").unwrap();
     it.app.type_text("text:Search transcript", "beginner").unwrap();
     it.app.wait_for_gone("Welcome back to the show.", GONE).unwrap();
-    assert!(it.app.shows("So, what should a beginner do first?"));
+    it.app.press("label:Clear search").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.wait_for_gone("label:Clear search", GONE).unwrap();
+}
+
+#[test]
+fn scrolling_away_from_the_sentence_playing_offers_a_way_back_to_it() {
+    let mut it = start("follow", seed_long_transcript, Vec::new());
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Sentence 1 says something about learning.").unwrap();
+    it.app.press("Sentence 2 says something about learning.").unwrap();
+    it.app.wait_for("role:button[Pause playback]").unwrap();
+    assert!(!it.app.shows("Jump to playing"), "nothing to jump to while the list follows");
+    it.app.scroll("Sentence 3 says something about learning.", px(1500.0)).unwrap();
+    it.app.wait_for("Jump to playing").unwrap();
+    it.app.press("Jump to playing").unwrap();
+    it.app.wait_for("Sentence 2 says something about learning.").unwrap();
+    it.app.wait_for_gone("Jump to playing", GONE).unwrap();
+}
+
+#[test]
+fn command_b_in_the_reader_hides_the_sidebar_unless_words_are_selected() {
+    let mut it = open_sample("command-b");
+    assert!(it.app.shows("Podcasts"), "the sidebar shows beside the reader");
+    it.app.press_key("mod+b").unwrap();
+    it.app.wait_for_gone("Podcasts", GONE).unwrap();
+    it.app.press_key("mod+b").unwrap();
+    it.app.wait_for("Podcasts").unwrap();
 }
 
 #[test]
@@ -655,10 +683,10 @@ fn tapping_a_sentence_plays_from_there() {
     let mut it = open_sample("tap-plays");
     it.app.press("Listening every day matters more than studying hard once a week.").unwrap();
     it.app.wait_for("00:05").unwrap();
-    it.app.wait_for("role:button[Pause]").unwrap();
+    it.app.wait_for("role:button[Pause playback]").unwrap();
     it.app.press("So, what should a beginner do first?").unwrap();
     it.app.wait_for("00:08").unwrap();
-    it.app.wait_for("role:button[Pause]").unwrap();
+    it.app.wait_for("role:button[Pause playback]").unwrap();
 }
 
 #[test]
@@ -701,6 +729,9 @@ fn dictation_checks_the_answer_without_showing_the_sentence() {
     // Mimic shares the card, and Practice opens in the mode used last.
     it.app.press("Mimic").unwrap();
     it.app.wait_for("Reps").unwrap();
+    // The card steps between sentences itself, without the transport.
+    it.app.press("label:Next sentence >> nth=0").unwrap();
+    it.app.wait_for("text:/^Sentence 2 ·/").unwrap();
     it.app.wait_for_gone("text:Type what you hear", GONE).unwrap();
     it.app.press("label:Practice").unwrap();
     it.app.wait_for_gone("Reps", GONE).unwrap();
@@ -735,6 +766,10 @@ fn type_answer_remembers_the_sentences_missed_and_goes_back_over_them() {
     it.app.wait_for("That's all to review.").unwrap();
     it.app.wait_for("Right at the first try: 1/2").unwrap();
     it.app.wait_for_gone("Missed 1", GONE).unwrap();
+    // The sentence's own controls leave with it: the summary has its own.
+    it.app.wait_for_gone("role:button[Check]", GONE).unwrap();
+    assert!(!it.app.shows("label:Replay"));
+    assert!(!it.app.shows("text:/^Sentence 1 ·/"));
     assert!(!saved().contains("to_review"), "done with, it is no longer saved as missed");
 }
 

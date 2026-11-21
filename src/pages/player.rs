@@ -433,7 +433,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     let second = computed(move || position_ms.get() / 1000 * 1000);
     let position = move || {
         ui::slider_on_picture(
-            "Position",
+            tr("Position"),
             move || dragging.get().unwrap_or_else(|| on_track.get() as f64),
             move || duration_ms.get() as f64,
             move |value| dragging.set(Some(value)),

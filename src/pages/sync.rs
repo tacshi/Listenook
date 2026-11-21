@@ -10,8 +10,8 @@ use crate::{
         tr,
     },
     ui::{
-        Icon, Size, Variant, bound_field, button, confirm_destructive, field, hint, icon, icon_button, modal,
-        progress_bar, separator, spinner, switch, text_field_with, tokens,
+        Icon, Size, Variant, bound_field, button, confirm_destructive, error_hint, field, hint, icon, icon_button,
+        modal, progress_bar, separator, spinner, switch, text_field_with, tokens,
     },
 };
 
@@ -143,7 +143,7 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
     view()
         .gap_4()
         .child(hint(l(
-            "Pair your devices once with a code. After that they sync on their own whenever they are open on the same network, and every one ends up with every recording, transcript, group and tag, and with the podcasts you follow and where you left each episode. Where two have a recording, the one edited last is kept.",
+            "Pair once with a code; then your devices sync recordings, transcripts and podcasts on their own over the same network.",
         )))
         .child(
             view()
@@ -352,11 +352,7 @@ fn pairing(code: Signal<String>, enter: impl Fn() + Copy + 'static) -> impl Into
         .child(
             when(
                 move || sync.wrong(),
-                || {
-                    view()
-                        .text_color(|| theme().destructive)
-                        .child(hint(l("That code is not right. Check it on the other device and try again.")))
-                },
+                || error_hint(l("That code is not right. Check it on the other device and try again.")),
             )
             .otherwise(|| {
                 hint(l("Once paired, the two devices sync on their own whenever both are open on the same network."))

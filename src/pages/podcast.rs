@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use listenook_core::{
     format::{date, duration_words},
@@ -13,7 +13,7 @@ use crate::{
     state::{error_text, l, store, tr},
     ui::{
         self, Icon, Size, Status, Variant, badge, button, chip, field, hint, icon, icon_button, list_row, modal,
-        modal_actions, search_field_ref, section, spinner, text_field_with, toggle_icon_button,
+        modal_actions, search_field_ref, section, spinner, text_field_with, toggle_button, toggle_icon_button,
         tokens::{self, motion},
     },
     util::file_url,
@@ -143,21 +143,29 @@ fn discover(page: Page) -> impl IntoElement {
     let failed = signal(None::<&'static str>);
     let searching = move || query.with(|q| q.trim().chars().count() >= 2);
     let shelf = signal(0_usize);
+    let shelving = signal(true);
     effect(move || {
         let chosen = shelf.get();
+        shelving.set(true);
         spawn(async move {
             let loaded = match chosen {
                 0 => podcasts::featured().await,
                 1 => podcasts::top_shows(None, 24).await,
                 other => podcasts::top_shows(COLLECTIONS.get(other - 2).map(|(_, genre)| *genre), 24).await,
             };
-            match loaded {
-                Ok(shows) => batch(|| {
-                    featured.set(shows);
-                    failed.set(None);
-                }),
-                Err(code) => failed.set(Some(code)),
+            if shelf.get_untracked() != chosen {
+                return;
             }
+            batch(|| {
+                match loaded {
+                    Ok(shows) => {
+                        featured.set(shows);
+                        failed.set(None);
+                    }
+                    Err(code) => failed.set(Some(code)),
+                }
+                shelving.set(false);
+            });
         });
     });
     effect(move || {
@@ -278,11 +286,18 @@ fn discover(page: Page) -> impl IntoElement {
                                 )
                                 .otherwise(move || chips().flex_wrap()),
                             )
-                            .child(card_grid().child(each(
-                                featured,
-                                |show: &ShowSummary| show.feed_url.clone(),
-                                move |show, _| show_card(page, move || show.get()),
-                            )))
+                            .child(when(move || shelving.get() && featured.with(Vec::is_empty), || spinner(18.0)))
+                            .child(
+                                card_grid()
+                                    .opacity(move || if shelving.get() { 0.5_f32 } else { 1.0 })
+                                    .transition_opacity()
+                                    .duration(motion::FAST)
+                                    .child(each(
+                                        featured,
+                                        |show: &ShowSummary| show.feed_url.clone(),
+                                        move |show, _| show_card(page, move || show.get()),
+                                    )),
+                            )
                             .child(hint(l("Podcast search and artwork are provided by Apple Podcasts.")))
                         }),
                     ),
@@ -320,15 +335,10 @@ fn card_grid() -> View {
 }
 
 fn show_card(page: Page, show: impl Fn() -> ShowSummary + Copy + 'static) -> impl IntoElement {
-    nsh_base::button()
+    ui::pressable_card()
         .on_press(move || page.open_show(&untracked(show).feed_url))
         .gap_2()
         .p_2()
-        .rounded(tokens::radius_lg)
-        .transition_colors()
-        .duration(motion::INSTANT)
-        .hover(|s| s.bg(tokens::hover_wash))
-        .active(|s| s.bg(|| theme().accent))
         .child(
             view()
                 .aspect_square()
@@ -359,7 +369,32 @@ fn show_page(page: Page) -> impl IntoElement {
         })
     };
     let episodes = computed(move || feed.with(|f| f.as_ref().map(|f| f.episodes.clone()).unwrap_or_default()));
+    let query = signal(String::new());
+    let searchable = computed(move || {
+        episodes.with(|e| {
+            e.iter()
+                .map(|e| format!("{}\n{}", e.title, e.description.as_deref().map(strip_html).unwrap_or_default()))
+                .map(|text| text.to_lowercase())
+                .collect::<Vec<_>>()
+        })
+    });
+    let shown = computed(move || {
+        let needle = query.with(|q| q.trim().to_lowercase());
+        if needle.is_empty() {
+            return episodes.get();
+        }
+        episodes.with(|e| {
+            searchable.with(|texts| {
+                e.iter().zip(texts).filter(|(_, text)| text.contains(&needle)).map(|(e, _)| e.clone()).collect()
+            })
+        })
+    });
+    let notes_open = signal(HashSet::<String>::new());
+    let filter_input = element_ref();
     let pushed = crate::shell::system_header();
+    if !pushed {
+        on_key("mod+f", move |_| filter_input.focus());
+    }
     let follow = move || {
         button(Variant::Default, Size::Md, move || if followed() { tr("Unfollow") } else { tr("Follow") }).on_press(
             move || {
@@ -418,99 +453,122 @@ fn show_page(page: Page) -> impl IntoElement {
                 },
             )
             .otherwise(move || {
-                virtual_list(move || episodes.with(Vec::len), move |at| episode_row(page, episodes, at))
-                    .keys(move || episodes.with(|e| e.iter().map(|e| e.id.clone()).collect::<Vec<_>>()))
+                virtual_list(move || shown.with(Vec::len), move |at| episode_row(page, shown, notes_open, at))
+                    .keys(move || shown.with(|e| e.iter().map(|e| e.id.clone()).collect::<Vec<_>>()))
                     .estimated_item_size(px(68.0))
                     .content_padding(px(ui::PAGE_INSET - 12.0))
                     .header(
                         view()
-                            .flex_row()
                             .gap_4()
                             .px_3()
                             .pb_4()
-                            .child(artwork(
-                                move || {
-                                    feed.with(|f| f.as_ref().and_then(|f| f.artwork_url.clone()).unwrap_or_default())
-                                },
-                                88.0,
-                            ))
                             .child(
                                 view()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .gap_1()
-                                    .child(
-                                        text(move || {
-                                            feed.with(|f| {
-                                                f.as_ref()
-                                                    .and_then(|f| f.author.clone())
-                                                    .map(SharedString::from)
-                                                    .unwrap_or_default()
-                                            })
-                                        })
-                                        .text_sm()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(|| theme().foreground),
-                                    )
-                                    .child(
-                                        text(move || {
-                                            feed.with(|f| {
-                                                f.as_ref()
-                                                    .and_then(|f| f.description.clone())
-                                                    .map(SharedString::from)
-                                                    .unwrap_or_default()
-                                            })
-                                        })
-                                        .text_sm()
-                                        .number_of_lines(3)
-                                        .text_color(|| theme().muted_foreground),
-                                    )
-                                    .child(when(move || pushed, move || view().flex_row().pt_1().child(follow())))
-                                    .child(when(
-                                        move || page.error.get().is_some(),
+                                    .flex_row()
+                                    .gap_4()
+                                    .child(artwork(
                                         move || {
-                                            text(move || page.error.get().map(error_text).unwrap_or_default())
-                                                .text_xs()
-                                                .text_color(|| theme().destructive)
+                                            feed.with(|f| {
+                                                f.as_ref().and_then(|f| f.artwork_url.clone()).unwrap_or_default()
+                                            })
                                         },
-                                    )),
-                            ),
+                                        88.0,
+                                    ))
+                                    .child(
+                                        view()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .gap_1()
+                                            .child(
+                                                text(move || {
+                                                    feed.with(|f| {
+                                                        f.as_ref()
+                                                            .and_then(|f| f.author.clone())
+                                                            .map(SharedString::from)
+                                                            .unwrap_or_default()
+                                                    })
+                                                })
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(|| theme().foreground),
+                                            )
+                                            .child(
+                                                text(move || {
+                                                    feed.with(|f| {
+                                                        f.as_ref()
+                                                            .and_then(|f| f.description.clone())
+                                                            .map(SharedString::from)
+                                                            .unwrap_or_default()
+                                                    })
+                                                })
+                                                .text_sm()
+                                                .number_of_lines(3)
+                                                .text_color(|| theme().muted_foreground),
+                                            )
+                                            .child(when(
+                                                move || pushed,
+                                                move || view().flex_row().pt_1().child(follow()),
+                                            ))
+                                            .child(when(
+                                                move || page.error.get().is_some(),
+                                                move || {
+                                                    text(move || page.error.get().map(error_text).unwrap_or_default())
+                                                        .text_xs()
+                                                        .text_color(|| theme().destructive)
+                                                },
+                                            )),
+                                    ),
+                            )
+                            .child(search_field_ref(query, l("Filter episodes"), &filter_input).max_w(px(420.0))),
                     )
+                    .empty(when(
+                        move || query.with(|q| !q.trim().is_empty()),
+                        || hint(l("No episodes match that filter.")).px_3(),
+                    ))
                     .flex_1()
             }),
         )
 }
 
-fn episode_row(page: Page, episodes: Memo<Vec<Episode>>, at: Position) -> impl IntoElement {
+fn episode_row(
+    page: Page,
+    episodes: Memo<Vec<Episode>>,
+    notes_open: Signal<HashSet<String>>,
+    at: Position,
+) -> impl IntoElement {
     let store = store();
     let player = store.podcast;
     let episode = computed(move || episodes.with(|e| e.get(at.index()).cloned()));
     let id = move || episode.with(|e| e.as_ref().map(|e| e.id.clone()).unwrap_or_default());
-    let playing = move || player.is_current(&id()) && !player.paused();
+    let current = move || player.is_current(&id());
+    let playing = move || current() && !player.paused();
     let job = move || {
         let id = id();
         store.jobs().into_iter().find(|job| job.podcast_provenance.as_ref().is_some_and(|p| p.episode_id == id))
     };
+    let notes = computed(move || {
+        episode.with(|e| e.as_ref().and_then(|e| e.description.as_deref()).map(strip_html).unwrap_or_default())
+    });
+    let open = move || notes_open.with(|shown| shown.contains(&id()));
     let narrow = untracked(crate::platform::compact);
     let meta = move || -> SharedString {
-        episode.with(|e| {
-            let Some(e) = e else {
-                return SharedString::default();
-            };
+        let mut parts = episode.with(|e| {
             let mut parts = Vec::new();
-            if let Some(published) = &e.published_at {
+            if let Some(published) = e.as_ref().and_then(|e| e.published_at.as_deref()) {
                 parts.push(date(published));
             }
-            if let Some(duration) = e.duration_ms {
+            if let Some(duration) = e.as_ref().and_then(|e| e.duration_ms) {
                 parts.push(duration_words(duration));
             }
-            if let Some(description) =
-                e.description.as_deref().filter(|_| !narrow).map(strip_html).filter(|d| !d.is_empty())
-            {
-                parts.push(description.replace('\n', " ").chars().take(120).collect());
+            parts
+        });
+        if !narrow && !open() {
+            let preview: String = notes.with(|n| n.replace('\n', " ").chars().take(120).collect());
+            if !preview.is_empty() {
+                parts.push(preview);
             }
-            parts.join(" · ").into()
-        })
+        }
+        parts.join(" · ").into()
     };
     let toggle_play = move || {
         let Some(episode) = episode.get_untracked() else {
@@ -526,58 +584,84 @@ fn episode_row(page: Page, episodes: Memo<Vec<Episode>>, at: Position) -> impl I
             page.feed.with_untracked(|f| f.as_ref().map(|f| SharedString::from(f.title.clone())).unwrap_or_default());
         player.play(episode, show, source);
     };
+    let toggle_notes = move || {
+        let id = untracked(id);
+        notes_open.update(|shown| {
+            if !shown.remove(&id) {
+                shown.insert(id);
+            }
+        });
+    };
     view()
-        .flex_row()
-        .items_center()
-        .gap_3()
+        .gap_2()
         .px_3()
         .py_2()
         .rounded(tokens::radius)
         .transition_colors()
         .duration(motion::INSTANT)
-        .bg(move || if player.is_current(&id()) { tokens::highlight() } else { theme().background })
-        .hover(|s| s.bg(tokens::hover_wash))
+        .bg(move || if current() { tokens::highlight() } else { theme().background })
+        .hover(move |s| s.bg(move || if current() { tokens::highlight() } else { tokens::hover_wash() }))
         .child(
-            toggle_icon_button(
-                move || if playing() { Icon::Pause } else { Icon::Play },
-                move || if playing() { "Pause".into() } else { "Play".into() },
-                Variant::Default,
-                Size::Md,
-            )
-            .on_press(toggle_play),
-        )
-        .child(
-            nsh_base::button()
-                .on_press(toggle_play)
-                .flex_1()
-                .min_w(px(0.0))
-                .gap_0p5()
-                .rounded(tokens::radius_sm)
+            view()
+                .flex_row()
+                .items_center()
+                .gap_3()
                 .child(
-                    text(move || {
-                        episode.with(|e| e.as_ref().map(|e| SharedString::from(e.title.clone())).unwrap_or_default())
-                    })
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .number_of_lines(if narrow { 2 } else { 1 })
-                    .text_color(|| theme().foreground),
+                    toggle_icon_button(
+                        move || if playing() { Icon::Pause } else { Icon::Play },
+                        move || if playing() { tr("Pause playback") } else { tr("Play") },
+                        Variant::Default,
+                        Size::Md,
+                    )
+                    .on_press(toggle_play),
                 )
-                .child(text(meta).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground)),
+                .child(
+                    nsh_base::button()
+                        .on_press(toggle_play)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap_0p5()
+                        .rounded(tokens::radius_sm)
+                        .child(
+                            text(move || {
+                                episode.with(|e| {
+                                    e.as_ref().map(|e| SharedString::from(e.title.clone())).unwrap_or_default()
+                                })
+                            })
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .number_of_lines(if narrow { 2 } else { 1 })
+                            .text_color(|| theme().foreground),
+                        )
+                        .child(text(meta).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground)),
+                )
+                .child(when(
+                    move || !narrow && episode.with(|e| e.as_ref().is_some_and(|e| !e.transcripts.is_empty())),
+                    || badge(l("Has captions"), || Status::Neutral),
+                ))
+                .child(
+                    button(Variant::Outline, Size::Sm, move || match job() {
+                        Some(job) if job.has_transcript() => tr("Open"),
+                        Some(_) => tr("In Library"),
+                        None => tr("Deep listen"),
+                    })
+                    .on_press(move || {
+                        if let (Some(episode), Some(feed)) = (episode.get_untracked(), page.feed.get_untracked()) {
+                            podcasts::deep_listen(&episode, &feed);
+                        }
+                    }),
+                )
+                .child(when(
+                    move || notes.with(|n| !n.is_empty()),
+                    move || {
+                        toggle_button(Variant::Ghost, Icon::ChevronDown, tr("Show notes"), Size::Sm, open, toggle_notes)
+                    },
+                )),
         )
-        .child(when(
-            move || !narrow && episode.with(|e| e.as_ref().is_some_and(|e| !e.transcripts.is_empty())),
-            || badge(l("Has captions"), || Status::Neutral),
-        ))
-        .child(
-            button(Variant::Outline, Size::Sm, move || match job() {
-                Some(job) if job.has_transcript() => tr("Open"),
-                Some(_) => tr("In Library"),
-                None => tr("Deep listen"),
-            })
-            .on_press(move || {
-                if let (Some(episode), Some(feed)) = (episode.get_untracked(), page.feed.get_untracked()) {
-                    podcasts::deep_listen(&episode, &feed);
-                }
-            }),
-        )
+        .child(when(open, move || {
+            text(move || SharedString::from(notes.get()))
+                .text_sm()
+                .text_color(|| theme().muted_foreground)
+                .pl(px(Size::Md.height() + 12.0))
+        }))
 }

@@ -124,16 +124,15 @@ fn search_field_with(
         .flex_1()
         .text_sm()
         .text_color(|| theme().foreground);
-    let field = match input_ref {
-        Some(target) => field.element_ref(&target),
-        None => field,
-    };
+    let target = input_ref.unwrap_or_else(element_ref);
+    let field = field.element_ref(&target);
     view()
         .flex_row()
         .items_center()
         .gap_2()
         .h(px(Size::Md.height()))
-        .px_3()
+        .pl_3()
+        .pr_1()
         .rounded(tokens::radius)
         .border_1()
         .border_color(tokens::control_border)
@@ -142,6 +141,28 @@ fn search_field_with(
         .focus_within(|s| s.border_color(|| theme().ring))
         .child(icon(Icon::Search, Size::Md.icon()))
         .child(field)
+        // Room kept for the clear button, so the text does not shift as it comes.
+        .child(view().size(px(Size::Sm.height())).flex_shrink_0().items_center().justify_center().child(when(
+            move || value.with(|v| !v.is_empty()),
+            move || {
+                nsh_base::button()
+                    .accessibility_label(crate::state::tr("Clear search"))
+                    .on_press(move || {
+                        value.set(String::new());
+                        target.focus();
+                    })
+                    .size(px(Size::Sm.height()))
+                    .items_center()
+                    .justify_center()
+                    .rounded(tokens::radius_sm)
+                    .text_color(|| theme().muted_foreground)
+                    .transition_colors()
+                    .duration(motion::INSTANT)
+                    .hover(|s| s.bg(|| theme().accent).text_color(|| theme().foreground))
+                    .active(|s| s.bg(|| theme().input).scale(tokens::press_scale(true)))
+                    .child(icon(Icon::Close, Size::Sm.icon()))
+            },
+        )))
 }
 
 pub fn field(label: impl IntoReactive<SharedString>, control: impl IntoElement) -> View {
@@ -153,6 +174,11 @@ pub fn field(label: impl IntoReactive<SharedString>, control: impl IntoElement) 
 
 pub fn hint(label: impl IntoReactive<SharedString>) -> Text {
     text(label).text_xs().text_color(|| theme().muted_foreground)
+}
+
+/// A hint saying what went wrong.
+pub fn error_hint(label: impl IntoReactive<SharedString>) -> Text {
+    text(label).text_xs().text_color(|| theme().destructive)
 }
 
 pub fn switch(
@@ -188,19 +214,17 @@ pub fn switch(
         .child(text(label).text_sm().flex_1().min_w(px(0.0)).text_color(|| theme().foreground))
 }
 
-pub fn checkbox(
-    label: impl IntoReactive<SharedString>,
+/// A checkbox's box, `side` points square: `control-border`, filled with
+/// `primary` and ticked while checked.
+fn ticked(
+    checkbox: nsh_base::CheckboxElement,
     checked: impl Fn() -> bool + Copy + 'static,
-    on_change: impl Fn(bool) + 'static,
+    side: f32,
 ) -> nsh_base::CheckboxElement {
-    nsh_base::checkbox()
+    checkbox
         .checked(checked)
-        .on_change(move |next: &bool| on_change(*next))
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .indicator_style(|s| {
-            s.size(px(16.0))
+        .indicator_style(move |s| {
+            s.size(px(side))
                 .items_center()
                 .justify_center()
                 .rounded(tokens::radius_sm)
@@ -210,7 +234,40 @@ pub fn checkbox(
                 .checked(|s| s.bg(|| theme().primary).border_color(|| theme().primary))
         })
         .indicator(when(checked, || icon(Icon::Check, 12.0)))
+}
+
+pub fn checkbox(
+    label: impl IntoReactive<SharedString>,
+    checked: impl Fn() -> bool + Copy + 'static,
+    on_change: impl Fn(bool) + 'static,
+) -> nsh_base::CheckboxElement {
+    ticked(nsh_base::checkbox(), checked, 16.0)
+        .on_change(move |next: &bool| on_change(*next))
+        .flex_row()
+        .items_center()
+        .gap_2()
         .child(text(label).text_sm().text_color(|| theme().foreground))
+}
+
+/// A checkbox that is a whole row of a card, the page laying out what it
+/// says beside the box (an icon, a title, a detail): it washes under the
+/// pointer.
+pub fn checkbox_row(
+    name: impl Into<SharedString>,
+    checked: impl Fn() -> bool + Copy + 'static,
+    on_change: impl Fn(bool) + 'static,
+) -> nsh_base::CheckboxElement {
+    ticked(nsh_base::checkbox(), checked, 18.0)
+        .on_change(move |next: &bool| on_change(*next))
+        .accessibility_label(name.into())
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .px_3()
+        .py_2p5()
+        .transition_colors()
+        .duration(motion::INSTANT)
+        .hover(|s| s.bg(tokens::hover_wash))
 }
 
 /// A choice of one of `options` (value, label). The desktops and narrow touch screens use the base select (a

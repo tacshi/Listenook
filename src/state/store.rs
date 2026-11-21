@@ -523,6 +523,11 @@ impl Store {
         })
     }
 
+    /// When each recording last played, as ISO times: finished ones too, which have no place left.
+    pub(crate) fn last_played(&self) -> BTreeMap<String, String> {
+        self.played.get()
+    }
+
     pub(crate) fn shelved(&self, shelf: Shelf, id: &str) -> bool {
         self.settings.with(|settings| !shelf.hidden(settings).contains(id))
     }

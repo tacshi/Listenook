@@ -11,8 +11,8 @@ use crate::{
     state::{SettingsTab, error_text, l, tr},
     ui::{
         Icon, Size, Tone, Variant, button, card, checkbox, empty_state, field, hint, icon, icon_button,
-        icon_text_button, modal, modal_actions, progress_bar, section, select, text_area, text_field, toast,
-        tokens::{self, motion},
+        icon_text_button, modal, modal_actions, moment_chip, progress_bar, section, select, text_area, text_field,
+        toast,
     },
 };
 
@@ -277,23 +277,12 @@ fn evidence(review: Review, ids: &[String]) -> impl IntoElement {
             .collect()
     });
     view().flex_row().flex_wrap().gap_1().children(moments.into_iter().map(move |(index, start_ms)| {
-        nsh_base::button()
-            .accessibility_label(format!("Play from {}", clock(start_ms)))
-            .on_press(move || review.play_from(index))
-            .flex_row()
-            .items_center()
-            .gap_1()
-            .h(px(24.0))
-            .px_2()
-            .rounded(tokens::radius_sm)
-            .bg(|| theme().muted)
-            .text_color(|| theme().muted_foreground)
-            .transition_colors()
-            .duration(motion::INSTANT)
-            .hover(|s| s.bg(|| theme().accent))
-            .active(|s| s.bg(|| theme().input))
-            .child(icon(Icon::Play, 12.0))
-            .child(text(clock(start_ms)).text_xs().tabular_nums())
+        moment_chip(clock(start_ms)).accessibility_label(format!("{} {}", tr("Play from"), clock(start_ms))).on_press(
+            move || {
+                review.follow();
+                review.play_from(index);
+            },
+        )
     }))
 }
 

@@ -43,6 +43,11 @@ pub fn highlight() -> AdaptiveColor {
     role("highlight", theme().accent)
 }
 
+/// A search match in the transcript: an amber wash under the words.
+pub fn found() -> AdaptiveColor {
+    warning().opacity(0.28)
+}
+
 pub fn highlight_foreground() -> AdaptiveColor {
     role("highlight-foreground", theme().foreground)
 }
