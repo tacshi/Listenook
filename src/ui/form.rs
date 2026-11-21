@@ -213,19 +213,24 @@ pub fn checkbox(
         .child(text(label).text_sm().text_color(|| theme().foreground))
 }
 
+/// A choice of one of `options` (value, label). The desktops and narrow touch screens use the base select (a
+/// popup, or a sheet at the bottom of a phone); a wider touch screen (a tablet) anchors the list to its trigger.
 pub fn select(
     name: impl Into<SharedString>,
     options: Vec<(SharedString, SharedString)>,
     value: impl Fn() -> SharedString + Copy + 'static,
     on_change: impl Fn(SharedString) + 'static,
-) -> nsh_base::SelectElement {
+) -> View {
+    if !is_desktop() && !untracked(crate::platform::compact) {
+        return view().child(anchored_select(name.into(), options, value, on_change));
+    }
     let labels = options.clone();
     let shown = move || {
         let current = value();
         labels.iter().find(|(v, _)| *v == current).map(|(_, label)| label.clone()).unwrap_or(current)
     };
     let touch = crate::platform::is_phone();
-    nsh_base::select()
+    let select = nsh_base::select()
         .items(options.into_iter().map(|(v, label)| SelectItem::new(v, label)).collect::<Vec<_>>())
         .value(move || Some(value()))
         .on_change(move |next: &Option<SharedString>| {
@@ -248,25 +253,102 @@ pub fn select(
             let title = text(item.title.clone()).text_color(|| theme().popover_foreground);
             if touch { title.text_base() } else { title.text_sm() }
         })
-        .trigger(
-            view()
-                .h(px(Size::Md.height()))
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .px_3()
-                .rounded(tokens::radius)
-                .border_1()
-                .border_color(tokens::control_border)
-                .bg(|| theme().card)
-                .text_color(|| theme().muted_foreground)
-                .transition_colors()
-                .duration(motion::INSTANT)
-                .hover(|s| s.bg(|| theme().muted))
-                .child(text(shown).text_sm().number_of_lines(1).text_color(|| theme().foreground))
-                .child(icon(Icon::ChevronDown, Size::Md.icon())),
-        )
+        .trigger(select_trigger(shown));
+    view().child(select)
+}
+
+fn select_trigger(shown: impl Fn() -> SharedString + 'static) -> View {
+    view()
+        .h(px(Size::Md.height()))
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .px_3()
+        .rounded(tokens::radius)
+        .border_1()
+        .border_color(tokens::control_border)
+        .bg(|| theme().card)
+        .text_color(|| theme().muted_foreground)
+        .transition_colors()
+        .duration(motion::INSTANT)
+        .hover(|s| s.bg(|| theme().muted))
+        .child(text(shown).text_sm().number_of_lines(1).text_color(|| theme().foreground))
+        .child(icon(Icon::ChevronDown, Size::Md.icon()))
+}
+
+/// The tablet select: its list in a popover below the trigger, as wide as it, instead of a sheet across the
+/// bottom of the screen.
+fn anchored_select(
+    name: SharedString,
+    options: Vec<(SharedString, SharedString)>,
+    value: impl Fn() -> SharedString + Copy + 'static,
+    on_change: impl Fn(SharedString) + 'static,
+) -> AnyElement {
+    let open = signal(false);
+    let width = signal(None::<Points>);
+    let options = std::rc::Rc::new(options);
+    let on_change = std::rc::Rc::new(on_change);
+    let shown = {
+        let options = options.clone();
+        move || {
+            let current = value();
+            options.iter().find(|(v, _)| *v == current).map(|(_, label)| label.clone()).unwrap_or(current)
+        }
+    };
+    let trigger = nsh_base::button()
+        .accessibility_label(name)
+        .on_layout(move |frame: &Bounds<Points>| width.set(Some(frame.size.width)))
+        .child(select_trigger(shown));
+    nsh_base::popover()
+        .open(move || Some(open.get()))
+        .on_open_change(move |event: &nsh_base::PopoverEvent| {
+            if let nsh_base::PopoverEvent::OpenChange(next, _) = event {
+                open.set(*next);
+            }
+        })
+        .align(Align::Start)
+        .offset(px(4.0))
+        .margin(px(8.0))
+        .popup_style(|s| tokens::popup_surface(s).p_1())
+        .popup_starting_class(tokens::POPUP_STARTING)
+        .popup_ending_class(tokens::POPUP_ENDING)
+        .trigger(trigger)
+        .child(dynamic(move || {
+            let rows = options.iter().cloned().map(|(choice, label)| {
+                let on_change = on_change.clone();
+                let picked = {
+                    let choice = choice.clone();
+                    move || value() == choice
+                };
+                nsh_base::button()
+                    .on_press(move || {
+                        open.set(false);
+                        if untracked(value) != choice {
+                            on_change(choice.clone());
+                        }
+                    })
+                    .flex_row()
+                    .items_center()
+                    .gap_3()
+                    .px_3()
+                    .min_h(px(44.0))
+                    .rounded(tokens::radius_sm)
+                    .text_color(|| theme().popover_foreground)
+                    .hover(|s| s.bg(|| theme().accent))
+                    .active(|s| s.bg(|| theme().input))
+                    .child(text(label).text_base().flex_1().number_of_lines(1))
+                    .child(view().size(px(18.0)).child(when(picked, || icon(Icon::Check, 18.0))))
+                    .into_element()
+            });
+            scroll()
+                // The popup's padding and border go around the rows: the list lines up with the trigger's edges.
+                .w(move || Length::from(width.get().map_or(px(240.0), |width| width - px(10.0))))
+                .max_h(px(320.0))
+                .child(view().children(rows.collect::<Vec<_>>()))
+                .into_element()
+        }))
+        .into_element()
 }
 
 pub fn segmented<T: Copy + PartialEq + 'static>(
