@@ -247,10 +247,12 @@ fn opened(id: &str) -> impl IntoElement {
             rate: review.rate.get(),
         }));
     });
-    let last = std::rc::Rc::new(std::cell::Cell::new((review.position_ms.get_untracked(), 0_i64, false)));
+    let last = std::rc::Rc::new(std::cell::Cell::new((review.position_ms.get_untracked(), 0_i64, false, true)));
     {
         let last = last.clone();
-        effect(move || last.set((review.position_ms.get(), review.duration_ms.get(), review.fullscreen.get())));
+        effect(move || {
+            last.set((review.position_ms.get(), review.duration_ms.get(), review.fullscreen.get(), review.paused.get()))
+        });
     }
     let remember = move |job_id: &str, position: i64, duration: i64| {
         let resume = position > 3000 && (duration <= 0 || position < duration - 3000);
@@ -268,8 +270,9 @@ fn opened(id: &str) -> impl IntoElement {
     }
     let job_id = id.to_owned();
     cleanup(move || {
-        let (position, duration, fullscreen) = last.get();
+        let (position, duration, fullscreen, paused) = last.get();
         remember(&job_id, position, duration);
+        store.left_reader(&job_id, paused);
         if fullscreen {
             store.set_immersive(false);
             current_window().set_mode(WindowMode::Normal);

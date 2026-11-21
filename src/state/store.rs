@@ -110,6 +110,7 @@ pub(crate) struct Store {
     filter: Signal<Filter>,
     open_job: Signal<Option<String>>,
     play_on_open: Stored<Option<String>>,
+    left_paused: Stored<std::collections::HashSet<String>>,
     open_video: Signal<Option<String>>,
     players: Signal<usize>,
     video_only: Signal<bool>,
@@ -225,6 +226,7 @@ impl Store {
             subtitle_choices: signal(Vec::new()),
             open_job: signal(None),
             play_on_open: stored(None),
+            left_paused: stored(std::collections::HashSet::new()),
             open_video: signal(None),
             players: signal(0),
             video_only: signal(false),
@@ -330,9 +332,23 @@ impl Store {
         });
     }
 
+    /// Opens a recording from Home's Continue cards: it plays on, unless it was left paused in this session.
     pub(crate) fn resume(&self, id: &str) {
-        self.play_on_open.with(|wanted| *wanted = Some(id.to_owned()));
+        if !self.left_paused.with(|paused| paused.contains(id)) {
+            self.play_on_open.with(|wanted| *wanted = Some(id.to_owned()));
+        }
         self.open_transcript(id);
+    }
+
+    /// The reader of `id` closed, playing or paused.
+    pub(crate) fn left_reader(&self, id: &str, paused: bool) {
+        self.left_paused.with(|left| {
+            if paused {
+                left.insert(id.to_owned());
+            } else {
+                left.remove(id);
+            }
+        });
     }
 
     pub(crate) fn take_play_on_open(&self, id: &str) -> bool {
