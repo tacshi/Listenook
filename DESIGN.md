@@ -28,10 +28,16 @@ Continue or Recently added, with Undo in the toast; nothing is deleted, and
 an item taken off Continue returns once it is opened or played again.
 
 A recording lives in one place. The Library lists every recording whatever
-its state (not transcribed, transcribing, ready); groups and tags are
-filters in the sidebar, not other lists. Opening a recording covers the list
-with the reader, and Back returns. Podcasts is for finding and following
-shows; an episode sent to the Library is a recording like any other.
+its state (not transcribed, transcribing, ready), newest first or in the
+order its Sort menu keeps (last played, title, shortest first); In progress
+(in the sidebar while something waits or transcribes), groups and tags are
+filters in the sidebar, not other lists. A row names two of its tags (one on
+a narrow page) and counts the rest. Opening a recording covers the list
+with the reader, and Back returns; one with no transcript yet says so in a
+toast instead, offering Transcribe or Retry. Podcasts is for finding and
+following shows; a show's page filters its episodes by title and notes, and
+an episode's notes open under its row. An episode sent to the Library is a
+recording like any other.
 
 Sync with another device on the same network sits at the foot of the
 sidebar, above Settings, and says when a sync runs or how the last one
@@ -51,11 +57,12 @@ the transport steps aside while that is up. Its top row switches between
 Type answer and Mimic, in that order (understand, then say it), and holds the
 mode's own controls; Practice opens in the mode used last, Type answer at
 first. Type answer has no
-options or Replay button: until it is answered, the sentence plays again
+options: until it is answered, the sentence plays again
 1.5 s after each time it ends (typing holds that off until 1.5 s after the
 last key), the transport's play button plays it from its start, a wrong
 check plays it at once, and a right one moves to the next sentence after
-1.5 s. ⌘R plays it again while typing. A word a letter off (or a swap, or an
+1.5 s. Replay (its glyph with ⌘R beside it on a computer) plays it again,
+and ⌘R does while typing. A word a letter off (or a swap, or an
 apostrophe) is marked amber, close rather than wrong; words run together or
 apart (`theright`, `the right`) match. Missed twice, the sentence plays at
 0.75× until it is answered or left, and a Hint shows the first mistake's first
@@ -64,8 +71,16 @@ review, with the recording (so it lasts and syncs), until it is typed right at
 the first try; the card's top row counts this time round (right at the first
 try out of those checked) and a Missed chip goes through only those. At the end
 of the recording, or of those to review, the box shows what the time round came
-to, the words to listen for, and Review missed or Start over; leaving Type
-answer says the count in a toast.
+to, the words to listen for, and Review missed or Start over, and the top row
+keeps only the mode switch; leaving Type answer says the count in a toast.
+Mimic's card has the previous sentence, play or pause, and the next beside its
+reps, so a pass is steered without leaving it.
+
+The transcript follows the sentence playing until the user scrolls it by hand
+(a wheel, a trackpad, a finger, the scroll bar). Then it stays put, and once
+the sentence playing is out of view a Jump to playing button at its foot
+brings it back; picking a sentence, stepping, seeking or pressing play follows
+again too. While searching, the matched words are washed amber.
 
 A setting is made where it is used: how to transcribe in the Library's
 options, what a transcript shows in the reader's menu, accounts and defaults
@@ -92,7 +107,7 @@ separated by hairlines; shadows only on what floats (menus, dialogs, toasts).
 | `accent` | Selected rows and open triggers |
 | `control-border` | The edge of fields, selects and checkboxes (3:1 against the page) |
 | `destructive` | Destructive actions and errors |
-| `success`, `warning` | A finished job, a job that needs attention |
+| `success`, `warning` | A finished job, a job that needs attention; `warning` at 28% (`tokens::found`) washes a search match in the transcript |
 | `listen`, `practice` | Learning time in charts: emerald for listening, hot orange for practice. The one place Home goes bright; never used for actions |
 | `highlight`, `highlight-foreground` | The sentence being played |
 | `scrim` | The layer behind a dialog |
@@ -116,8 +131,9 @@ Colors live in `theme.json` and are read through `nsh_base::theme()` and
   small). Rows 32–60pt.
 - **Icons:** Lucide outlines, 1.75 stroke, 16pt in controls (14pt small;
   18–20pt under a finger).
-- **Focus:** the keyboard's ring (`focus_visible`) on every control, outside
-  its edge; a field's own edge turns `ring` on any focus.
+- **Focus:** a field's own edge turns `ring` on any focus. Controls draw no
+  ring of their own: on an iPad with a keyboard one stayed on the reader's
+  play button after every tap.
 
 ## The `ui` layer
 
@@ -125,15 +141,18 @@ Colors live in `theme.json` and are read through `nsh_base::theme()` and
 
 | Component | Variants and states |
 | --- | --- |
-| `button`, `icon_text_button`, `icon_button`, `icon_button_as`, `toggle_icon_button` | Primary, Default, Outline, Ghost, Picture (over a video) × Sm, Md; hover, pressed (scale 0.97 / 0.94), focus ring, disabled |
+| `button`, `icon_text_button`, `icon_button`, `icon_button_as`, `toggle_icon_button` | Primary, Default, Outline, Ghost, Picture (over a video) × Sm, Md; hover, pressed (scale 0.97 / 0.94), disabled |
+| `shortcut_button` | A small ghost button with its glyph and its shortcut's `key_cap` (Replay ⌘R) |
+| `floating_button` | Over content (Jump to playing): the popup surface and its shadow, rising in |
 | `toggle_button` | An icon button that is on or off (a side panel, repeat): tinted and announced as selected while on |
 | `menu_trigger` | The square button a menu or popover opens from; pressed while it is open |
-| `text_field`, `bound_field`, `text_area`, `search_field`, `field`, `hint` | One look: `control-border` edge on `card`, focus edge, placeholder |
-| `switch`, `checkbox`, `select`, `segmented`, `slider`, `progress_bar` | Checked, disabled, indeterminate |
+| `text_field`, `bound_field`, `text_area`, `search_field`, `field`, `hint`, `error_hint` | One look: `control-border` edge on `card`, focus edge, placeholder; a search field shows a clear button while it has text; `error_hint` in `destructive` |
+| `switch`, `checkbox`, `checkbox_row`, `select`, `segmented`, `slider`, `progress_bar` | Checked, disabled, indeterminate; `checkbox_row` is a card's whole row, washing under the pointer |
 | `menu`, `menu_with`, `context_menu`, `menu_action`, `menu_choice`, `menu_danger`, `menu_toggle`, `menu_divider` | One popup surface (`tokens::popup_surface`) |
 | `modal`, `modal_actions`, `confirm_destructive` | Centered dialog; the system's alert for confirmations |
 | `toast`, `toast_host` | Info, Success, Error |
 | `page_header`, `card`, `section`, `separator`, `list_row`, `badge`, `empty_state`, `spinner`, `key_cap` | |
+| `pressable_card`, `moment_chip` | A card pressed as a whole (Home); a moment's play glyph and time (the Brief's evidence) |
 | `chart::goal_ring`, `chart::day_bars`, `chart::heatmap`, `chart::heat_key`, `chart::swatch` | `nsh_base::plot` marks in `listen` (listening, calendar shades) and `practice`; the goal line in `foreground` at 45% |
 
 A look a page needs becomes a variant here first.
@@ -160,6 +179,7 @@ With reduced motion, presses do not scale, entrances land at once
 | The sleep timer runs out | Every player pauses; the button turns back to the plain glyph | Same |
 | A toast arrives / leaves | Rises 16pt and fades in, `BASE`; fades and shrinks out | Instant |
 | A sync runs or ends | The status beside Sync in the sidebar changes in place | Same |
+| Something starts or stops waiting to transcribe | The In progress row appears under Library, or leaves (not while it is the filter shown), without motion | Same |
 
 ### Home
 
@@ -184,17 +204,20 @@ With reduced motion, presses do not scale, entrances land at once
 | A job is added | Its card rises in | Appears |
 | A job's status changes | The status dot's color cross-fades, `BASE`; the glyph swaps | Instant |
 | Work runs | The progress bar's fill glides between values, `BASE`; indeterminate while the length is unknown | Static bar |
-| Row menu opens | Grows from 0.95 and fades, 200ms; leaves in 150ms; its button stays pressed while it is open | Instant |
+| Row or Sort menu opens | Grows from 0.95 and fades, 200ms; leaves in 150ms; its button stays pressed while it is open | Instant |
+| Sort changes | The rows take their new order at once | Same |
+| A row with no transcript is pressed | Wash and press as any row; a toast says why, with Transcribe or Retry | Instant |
 | Empty Library | The empty state fades in | Appears |
 
 ### Reader
 
 | Change | Motion | Reduced |
 | --- | --- | --- |
-| The played sentence changes | The highlight fill cross-fades between rows, `BASE`; the list scrolls it to a third of the way down | Jumps |
+| The played sentence changes | The highlight fill cross-fades between rows, `BASE`; while the list follows playback it scrolls it to a third of the way down | Jumps |
+| The transcript is scrolled by hand while it plays | It stops following; once the sentence playing is out of view, Jump to playing rises in at its foot (`FadeInUp`), its arrow pointing up or down to it. Pressed, the list scrolls back and follows again | Appears; jumps |
 | Hover on a sentence | Wash `INSTANT`; its commands fade in, `INSTANT` (they are also on its context menu and on E / R) | Instant |
 | Sentence menu opens (secondary click) | As a row menu | Instant |
-| Words selected in a sentence | The platform's selection; a Bold toggle fades in among the sentence's own commands, `INSTANT`, tinted while the selected words are bold. Highlighted words turn bold at once (also from the sentence menu and ⌘B) | Instant |
+| Words selected in a sentence | The platform's selection; a Bold toggle fades in among the sentence's own commands, `INSTANT`, tinted while the selected words are bold. Highlighted words turn bold at once (also from the sentence menu, and ⌘B while words are selected; with none, ⌘B shows or hides the sidebar) | Instant |
 | Full screen | The transport turns light on the picture; it fades out while playing and back on pointer movement, `BASE` | Instant |
 | A finger on the picture (phones and tablets; the video player too) | Held still: it plays at 3× under a "3×" pill at the top until the finger lifts. Dragged sideways: it scrubs (a full width is two minutes, or the whole video), the time and the offset in a card at the center. Dragged up or down: the left half sets the screen's brightness, the right half the volume, a level bar in the card. Double-tapped: that half skips 10 s back or ahead, and taps right after keep skipping. A tap shows or hides the transport (full screen) or plays and pauses (beside the transcript). The card leaves 600 ms after the finger lifts | Same |
 | Repeat on / off | The repeat button's tint cross-fades, `FAST` | Instant |
@@ -203,10 +226,11 @@ With reduced motion, presses do not scale, entrances land at once
 | The handle is held near the list's top or bottom edge | The list scrolls on, faster the closer the finger is to the edge, and the repeat keeps following the finger; playback stops moving the list meanwhile | Same |
 | A side panel opens or changes | Its toolbar toggle's fill cross-fades, `FAST`; the panel takes its width at once | Instant |
 | Position | No motion: the slider follows playback 10 times a second and the thumb 1:1 while dragged | — |
-| Search opens | The search bar drops in from the header | Appears |
+| Search opens | The search bar drops in from the header; the matched words in each sentence are washed amber as the query changes | Appears |
 | Practice opens or changes mode | The composer card rises in at the bottom of the reader, `FadeInUp` | Appears |
 | Dictation checked | The typed words turn into green and red marks in place. Right: the marks rise in. Wrong: they shake once, and the first word typed wrong comes selected | Appears |
-| Mimic between passes | The reps badge turns to the accent while it is the user's turn | Same |
+| Mimic between passes | The reps badge turns to the accent while it is the user's turn; the card's play button swaps glyph with the transport's | Same |
+| Type answer reaches the end | The summary rises in over the box; the top row's sentence, Replay, Check and Next leave at once | Appears |
 | AI Brief generating | Progress bar, indeterminate for a single request | Static |
 | Evidence chip pressed | Wash; the transcript scrolls to the sentence | Jumps |
 
@@ -229,7 +253,10 @@ With reduced motion, presses do not scale, entrances land at once
 | Featured shows arrive | Cards rise in | Appear |
 | Hover / press on a card or row | Wash `INSTANT`; deeper on press | Instant |
 | Searching | A spinner while the first results load; results replace it without motion (they change per keystroke) | Static glyph |
-| An episode plays | Its row takes the highlight fill, `INSTANT`; play ↔ pause glyph swap | Instant |
+| A Browse chip is chosen | The shown cards dim to half, `FAST`, until the shelf's shows replace them; a spinner while the first ones load | Instant dim, static glyph |
+| An episode plays | Its row takes the highlight fill, `INSTANT`, and keeps it under the pointer; play ↔ pause glyph swap | Instant |
+| Episodes filtered | The rows narrow to the matches at once (per keystroke) | Same |
+| An episode's notes open / close | Its notes toggle's tint cross-fades, `INSTANT`; the notes appear under the row in place of the line's preview, without motion | Instant |
 
 ### Settings
 

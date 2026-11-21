@@ -20,8 +20,7 @@ use crate::{
     state::{Filter, Place, Shelf, l, store, tr},
     ui::{
         self, Icon, Size, Tone, Variant, card, empty_state, focused_search_field, icon, icon_text_button, list_row,
-        progress_bar, toast_with_action, toggle_icon_button,
-        tokens::{self, motion},
+        progress_bar, toast_with_action, toggle_icon_button, tokens,
     },
     util::{self, file_url},
 };
@@ -485,15 +484,6 @@ fn resume_glyph(item: &Resume) -> (Icon, Art) {
     }
 }
 
-fn pressable() -> nsh_base::ButtonElement {
-    nsh_base::button()
-        .rounded(tokens::radius_lg)
-        .transition_colors()
-        .duration(motion::INSTANT)
-        .hover(|s| s.bg(tokens::hover_wash))
-        .active(|s| s.bg(|| theme().accent))
-}
-
 fn continue_section(continued: Memo<Vec<Resume>>) -> impl IntoElement {
     dynamic(move || {
         let items = continued.get();
@@ -529,7 +519,7 @@ fn lead_card(item: Resume) -> impl IntoElement {
     let id = item.id().to_owned();
     let pressed = item.clone();
     let lead = card().flex_1().child(
-        pressable()
+        ui::pressable_card()
             .on_press(move || pressed.resume())
             .accessibility_label(label)
             .flex_1()
@@ -580,7 +570,7 @@ fn small_card(item: Resume) -> impl IntoElement {
     let label = format!("{} {}", tr("Resume"), title);
     let id = item.id().to_owned();
     let small = card().child(
-        pressable()
+        ui::pressable_card()
             .on_press(move || item.resume())
             .accessibility_label(label)
             .flex_row()
@@ -688,7 +678,7 @@ fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
             let readable = job.with_untracked(|job| job.has_transcript());
             let opened = id.clone();
             let tile = card().flex_1().child(
-                pressable()
+                ui::pressable_card()
                     .on_press(move || if readable { store.open_transcript(&opened) } else { store.show(Filter::All) })
                     .gap_3()
                     .p_3()
@@ -782,7 +772,7 @@ fn fresh_list(fresh: Memo<Vec<Fresh>>) -> impl IntoElement {
                 .child(
                     toggle_icon_button(
                         move || if playing() { Icon::Pause } else { Icon::Play },
-                        move || if playing() { "Pause".into() } else { "Play".into() },
+                        move || if playing() { tr("Pause playback") } else { tr("Play") },
                         Variant::Ghost,
                         Size::Md,
                     )

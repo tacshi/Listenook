@@ -106,6 +106,47 @@ pub fn runs(text: &str, highlights: &[Highlight]) -> Vec<(String, bool)> {
     out
 }
 
+/// Where `needle` occurs in `text`, ignoring case: the character ranges of
+/// each match, left to right (none for an empty needle).
+pub fn matches(text: &str, needle: &str) -> Vec<Range<u32>> {
+    let needle: Vec<char> = needle.chars().flat_map(char::to_lowercase).collect();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    // Each lowercase character, with the character of `text` it comes from.
+    let folded: Vec<(u32, char)> =
+        text.chars().enumerate().flat_map(|(at, c)| c.to_lowercase().map(move |lower| (at as u32, lower))).collect();
+    let mut found = Vec::new();
+    let mut from = 0;
+    while from + needle.len() <= folded.len() {
+        let window = &folded[from..from + needle.len()];
+        if window.iter().map(|(_, c)| *c).eq(needle.iter().copied()) {
+            found.push(window[0].0..window[window.len() - 1].0 + 1);
+            from += needle.len();
+        } else {
+            from += 1;
+        }
+    }
+    found
+}
+
+/// [`runs`], each also saying whether it is part of a match of `needle`
+/// ([`matches`]).
+pub fn found_runs(text: &str, highlights: &[Highlight], needle: &str) -> Vec<(String, bool, bool)> {
+    let found = matches(text, needle);
+    let mut out: Vec<(String, bool, bool)> = Vec::new();
+    for (index, c) in text.chars().enumerate() {
+        let index = index as u32;
+        let marked = highlights.iter().any(|h| (h.start..h.end).contains(&index));
+        let hit = found.iter().any(|range| range.contains(&index));
+        match out.last_mut() {
+            Some((run, was_marked, was_hit)) if *was_marked == marked && *was_hit == hit => run.push(c),
+            _ => out.push((c.to_string(), marked, hit)),
+        }
+    }
+    out
+}
+
 pub fn word_marks(text: &str, words: &[&str], highlights: &[Highlight]) -> Vec<bool> {
     let mut cursor = 0;
     words
@@ -295,6 +336,27 @@ mod tests {
         assert_eq!(runs(text, &marks), [("We ".into(), false), ("ship".into(), true), (" on Friday.".into(), false)]);
         assert_eq!(word_marks(text, &["We", "ship", "on", "Friday."], &marks), [false, true, false, false]);
         assert_eq!(word_marks(text, &["We", "nope", "ship"], &marks), [false, false, true]);
+    }
+
+    #[test]
+    fn search_matches_ignore_case_and_split_the_runs() {
+        assert_eq!(matches("The cat sat on THE mat.", "the"), [0..3, 15..18]);
+        assert_eq!(matches("aaaa", "aa"), [0..2, 2..4]);
+        assert!(matches("anything", "").is_empty());
+        assert_eq!(matches("Straße und STRASSE", "straße"), vec![0..6]);
+        assert_eq!(matches("你好吗朋友", "好吗"), vec![1..3]);
+        let text = "We ship on Friday.";
+        assert_eq!(
+            found_runs(text, &[h(3, 7)], "ON"),
+            [
+                ("We ".into(), false, false),
+                ("ship".into(), true, false),
+                (" ".into(), false, false),
+                ("on".into(), false, true),
+                (" Friday.".into(), false, false),
+            ]
+        );
+        assert_eq!(found_runs(text, &[], ""), [(text.into(), false, false)]);
     }
 
     #[test]

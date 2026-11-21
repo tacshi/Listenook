@@ -16,8 +16,8 @@ use crate::{
     state::{Filter, SettingsTab, error_text, l, secrets, store, tr},
     ui::{
         self, Icon, Size, Status, Variant, button, confirm_destructive, empty_state, field, hint, icon_of,
-        icon_text_button, menu_action, menu_danger, menu_divider, popover, progress_bar, search_field_ref, select,
-        separator, switch, text_area, text_field,
+        icon_text_button, menu_action, menu_choice, menu_danger, menu_divider, popover, progress_bar, search_field_ref,
+        select, separator, switch, text_area, text_field,
         tokens::{self, motion},
     },
     util,
@@ -31,6 +31,62 @@ struct Dialogs {
     tags: JobDialog,
 }
 
+/// The order the Library lists recordings in, kept in the settings.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Sort {
+    #[default]
+    Added,
+    Played,
+    Title,
+    Length,
+}
+
+impl Sort {
+    const ALL: [(Sort, &'static str); 4] = [
+        (Sort::Added, "Recently added"),
+        (Sort::Played, "Last played"),
+        (Sort::Title, "Title"),
+        (Sort::Length, "Shortest first"),
+    ];
+    const SETTING: &'static str = "library_sort";
+
+    fn key(self) -> &'static str {
+        match self {
+            Sort::Added => "added",
+            Sort::Played => "played",
+            Sort::Title => "title",
+            Sort::Length => "length",
+        }
+    }
+
+    fn saved() -> Self {
+        let saved = store().setting(|s| s.extra.get(Self::SETTING).and_then(|v| v.as_str().map(str::to_owned)));
+        Self::ALL
+            .into_iter()
+            .map(|(sort, _)| sort)
+            .find(|sort| saved.as_deref() == Some(sort.key()))
+            .unwrap_or_default()
+    }
+
+    fn save(self) {
+        store().update_settings(|s| drop(s.extra.insert(Self::SETTING.into(), self.key().into())));
+    }
+
+    /// Never played and unknown lengths go last; ties keep the newest first.
+    fn apply(self, jobs: &mut [Rc<Job>]) {
+        jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        match self {
+            Sort::Added => {}
+            Sort::Played => {
+                let played = store().last_played();
+                jobs.sort_by(|a, b| played.get(&b.id).cmp(&played.get(&a.id)));
+            }
+            Sort::Title => jobs.sort_by_cached_key(|job| job.title().to_lowercase()),
+            Sort::Length => jobs.sort_by_key(|job| Some(job.duration_ms()).filter(|ms| *ms > 0).unwrap_or(i64::MAX)),
+        }
+    }
+}
+
 pub(crate) fn library() -> impl IntoElement {
     let store = store();
     let query = signal(String::new());
@@ -40,9 +96,10 @@ pub(crate) fn library() -> impl IntoElement {
         group: JobDialog::new(),
         tags: JobDialog::new(),
     };
+    let sort = computed(Sort::saved);
     let shown = computed(move || {
         let needle = query.with(|q| q.trim().to_lowercase());
-        store
+        let mut jobs = store
             .library()
             .into_iter()
             .filter(|job| {
@@ -50,13 +107,16 @@ pub(crate) fn library() -> impl IntoElement {
                     || job.title().to_lowercase().contains(&needle)
                     || job.file_name().to_lowercase().contains(&needle)
             })
-            .collect::<Vec<Rc<Job>>>()
+            .collect::<Vec<Rc<Job>>>();
+        sort.get().apply(&mut jobs);
+        jobs
     });
     let waiting = move || store.jobs().iter().filter(|job| job.status.is_transcribable()).count();
     let search_input = element_ref();
     on_key("mod+enter", move |_| transcribe::start_ready());
     on_key("mod+f", move |_| search_input.focus());
     let options_open = signal(false);
+    let sort_open = signal(false);
     view()
         .flex_1()
         .child(
@@ -90,6 +150,12 @@ pub(crate) fn library() -> impl IntoElement {
                         .items_center()
                         .gap_1()
                         .window_drag(false)
+                        .child(
+                            ui::menu_with(sort_open, ui::menu_trigger(Icon::Sort, tr("Sort"), Size::Sm, sort_open))
+                                .children(Sort::ALL.map(|(choice, label)| {
+                                    menu_choice(l(label), move || sort.get() == choice, move || choice.save())
+                                })),
+                        )
                         .child(
                             popover(
                                 ui::menu_trigger(Icon::Tune, tr("Transcription options"), Size::Sm, options_open),
@@ -298,6 +364,41 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
         }))
 }
 
+fn retry(id: &str) {
+    let failed_download =
+        store().job_now(id).is_some_and(|job| job.error_code.as_deref() == Some("podcast_download_failed"));
+    if failed_download { podcasts::download(id) } else { transcribe::retry(id) }
+}
+
+/// Opens a recording, or says why it cannot open yet and offers what would make it readable.
+fn open_or_explain(id: &str) {
+    let store = store();
+    let Some(job) = store.job_now(id) else {
+        return;
+    };
+    if job.has_transcript() {
+        return store.open_transcript(id);
+    }
+    let id = id.to_owned();
+    let missing = tr("It has no transcript yet.");
+    if job.status.is_transcribable() {
+        ui::toast_with_action(ui::Tone::Info, missing, tr("Transcribe"), move || transcribe::start(&id));
+    } else if job.status.is_retryable() {
+        ui::toast_with_action(ui::Tone::Info, missing, tr("Retry"), move || retry(&id));
+    } else {
+        ui::toast(ui::Tone::Info, tr("It opens once it’s transcribed."));
+    }
+}
+
+fn tag_pill(name: impl Into<SharedString>) -> View {
+    view()
+        .px_1p5()
+        .py(px(1.0))
+        .rounded(tokens::radius_sm)
+        .bg(|| theme().muted)
+        .child(text(name.into()).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground))
+}
+
 fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoElement {
     let store = store();
     let job = computed(move || shown.with(|jobs| jobs.get(at.index()).cloned()));
@@ -312,6 +413,7 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         }
         store.catalog().tags.into_iter().filter(|tag| carried.contains(&tag.id)).map(|tag| tag.name).collect::<Vec<_>>()
     });
+    let tag_room = computed(|| if crate::shell::page_narrow() { 1 } else { 2 });
     let more_open = signal(false);
     let content = view()
         .flex_row()
@@ -319,8 +421,7 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         .gap_1()
         .child(
             ui::list_row(|| false)
-                .disabled(move || !read(Job::has_transcript))
-                .on_press(move || store.open_transcript(&id()))
+                .on_press(move || open_or_explain(&id()))
                 .flex_1()
                 .min_w(px(0.0))
                 .child(
@@ -368,23 +469,18 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                                     }),
                                 )
                                 .child(dynamic(move || {
-                                    let names = tags.get();
+                                    let (names, room) = (tags.get(), tag_room.get());
+                                    let rest = SharedString::from(names.get(room..).unwrap_or_default().join(", "));
+                                    let more = names.len().saturating_sub(room);
                                     view()
                                         .flex_row()
                                         .flex_shrink_0()
                                         .gap_1()
-                                        .children(names.into_iter().map(|name| {
-                                            view()
-                                                .px_1p5()
-                                                .py(px(1.0))
-                                                .rounded(tokens::radius_sm)
-                                                .bg(|| theme().muted)
-                                                .child(
-                                                    text(SharedString::from(name))
-                                                        .text_xs()
-                                                        .number_of_lines(1)
-                                                        .text_color(|| theme().muted_foreground),
-                                                )
+                                        .children(
+                                            names.into_iter().take(room).map(|name| tag_pill(name).max_w(px(112.0))),
+                                        )
+                                        .children((more > 0).then(|| {
+                                            tag_pill(format!("+{more}")).label(rest.clone()).tooltip(ui::tip(rest))
                                         }))
                                         .into_element()
                                 })),
@@ -433,15 +529,7 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         }))
         .child(when(
             move || read(|job| job.status.is_retryable() && !job.has_transcript()),
-            move || {
-                button(Variant::Outline, Size::Sm, l("Retry")).on_press(move || {
-                    let id = id();
-                    let failed_download = store
-                        .job_now(&id)
-                        .is_some_and(|job| job.error_code.as_deref() == Some("podcast_download_failed"));
-                    if failed_download { podcasts::download(&id) } else { transcribe::retry(&id) }
-                })
-            },
+            move || button(Variant::Outline, Size::Sm, l("Retry")).on_press(move || retry(&id())),
         ))
         .child(row_menu(
             ui::menu_with(more_open, ui::menu_trigger(Icon::More, tr("More actions"), Size::Sm, more_open)),

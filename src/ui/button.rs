@@ -3,6 +3,7 @@ use nsh_core::prelude::*;
 
 use super::{
     icons::{Icon, icon, icon_of},
+    layout::key_cap,
     tokens::{self, motion},
 };
 
@@ -133,6 +134,52 @@ pub fn icon_button_as(
             .accessibility_label(name)
             .on_press(on_press)
             .child(icon(glyph, size.icon())),
+    )
+}
+
+/// A button floating over what it acts on (Jump to playing): on the popup
+/// surface, with the shadow of what floats.
+pub fn floating_button(glyph: impl Fn() -> Icon + 'static, label: impl IntoReactive<SharedString>) -> ButtonElement {
+    let scale = tokens::press_scale(false);
+    nsh_base::button()
+        .h(px(Size::Sm.height()))
+        .flex_row()
+        .flex_shrink_0()
+        .items_center()
+        .gap_1p5()
+        .px_3()
+        .rounded(tokens::radius)
+        .border_1()
+        .border_color(|| theme().border)
+        .bg(|| theme().popover)
+        .text_color(|| theme().foreground)
+        .shadow_lg()
+        .bind_motion(&motion().entering(MotionPreset::FadeInUp))
+        .transition_colors()
+        .duration(motion::INSTANT)
+        .ease_out()
+        .hover(|s| s.bg(|| theme().accent))
+        .active(move |s| s.bg(|| theme().input).scale(scale))
+        .child(icon_of(glyph, Size::Sm.icon()))
+        .child(label_text(label, Size::Sm))
+}
+
+/// A small icon button that also shows its shortcut's key cap (Replay ⌘R):
+/// the glyph says it can be pressed, the key how to without the pointer.
+pub fn shortcut_button(
+    glyph: Icon,
+    name: impl Into<SharedString>,
+    keystroke: &'static str,
+    on_press: impl Fn() + 'static,
+) -> View {
+    let name: SharedString = name.into();
+    view().flex_shrink_0().tooltip(tip(name.clone())).child(
+        dressed(nsh_base::button(), Variant::Ghost, Size::Sm, false)
+            .px_2()
+            .accessibility_label(name)
+            .on_press(on_press)
+            .child(icon(glyph, Size::Sm.icon()))
+            .child(key_cap(keystroke)),
     )
 }
 

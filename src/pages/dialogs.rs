@@ -6,9 +6,8 @@ use nsh_base::theme;
 use crate::{
     state::{l, store, tr},
     ui::{
-        Icon, Tone, card, checkbox, field, hint, icon, modal, modal_actions, select, text_field, text_field_with,
-        toast,
-        tokens::{self, motion},
+        Icon, Tone, card, checkbox, checkbox_row, field, hint, icon, modal, modal_actions, select, text_field,
+        text_field_with, toast, tokens,
     },
 };
 
@@ -186,29 +185,7 @@ fn part_card(
     set: impl Fn(bool) + 'static,
 ) -> View {
     card().border_color(move || if on() { theme().primary } else { theme().border }).overflow_hidden().child(
-        nsh_base::checkbox()
-            .checked(on)
-            .on_change(move |next: &bool| set(*next))
-            .accessibility_label(tr(title))
-            .flex_row()
-            .items_center()
-            .gap_3()
-            .px_3()
-            .py_2p5()
-            .transition_colors()
-            .duration(motion::INSTANT)
-            .hover(|s| s.bg(tokens::hover_wash))
-            .indicator_style(|s| {
-                s.size(px(18.0))
-                    .items_center()
-                    .justify_center()
-                    .rounded(tokens::radius_sm)
-                    .border_1()
-                    .border_color(tokens::control_border)
-                    .text_color(|| theme().primary_foreground)
-                    .checked(|s| s.bg(|| theme().primary).border_color(|| theme().primary))
-            })
-            .indicator(when(on, || icon(Icon::Check, 12.0)))
+        checkbox_row(tr(title), on, set)
             .child(
                 view()
                     .size(px(32.0))

@@ -84,7 +84,14 @@ struct ListScroll {
     offset: f32,
     content: f32,
     viewport: f32,
+    /// Where the list was when a finger, the trackpad or the scroll bar
+    /// took hold of it, until it lets go.
+    held_at: Option<f32>,
 }
+
+/// How far a held list moves before it counts as scrolled by hand (a
+/// trackpad's resting fingers hold it without moving it).
+const HAND_SCROLL: f32 = 4.0;
 
 fn chain(found: &std::collections::BTreeMap<usize, (f32, f32)>, anchor: usize) -> Vec<(usize, f32, f32)> {
     const SLACK: f32 = 2.0;
@@ -154,6 +161,10 @@ pub(super) struct Review {
     drag: Stored<Drag>,
     drag_task: Stored<Option<Spawned<()>>>,
     scroll: Stored<ListScroll>,
+    /// The list keeps the sentence playing in view: until the user scrolls
+    /// it by hand, and again once they pick a sentence, step, seek, press
+    /// play or Jump to playing.
+    pub(super) following: Signal<bool>,
     pub(super) looping: Signal<bool>,
     pub(super) revealed: Signal<Option<String>>,
     /// The sentences typed right in Type answer: shown from then on, blind
@@ -340,6 +351,7 @@ impl Review {
             drag: stored(Drag::default()),
             drag_task: stored(None),
             scroll: stored(ListScroll::default()),
+            following: signal(true),
             looping: signal(false),
             revealed: signal(None),
             answered: signal(std::collections::BTreeSet::new()),
@@ -659,6 +671,7 @@ impl Review {
     }
 
     pub(super) fn seek(&self, position_ms: i64) {
+        self.follow();
         self.jump(position_ms, false);
     }
 
@@ -738,6 +751,9 @@ impl Review {
         }
         self.cancel_wait();
         self.stop_at.set(None);
+        if self.paused.get_untracked() {
+            self.follow();
+        }
         self.paused.set(!self.paused.get_untracked());
     }
 
@@ -775,6 +791,7 @@ impl Review {
         let from = untracked(|| self.target()).map_or(0, |index| index as isize);
         let next = (from + by).clamp(0, self.count().saturating_sub(1) as isize) as usize;
         if let Some(next) = self.kept_near(next, by >= 0) {
+            self.follow();
             self.play_from(next);
         }
     }
@@ -850,11 +867,35 @@ impl Review {
     }
 
     pub(super) fn scrolled(&self, event: &ScrollEvent) {
-        self.scroll.with(|scroll| {
+        let by_hand = self.scroll.with(|scroll| {
             scroll.offset = event.offset.y.0;
             scroll.content = event.content_size.height.0;
             scroll.viewport = event.size.height.0;
+            scroll.held_at.is_some_and(|at| (scroll.offset - at).abs() > HAND_SCROLL)
         });
+        if by_hand {
+            self.stop_following();
+        }
+    }
+
+    /// A finger, the trackpad or the scroll bar took hold of the list
+    /// (`Some`, where it was) or let go of it.
+    pub(super) fn held(&self, at: Option<f32>) {
+        self.scroll.with(|scroll| scroll.held_at = at);
+    }
+
+    /// The user scrolled the list: it stops bringing the sentence playing
+    /// back into view.
+    pub(super) fn stop_following(&self) {
+        if self.following.get_untracked() {
+            self.following.set(false);
+        }
+    }
+
+    pub(super) fn follow(&self) {
+        if !self.following.get_untracked() {
+            self.following.set(true);
+        }
     }
 
     pub(super) fn dragging(&self) -> bool {

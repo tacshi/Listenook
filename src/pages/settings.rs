@@ -313,11 +313,27 @@ fn key_field(
             }
         }
     };
+    let remove = move || {
+        confirm_destructive(
+            tr("Remove this API key?"),
+            tr("What uses it stops working until you paste a key again."),
+            tr("Cancel"),
+            tr("Remove"),
+            move || {
+                if secrets::write(secret, "").is_ok() {
+                    saved.set(false);
+                    status.set(SharedString::default());
+                }
+            },
+        );
+    };
     view()
         .gap_2()
         .child(
+            // The buttons go under the key when there is no room for both.
             view()
                 .flex_row()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(
@@ -332,31 +348,38 @@ fn key_field(
                         },
                         |input| input.masked(true),
                     )
-                    .flex_1(),
+                    .flex_1()
+                    .min_w(px(220.0)),
                 )
                 .child(
-                    button(Variant::Default, Size::Md, l("Save"))
-                        .disabled(move || draft.with(|d| d.trim().is_empty()))
-                        .on_press(save),
-                )
-                .child(
-                    button(Variant::Outline, Size::Md, l("Test"))
-                        .disabled(move || !keyless() && !saved.get() && draft.with(|d| d.trim().is_empty()))
-                        .on_press(move || {
-                            let typed = draft.get_untracked().trim().to_owned();
-                            let key = if typed.is_empty() { secrets::read(secret).unwrap_or_default() } else { typed };
-                            status.set(tr("Testing…"));
-                            test(key, status);
-                        }),
-                )
-                .child(button(Variant::Danger, Size::Md, l("Remove")).disabled(move || !saved.get()).on_press(
-                    move || {
-                        if secrets::write(secret, "").is_ok() {
-                            saved.set(false);
-                            status.set(SharedString::default());
-                        }
-                    },
-                )),
+                    view()
+                        .flex_row()
+                        .gap_2()
+                        .child(
+                            button(Variant::Default, Size::Md, l("Save"))
+                                .disabled(move || draft.with(|d| d.trim().is_empty()))
+                                .on_press(save),
+                        )
+                        .child(
+                            button(Variant::Outline, Size::Md, l("Test"))
+                                .disabled(move || !keyless() && !saved.get() && draft.with(|d| d.trim().is_empty()))
+                                .on_press(move || {
+                                    let typed = draft.get_untracked().trim().to_owned();
+                                    let key = if typed.is_empty() {
+                                        secrets::read(secret).unwrap_or_default()
+                                    } else {
+                                        typed
+                                    };
+                                    status.set(tr("Testing…"));
+                                    test(key, status);
+                                }),
+                        )
+                        .child(
+                            button(Variant::Danger, Size::Md, l("Remove"))
+                                .disabled(move || !saved.get())
+                                .on_press(remove),
+                        ),
+                ),
         )
         .child(
             view()
@@ -767,6 +790,7 @@ fn shortcuts() -> impl IntoElement {
             "Transcript",
             vec![
                 ("mod+f", "Search transcript"),
+                ("mod+b", "Highlight the selected words"),
                 ("mod+enter", "Save an edit, or check your answer"),
                 ("mod+r", "Play the sentence again while typing"),
                 ("mod+z", "Undo the last sentence change"),

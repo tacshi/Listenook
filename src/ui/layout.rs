@@ -104,7 +104,7 @@ pub fn spinner(size: f32) -> impl IntoElement {
         .bind_motion(&turn)
         .size(px(size))
         .text_color(|| theme().muted_foreground)
-        .label("Loading")
+        .label(crate::state::tr("Loading"))
         .child(icon(Icon::Refresh, size))
 }
 
@@ -123,6 +123,37 @@ pub fn list_row(selected: impl Fn() -> bool + 'static) -> nsh_base::ButtonElemen
         .active(|s| s.bg(|| theme().input))
         .selected_style(|s| s.bg(|| theme().accent))
         .disabled_style(|s| s.bg(|| theme().background.opacity(0.0)))
+}
+
+/// A card-sized surface pressed as a whole (a Continue or Recently added
+/// card): it washes under the pointer, deeper while pressed.
+pub fn pressable_card() -> nsh_base::ButtonElement {
+    nsh_base::button()
+        .rounded(tokens::radius_lg)
+        .transition_colors()
+        .duration(motion::INSTANT)
+        .hover(|s| s.bg(tokens::hover_wash))
+        .active(|s| s.bg(|| theme().accent))
+}
+
+/// A small chip for a moment in the recording (an AI Brief's evidence): a
+/// play glyph and its time, on `muted`.
+pub fn moment_chip(time: impl IntoReactive<SharedString>) -> nsh_base::ButtonElement {
+    nsh_base::button()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .h(px(24.0))
+        .px_2()
+        .rounded(tokens::radius_sm)
+        .bg(|| theme().muted)
+        .text_color(|| theme().muted_foreground)
+        .transition_colors()
+        .duration(motion::INSTANT)
+        .hover(|s| s.bg(|| theme().accent))
+        .active(|s| s.bg(|| theme().input))
+        .child(icon(Icon::Play, 12.0))
+        .child(text(time).text_xs().tabular_nums())
 }
 
 pub fn key_cap(keystroke: &'static str) -> View {
@@ -161,7 +192,7 @@ pub fn veil<E: IntoElement>(
             .self_start()
             .rounded(tokens::radius_sm)
             .bg(|| theme().foreground.opacity(0.1))
-            .label("Hidden sentence")
+            .label(crate::state::tr("Hidden sentence"))
             .child(view().opacity(0.0).child(veiled()))
     })
     .otherwise(content)

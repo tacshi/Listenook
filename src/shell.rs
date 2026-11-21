@@ -751,6 +751,25 @@ fn sidebar() -> impl IntoElement {
                             )
                             .child(trailing_lane()),
                     )
+                    .child(when(
+                        move || store.count(&Filter::InProgress) > 0 || in_library(Filter::InProgress),
+                        move || {
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .child(
+                                    row(
+                                        Icon::Transcribe,
+                                        l("In progress"),
+                                        move || Some(store.count(&Filter::InProgress)),
+                                        move || in_library(Filter::InProgress),
+                                        move || store.show(Filter::InProgress),
+                                    )
+                                    .flex_1(),
+                                )
+                                .child(trailing_lane())
+                        },
+                    ))
                     .child(
                         view()
                             .flex_row()
@@ -982,7 +1001,7 @@ fn mini_player() -> impl IntoElement {
     });
     let track_slider = move || {
         slider(
-            "Position",
+            tr("Position"),
             move || dragging.get().unwrap_or_else(|| on_track.get() as f64),
             move || player.duration_ms() as f64,
             move |value| dragging.set(Some(value)),
@@ -1105,7 +1124,7 @@ fn artwork_toggle() -> impl IntoElement {
     let artwork = computed(move || player.playing().map(|p| p.artwork).unwrap_or_default());
     let scrim = move || if artwork.with(String::is_empty) { 0.0 } else { 0.35 };
     nsh_base::button()
-        .accessibility_label(move || Some(if player.paused() { tr("Play") } else { tr("Pause") }))
+        .accessibility_label(move || Some(if player.paused() { tr("Play") } else { tr("Pause playback") }))
         .on_press(move || player.set_paused(!player.paused()))
         .size(px(SIZE))
         .flex_shrink_0()

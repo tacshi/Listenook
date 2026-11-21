@@ -180,7 +180,6 @@ fn opened(id: &str) -> impl IntoElement {
         review.revealed.update(|revealed| *revealed = if revealed.is_some() { None } else { current });
     });
     on_key("mod+f", move |_| review.searching.set(true));
-    on_key("mod+b", move |_| review.toggle_highlight());
     on_key("mod+z", move |_| {
         review.undo();
     });
@@ -504,11 +503,24 @@ fn opened(id: &str) -> impl IntoElement {
                 ))),
         )
         .child(when(move || !(dock() && soft_keyboard()), move || transport(review, hud)))
+        .child(highlight_key(review))
         .child(export_dialog(export))
         .child(rename_dialog(rename))
         .child(translate_dialog(review, translate))
         .child(brief::generate_dialog(review, brief_dialog))
         .child(brief::edit_dialog(review))
+}
+
+/// ⌘B bolds the selected words: bound only while words are selected, so
+/// with none it shows or hides the sidebar, as everywhere else.
+fn highlight_key(review: Review) -> impl IntoElement {
+    when(
+        move || review.selection.with(Option::is_some),
+        move || {
+            on_key("mod+b", move |_| review.toggle_highlight());
+            view().absolute()
+        },
+    )
 }
 
 fn has_translation(review: Review) -> bool {
@@ -940,7 +952,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let second = computed(move || review.position_ms.get() / 1000 * 1000);
     let position = move |picture: bool| {
         (if picture { ui::slider_on_picture } else { ui::slider })(
-            "Position",
+            tr("Position"),
             move || review.scrub.get().unwrap_or_else(|| on_track.get()) as f64,
             move || review.duration_ms.get() as f64,
             move |value| review.scrub.set(Some(value as i64)),
@@ -962,7 +974,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             .child(
                 toggle_icon_button(
                     move || if active() { Icon::Pause } else { Icon::Play },
-                    move || if active() { tr("Pause") } else { tr("Play") },
+                    move || if active() { tr("Pause playback") } else { tr("Play") },
                     variant(picture),
                     size,
                 )

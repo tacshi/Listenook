@@ -24,6 +24,9 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
             return;
         }
         if let Some(row) = review.shown.with_untracked(|shown| shown.iter().position(|index| *index == segment)) {
+            // Moved by the app: a hold left over (a gesture the platform
+            // ended without saying) does not make this a scroll by hand.
+            review.held(None);
             review.list.scroll_to_index(row as u32, percentage(0.35), px(0.0), animated && !reduce_motion());
         }
     };
@@ -34,7 +37,7 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
     };
     effect(move || {
         review.current.get();
-        if !review.paused.get() && review.scrub.get_untracked().is_none() {
+        if review.following.get() && !review.paused.get() && review.scrub.get_untracked().is_none() {
             bring(true);
         }
     });
@@ -50,7 +53,11 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
             if !first.replace(false) {
                 spawn(async move {
                     timer(std::time::Duration::from_millis(250)).await;
-                    let Some(segment) = review.scrubbed.get_untracked().or_else(|| review.current.get_untracked())
+                    let following = review.following.get_untracked();
+                    let Some(segment) = review
+                        .scrubbed
+                        .get_untracked()
+                        .or_else(|| following.then(|| review.current.get_untracked()).flatten())
                     else {
                         return;
                     };
@@ -99,9 +106,57 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
                 .viewability(Viewability { item_visible_threshold: Some(percentage(1.0)), ..Default::default() })
                 .on_viewable_items_change(move |items: &ViewableItems| viewable.set(items.viewable))
                 .on_scroll(move |event: &ScrollEvent| review.scrolled(event))
+                .on_scroll_drag_start(move |at: &Point<Points>| review.held(Some(at.y.0)))
+                .on_scroll_drag_end(move |_: &Point<Points>| review.held(None))
+                .on_scroll_end(move |_: &Point<Points>| review.held(None))
+                .on_wheel(move |event: &WheelEvent| {
+                    let moved = match event.delta {
+                        WheelDelta::Points(by) => by.y.0 != 0.0,
+                        WheelDelta::Lines(by) => by.y != 0.0,
+                    };
+                    if moved {
+                        review.stop_following();
+                    }
+                })
                 .flex_1(),
         )
+        .child(jump_to_playing(review, viewable))
         .child(speaker_dialog(review, speaker))
+}
+
+/// Once the user scrolled the sentence playing out of view: a button back
+/// to it, pointing the way, after which the list follows playback again.
+fn jump_to_playing(review: Review, viewable: Signal<Option<(usize, usize)>>) -> impl IntoElement {
+    let away = computed(move || {
+        if review.following.get() || review.paused.get() {
+            return None;
+        }
+        let current = review.current.get()?;
+        let row = review.shown.with(|shown| shown.iter().position(|index| *index == current))?;
+        let (first, last) = viewable.get()?;
+        if row < first {
+            Some(Icon::ArrowUp)
+        } else if row > last {
+            Some(Icon::ArrowDown)
+        } else {
+            None
+        }
+    });
+    view()
+        .absolute()
+        .left(px(0.0))
+        .right(px(0.0))
+        .bottom(px(16.0))
+        .items_center()
+        .pointer_events(nsh_core::PointerEvents::BoxNone)
+        .child(when(
+            move || away.with(Option::is_some),
+            move || {
+                ui::floating_button(move || away.get().unwrap_or(Icon::ArrowDown), l("Jump to playing"))
+                    .on_press(move || review.follow())
+                    .test_id("jump-to-playing")
+            },
+        ))
 }
 
 fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> impl IntoElement {
@@ -155,7 +210,6 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
     let store = review.store;
     let index = computed(move || review.shown.with(|shown| shown.get(at.index()).copied()));
     let segment = computed(move || index.get().and_then(|index| review.segment(index)));
-    let read = move |f: fn(&Segment) -> SharedString| segment.with(|s| s.as_ref().map(f).unwrap_or_default());
     let id = move || segment.with(|s| s.as_ref().map(|s| s.id.clone()));
     let is_current = move || index.get().is_some() && index.get() == review.scrubbed.get().or_else(|| review.spoken());
     let is_repeating = move || index.get().is_some_and(|index| review.repeats(index));
@@ -183,6 +237,8 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
     let shows_original = move || mode() != ContentMode::Translated || !translated();
     let shows_translation = move || mode() != ContentMode::Original && translated();
     let retranslating = move || id().is_some_and(|id| review.retranslating.with(|waiting| waiting.contains(&id)));
+    let needle =
+        move || if review.searching.get() { review.query.with(|q| q.trim().to_owned()) } else { String::new() };
     let speaker_name = move || {
         segment.with(|s| {
             let speaker = s.as_ref()?.speaker.as_deref()?;
@@ -193,6 +249,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
     };
     let press = move || {
         if let Some(index) = index.get_untracked() {
+            review.follow();
             review.play_from(index);
         }
     };
@@ -225,6 +282,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
         if let Some(index) = index.get_untracked()
             && !review.finish_skip(index)
         {
+            review.follow();
             review.play_from(index);
         }
     };
@@ -398,9 +456,12 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                             )
                                             .otherwise(move || {
                                                 dynamic(move || {
+                                                    let needle = needle();
                                                     let runs = segment.with(|s| {
                                                         s.as_ref()
-                                                            .map(|s| highlights::runs(&s.text, &s.highlights))
+                                                            .map(|s| {
+                                                                highlights::found_runs(&s.text, &s.highlights, &needle)
+                                                            })
                                                             .unwrap_or_default()
                                                     });
                                                     untracked(|| {
@@ -414,10 +475,15 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                                     theme().foreground
                                                                 }
                                                             })
-                                                            .children(runs.into_iter().map(|(run, marked)| {
+                                                            .children(runs.into_iter().map(|(run, marked, found)| {
                                                                 let run = text(SharedString::from(run));
-                                                                if marked {
+                                                                let run = if marked {
                                                                     run.font_weight(FontWeight::SEMIBOLD)
+                                                                } else {
+                                                                    run
+                                                                };
+                                                                if found {
+                                                                    run.rounded(tokens::radius_sm).bg(tokens::found)
                                                                 } else {
                                                                     run
                                                                 }
@@ -432,33 +498,54 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                 .flex_row()
                                                 .items_center()
                                                 .gap_2()
-                                                .child(
-                                                    text(move || {
-                                                        read(|s| s.translated_text.clone().unwrap_or_default().into())
+                                                .child(dynamic(move || {
+                                                    let needle = needle();
+                                                    let runs = segment.with(|s| {
+                                                        let translated =
+                                                            s.as_ref().and_then(|s| s.translated_text.as_deref());
+                                                        highlights::found_runs(
+                                                            translated.unwrap_or_default(),
+                                                            &[],
+                                                            &needle,
+                                                        )
+                                                    });
+                                                    untracked(|| {
+                                                        text("")
+                                                            .select_none()
+                                                            .flex_shrink(1.0)
+                                                            .line_height(nsh_core::LineHeight::Multiple(1.5))
+                                                            .style_with(move |s| {
+                                                                if mode() == ContentMode::Translated {
+                                                                    s.text_base()
+                                                                } else {
+                                                                    s.text_sm()
+                                                                }
+                                                            })
+                                                            .text_color(move || {
+                                                                if mode() == ContentMode::Translated {
+                                                                    theme().foreground
+                                                                } else {
+                                                                    theme().muted_foreground
+                                                                }
+                                                            })
+                                                            .transition_opacity()
+                                                            .duration(motion::INSTANT)
+                                                            .opacity(
+                                                                move || if retranslating() { 0.45_f32 } else { 1.0 },
+                                                            )
+                                                            .children(runs.into_iter().map(|(run, _, found)| {
+                                                                let run = text(SharedString::from(run));
+                                                                if found {
+                                                                    run.rounded(tokens::radius_sm).bg(tokens::found)
+                                                                } else {
+                                                                    run
+                                                                }
+                                                            }))
+                                                            .into_element()
                                                     })
-                                                    .select_none()
-                                                    .flex_shrink(1.0)
-                                                    .line_height(nsh_core::LineHeight::Multiple(1.5))
-                                                    .style_with(move |s| {
-                                                        if mode() == ContentMode::Translated {
-                                                            s.text_base()
-                                                        } else {
-                                                            s.text_sm()
-                                                        }
-                                                    })
-                                                    .text_color(move || {
-                                                        if mode() == ContentMode::Translated {
-                                                            theme().foreground
-                                                        } else {
-                                                            theme().muted_foreground
-                                                        }
-                                                    })
-                                                    .transition_opacity()
-                                                    .duration(motion::INSTANT)
-                                                    .opacity(move || if retranslating() { 0.45_f32 } else { 1.0 }),
-                                                )
+                                                }))
                                                 .child(when(retranslating, || {
-                                                    view().label("Translating").child(ui::spinner(12.0))
+                                                    view().label(tr("Translating")).child(ui::spinner(12.0))
                                                 }))
                                         }))
                                 },

@@ -9,8 +9,8 @@ use super::review::{Practice, Review, Side};
 use crate::{
     state::{l, store, tr},
     ui::{
-        self, Icon, Size, Status, Tone, Variant, badge, chip, composer_dock, hint, icon, icon_text_button, key_cap,
-        segmented, select, text_area, toast, tokens,
+        self, Icon, Size, Status, Tone, Variant, badge, chip, composer_dock, hint, icon, icon_text_button, segmented,
+        select, text_area, toast, tokens,
     },
 };
 
@@ -496,7 +496,11 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
         .child(practice_bar(
             review,
             // With a tally, the sentence's time gives way to it, so it fits.
+            // At the end the summary below says it all.
             move || -> SharedString {
+                if finished.get() {
+                    return SharedString::default();
+                }
                 let (first_try, checked) = tally.with(|tally| (tally.first_try, tally.checked));
                 match pinned.get() {
                     Some(index) if checked > 0 => {
@@ -505,41 +509,43 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
                     _ => heading(),
                 }
             },
-            view()
-                .child(when(
-                    move || review.left_to_review() > 0,
-                    move || {
-                        chip(
-                            move || -> SharedString { format!("{} {}", tr("Missed"), review.left_to_review()).into() },
-                            move || only_missed.get(),
-                            toggle_missed,
-                        )
-                    },
-                ))
-                .child(
-                    when(
-                        || !crate::platform::is_phone(),
-                        // The key alone, named by its tooltip, leaving the row's
-                        // room to the sentence and its count; pressing it replays too.
-                        move || {
-                            view().tooltip(ui::tip(tr("Replay"))).child(
-                                nsh_base::button()
-                                    .accessibility_label(tr("Replay"))
-                                    .on_press(replay)
-                                    .rounded(tokens::radius_sm)
-                                    .hover(|s| s.opacity(0.8))
-                                    .child(key_cap("mod+r")),
+            // A sentence's controls, gone at the end: the summary has its own.
+            view().child(when(
+                move || !finished.get(),
+                move || {
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(when(
+                            move || review.left_to_review() > 0,
+                            move || {
+                                chip(
+                                    move || -> SharedString {
+                                        format!("{} {}", tr("Missed"), review.left_to_review()).into()
+                                    },
+                                    move || only_missed.get(),
+                                    toggle_missed,
+                                )
+                            },
+                        ))
+                        .child(
+                            // The glyph says it is a button; the key cap beside it,
+                            // how to press it without leaving the answer.
+                            when(
+                                || !crate::platform::is_phone(),
+                                move || ui::shortcut_button(Icon::Refresh, tr("Replay"), "mod+r", replay),
                             )
-                        },
-                    )
-                    .otherwise(move || ui::icon_button(Icon::Refresh, tr("Replay"), Size::Sm, replay)),
-                )
-                .child(
-                    icon_text_button(Variant::Primary, Size::Sm, Icon::Check, l("Check"))
-                        .disabled(move || !supported() || answer.with(|a| a.trim().is_empty()))
-                        .on_press(check),
-                )
-                .child(icon_text_button(Variant::Ghost, Size::Sm, Icon::SkipForward, l("Next")).on_press(next)),
+                            .otherwise(move || ui::icon_button(Icon::Refresh, tr("Replay"), Size::Sm, replay)),
+                        )
+                        .child(
+                            icon_text_button(Variant::Primary, Size::Sm, Icon::Check, l("Check"))
+                                .disabled(move || !supported() || answer.with(|a| a.trim().is_empty()))
+                                .on_press(check),
+                        )
+                        .child(icon_text_button(Variant::Ghost, Size::Sm, Icon::SkipForward, l("Next")).on_press(next))
+                },
+            )),
         ))
         .child(
             // One input throughout, keeping its focus and caret: always laid
@@ -913,6 +919,7 @@ fn mimic_panel(review: Review, heading: impl Fn() -> SharedString + 'static) -> 
                             .flex_wrap()
                             .items_center()
                             .gap_2()
+                            .child(mimic_controls(review))
                             .child(badge(
                                 move || -> SharedString {
                                     format!("{} {}/{}", tr("Reps"), review.reps.get(), goal()).into()
@@ -927,6 +934,27 @@ fn mimic_panel(review: Review, heading: impl Fn() -> SharedString + 'static) -> 
                     ),
             ),
         )
+}
+
+/// The previous sentence, play or pause, and the next, in the card itself:
+/// no trip to the transport under it or to the transcript.
+fn mimic_controls(review: Review) -> View {
+    let active = move || !review.paused.get() || review.waiting.get();
+    view()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .child(ui::icon_button(Icon::SkipBack, tr("Previous sentence"), Size::Sm, move || review.step(-1)))
+        .child(
+            ui::toggle_icon_button(
+                move || if active() { Icon::Pause } else { Icon::Play },
+                move || if active() { tr("Pause playback") } else { tr("Play") },
+                Variant::Ghost,
+                Size::Sm,
+            )
+            .on_press(move || review.toggle_play()),
+        )
+        .child(ui::icon_button(Icon::SkipForward, tr("Next sentence"), Size::Sm, move || review.step(1)))
 }
 
 /// A Reps or Pause choice in the card's top row: wide enough for "30×".
