@@ -299,7 +299,11 @@ fn opened(id: &str) -> impl IntoElement {
         .on_progress(move |progress: &VideoProgress| {
             review.on_progress((progress.current_time * 1000.0) as i64, (progress.duration * 1000.0) as i64);
         })
-        .repeat(move || review.looping.get())
+        // Looped only while playing: a pause that lands at the very end, just
+        // before the player reports it, would otherwise be undone by the loop
+        // starting over (seen on the iPad, Space pressed at the last word).
+        // Played again, a recording paused at its end starts from the top.
+        .repeat(move || review.looping.get() && !review.paused.get())
         .on_end(move || {
             if review.store.sleep.ended() || !review.looping.get_untracked() {
                 review.paused.set(true);
