@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::{ops::Range, sync::LazyLock};
 
 use regex::Regex;
 use serde_json::Value;
@@ -66,28 +66,130 @@ fn segment_of(tokens: &[&Token]) -> Option<Segment> {
     })
 }
 
+/// Whether `next` carries on a word that a full stop in `previous` sits inside, as in `7` `.`
+/// `6`: it follows straight on, with no space, in a digit or small letter.
+fn carries_on(previous: &str, next: &str) -> bool {
+    previous.trim_end().ends_with('.') && next.chars().next().is_some_and(|c| c.is_ascii_digit() || c.is_lowercase())
+}
+
 fn plain_segments(tokens: &[Token]) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<&Token> = Vec::new();
+    let mut ended = false;
     for token in tokens {
         if let Some(previous) = current.last()
             && !punctuation_only(&token.text)
         {
             let speaker_changed = matches!((&previous.speaker, &token.speaker), (Some(a), Some(b)) if a != b);
             let paused = token.start_ms > 0 && previous.end_ms > 0 && token.start_ms - previous.end_ms > PAUSE_MS;
-            if speaker_changed || paused {
-                segments.extend(segment_of(&current));
+            if speaker_changed || paused || (ended && !carries_on(&previous.text, &token.text)) {
+                push_sentence(&mut segments, &current);
                 current.clear();
             }
         }
+        ended = ends_sentence(&token.text) || (ended && punctuation_only(&token.text));
         current.push(token);
-        if ends_sentence(&token.text) {
-            segments.extend(segment_of(&current));
-            current.clear();
+    }
+    push_sentence(&mut segments, &current);
+    segments
+}
+
+/// A sentence wider than this (see [`width`]) is too long to repeat after in one go, so it is
+/// cut into clauses.
+pub const LONG_SENTENCE: usize = 100;
+/// The narrowest clause a long sentence is cut into, so `I mean,` is never one on its own.
+const SHORTEST_CLAUSE: usize = 20;
+/// Words a clause can start with when there is no comma to cut a long sentence at.
+const JOINING_WORDS: [&str; 8] = ["and", "but", "because", "which", "while", "although", "though", "whereas"];
+
+/// How much room `text` takes: two for a wide (CJK) character, one for any other.
+fn width(text: &str) -> usize {
+    text.chars().map(|c| if c.is_alphanumeric() && !is_spaced_letter(c) { 2 } else { 1 }).sum()
+}
+
+/// The word `tokens[at]` is part of, lowercased and without its punctuation; a word starts at
+/// a token that starts with a space.
+fn word_at(tokens: &[&Token], at: usize) -> String {
+    let start = (0..=at).rev().find(|&index| tokens[index].text.starts_with(char::is_whitespace)).unwrap_or(0);
+    let end = (at + 1..tokens.len()).find(|&index| tokens[index].text.starts_with(char::is_whitespace));
+    tokens[start..end.unwrap_or(tokens.len())]
+        .iter()
+        .flat_map(|token| token.text.chars())
+        .filter(|c| c.is_alphanumeric() || *c == '\'')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// How good a place it is to cut a long sentence after `tokens[at]`, if it is one at all: after
+/// a semicolon or colon, then a comma (but not inside `1,500` or `very, very`), then before a
+/// word like `and` or `because`.
+fn clause_break(tokens: &[&Token], at: usize) -> Option<f64> {
+    let (here, next) = (&tokens[at].text, &tokens[at + 1].text);
+    let mark = here.trim_end().chars().last()?;
+    if matches!(mark, '；' | '：') {
+        return Some(2.5);
+    }
+    if matches!(mark, '，' | '、') {
+        return Some(2.0);
+    }
+    if !next.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let after = word_at(tokens, at + 1);
+    match mark {
+        ';' | ':' => Some(2.5),
+        ',' if word_at(tokens, at) != after => Some(2.0),
+        ',' => None,
+        _ if JOINING_WORDS.contains(&after.as_str()) => Some(1.0),
+        _ => None,
+    }
+}
+
+/// Where to cut a sentence's tokens so no clause is wider than [`LONG_SENTENCE`] where that can
+/// be helped: at the strongest break, nearest the middle and in a pause, again and again.
+fn clauses(tokens: &[&Token], span: Range<usize>, out: &mut Vec<Range<usize>>) {
+    let total: usize = tokens[span.clone()].iter().map(|token| width(&token.text)).sum();
+    if total <= LONG_SENTENCE || span.len() < 2 {
+        out.push(span);
+        return;
+    }
+    let mut best: Option<(f64, usize)> = None;
+    let mut left = 0;
+    for at in span.start..span.end - 1 {
+        left += width(&tokens[at].text);
+        let right = total - left;
+        if left < SHORTEST_CLAUSE || right < SHORTEST_CLAUSE {
+            continue;
+        }
+        let Some(strength) = clause_break(&tokens[span.clone()], at - span.start) else {
+            continue;
+        };
+        let pause = (tokens[at + 1].start_ms - tokens[at].end_ms).clamp(0, 1200) as f64 / 400.0;
+        let uneven = 3.0 * left.abs_diff(right) as f64 / total as f64;
+        let score = strength + pause - uneven;
+        if best.is_none_or(|(most, _)| score > most) {
+            best = Some((score, at));
         }
     }
-    segments.extend(segment_of(&current));
-    segments
+    match best {
+        Some((_, at)) => {
+            clauses(tokens, span.start..at + 1, out);
+            clauses(tokens, at + 1..span.end, out);
+        }
+        None => out.push(span),
+    }
+}
+
+/// Adds a sentence, cut into clauses if it is too long to practise ([`LONG_SENTENCE`]); the
+/// clauses stay apart when the transcript is normalized.
+fn push_sentence(segments: &mut Vec<Segment>, tokens: &[&Token]) {
+    let mut spans = Vec::new();
+    clauses(tokens, 0..tokens.len(), &mut spans);
+    for (index, span) in spans.into_iter().enumerate() {
+        if let Some(segment) = segment_of(&tokens[span]) {
+            segments.push(Segment { preserve_boundary_before: index > 0, ..segment });
+        }
+    }
 }
 
 fn translated_segments(tokens: &[Token], target: &str) -> Vec<Segment> {
@@ -385,6 +487,60 @@ mod tests {
         assert_eq!(document.segments[2].speaker.as_deref(), Some("2"));
         assert_eq!(document.speakers.len(), 2);
         assert_eq!(document.segments[0].id, "segment-1");
+    }
+
+    fn texts_of(pieces: &[&str]) -> Vec<String> {
+        let tokens: Vec<Value> = pieces
+            .iter()
+            .enumerate()
+            .map(|(index, text)| token(text, index as i64 * 200, index as i64 * 200 + 150, "1"))
+            .collect();
+        parse_soniox(&json!({ "tokens": tokens }), None).segments.into_iter().map(|s| s.text).collect()
+    }
+
+    fn spoken(text: &str) -> Vec<String> {
+        text.split(' ').map(|word| format!(" {word}")).collect()
+    }
+
+    #[test]
+    fn a_full_stop_inside_a_number_does_not_end_the_sentence() {
+        let pieces = [" Both", " screens", " are", " 7", ".", "6", " inches", " wide.", " That's", " big."];
+        assert_eq!(texts_of(&pieces), ["Both screens are 7.6 inches wide.", "That's big."]);
+        assert_eq!(texts_of(&[" It", " is", " 7", ".", " Six", " more."]), ["It is 7.", "Six more."]);
+    }
+
+    #[test]
+    fn a_sentence_too_long_to_practise_is_cut_into_clauses() {
+        let long = "I mean, when you have something that is almost the size of an iPad mini, it is fantastic to have \
+                    that in your pocket, but also being able to take it down to this very, very tiny outer screen.";
+        let words = spoken(long);
+        let pieces: Vec<&str> = words.iter().map(String::as_str).collect();
+        assert_eq!(
+            texts_of(&pieces),
+            [
+                "I mean, when you have something that is almost the size of an iPad mini,",
+                "it is fantastic to have that in your pocket,",
+                "but also being able to take it down to this very, very tiny outer screen.",
+            ]
+        );
+        let words =
+            spoken("We tried this and we liked it so much that we kept going back to it for weeks and weeks on end.");
+        let pieces: Vec<&str> = words.iter().map(String::as_str).collect();
+        assert_eq!(texts_of(&pieces).len(), 1, "short enough to keep whole");
+        let words = spoken(
+            "We tried the new phone for a whole month in the city and we liked it so much that we kept on going back \
+             to it every single day for weeks on end without stopping once.",
+        );
+        let pieces: Vec<&str> = words.iter().map(String::as_str).collect();
+        assert_eq!(
+            texts_of(&pieces),
+            [
+                "We tried the new phone for a whole month in the city",
+                "and we liked it so much that we kept on going back to it every single day for weeks on end without \
+                 stopping once."
+            ],
+            "with no comma, before a joining word"
+        );
     }
 
     #[test]
