@@ -199,6 +199,66 @@ pub fn menu_action(glyph: Icon, label: impl IntoReactive<SharedString>, on_selec
     menu_row(icon(glyph, mark_size()).into_element(), label, false, false, None, on_select)
 }
 
+/// A menu row offering a source of something, as a menu of where to add
+/// from lists them: its glyph, what it is, a line saying more under it, and
+/// its shortcut at the end, as the menu bar shows it.
+pub fn menu_source(
+    glyph: Icon,
+    label: impl IntoReactive<SharedString>,
+    detail: impl IntoReactive<SharedString>,
+    shortcut: &'static str,
+    on_select: impl Fn() + 'static,
+) -> AnyElement {
+    let touch = crate::platform::is_phone();
+    let words = view()
+        .flex_1()
+        .min_w(px(0.0))
+        .gap(px(2.0))
+        .child({
+            let label = text(label).font_weight(FontWeight::MEDIUM).text_color(|| theme().popover_foreground);
+            if touch { label.text_base() } else { label.text_sm() }
+        })
+        .child(text(detail).text_xs().text_color(|| theme().muted_foreground));
+    let keys = text(key_label(shortcut)).text_xs().text_color(|| theme().muted_foreground);
+    let glyph = view().pt(px(2.0)).text_color(|| theme().popover_foreground).child(icon(glyph, mark_size()));
+    if anchored() {
+        return nsh_base::button()
+            .on_press(move || {
+                on_select();
+                CHOSEN.with(|chosen| chosen.update(|count| *count += 1));
+            })
+            .flex_row()
+            .items_start()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .min_h(px(44.0))
+            .rounded(tokens::radius_sm)
+            .hover(|s| s.bg(|| theme().accent))
+            .active(|s| s.bg(|| theme().input))
+            .child(glyph)
+            .child(words)
+            .into_element();
+    }
+    menu_item()
+        .on_select(on_select)
+        .w(px(300.0))
+        .flex_row()
+        .items_start()
+        .gap_2p5()
+        .px_2()
+        .py_2()
+        .rounded(tokens::radius_sm)
+        .hover(|s| s.bg(|| theme().accent))
+        .focus(|s| s.bg(|| theme().accent))
+        .active(|s| s.bg(|| theme().input))
+        .disabled_style(|s| s.opacity(0.45))
+        .child(glyph)
+        .child(words)
+        .child(keys)
+        .into_element()
+}
+
 pub fn menu_danger(glyph: Icon, label: impl IntoReactive<SharedString>, on_select: impl Fn() + 'static) -> AnyElement {
     menu_row(icon(glyph, mark_size()).into_element(), label, true, false, None, on_select)
 }

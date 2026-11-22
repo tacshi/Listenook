@@ -296,8 +296,7 @@ pub(crate) fn home() -> impl IntoElement {
                         .gap_1()
                         .window_drag(false)
                         .child(ui::icon_button(Icon::Search, tr("Search"), Size::Sm, move || open.set(true)))
-                        .child(when(super::capture::offered, super::capture::record_button))
-                        .child(ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, util::pick_media)),
+                        .child(super::capture::add_button()),
                 )
             },
         ))

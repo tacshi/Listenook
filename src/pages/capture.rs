@@ -39,22 +39,55 @@ pub(crate) fn status() -> SharedString {
     }
 }
 
-/// The top bar's way in: a button to record, or while recording, the
-/// recording's light and time, which show it.
-pub(crate) fn record_button() -> impl IntoElement {
+/// The top bar's way to add to the Library: a menu of where from (files,
+/// or recording what plays) where recording is offered, else a button to
+/// choose files. While recording, the recording's light and time stand
+/// beside it, and show it.
+pub(crate) fn add_button() -> AnyElement {
+    if !offered() {
+        return ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, crate::util::pick_media).into_element();
+    }
     let capture = store().capture;
-    when(
-        move || capture.recording(),
-        move || {
-            ui::recording_button(
-                tr("Show the recording"),
-                move || !capture.paused(),
-                move || clock(capture.elapsed_ms()),
-            )
-            .on_press(move || capture.open.set(true))
-        },
-    )
-    .otherwise(move || ui::icon_button(Icon::Record, tr("Record what’s playing"), Size::Sm, move || capture.record()))
+    let open = signal(false);
+    view()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .child(when(
+            move || capture.recording(),
+            move || {
+                ui::recording_button(
+                    tr("Show the recording"),
+                    move || !capture.paused(),
+                    move || clock(capture.elapsed_ms()),
+                )
+                .on_press(move || capture.open.set(true))
+            },
+        ))
+        .child(
+            ui::menu_with(open, ui::menu_trigger(Icon::Plus, tr("Add to Library"), Size::Sm, open))
+                .child(ui::menu_source(
+                    Icon::File,
+                    l("Files…"),
+                    l("Audio or video on this computer"),
+                    "mod+o",
+                    crate::util::pick_media,
+                ))
+                .child(ui::menu_source(
+                    Icon::Record,
+                    move || tr(if capture.pending() { "Show the recording" } else { "Record what’s playing" }),
+                    move || {
+                        if capture.pending() {
+                            format!("{} · {}", tr("Recording"), status()).into()
+                        } else {
+                            tr("Sound from a video or app as it plays")
+                        }
+                    },
+                    "mod+shift+r",
+                    move || capture.record(),
+                )),
+        )
+        .into_element()
 }
 
 pub(crate) fn capture_dialog() -> impl IntoElement {

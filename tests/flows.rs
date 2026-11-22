@@ -1977,10 +1977,24 @@ fn left_files(folder: &Path, start: &str) -> Vec<String> {
 /// silence, two of sound, then silence for as long as it runs.
 #[test]
 fn a_recording_of_what_plays_is_cut_of_its_silence_and_kept_in_the_library() {
-    let mut it = start("capture", fake_capture, Vec::new());
-    it.app.press("label:Record what’s playing >> nth=0").unwrap();
+    let mut it = start(
+        "capture",
+        |root| {
+            fake_capture(root);
+            seed_transcript(root);
+        },
+        Vec::new(),
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("label:Add to Library").unwrap();
+    it.app.wait_for("Audio or video on this computer").unwrap();
+    it.app.press("Record what’s playing").unwrap();
     it.app.wait_for("Recording goes on if you close this window.").unwrap();
     it.app.wait_for(r"text:/^00:(09|1\d)$/ >> nth=0").unwrap();
+    it.app.press_key("escape").unwrap();
+    it.app.wait_for_gone("Recording goes on if you close this window.", GONE).unwrap();
+    it.app.press("label:Show the recording >> nth=0").unwrap();
+    it.app.wait_for("Pause").unwrap();
     it.app.press("Pause").unwrap();
     it.app.wait_for("Resume").unwrap();
     it.app.press("Stop").unwrap();
@@ -1998,6 +2012,7 @@ fn a_recording_of_what_plays_is_cut_of_its_silence_and_kept_in_the_library() {
     it.app.wait_for("Evening news").unwrap();
     assert!(!it.app.shows("Trim recording"));
 
+    assert!(it.app.shows("Learning languages"), "what was in the Library stays");
     let kept = left_files(&it.root.join("media"), "");
     assert_eq!(kept.len(), 1, "{kept:?}");
     let file = it.root.join("media").join(&kept[0]);

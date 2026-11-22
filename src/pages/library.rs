@@ -168,11 +168,7 @@ pub(crate) fn library() -> impl IntoElement {
                                 }
                             }),
                         )
-                        .child(when(super::capture::offered, super::capture::record_button))
-                        .child(when(
-                            || !crate::shell::system_header(),
-                            || ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, util::pick_media),
-                        ))
+                        .child(when(|| !crate::shell::system_header(), super::capture::add_button))
                         .child(ui::icon_button(Icon::Export, tr("Export shown as ZIP…"), Size::Sm, move || {
                             super::dialogs::export_zip(shown.get_untracked())
                         })),

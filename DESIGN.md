@@ -84,16 +84,21 @@ again too. While searching, the matched words are washed amber.
 
 What the computer plays can be recorded into the Library, on a Mac (macOS
 14.2 and later) and on Windows: a video in a browser, a call, an app with no
-file to add. Record what’s playing (the Library's and Home's top bars, the
-Library's empty state, File › ⇧⌘R, the tray menu) starts recording at once,
+file to add. The + in the Library's and Home's top bars opens Add to Library,
+a menu of where to add from, each source with its glyph, a line saying what
+it is and its shortcut: Files… (⌘O) and Record what’s playing (⇧⌘R); on a
+phone, where files are the only source, + chooses files at once. Record
+what’s playing (that menu, the empty states, File › ⇧⌘R, the tray menu)
+starts recording at once,
 in one dialog: the recording light breathing, the time, and the last 12
 seconds of sound as bars growing from the middle. On a Mac it is a tap of
 every app but Listenook; macOS asks the first time, and when it is refused
 the dialog says where to allow it and starts once the app is back in front.
 What Listenook plays itself pauses as recording starts. The dialog can be
 closed: recording goes on, and a Recording row with its light and time sits
-in the sidebar above Sync, the top bars' record button turning into the
-light and the time; either opens it again. Pause holds it (Space too); Stop
+in the sidebar above Sync, and the light and the time stand beside the + in
+the top bars; either opens it again, as does the + menu's Show the
+recording (in place of Record what’s playing while one waits). Pause holds it (Space too); Stop
 lays the whole recording out to trim: its name, a waveform with a line where
 the preview plays (a press or a drag on it moves the line; Space plays and
 pauses, skipping what is cut), a range slider for its start and end, and Cut
@@ -173,6 +178,7 @@ Colors live in `theme.json` and are read through `nsh_base::theme()` and
 | `text_field`, `bound_field`, `text_area`, `search_field`, `field`, `hint`, `error_hint` | One look: `control-border` edge on `card`, focus edge, placeholder; a search field shows a clear button while it has text; `error_hint` in `destructive` |
 | `switch`, `checkbox`, `checkbox_row`, `select`, `segmented`, `slider`, `progress_bar` | Checked, disabled, indeterminate; `checkbox_row` is a card's whole row, washing under the pointer |
 | `menu`, `menu_with`, `context_menu`, `menu_action`, `menu_choice`, `menu_danger`, `menu_toggle`, `menu_divider` | One popup surface (`tokens::popup_surface`) |
+| `menu_source` | A menu row for where to add from: glyph, name, a muted line under it, the shortcut at its end |
 | `modal`, `modal_actions`, `confirm_destructive` | Centered dialog; the system's alert for confirmations |
 | `toast`, `toast_host` | Info, Success, Error |
 | `page_header`, `card`, `section`, `separator`, `list_row`, `badge`, `empty_state`, `spinner`, `key_cap` | |
@@ -288,6 +294,7 @@ With reduced motion, presses do not scale, entrances land at once
 
 | Change | Motion | Reduced |
 | --- | --- | --- |
+| The + menu opens | As a row menu: grows from 0.95 and fades, 200ms; leaves in 150ms; the + stays pressed while it is open | Instant |
 | The dialog opens, or comes back from the sidebar or a top bar | As every dialog: fades in whole, the card rising (`FadeInUp`) | Appears |
 | Getting ready | A spinner beside the line | Static glyph |
 | Recording | The light breathes (`Breathe`, 1.8 s, in and out); the bars move left as sound comes in, ten times a second; the time counts up in place, tabular | The light rests; the bars still move (they are the data) |
@@ -301,7 +308,7 @@ With reduced motion, presses do not scale, entrances land at once
 | The preview plays | Its line moves with playback, 20 times a second, and jumps over what is cut | Same |
 | Saving | The button says Saving… and is disabled | Same |
 | Saved | The dialog leaves as every dialog; a toast with Show | Instant |
-| A recording runs or waits | The Recording row appears in the sidebar above Sync, its light breathing, its time counting | The light rests |
+| A recording runs or waits | The Recording row appears in the sidebar above Sync, its light breathing, its time counting; while it runs, the light and time appear beside the + | The light rests |
 
 ### Settings
 
