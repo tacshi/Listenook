@@ -485,6 +485,7 @@ fn opened(id: &str) -> impl IntoElement {
         .on_mouse_move(move |_: &MouseEvent| wake())
         .style_with(move |s| if review.fullscreen.get() && !hud.get() { s.cursor(Cursor::None) } else { s })
         .child(when(move || !review.fullscreen.get(), move || header(review, export, rename, translate)))
+        .child(when(move || !review.fullscreen.get(), move || transcribe_strip(review)))
         .child(when(move || !review.fullscreen.get(), move || translation_strip(review)))
         .child(when(move || !review.fullscreen.get(), move || ad_strip(review)))
         .child(when(move || !review.fullscreen.get(), move || skip_strip(review)))
@@ -873,6 +874,40 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
             },
         ))
         .into_element()
+}
+
+/// While a recording that has a transcript is transcribed again, or its words are timed: what it
+/// is doing, how far it is, and a way to stop it. The transcript it has stays readable meanwhile.
+fn transcribe_strip(review: Review) -> impl IntoElement {
+    let job = move |f: fn(&listenook_core::Job) -> bool| review.job.with(|job| job.as_deref().is_some_and(f));
+    let visible = move || job(|job| job.status.is_active() && job.has_transcript());
+    when(visible, move || {
+        view()
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .px(px(ui::PAGE_INSET))
+            .py_2()
+            .border_b_1()
+            .border_color(|| theme().border)
+            .bg(|| theme().muted)
+            .child(
+                text(move || {
+                    review.job.with(|job| {
+                        job.as_ref().map(|job| tr(listenook_core::l10n::status_label(job.status))).unwrap_or_default()
+                    })
+                })
+                .text_xs()
+                .text_color(|| theme().muted_foreground),
+            )
+            .child(
+                progress_bar(move || review.job.with(|job| job.as_ref()?.progress.fraction.map(|f| f as f32))).flex_1(),
+            )
+            .child(
+                button(Variant::Ghost, Size::Sm, l("Cancel"))
+                    .on_press(move || crate::services::transcribe::cancel(&review.id())),
+            )
+    })
 }
 
 fn translation_strip(review: Review) -> impl IntoElement {

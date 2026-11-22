@@ -390,23 +390,29 @@ pub(crate) fn can_transcribe_again(job: &Job) -> bool {
 }
 
 /// Asks before transcribing a recording once more, since the new transcript replaces this one.
+///
+/// Asked under the store, not the menu: a menu item shown only sometimes goes with the menu as
+/// it closes, and the answer would go with it.
 pub(crate) fn transcribe_again(id: &str) {
-    let Some(job) = store().job_now(id) else {
+    let store = store();
+    let Some(job) = store.job_now(id) else {
         return;
     };
     let id = id.to_owned();
     if !std::path::Path::new(&job.source_path).is_file() {
         return missing_source(id);
     }
-    confirm_destructive(
-        format!("{} “{}”?", tr("Transcribe again"), job.title()),
-        tr(
-            "It’s transcribed with your current settings. This transcript stays until the new one is ready, which then replaces it with its edits, translation and AI Brief.",
-        ),
-        tr("Cancel"),
-        tr("Transcribe again"),
-        move || transcribe::again(&id),
-    );
+    store.run(async move {
+        confirm_destructive(
+            format!("{} “{}”?", tr("Transcribe again"), job.title()),
+            tr(
+                "It’s transcribed with your current settings. This transcript stays until the new one is ready, which then replaces it with its edits, translation and AI Brief.",
+            ),
+            tr("Cancel"),
+            tr("Transcribe again"),
+            move || transcribe::again(&id),
+        );
+    });
 }
 
 fn missing_source(id: String) {

@@ -2123,3 +2123,86 @@ fn a_recording_left_unsaved_is_offered_again_at_the_next_start() {
     }
     assert!(left_files(&it.root.join("temporary"), "capture-").is_empty());
 }
+
+#[test]
+fn transcribing_again_replaces_the_transcript_and_what_was_made_from_it() {
+    let routes = vec![
+        ("POST https://api.soniox.com/v1/files".to_owned(), response(r#"{"id":"file-2"}"#)),
+        ("POST https://api.soniox.com/v1/transcriptions".to_owned(), response(r#"{"id":"tr-2"}"#)),
+        ("GET https://api.soniox.com/v1/transcriptions/tr-2".to_owned(), response(r#"{"status":"completed"}"#)),
+        (
+            "GET https://api.soniox.com/v1/transcriptions/tr-2/transcript".to_owned(),
+            response(
+                r#"{"tokens":[{"text":"Hello","start_ms":0,"end_ms":400,"speaker":"1"},{"text":" again.","start_ms":400,"end_ms":900,"speaker":"1"}]}"#,
+            ),
+        ),
+        ("DELETE https://api.soniox.com/v1/transcriptions/tr-2".to_owned(), response("")),
+        ("DELETE https://api.soniox.com/v1/files/file-2".to_owned(), response("")),
+    ];
+    let mut it = start(
+        "again",
+        |root| {
+            seed_transcript(root);
+            let media = root.join("Learning languages.m4a");
+            std::fs::write(&media, b"not really audio").unwrap();
+            let path = manifest(root, "sample");
+            let mut job: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            job["source_path"] = json!(media);
+            job["remote_file_id"] = json!("file-1");
+            job["remote_transcription_id"] = json!("tr-1");
+            job["cleanup_state"] = json!("complete");
+            std::fs::write(&path, job.to_string()).unwrap();
+        },
+        routes,
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.on_dialog(|dialog| {
+        assert_eq!(dialog.title.as_deref(), Some("Transcribe again “Learning languages”?"));
+        DialogAnswer::Press("Transcribe again".to_owned())
+    });
+    it.app.press("label:More actions").unwrap();
+    it.app.press("Transcribe again…").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Hello again.").unwrap();
+    assert!(!it.app.shows("Welcome back to the show."), "the new transcript takes the old one's place");
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(saved.contains(r#""status": "completed""#));
+    assert!(!saved.contains("欢迎回到节目"), "the old translation went with the old transcript");
+}
+
+#[test]
+fn transcribing_again_shows_how_far_it_is_and_cancelling_keeps_the_transcript() {
+    let routes = vec![
+        ("POST https://api.soniox.com/v1/files".to_owned(), response(r#"{"id":"file-2"}"#)),
+        ("POST https://api.soniox.com/v1/transcriptions".to_owned(), response(r#"{"id":"tr-2"}"#)),
+        ("GET https://api.soniox.com/v1/transcriptions/tr-2".to_owned(), response(r#"{"status":"processing"}"#)),
+        ("DELETE https://api.soniox.com/v1/transcriptions/tr-2".to_owned(), response("")),
+        ("DELETE https://api.soniox.com/v1/files/file-2".to_owned(), response("")),
+    ];
+    let mut it = start(
+        "again-cancel",
+        |root| {
+            seed_transcript(root);
+            let media = root.join("Learning languages.m4a");
+            std::fs::write(&media, b"not really audio").unwrap();
+            let path = manifest(root, "sample");
+            let mut job: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            job["source_path"] = json!(media);
+            std::fs::write(&path, job.to_string()).unwrap();
+        },
+        routes,
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("Welcome back to the show.").unwrap();
+    it.app.on_dialog(|_| DialogAnswer::Press("Transcribe again".to_owned()));
+    it.app.press("label:More actions").unwrap();
+    it.app.press("Transcribe again…").unwrap();
+    it.app.wait_for("Transcribing").unwrap();
+    assert!(it.app.shows("Welcome back to the show."), "the transcript stays readable meanwhile");
+    it.app.press("role:button[Cancel]").unwrap();
+    it.app.wait_for_gone("Transcribing", GONE).unwrap();
+    assert!(it.app.shows("Welcome back to the show."));
+    let saved = std::fs::read_to_string(manifest(&it.root, "sample")).unwrap();
+    assert!(saved.contains(r#""status": "completed""#), "cancelling leaves it transcribed");
+}
