@@ -1,2 +1,3 @@
 "CFBundleDisplayName" = "Listenook";
 "CFBundleName" = "Listenook";
+"NSAudioCaptureUsageDescription" = "Listenook records what other apps play when you ask it to, so you can keep it and transcribe it.";

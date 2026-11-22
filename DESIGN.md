@@ -82,6 +82,34 @@ the sentence playing is out of view a Jump to playing button at its foot
 brings it back; picking a sentence, stepping, seeking or pressing play follows
 again too. While searching, the matched words are washed amber.
 
+What the computer plays can be recorded into the Library, on a Mac (macOS
+14.2 and later) and on Windows: a video in a browser, a call, an app with no
+file to add. The + in the Library's and Home's top bars opens Add to Library,
+a menu of where to add from, each source with its glyph, a line saying what
+it is and its shortcut: Files… (⌘O) and Record what’s playing (⇧⌘R); on a
+phone, where files are the only source, + chooses files at once. Record
+what’s playing (that menu, the empty states, File › ⇧⌘R, the tray menu)
+starts recording at once,
+in one dialog: the recording light breathing, the time, and the last 12
+seconds of sound as bars growing from the middle. On a Mac it is a tap of
+every app but Listenook; macOS asks the first time, and when it is refused
+the dialog says where to allow it and starts once the app is back in front.
+What Listenook plays itself pauses as recording starts. The dialog can be
+closed: recording goes on, and a Recording row with its light and time sits
+in the sidebar above Sync, and the light and the time stand beside the + in
+the top bars; either opens it again, as does the + menu's Show the
+recording (in place of Record what’s playing while one waits). Pause holds it (Space too); Stop
+lays the whole recording out to trim: its name, a waveform with a line where
+the preview plays (a press or a drag on it moves the line; Space plays and
+pauses, skipping what is cut), a range slider for its start and end, and Cut
+out silent gaps, on by default: the silence before the first sound and after
+the last, and any stretch of two seconds or more without sound, leaving a
+0.3-second pause. What is cut is drawn faint on a band washed with the ink (`foreground` at 7%), and the
+dialog says how much it keeps and how much silence it cuts. Save to Library
+keeps it as an M4A (AAC), Transcribe beside it starting the transcription.
+A recording not saved when the app quits is offered again at the next start
+(a toast, and the sidebar row); Discard… deletes it, after asking.
+
 A setting is made where it is used: how to transcribe in the Library's
 options, what a transcript shows in the reader's menu, accounts and defaults
 in Settings.
@@ -109,6 +137,7 @@ separated by hairlines; shadows only on what floats (menus, dialogs, toasts).
 | `destructive` | Destructive actions and errors |
 | `success`, `warning` | A finished job, a job that needs attention; `warning` at 28% (`tokens::found`) washes a search match in the transcript |
 | `listen`, `practice` | Learning time in charts: emerald for listening, hot orange for practice. The one place Home goes bright; never used for actions |
+| `recording` | The recording light and the live meter while recording: the red of a tape machine's light; never used for actions |
 | `highlight`, `highlight-foreground` | The sentence being played |
 | `scrim` | The layer behind a dialog |
 
@@ -149,10 +178,13 @@ Colors live in `theme.json` and are read through `nsh_base::theme()` and
 | `text_field`, `bound_field`, `text_area`, `search_field`, `field`, `hint`, `error_hint` | One look: `control-border` edge on `card`, focus edge, placeholder; a search field shows a clear button while it has text; `error_hint` in `destructive` |
 | `switch`, `checkbox`, `checkbox_row`, `select`, `segmented`, `slider`, `progress_bar` | Checked, disabled, indeterminate; `checkbox_row` is a card's whole row, washing under the pointer |
 | `menu`, `menu_with`, `context_menu`, `menu_action`, `menu_choice`, `menu_danger`, `menu_toggle`, `menu_divider` | One popup surface (`tokens::popup_surface`) |
+| `menu_source` | A menu row for where to add from: glyph, name, a muted line under it, the shortcut at its end |
 | `modal`, `modal_actions`, `confirm_destructive` | Centered dialog; the system's alert for confirmations |
 | `toast`, `toast_host` | Info, Success, Error |
 | `page_header`, `card`, `section`, `separator`, `list_row`, `badge`, `empty_state`, `spinner`, `key_cap` | |
 | `pressable_card`, `moment_chip` | A card pressed as a whole (Home); a moment's play glyph and time (the Brief's evidence) |
+| `recording_dot`, `recording_button` | The recording light (breathing while live, grey while paused); a small outline button with the light and the time |
+| `live_wave`, `waveform`, `range_slider` | The last seconds recorded as bars from the middle; a whole recording with what is cut faint on a washed band and the preview's line; a track with a handle at each end |
 | `chart::goal_ring`, `chart::day_bars`, `chart::heatmap`, `chart::heat_key`, `chart::swatch` | `nsh_base::plot` marks in `listen` (listening, calendar shades) and `practice`; the goal line in `foreground` at 45% |
 
 A look a page needs becomes a variant here first.
@@ -257,6 +289,26 @@ With reduced motion, presses do not scale, entrances land at once
 | An episode plays | Its row takes the highlight fill, `INSTANT`, and keeps it under the pointer; play ↔ pause glyph swap | Instant |
 | Episodes filtered | The rows narrow to the matches at once (per keystroke) | Same |
 | An episode's notes open / close | Its notes toggle's tint cross-fades, `INSTANT`; the notes appear under the row in place of the line's preview, without motion | Instant |
+
+### Recording
+
+| Change | Motion | Reduced |
+| --- | --- | --- |
+| The + menu opens | As a row menu: grows from 0.95 and fades, 200ms; leaves in 150ms; the + stays pressed while it is open | Instant |
+| The dialog opens, or comes back from the sidebar or a top bar | As every dialog: fades in whole, the card rising (`FadeInUp`) | Appears |
+| Getting ready | A spinner beside the line | Static glyph |
+| Recording | The light breathes (`Breathe`, 1.8 s, in and out); the bars move left as sound comes in, ten times a second; the time counts up in place, tabular | The light rests; the bars still move (they are the data) |
+| Pause ↔ Resume | The light stops breathing and turns grey; the bars turn grey; the button's glyph and label swap | Same, without breathing |
+| Nothing heard yet → sound | The hint under the bars changes in place | Same |
+| Refused, or nothing heard | The explanation fades in (`FadeIn`) | Appears |
+| Stop | The dialog's content swaps to the trim view, the title with it | Same |
+| Trim handles dragged | The washed band and the kept bars follow the handles 1:1; the totals change in place | Same |
+| Cut out silent gaps on / off | The switch as in Settings; the gaps' bars turn faint or back to `primary` at once, and the summary changes | Same |
+| A press or drag on the waveform | The preview's line jumps there and follows the pointer | Same |
+| The preview plays | Its line moves with playback, 20 times a second, and jumps over what is cut | Same |
+| Saving | The button says Saving… and is disabled | Same |
+| Saved | The dialog leaves as every dialog; a toast with Show | Instant |
+| A recording runs or waits | The Recording row appears in the sidebar above Sync, its light breathing, its time counting; while it runs, the light and time appear beside the + | The light rests |
 
 ### Settings
 

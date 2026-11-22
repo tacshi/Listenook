@@ -762,19 +762,21 @@ fn shortcuts() -> impl IntoElement {
     view()
         .gap_6()
         .child(when(|| !crate::platform::is_phone(), anywhere))
-        .child(group(
-            "Application",
-            vec![
+        .child(group("Application", {
+            let mut keys = vec![
                 ("mod+1", "Home"),
                 ("mod+2", "Library"),
                 ("mod+3", "Podcasts"),
                 ("mod+,", "Settings"),
                 ("mod+b", "Show or hide the sidebar"),
                 ("mod+o", "Add media"),
-                ("mod+shift+o", "Open video"),
-                ("mod+enter", "Transcribe everything that is ready"),
-            ],
-        ))
+            ];
+            if super::capture::offered() {
+                keys.push(("mod+shift+r", "Record what’s playing, or stop recording"));
+            }
+            keys.extend([("mod+shift+o", "Open video"), ("mod+enter", "Transcribe everything that is ready")]);
+            keys
+        }))
         .child(group(
             "Playback",
             vec![

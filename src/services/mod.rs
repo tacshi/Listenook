@@ -3,6 +3,7 @@ mod apple;
 pub(crate) mod artwork;
 pub(crate) mod audio;
 pub(crate) mod blas;
+pub(crate) mod capture;
 pub(crate) mod llm;
 pub(crate) mod local;
 pub(crate) mod login;

@@ -85,6 +85,20 @@ pub(crate) fn shell() -> impl IntoElement {
                         .on_select(move || store.set_monitor_paused(!store.monitor().paused)),
                 );
             }
+            if pages::capture_offered() {
+                let item = if store.capture.recording() {
+                    MenuItem::new(tr("Stop recording").to_string()).on_select(move || {
+                        show_window();
+                        store.capture.stop();
+                    })
+                } else {
+                    MenuItem::new(tr("Record what’s playing").to_string()).on_select(move || {
+                        show_window();
+                        store.capture.record();
+                    })
+                };
+                items.push(item);
+            }
             items.push(MenuItem::new(tr("Settings…").to_string()).on_select(move || {
                 show_window();
                 store.settings_open().set(true);
@@ -217,11 +231,13 @@ pub(crate) fn shell() -> impl IntoElement {
     });
     nsh_core::element::desktop::on_app_quit(move || {
         store.activity.flush();
+        store.capture.finish_on_quit();
         async {}
     });
     if is_desktop() {
         effect(move || {
             store.lang();
+            store.capture.recording();
             set_application_menu(application_menu());
         });
     } else {
@@ -290,6 +306,7 @@ pub(crate) fn shell() -> impl IntoElement {
         .child(pages::subtitle_choice_dialog())
         .child(pages::sync_dialog())
         .child(pages::sync_code_dialog())
+        .child(pages::capture_dialog())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -496,9 +513,17 @@ fn application_menu() -> Vec<MenuItem> {
     let mut file = vec![
         MenuItem::new(named("Add media…")).shortcut("mod+o").on_select(util::pick_media),
         MenuItem::new(named("Open video…")).shortcut("mod+shift+o").on_select(util::pick_video),
-        MenuItem::separator(),
-        role(MenuRole::Close, "Close Window"),
     ];
+    if pages::capture_offered() {
+        file.push(if untracked(|| store.capture.recording()) {
+            MenuItem::new(named("Stop recording")).shortcut("mod+shift+r").on_select(move || store.capture.stop())
+        } else {
+            MenuItem::new(named("Record what’s playing"))
+                .shortcut("mod+shift+r")
+                .on_select(move || store.capture.record())
+        });
+    }
+    file.extend([MenuItem::separator(), role(MenuRole::Close, "Close Window")]);
     if !mac {
         file.extend([
             MenuItem::separator(),
@@ -906,6 +931,29 @@ fn sidebar() -> impl IntoElement {
             view()
                 .p_2()
                 .gap(px(2.0))
+                .child(when(
+                    move || store.capture.pending(),
+                    move || {
+                        row(
+                            Icon::Record,
+                            l("Recording"),
+                            || None,
+                            move || store.capture.open.get(),
+                            move || store.capture.open.set(true),
+                        )
+                        .child(when(
+                            move || store.capture.recording(),
+                            move || ui::recording_dot(move || !store.capture.paused(), 8.0),
+                        ))
+                        .child(
+                            text(pages::capture_status)
+                                .text_xs()
+                                .tabular_nums()
+                                .number_of_lines(1)
+                                .text_color(|| theme().muted_foreground),
+                        )
+                    },
+                ))
                 .child(
                     row(Icon::Devices, l("Sync"), || None, move || store.sync.open.get(), move || store.sync.show())
                         .child(text(sync_status).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground)),

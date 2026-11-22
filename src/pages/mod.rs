@@ -1,3 +1,4 @@
+mod capture;
 mod dialogs;
 mod gestures;
 mod home;
@@ -9,6 +10,7 @@ mod settings;
 mod sync;
 mod workspace;
 
+pub(crate) use capture::{capture_dialog, offered as capture_offered, status as capture_status};
 pub(crate) use dialogs::subtitle_choice_dialog;
 pub(crate) use home::home;
 pub(crate) use library::library;

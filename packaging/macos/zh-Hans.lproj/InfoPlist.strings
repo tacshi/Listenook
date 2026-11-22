@@ -1,2 +1,3 @@
 "CFBundleDisplayName" = "聆页";
 "CFBundleName" = "聆页";
+"NSAudioCaptureUsageDescription" = "聆页会在你要求时录制其他 App 播放的声音，方便你保存和转写。";

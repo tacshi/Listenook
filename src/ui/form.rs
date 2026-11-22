@@ -494,6 +494,34 @@ fn slider_in(
         .thumb_style(move |s| s.size(px(12.0)).rounded_full().bg(fill).shadow_sm().transition_transform())
 }
 
+/// A range picked along a track with a handle at each end, from 0 to
+/// `max`: where a recording starts and ends. Each handle moves by `step`
+/// from the keyboard.
+pub fn range_slider(
+    name: impl Into<SharedString>,
+    value: impl Fn() -> (f64, f64) + 'static,
+    max: impl Fn() -> f64 + 'static,
+    step: f64,
+    on_change: impl Fn(f64, f64) + 'static,
+) -> nsh_base::SliderElement {
+    nsh_base::slider()
+        .value(move || {
+            let (start, end) = value();
+            Some(SliderValue::Range(start, end))
+        })
+        .min(0.0)
+        .max(move || max().max(step))
+        .step(step)
+        .on_change(move |value: &SliderValue| on_change(value.start(), value.end()))
+        .accessibility_label(name.into())
+        .h(px(24.0))
+        .justify_center()
+        .track_style(|s| s.h(px(4.0)).rounded_full().bg(|| color(theme().input)))
+        .indicator_style(|s| s.h(px(4.0)))
+        .range_style(|s| s.h(px(4.0)).rounded_full().bg(|| color(theme().primary)))
+        .thumb_style(|s| s.w(px(8.0)).h(px(20.0)).rounded_full().bg(|| color(theme().primary)).shadow_sm())
+}
+
 pub fn progress_bar(fraction: impl Fn() -> Option<f32> + Copy + 'static) -> nsh_base::ProgressElement {
     nsh_base::progress()
         .value(move || fraction().unwrap_or(0.0) * 100.0)
