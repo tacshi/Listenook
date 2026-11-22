@@ -815,6 +815,14 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                 ))
                 .child(menu_action(Icon::Pencil, l("Rename…"), move || rename.show(&review.id())))
                 .child(when(
+                    move || review.job.with(|job| job.as_deref().is_some_and(super::library::can_transcribe_again)),
+                    move || {
+                        menu_action(Icon::Transcribe, l("Transcribe again…"), move || {
+                            super::library::transcribe_again(&review.id())
+                        })
+                    },
+                ))
+                .child(when(
                     || !crate::platform::is_phone() || cfg!(target_os = "ios"),
                     move || menu_action(Icon::Refresh, l("Relink media…"), move || crate::util::relink(review.id())),
                 ))
