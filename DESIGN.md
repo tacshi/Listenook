@@ -33,8 +33,13 @@ order its Sort menu keeps (last played, title, shortest first); In progress
 (in the sidebar while something waits or transcribes), groups and tags are
 filters in the sidebar, not other lists. A row names two of its tags (one on
 a narrow page) and counts the rest. Opening a recording covers the list
-with the reader, and Back returns; one with no transcript yet says so in a
-toast instead, offering Transcribe or Retry. Podcasts is for finding and
+with the reader, and Back returns. One with no transcript yet opens too and
+plays: where the transcript goes it says what it waits on and offers
+Transcribe, Retry or Cancel, and what needs the words (search, Practice, the
+AI Brief, translating, finding ads, copying and exporting) stays out of sight
+until the transcript arrives and takes that place; the transport's sentence
+steps jump 15 seconds back and 30 on instead. Only one whose media is not
+there yet (still downloading, or missing) says so in a toast instead. Podcasts is for finding and
 following shows; a show's page filters its episodes by title and notes, and
 an episode's notes open under its row. An episode sent to the Library is a
 recording like any other.

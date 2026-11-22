@@ -375,29 +375,37 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
         }))
 }
 
-fn retry(id: &str) {
+pub(crate) fn retry(id: &str) {
     let failed_download =
         store().job_now(id).is_some_and(|job| job.error_code.as_deref() == Some("podcast_download_failed"));
     if failed_download { podcasts::download(id) } else { transcribe::retry(id) }
 }
 
-/// Opens a recording, or says why it cannot open yet and offers what would make it readable.
-fn open_or_explain(id: &str) {
+/// Whether the reader can open `job`: to read its transcript, or else to play its media.
+pub(crate) fn can_open(job: &Job) -> bool {
+    job.has_transcript() || (job.status != JobStatus::Downloading && std::path::Path::new(&job.source_path).is_file())
+}
+
+/// Opens a recording, or says why it cannot open yet and offers what would make it playable.
+pub(crate) fn open(id: &str) {
     let store = store();
     let Some(job) = store.job_now(id) else {
         return;
     };
-    if job.has_transcript() {
+    if can_open(&job) {
         return store.open_transcript(id);
     }
     let id = id.to_owned();
-    let missing = tr("It has no transcript yet.");
-    if job.status.is_transcribable() {
-        ui::toast_with_action(ui::Tone::Info, missing, tr("Transcribe"), move || transcribe::start(&id));
-    } else if job.status.is_retryable() {
-        ui::toast_with_action(ui::Tone::Info, missing, tr("Retry"), move || retry(&id));
+    if job.status == JobStatus::Downloading {
+        ui::toast(ui::Tone::Info, tr("It opens once it’s downloaded."));
+    } else if job.error_code.as_deref() == Some("podcast_download_failed") {
+        ui::toast_with_action(ui::Tone::Info, error_text("podcast_download_failed"), tr("Retry"), move || retry(&id));
+    } else if !platform::is_phone() || cfg!(target_os = "ios") {
+        ui::toast_with_action(ui::Tone::Info, error_text("missing_source"), tr("Relink media…"), move || {
+            util::relink(id.clone())
+        });
     } else {
-        ui::toast(ui::Tone::Info, tr("It opens once it’s transcribed."));
+        ui::toast(ui::Tone::Info, error_text("missing_source"));
     }
 }
 
@@ -432,7 +440,7 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         .gap_1()
         .child(
             ui::list_row(|| false)
-                .on_press(move || open_or_explain(&id()))
+                .on_press(move || open(&id()))
                 .flex_1()
                 .min_w(px(0.0))
                 .child(

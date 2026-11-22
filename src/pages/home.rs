@@ -141,7 +141,7 @@ fn resumable() -> Vec<Resume> {
         .into_iter()
         .filter(|(id, ..)| store.shelved(Shelf::Continue, id))
         .filter_map(|(id, at, position)| {
-            let job = jobs.iter().find(|job| job.id == id && job.has_transcript())?;
+            let job = jobs.iter().find(|job| job.id == id && super::library::can_open(job))?;
             let (glyph, artwork) = job_glyph(job);
             Some(Resume::Recording {
                 title: job.title(),
@@ -675,7 +675,6 @@ fn processing_section(processing: Memo<Vec<Rc<Job>>>, waiting: Memo<usize>) -> i
 }
 
 fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
-    let store = store();
     // Tiles across on a wide page; on a phone a card spans the page, so
     // one a row with the words beside the icon.
     let columns = || -> SharedString {
@@ -686,11 +685,10 @@ fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
         |job| job.id.clone(),
         move |job, _| {
             let id = job.with_untracked(|job| job.id.clone());
-            let readable = job.with_untracked(|job| job.has_transcript());
             let opened = id.clone();
             let tile = card().flex_1().child(
                 ui::pressable_card()
-                    .on_press(move || if readable { store.open_transcript(&opened) } else { store.show(Filter::All) })
+                    .on_press(move || super::library::open(&opened))
                     .gap_3()
                     .p_3()
                     .style_with(|s| if page_narrow() { s.flex_row().items_center() } else { s })
@@ -800,16 +798,14 @@ fn fresh_list(fresh: Memo<Vec<Fresh>>) -> impl IntoElement {
 }
 
 fn results(found: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
-    let store = store();
     view()
         .child(each(
             move || found.get(),
             |job| job.id.clone(),
             move |job, _| {
                 let id = job.with_untracked(|job| job.id.clone());
-                let readable = job.with_untracked(|job| job.has_transcript());
                 list_row(|| false)
-                    .on_press(move || if readable { store.open_transcript(&id) } else { store.show(Filter::All) })
+                    .on_press(move || super::library::open(&id))
                     .child(job.with_untracked(|job| job_tile(job)))
                     .child(
                         view()
