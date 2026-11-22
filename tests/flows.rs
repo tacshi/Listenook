@@ -909,6 +909,67 @@ fn a_failed_transcription_says_why_and_can_be_retried() {
 }
 
 #[test]
+fn an_untranscribed_recording_plays_in_the_reader_until_its_transcript_takes_its_place() {
+    let routes = vec![
+        ("POST https://api.soniox.com/v1/files".to_owned(), response(r#"{"id":"file-1"}"#)),
+        ("POST https://api.soniox.com/v1/transcriptions".to_owned(), response(r#"{"id":"tr-1"}"#)),
+        ("GET https://api.soniox.com/v1/transcriptions/tr-1".to_owned(), response(r#"{"status":"completed"}"#)),
+        (
+            "GET https://api.soniox.com/v1/transcriptions/tr-1/transcript".to_owned(),
+            response(
+                r#"{"tokens":[{"text":"Hello","start_ms":0,"end_ms":400,"speaker":"1"},{"text":" world.","start_ms":400,"end_ms":900,"speaker":"1"}]}"#,
+            ),
+        ),
+        ("DELETE https://api.soniox.com/v1/transcriptions/tr-1".to_owned(), response("")),
+        ("DELETE https://api.soniox.com/v1/files/file-1".to_owned(), response("")),
+    ];
+    let mut it = start(
+        "untranscribed",
+        |root| {
+            let media = root.join("Standup.mp3");
+            std::fs::write(&media, b"not really audio").unwrap();
+            let job =
+                json!({"id": "queued", "source_path": media, "status": "ready", "transcription_provider": "soniox"});
+            std::fs::create_dir_all(root.join("jobs/queued")).unwrap();
+            std::fs::write(manifest(root, "queued"), job.to_string()).unwrap();
+        },
+        routes,
+    );
+    it.app.wait_for("Standup").unwrap();
+    it.app.press("Standup").unwrap();
+    it.app.wait_for("No transcript yet").unwrap();
+    it.app.press("role:button[Play]").unwrap();
+    it.app.wait_for("role:button[Pause playback]").unwrap();
+    it.app.wait_for("role:button[Back 15 seconds]").unwrap();
+    // With no sentences, the steps jump by time, and what needs the words waits for them.
+    for needs_words in ["role:button[Search transcript]", "role:button[Practice]", "role:button[AI Brief]"] {
+        assert!(!it.app.screen().matches(needs_words).unwrap(), "{needs_words} waits for the transcript");
+    }
+    it.app.press("role:button[Transcribe]").unwrap();
+    it.app.wait_for("Hello world.").unwrap();
+    it.app.wait_for("role:button[Previous sentence]").unwrap();
+    it.app.wait_for("role:button[Search transcript]").unwrap();
+    it.app.wait_for("role:button[Practice]").unwrap();
+}
+
+#[test]
+fn an_episode_whose_download_broke_off_offers_to_fetch_it_again_instead_of_opening() {
+    let mut it = start(
+        "downloading",
+        |root| {
+            let job = json!({"id": "fetching", "source_path": "/nowhere/Episode.mp3", "status": "downloading"});
+            std::fs::create_dir_all(root.join("jobs/fetching")).unwrap();
+            std::fs::write(manifest(root, "fetching"), job.to_string()).unwrap();
+        },
+        Vec::new(),
+    );
+    it.app.wait_for("Episode").unwrap();
+    it.app.press("Episode").unwrap();
+    it.app.wait_for("role:button[Retry] >> nth=1").unwrap();
+    assert!(!it.app.screen().matches("No transcript yet").unwrap(), "with no media there is nothing to play");
+}
+
+#[test]
 fn a_show_opens_from_discover_and_lists_its_episodes() {
     const FEED: &str = r#"<rss><channel><title>Daily English</title><author>BBC</author>
 <item><title>Episode two</title><guid>g2</guid><pubDate>Tue, 04 Mar 2025 10:00:00 GMT</pubDate><enclosure url="https://cdn.example/b.mp3" type="audio/mpeg"/></item>

@@ -263,8 +263,11 @@ impl Review {
         let remembered_mode = store
             .setting(|s| s.extra.get("reader_content_mode").and_then(serde_json::Value::as_str).map(ContentMode::parse))
             .unwrap_or(ContentMode::Bilingual);
-        let brief_open =
-            store.setting(|s| s.extra.get("reader_brief_open").and_then(serde_json::Value::as_bool)).unwrap_or(false);
+        // The Brief is made from the transcript: with none yet, it stays shut.
+        let brief_open = job.with_untracked(|job| job.as_ref().is_some_and(|job| job.has_transcript()))
+            && store
+                .setting(|s| s.extra.get("reader_brief_open").and_then(serde_json::Value::as_bool))
+                .unwrap_or(false);
         let query = signal(String::new());
         let searching = signal(false);
         let loudness = signal(None::<Rc<Loudness>>);
@@ -787,7 +790,20 @@ impl Review {
         self.paused.set(false);
     }
 
+    /// Whether the recording has a transcript yet: until it does, the reader only plays it.
+    pub(super) fn has_text(&self) -> bool {
+        self.job.with(|job| job.as_ref().is_some_and(|job| job.has_transcript()))
+    }
+
+    /// A sentence back or on; with no transcript, 15 seconds back or 30 on.
     pub(super) fn step(&self, by: isize) {
+        if !untracked(|| self.has_text()) {
+            let jump = if by < 0 { -15_000 } else { 30_000 };
+            let end = self.duration_ms.get_untracked();
+            let to = self.position_ms.get_untracked() + jump;
+            self.seek(if end > 0 { to.clamp(0, end) } else { to.max(0) });
+            return;
+        }
         let from = untracked(|| self.target()).map_or(0, |index| index as isize);
         let next = (from + by).clamp(0, self.count().saturating_sub(1) as isize) as usize;
         if let Some(next) = self.kept_near(next, by >= 0) {
