@@ -59,6 +59,8 @@ pub enum Icon {
     ArrowUp,
     ArrowDown,
     Sort,
+    Record,
+    Stop,
 }
 
 impl Icon {
@@ -196,6 +198,8 @@ impl Icon {
             Icon::Sort => {
                 r#"<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/>"#
             }
+            Icon::Record => r#"<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor"/>"#,
+            Icon::Stop => r#"<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>"#,
             Icon::Devices => {
                 r#"<path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8"/><path d="M10 19v-3.96 3.15"/><path d="M7 19h5"/><rect width="6" height="10" x="16" y="12" rx="2"/>"#
             }

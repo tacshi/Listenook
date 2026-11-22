@@ -12,6 +12,7 @@ use nsh_core::prelude::*;
 
 use super::{
     activity::ActivityState,
+    capture::CaptureState,
     monitor::{self, MonitorConfig, MonitorFile, Seen},
     persist,
     podcast::PodcastState,
@@ -130,6 +131,7 @@ pub(crate) struct Store {
     pub(crate) sync: SyncState,
     pub(crate) activity: ActivityState,
     pub(crate) sleep: SleepState,
+    pub(crate) capture: CaptureState,
 }
 
 #[derive(Clone, Default)]
@@ -237,6 +239,7 @@ impl Store {
             sync: SyncState::new(),
             activity: ActivityState::new(root_activity),
             sleep: SleepState::new(),
+            capture: CaptureState::new(),
         };
         match std::env::var("LISTENOOK_START").as_deref() {
             Ok("reader") => {
@@ -284,6 +287,9 @@ impl Store {
         }
         global::<Handle>().set(Handle(Some(store)));
         crate::services::transcribe::clean_up_left(store);
+        if let Some(temporary) = store.data_root().map(|root| root.join("temporary")) {
+            store.capture.recover(temporary);
+        }
         store.configure_sync();
         let root = store.data_root();
         cleanup(move || crate::services::sync::release(&root));

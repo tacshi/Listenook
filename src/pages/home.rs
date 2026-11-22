@@ -296,6 +296,7 @@ pub(crate) fn home() -> impl IntoElement {
                         .gap_1()
                         .window_drag(false)
                         .child(ui::icon_button(Icon::Search, tr("Search"), Size::Sm, move || open.set(true)))
+                        .child(when(super::capture::offered, super::capture::record_button))
                         .child(ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, util::pick_media)),
                 )
             },
@@ -335,8 +336,19 @@ pub(crate) fn home() -> impl IntoElement {
                             "Drop audio or video here, or follow a podcast. What you play shows up here."
                         })
                     },
-                    icon_text_button(Variant::Primary, Size::Md, Icon::Plus, l("Add media…"))
-                        .on_press(util::pick_media),
+                    view()
+                        .flex_row()
+                        .flex_wrap()
+                        .justify_center()
+                        .gap_2()
+                        .child(
+                            icon_text_button(Variant::Primary, Size::Md, Icon::Plus, l("Add media…"))
+                                .on_press(util::pick_media),
+                        )
+                        .child(when(super::capture::offered, || {
+                            icon_text_button(Variant::Outline, Size::Md, Icon::Record, l("Record what’s playing"))
+                                .on_press(|| crate::state::store().capture.record())
+                        })),
                 )
             })
             .otherwise(move || {

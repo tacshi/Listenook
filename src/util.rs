@@ -284,6 +284,25 @@ pub(crate) fn import_picked(paths: Vec<String>) {
     }
 }
 
+/// Puts a recording made in the app into the Library as `title`, moving its
+/// file into the library's media. The new recording's id.
+pub(crate) fn add_recording(path: &std::path::Path, title: &str) -> Option<String> {
+    let store = store();
+    let media = store.data_root()?.join("media");
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("m4a").to_lowercase();
+    let kept = media.join(format!("{}.{extension}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&media).ok()?;
+    if std::fs::rename(path, &kept).is_err() {
+        std::fs::copy(path, &kept).ok()?;
+        let _ = std::fs::remove_file(path);
+    }
+    let mut job = store.new_job(kept.to_str()?, listenook_core::JobSourceOrigin::Manual);
+    job.display_title = Some(title.to_owned());
+    let id = job.id.clone();
+    store.add_job(job);
+    Some(id)
+}
+
 pub(crate) fn import_opened(paths: Vec<String>) -> usize {
     take_in_with(paths.into_iter().map(std::path::PathBuf::from).collect(), |from, to| {
         let Some(source) = from.to_str() else {

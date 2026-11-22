@@ -31,6 +31,12 @@ pub fn practice() -> AdaptiveColor {
     role("practice", theme().chart_2)
 }
 
+/// What is being recorded: the red of a recording light. Only for the
+/// recording itself (its dot, its live meter), never for an action.
+pub fn recording() -> AdaptiveColor {
+    role("recording", theme().destructive)
+}
+
 pub fn control_border() -> AdaptiveColor {
     role("control-border", theme().input)
 }

@@ -31,6 +31,12 @@ impl SleepState {
         self.stops.get()
     }
 
+    /// Pauses every player, as the timer does when it runs out: recording
+    /// what the computer plays starts.
+    pub(crate) fn pause_players(&self) {
+        self.stops.update(|count| *count += 1);
+    }
+
     /// A player reported progress while playing.
     pub(crate) fn heard(&self) {
         let now = Instant::now();

@@ -168,6 +168,7 @@ pub(crate) fn library() -> impl IntoElement {
                                 }
                             }),
                         )
+                        .child(when(super::capture::offered, super::capture::record_button))
                         .child(when(
                             || !crate::shell::system_header(),
                             || ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, util::pick_media),
@@ -180,7 +181,7 @@ pub(crate) fn library() -> impl IntoElement {
         .child(
             when(
                 move || store.jobs().is_empty(),
-                || {
+                move || {
                     empty_state(
                         Icon::Wave,
                         move || tr(if platform::is_phone() { "Add audio or video" } else { "Drop audio or video here" }),
@@ -189,12 +190,26 @@ pub(crate) fn library() -> impl IntoElement {
                                 "Choose audio or video from the Files app. Up to 5 hours each."
                             } else if platform::is_phone() {
                                 "Put files in the Listenook folder in the Files app, then tap Add media. Up to 5 hours each."
+                            } else if super::capture::offered() {
+                                "A subtitle file with the same name becomes its transcript. Or record a video or \
+                                 audio as it plays in another app. Up to 5 hours each."
                             } else {
                                 "A subtitle file with the same name becomes its transcript. Up to 5 hours each."
                             })
                         },
-                        icon_text_button(Variant::Primary, Size::Md, Icon::Plus, l("Add media…"))
-                            .on_press(util::pick_media),
+                        view()
+                            .flex_row()
+                            .flex_wrap()
+                            .justify_center()
+                            .gap_2()
+                            .child(
+                                icon_text_button(Variant::Primary, Size::Md, Icon::Plus, l("Add media…"))
+                                    .on_press(util::pick_media),
+                            )
+                            .child(when(super::capture::offered, move || {
+                                icon_text_button(Variant::Outline, Size::Md, Icon::Record, l("Record what’s playing"))
+                                    .on_press(move || store.capture.record())
+                            })),
                     )
                 },
             )

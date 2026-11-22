@@ -117,6 +117,44 @@ pub fn icon_text_button(
     dressed(nsh_base::button(), variant, size, false).child(icon(glyph, size.icon())).child(label_text(label, size))
 }
 
+/// The recording light: a dot in `recording` that breathes while `live`
+/// (it rests while paused, and with reduced motion).
+pub fn recording_dot(live: impl Fn() -> bool + 'static, side: f32) -> View {
+    let live = std::rc::Rc::new(live);
+    let calm = live.clone();
+    view().size(px(side)).items_center().justify_center().child(
+        when(
+            move || live() && !reduce_motion(),
+            move || {
+                let breath = motion();
+                let _ = breath.play(MotionPreset::Breathe);
+                view().bind_motion(&breath).size(px(side)).rounded_full().bg(tokens::recording)
+            },
+        )
+        .otherwise(move || {
+            let calm = calm.clone();
+            view()
+                .size(px(side))
+                .rounded_full()
+                .bg(move || if calm() { tokens::recording() } else { theme().muted_foreground })
+        }),
+    )
+}
+
+/// A small outline button standing for a recording under way: its light
+/// and how long it has run, in tabular figures. Pressed, it shows it.
+pub fn recording_button(
+    name: impl Into<SharedString>,
+    live: impl Fn() -> bool + 'static,
+    elapsed: impl IntoReactive<SharedString>,
+) -> ButtonElement {
+    dressed(nsh_base::button(), Variant::Outline, Size::Sm, false)
+        .accessibility_label(name.into())
+        .text_color(|| theme().foreground)
+        .child(recording_dot(live, 8.0))
+        .child(label_text(elapsed, Size::Sm).tabular_nums())
+}
+
 pub fn icon_button(glyph: Icon, name: impl Into<SharedString>, size: Size, on_press: impl Fn() + 'static) -> View {
     icon_button_as(Variant::Ghost, glyph, name, size, on_press)
 }

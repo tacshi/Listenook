@@ -64,6 +64,12 @@ takes files of up to 5 hours.
   and AVI: Listenook appears in **Open With** on macOS, and the Windows
   installer registers those types. Choose it as the default in Finder's
   **Get Info → Open with** or Windows **Default apps**.
+- **Record what's playing:** on a Mac (macOS 14.2 or later) or a Windows PC,
+  record the sound of a video or audio playing in any other app, then trim it
+  and keep it in the Library. Silent gaps are cut out for you (switch it off
+  to keep them), and handles trim the start and end. Recording goes on while
+  you use the rest of the app; **⇧⌘R** / **Ctrl+Shift+R** starts or stops it.
+  macOS asks once for permission to record system audio.
 - **Import subtitles:** a SRT, WebVTT, or ASS/SSA file with the same name as
   the media becomes its transcript; when several files match, you choose one.
   Imported subtitles use their parsed cue timings; they do not run speech

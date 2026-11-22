@@ -44,6 +44,7 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
         std::env::remove_var("LISTENOOK_START");
         std::env::remove_var("LISTENOOK_TABLET_MENUS");
         std::env::remove_var("LISTENOOK_SYNC_PORT");
+        std::env::remove_var("LISTENOOK_CAPTURE");
     }
     seed(&root);
     let app = Headless::start(EngineConfig {
@@ -1956,4 +1957,93 @@ fn a_corrected_sentence_with_its_translation_untouched_is_translated_again_on_sa
         "one sentence leaves the recording's translation alone"
     );
     assert_ne!(saved["translation_state"]["total_segments"], 1);
+}
+
+fn fake_capture(_: &Path) {
+    unsafe { std::env::set_var("LISTENOOK_CAPTURE", "fake") };
+}
+
+fn left_files(folder: &Path, start: &str) -> Vec<String> {
+    std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(start))
+        .collect()
+}
+
+/// The made-up recording: a second of silence, two of sound, four of
+/// silence, two of sound, then silence for as long as it runs.
+#[test]
+fn a_recording_of_what_plays_is_cut_of_its_silence_and_kept_in_the_library() {
+    let mut it = start("capture", fake_capture, Vec::new());
+    it.app.press("label:Record what’s playing >> nth=0").unwrap();
+    it.app.wait_for("Recording goes on if you close this window.").unwrap();
+    it.app.wait_for(r"text:/^00:(09|1\d)$/ >> nth=0").unwrap();
+    it.app.press("Pause").unwrap();
+    it.app.wait_for("Resume").unwrap();
+    it.app.press("Stop").unwrap();
+    it.app.wait_for("Trim recording").unwrap();
+    it.app.wait_for(r"text:/^Cuts 00:\d\d of silence in 3 places\.$/").unwrap();
+    it.app.wait_for(r"text:/^Keeps 00:04 of 00:(09|1\d)$/").unwrap();
+    it.app.press("Cut out silent gaps").unwrap();
+    it.app.wait_for(r"text:/of silence in 3 places stays in\.$/").unwrap();
+    it.app.press("Cut out silent gaps").unwrap();
+    it.app.wait_for(r"text:/^Keeps 00:04 /").unwrap();
+    it.app.clear("id:recording-name").unwrap();
+    it.app.type_text("id:recording-name", "Evening news").unwrap();
+    it.app.press("Save to Library").unwrap();
+    it.app.wait_for("Saved to your Library.").unwrap();
+    it.app.wait_for("Evening news").unwrap();
+    assert!(!it.app.shows("Trim recording"));
+
+    let kept = left_files(&it.root.join("media"), "");
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let file = it.root.join("media").join(&kept[0]);
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        assert!(kept[0].ends_with(".m4a"), "kept as AAC: {kept:?}");
+    }
+    assert!(std::fs::metadata(&file).unwrap().len() > 1000);
+    assert!(left_files(&it.root.join("temporary"), "capture-").is_empty(), "nothing is left behind");
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(it.root.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["capture_transcribe"], json!(false), "the choice to transcribe is kept");
+}
+
+#[test]
+fn a_recording_left_unsaved_is_offered_again_at_the_next_start() {
+    let mut it = start(
+        "capture-left",
+        |root| {
+            fake_capture(root);
+            let folder = root.join("temporary");
+            std::fs::create_dir_all(&folder).unwrap();
+            let mut wav =
+                listenook_core::capture::WavWriter::create(&folder.join("capture-left.wav"), 8_000, 2).unwrap();
+            let sound: Vec<i16> = (0..8_000 * 3).flat_map(|at| [((at % 40) * 400) as i16; 2]).collect();
+            wav.write(&sound).unwrap();
+            wav.sync().unwrap();
+            std::fs::write(folder.join("capture-left.kept.wav"), b"half made").unwrap();
+        },
+        Vec::new(),
+    );
+    it.app.wait_for("A recording wasn’t saved.").unwrap();
+    assert!(it.app.shows("Not saved"), "the sidebar keeps it");
+    assert_eq!(left_files(&it.root.join("temporary"), "capture-"), vec!["capture-left.wav".to_owned()]);
+    it.app.press("Open").unwrap();
+    it.app.wait_for("Trim recording").unwrap();
+    assert!(it.app.shows("Keeps 00:03 of 00:03"));
+    it.app.on_dialog(|dialog| {
+        assert_eq!(dialog.title.as_deref(), Some("Discard this recording?"));
+        DialogAnswer::Press("Discard".to_owned())
+    });
+    it.app.press("Discard…").unwrap();
+    it.app.wait_for_gone("Trim recording", GONE).unwrap();
+    it.app.wait_for_gone("Not saved", GONE).unwrap();
+    let deadline = Instant::now() + GONE;
+    while !left_files(&it.root.join("temporary"), "capture-").is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(left_files(&it.root.join("temporary"), "capture-").is_empty());
 }

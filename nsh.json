@@ -30,6 +30,11 @@
       "ITSAppUsesNonExemptEncryption": false
     }
   },
+  "macos": {
+    "infoPlist": {
+      "NSAudioCaptureUsageDescription": "Listenook records what other apps play when you ask it to, so you can keep it and transcribe it."
+    }
+  },
   "singleInstance": true,
   "fileTypes": [
     {
