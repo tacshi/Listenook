@@ -311,6 +311,10 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
             move || menu_action(Icon::Languages, l("Use a subtitle file…"), move || util::attach_subtitles(id())),
         ))
         .child(when(
+            move || store.job(&id()).is_some_and(|job| can_transcribe_again(&job)),
+            move || menu_action(Icon::Transcribe, l("Transcribe again…"), move || transcribe_again(&id())),
+        ))
+        .child(when(
             move || {
                 store
                     .job(&id())
@@ -381,6 +385,40 @@ pub(crate) fn retry(id: &str) {
     if failed_download { podcasts::download(id) } else { transcribe::retry(id) }
 }
 
+pub(crate) fn can_transcribe_again(job: &Job) -> bool {
+    job.has_transcript() && !job.is_busy()
+}
+
+/// Asks before transcribing a recording once more, since the new transcript replaces this one.
+pub(crate) fn transcribe_again(id: &str) {
+    let Some(job) = store().job_now(id) else {
+        return;
+    };
+    let id = id.to_owned();
+    if !std::path::Path::new(&job.source_path).is_file() {
+        return missing_source(id);
+    }
+    confirm_destructive(
+        format!("{} “{}”?", tr("Transcribe again"), job.title()),
+        tr(
+            "It’s transcribed with your current settings. This transcript stays until the new one is ready, which then replaces it with its edits, translation and AI Brief.",
+        ),
+        tr("Cancel"),
+        tr("Transcribe again"),
+        move || transcribe::again(&id),
+    );
+}
+
+fn missing_source(id: String) {
+    if !platform::is_phone() || cfg!(target_os = "ios") {
+        ui::toast_with_action(ui::Tone::Info, error_text("missing_source"), tr("Relink media…"), move || {
+            util::relink(id.clone())
+        });
+    } else {
+        ui::toast(ui::Tone::Info, error_text("missing_source"));
+    }
+}
+
 /// Whether the reader can open `job`: to read its transcript, or else to play its media.
 pub(crate) fn can_open(job: &Job) -> bool {
     job.has_transcript() || (job.status != JobStatus::Downloading && std::path::Path::new(&job.source_path).is_file())
@@ -400,12 +438,8 @@ pub(crate) fn open(id: &str) {
         ui::toast(ui::Tone::Info, tr("It opens once it’s downloaded."));
     } else if job.error_code.as_deref() == Some("podcast_download_failed") {
         ui::toast_with_action(ui::Tone::Info, error_text("podcast_download_failed"), tr("Retry"), move || retry(&id));
-    } else if !platform::is_phone() || cfg!(target_os = "ios") {
-        ui::toast_with_action(ui::Tone::Info, error_text("missing_source"), tr("Relink media…"), move || {
-            util::relink(id.clone())
-        });
     } else {
-        ui::toast(ui::Tone::Info, error_text("missing_source"));
+        missing_source(id);
     }
 }
 

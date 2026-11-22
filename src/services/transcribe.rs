@@ -1,8 +1,8 @@
 use std::{path::PathBuf, time::Duration};
 
 use listenook_core::{
-    CleanupState, Job, JobProgress, JobStatus, MediaMetadata, TranscriptionProvider, TranslationState,
-    TranslationStatus, parser, subtitles,
+    AdScan, CleanupState, Document, Job, JobProgress, JobStatus, MediaMetadata, TranscriptAcquisitionMode,
+    TranscriptionProvider, TranslationState, TranslationStatus, parser, subtitles,
 };
 use nsh_core::prelude::*;
 
@@ -10,7 +10,10 @@ use super::{
     llm, local,
     remote::{Failure, Progress, Provider, SONIOX_MODEL},
 };
-use crate::state::{Store, secrets, store};
+use crate::{
+    state::{Store, error_text, secrets, store, tr},
+    ui::{Tone, toast},
+};
 
 pub(crate) fn start_ready() {
     let ready: Vec<String> =
@@ -42,8 +45,59 @@ pub(crate) fn start(id: &str) {
                 job.error_code = Some(failure.code.clone());
                 job.error_message = Some(failure.message.clone());
             });
+            if store.job_now(&id).is_some_and(|job| job.has_transcript()) {
+                // Transcribing it again failed: the transcript it had is still good, so it stays.
+                // Set apart from the failure above, so a notification still says it failed.
+                keep_transcript(store, &id);
+                toast(Tone::Error, format!("{} {}", error_text(&failure.code), tr("The earlier transcript is kept.")));
+            }
             clean_up(store, &id).await;
         }
+    });
+}
+
+/// Transcribes a recording that already has a transcript once more, with the current settings.
+/// The transcript it has stays readable until the new one replaces it, and stays for good if
+/// transcribing fails or is cancelled.
+pub(crate) fn again(id: &str) {
+    store().update_job(id, |job| {
+        job.remote_file_id = None;
+        job.remote_transcription_id = None;
+        job.cleanup_state = CleanupState::None;
+    });
+    start(id);
+}
+
+fn keep_transcript(store: Store, id: &str) {
+    store.update_job(id, |job| {
+        job.status = JobStatus::Completed;
+        job.progress = JobProgress { stage: "complete".into(), fraction: Some(1.0), detail: None };
+        job.error_code = None;
+        job.error_message = None;
+    });
+}
+
+/// Finding no speech when transcribing again leaves the transcript it had, rather than none.
+fn keep_if_silent(store: Store, id: &str, empty: bool) -> Result<(), Failure> {
+    match empty && store.job_now(id).is_some_and(|job| job.has_transcript()) {
+        true => Err(Failure::new("no_speech", "No speech was found.")),
+        false => Ok(()),
+    }
+}
+
+/// Puts a new transcript in place, dropping what was made from the one it replaces.
+fn put_transcript(store: Store, id: &str, document: Document) {
+    llm::cancel_translation(id);
+    llm::cancel_brief(id);
+    llm::cancel_ad_scan(id);
+    store.update_job(id, |job| {
+        job.document = Some(document);
+        job.ai_brief = None;
+        job.ai_generation_state = Default::default();
+        job.ad_scan = AdScan::default();
+        job.translation_state = TranslationState::default();
+        job.extra.remove("forced_alignment");
+        job.transcript_acquisition_mode = TranscriptAcquisitionMode::parse(job.transcription_provider.as_str());
     });
 }
 
@@ -56,7 +110,8 @@ pub(crate) fn cancel(id: &str) {
     for kind in ["wav", "m4a"] {
         let _ = std::fs::remove_file(std::env::temp_dir().join(format!("listenook-{id}.{kind}")));
     }
-    if store.job_now(id).is_some_and(|job| job.status == JobStatus::Aligning) {
+    let job = store.job_now(id);
+    if job.as_ref().is_some_and(|job| job.status == JobStatus::Aligning) {
         store.update_job(id, |job| {
             job.status = JobStatus::Completed;
             job.progress = JobProgress { stage: "complete".into(), fraction: Some(1.0), detail: None };
@@ -67,11 +122,15 @@ pub(crate) fn cancel(id: &str) {
         });
         return;
     }
-    store.update_job(id, |job| {
-        job.status = JobStatus::Cancelled;
-        job.progress.stage = "cancelled".into();
-        job.error_code = Some("cancelled".into());
-    });
+    if job.is_some_and(|job| job.has_transcript()) {
+        keep_transcript(store, id);
+    } else {
+        store.update_job(id, |job| {
+            job.status = JobStatus::Cancelled;
+            job.progress.stage = "cancelled".into();
+            job.error_code = Some("cancelled".into());
+        });
+    }
     let id = id.to_owned();
     store.run(async move { clean_up(store, &id).await });
 }
@@ -235,10 +294,12 @@ async fn run(store: Store, id: &str) -> Result<(), Failure> {
     let empty = document.segments.is_empty();
     let duration_ms = document.segments.last().map_or(0, |segment| segment.end_ms);
     let has_video = matches!(subtitles::extension(&job.source_path).as_str(), "mp4" | "mkv" | "avi");
+    let translated = document.segments.iter().filter(|s| s.has_translation()).count() as u32;
+    let total = document.segments.len() as u32;
+    keep_if_silent(store, id, empty)?;
+    put_transcript(store, id, document);
     store.update_job(id, |job| {
         if let Some(target) = soniox_target {
-            let translated = document.segments.iter().filter(|s| s.has_translation()).count() as u32;
-            let total = document.segments.len() as u32;
             job.translation_state = TranslationState {
                 status: if translated == total { TranslationStatus::Completed } else { TranslationStatus::Partial },
                 target_language: target.to_owned(),
@@ -259,7 +320,6 @@ async fn run(store: Store, id: &str) -> Result<(), Failure> {
                 ..MediaMetadata::default()
             });
         }
-        job.document = Some(document);
         job.status = if empty { JobStatus::Empty } else { JobStatus::Completed };
         job.progress = JobProgress { stage: "complete".into(), fraction: Some(1.0), detail: None };
     });
@@ -290,6 +350,8 @@ async fn run_local(store: Store, id: &str, job: &Job) -> Result<(), Failure> {
     let empty = document.segments.is_empty();
     let timed = !document.tokens.is_empty();
     let has_video = matches!(subtitles::extension(&job.source_path).as_str(), "mp4" | "mkv" | "avi");
+    keep_if_silent(store, id, empty)?;
+    put_transcript(store, id, document);
     store.update_job(id, |job| {
         if job.metadata.is_none() {
             job.metadata = Some(MediaMetadata {
@@ -301,7 +363,6 @@ async fn run_local(store: Store, id: &str, job: &Job) -> Result<(), Failure> {
                 ..MediaMetadata::default()
             });
         }
-        job.document = Some(document);
         job.status = if empty { JobStatus::Empty } else { JobStatus::Completed };
         job.progress = JobProgress { stage: "complete".into(), fraction: Some(1.0), detail: None };
     });

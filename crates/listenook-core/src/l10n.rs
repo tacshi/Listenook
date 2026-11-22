@@ -441,6 +441,13 @@ const ZH: &[(&str, &str)] = &[
     ("Replace", "替换"),
     ("Replace existing translations", "替换已有译文"),
     ("Replace this transcript?", "替换这份转写？"),
+    ("Transcribe again…", "重新转写…"),
+    ("Transcribe again", "重新转写"),
+    (
+        "It’s transcribed with your current settings. This transcript stays until the new one is ready, which then replaces it with its edits, translation and AI Brief.",
+        "将按当前设置重新转写。新的转写完成前保留这份转写，完成后它连同其中的编辑、翻译和 AI 简报一并被替换。",
+    ),
+    ("The earlier transcript is kept.", "已保留之前的转写。"),
     ("Saved", "已保存"),
     ("Select a sentence to practice.", "选择一句进行练习。"),
     ("Setup required", "需要设置"),
@@ -884,6 +891,7 @@ fn known_error(code: &str) -> Option<(&'static str, &'static str)> {
             ("The download was damaged. Download it again.", "下载内容已损坏，请重新下载。")
         }
         "cancelled" => ("Cancelled.", "已取消。"),
+        "no_speech" => ("No speech was found.", "未发现语音。"),
         "subtitle_no_valid_cues" => ("The subtitle file has no readable cues.", "字幕文件中没有可读取的字幕。"),
         "subtitle_read_failed" => ("The subtitle file could not be read.", "无法读取字幕文件。"),
         "translation_invalid_url" => ("Enter a valid http or https base URL.", "请输入有效的 http 或 https Base URL。"),
