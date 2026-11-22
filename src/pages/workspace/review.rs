@@ -1355,6 +1355,16 @@ impl Review {
         self.selection.set(None);
     }
 
+    /// Clears the text selected in a sentence, as a tap outside it does in a
+    /// text view. A sentence's area clears on taps inside it alone (iOS, and
+    /// Android), so a tap elsewhere takes the focus off it, which clears it.
+    pub(super) fn clear_selection(&self) {
+        if self.selection.with_untracked(Option::is_some) {
+            self.selection.set(None);
+            dismiss_keyboard();
+        }
+    }
+
     pub(super) fn copy_selection(&self) {
         if let Some(picked) = self.selection.get_untracked() {
             set_clipboard(picked.text);

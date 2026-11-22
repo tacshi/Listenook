@@ -1,7 +1,8 @@
 use listenook_core::{ContentMode, Segment, format::clock, highlights};
 use nsh_base::theme;
 use nsh_core::{
-    element::{Position, desktop::MenuItem},
+    TouchPhase,
+    element::{Position, TouchEvent, desktop::MenuItem},
     prelude::*,
 };
 
@@ -278,7 +279,13 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
             review.begin_skip(index);
         }
     };
+    // Where a touch on the row went down while text of another sentence was
+    // selected: lifted there, it clears that selection and does nothing else.
+    let clears = signal(None::<Point<Points>>);
     let tap = move || {
+        if clears.get_untracked().is_some() {
+            return;
+        }
         if let Some(index) = index.get_untracked()
             && !review.finish_skip(index)
         {
@@ -590,6 +597,28 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
             }
         })
     };
+    let outer = move || {
+        view().items_center().on_touch(move |event: &TouchEvent| {
+            let Some(point) = event.points.iter().find(|point| point.changed) else {
+                return;
+            };
+            match event.phase {
+                TouchPhase::Start => {
+                    let elsewhere = review.selection.with_untracked(Option::is_some) && !picked();
+                    clears.set(elsewhere.then_some(point.page));
+                }
+                TouchPhase::End => {
+                    if let Some(from) = clears.get_untracked()
+                        && (point.page.x.0 - from.x.0).abs() < 10.0
+                        && (point.page.y.0 - from.y.0).abs() < 10.0
+                    {
+                        review.clear_selection();
+                    }
+                }
+                TouchPhase::Move | TouchPhase::Cancel => {}
+            }
+        })
+    };
     if crate::platform::is_phone() {
         let actions = move || {
             if !picked() {
@@ -598,10 +627,9 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
             let label = if review.picked_marked() { tr("Remove highlight") } else { tr("Highlight") };
             vec![MenuItem::new(label.to_string()).on_select(move || review.toggle_highlight())]
         };
-        return view().items_center().child(area().selection_menu(actions).child(line)).into_element();
+        return outer().child(area().selection_menu(actions).child(line)).into_element();
     }
-    view()
-        .items_center()
+    outer()
         .child(
             area().child(
                 ui::context_menu(line)
