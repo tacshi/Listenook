@@ -52,7 +52,7 @@ impl IntoElement for Menu {
     }
 }
 
-pub fn menu(trigger: impl IntoElement) -> Menu {
+pub fn menu(trigger: View) -> Menu {
     menu_with(signal(false), trigger)
 }
 
@@ -79,7 +79,14 @@ fn anchored_popover(open: Signal<bool>) -> nsh_base::PopoverElement {
         .popup_ending_class(tokens::POPUP_ENDING)
 }
 
-pub fn menu_with(open: Signal<bool>, trigger: impl IntoElement) -> Menu {
+/// A menu `trigger` opens. The trigger never takes the keyboard focus: a tap
+/// (on an iPad) or a click gives a button the focus, and a focused menu
+/// button opens its menu on Space, which plays or pauses instead. Opened by
+/// a key, the menu also puts the keyboard on its first item, and on an iPad,
+/// where that item never gets the focus, a tap on another item then chooses
+/// the first one.
+pub fn menu_with(open: Signal<bool>, trigger: View) -> Menu {
+    let trigger = trigger.focusable(false);
     if anchored() {
         return Menu::Anchored(anchored_popover(open).trigger(trigger));
     }

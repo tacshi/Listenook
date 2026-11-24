@@ -687,7 +687,7 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                     let open = signal(false);
                     ui::menu_with(open, ui::menu_trigger(Icon::Languages, tr("Language"), Size::Sm, open))
                 } else {
-                    menu(ui::icon_text_button(Variant::Ghost, Size::Sm, Icon::Languages, mode_label))
+                    menu(ui::menu_icon_text_button(Variant::Ghost, Size::Sm, Icon::Languages, mode_label))
                 };
                 view().window_drag(false).child(
                     picker
