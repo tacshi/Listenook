@@ -1206,7 +1206,7 @@ pub(crate) fn rate_menu(
     rate: impl Fn() -> f32 + Copy + 'static,
     set: impl Fn(f32) + Copy + 'static,
 ) -> impl IntoElement {
-    menu(ui::button(variant, Size::Sm, move || rate_label(rate())).accessibility_label(tr("Playback speed"))).children(
+    menu(ui::menu_button(variant, Size::Sm, tr("Playback speed"), move || rate_label(rate()))).children(
         RATES.iter().map(move |option| {
             let option = *option;
             ui::menu_choice(rate_label(option), move || (rate() - option).abs() < 0.001, move || set(option))
@@ -1224,8 +1224,7 @@ pub(crate) fn sleep_menu(variant: Variant, end: &'static str) -> impl IntoElemen
     let sleep = store().sleep;
     let left = move || sleep.timer().countdown().map(SharedString::from);
     let on = move || sleep.timer().is_on();
-    let trigger = ui::glyph_label_button(variant, Size::Sm, Icon::Sleep, left, on, page_narrow)
-        .accessibility_label(tr("Sleep timer"));
+    let trigger = ui::menu_glyph_label_button(variant, Size::Sm, tr("Sleep timer"), Icon::Sleep, left, on, page_narrow);
     menu(trigger)
         .child(ui::menu_choice(l("Off"), move || !sleep.timer().is_on(), move || sleep.set(Sleep::Off)))
         .children(SLEEP_AFTER.iter().map(move |&(minutes, label)| {

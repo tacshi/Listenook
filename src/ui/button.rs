@@ -43,57 +43,72 @@ impl Size {
     }
 }
 
-fn dressed(element: ButtonElement, variant: Variant, size: Size, square: bool) -> ButtonElement {
-    let scale = tokens::press_scale(square);
-    let element = element
-        .h(px(size.height()))
-        .flex_row()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .rounded(tokens::radius)
-        .transition_all()
-        .duration(motion::INSTANT)
-        .ease_out()
-        .disabled_style(|s| s.opacity(0.45));
-    let element = if square {
-        element.w(px(size.height()))
-    } else {
-        match size {
-            Size::Sm => element.px_3().gap_1p5(),
-            Size::Md => element.px_4().gap_2(),
+/// A button's look, on a button or on the view a menu opens from (whose
+/// styling methods come from other traits, so this is a macro).
+macro_rules! dress {
+    ($element:expr, $variant:expr, $size:expr, $square:expr) => {{
+        let (variant, size, square) = ($variant, $size, $square);
+        let scale = tokens::press_scale(square);
+        let element = $element
+            .h(px(size.height()))
+            .flex_row()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .rounded(tokens::radius)
+            .transition_all()
+            .duration(motion::INSTANT)
+            .ease_out()
+            .disabled_style(|s| s.opacity(0.45));
+        let element = if square {
+            element.w(px(size.height()))
+        } else {
+            match size {
+                Size::Sm => element.px_3().gap_1p5(),
+                Size::Md => element.px_4().gap_2(),
+            }
+        };
+        match variant {
+            Variant::Primary => element
+                .bg(|| theme().primary)
+                .text_color(|| theme().primary_foreground)
+                .hover(|s| s.bg(tokens::primary_hover))
+                .active(move |s| s.bg(tokens::primary_active).scale(scale)),
+            Variant::Default => element
+                .bg(|| theme().secondary)
+                .text_color(|| theme().secondary_foreground)
+                .hover(|s| s.bg(|| theme().accent))
+                .active(move |s| s.bg(|| theme().input).scale(scale)),
+            Variant::Outline => element
+                .border_1()
+                .border_color(|| theme().input)
+                .text_color(|| theme().primary)
+                .hover(|s| s.bg(|| theme().muted))
+                .active(move |s| s.bg(|| theme().accent).scale(scale)),
+            Variant::Ghost => element
+                .text_color(|| theme().foreground)
+                .hover(|s| s.bg(|| theme().accent))
+                .active(move |s| s.bg(|| theme().input).scale(scale)),
+            Variant::Danger => element
+                .text_color(|| theme().destructive)
+                .hover(|s| s.bg(|| theme().destructive.opacity(0.1)))
+                .active(move |s| s.bg(|| theme().destructive.opacity(0.18)).scale(scale)),
+            Variant::Picture => element
+                .text_color(|| theme().foreground.dark)
+                .hover(|s| s.bg(|| theme().foreground.dark.opacity(0.14)))
+                .active(move |s| s.bg(|| theme().foreground.dark.opacity(0.24)).scale(scale)),
         }
-    };
-    match variant {
-        Variant::Primary => element
-            .bg(|| theme().primary)
-            .text_color(|| theme().primary_foreground)
-            .hover(|s| s.bg(tokens::primary_hover))
-            .active(move |s| s.bg(tokens::primary_active).scale(scale)),
-        Variant::Default => element
-            .bg(|| theme().secondary)
-            .text_color(|| theme().secondary_foreground)
-            .hover(|s| s.bg(|| theme().accent))
-            .active(move |s| s.bg(|| theme().input).scale(scale)),
-        Variant::Outline => element
-            .border_1()
-            .border_color(|| theme().input)
-            .text_color(|| theme().primary)
-            .hover(|s| s.bg(|| theme().muted))
-            .active(move |s| s.bg(|| theme().accent).scale(scale)),
-        Variant::Ghost => element
-            .text_color(|| theme().foreground)
-            .hover(|s| s.bg(|| theme().accent))
-            .active(move |s| s.bg(|| theme().input).scale(scale)),
-        Variant::Danger => element
-            .text_color(|| theme().destructive)
-            .hover(|s| s.bg(|| theme().destructive.opacity(0.1)))
-            .active(move |s| s.bg(|| theme().destructive.opacity(0.18)).scale(scale)),
-        Variant::Picture => element
-            .text_color(|| theme().foreground.dark)
-            .hover(|s| s.bg(|| theme().foreground.dark.opacity(0.14)))
-            .active(move |s| s.bg(|| theme().foreground.dark.opacity(0.24)).scale(scale)),
-    }
+    }};
+}
+
+fn dressed(element: ButtonElement, variant: Variant, size: Size, square: bool) -> ButtonElement {
+    dress!(element, variant, size, square)
+}
+
+/// A menu's trigger dressed as a button: a view the menu itself presses
+/// ([`super::menu`]), named `name` for screen readers.
+fn dressed_trigger(name: SharedString, variant: Variant, size: Size, square: bool) -> View {
+    dress!(view(), variant, size, square).role(AccessibilityRole::Button).label(name)
 }
 
 fn label_text(label: impl IntoReactive<SharedString>, size: Size) -> Text {
@@ -115,6 +130,30 @@ pub fn icon_text_button(
     label: impl IntoReactive<SharedString>,
 ) -> ButtonElement {
     dressed(nsh_base::button(), variant, size, false).child(icon(glyph, size.icon())).child(label_text(label, size))
+}
+
+/// [`button`] opening a menu: `label` shows, `name` is what screen readers
+/// say (Playback speed for "1×").
+pub fn menu_button(
+    variant: Variant,
+    size: Size,
+    name: impl Into<SharedString>,
+    label: impl IntoReactive<SharedString>,
+) -> View {
+    dressed_trigger(name.into(), variant, size, false).child(label_text(label, size))
+}
+
+/// [`icon_text_button`] opening a menu, named by what it shows.
+pub fn menu_icon_text_button(
+    variant: Variant,
+    size: Size,
+    glyph: Icon,
+    label: impl IntoReactive<SharedString>,
+) -> View {
+    dress!(view(), variant, size, false)
+        .role(AccessibilityRole::Button)
+        .child(icon(glyph, size.icon()))
+        .child(label_text(label, size))
 }
 
 /// The recording light: a dot in `recording` that breathes while `live`
@@ -265,23 +304,23 @@ pub fn toggle_button(
     )
 }
 
-/// A button showing `glyph`, with `label` beside it while there is one, lit
-/// while `on`: a timer's button showing what is left. While `crowded`, the
-/// label shows in place of the glyph.
-pub fn glyph_label_button(
+/// A button opening a menu, showing `glyph`, with `label` beside it while
+/// there is one, lit while `on`: a timer's button showing what is left.
+/// While `crowded`, the label shows in place of the glyph.
+pub fn menu_glyph_label_button(
     variant: Variant,
     size: Size,
+    name: impl Into<SharedString>,
     glyph: Icon,
     label: impl Fn() -> Option<SharedString> + Copy + 'static,
     on: impl Fn() -> bool + Copy + 'static,
     crowded: impl Fn() -> bool + Copy + 'static,
-) -> ButtonElement {
+) -> View {
     let lit = move || if variant == Variant::Picture { theme().primary.dark } else { color(theme().primary) };
-    dressed(nsh_base::button(), variant, size, false)
+    dressed_trigger(name.into(), variant, size, false)
         .px(px((size.height() - size.icon()) / 2.0))
         .min_w(px(size.height()))
-        .selected(on)
-        .selected_style(move |s| s.bg(move || lit().opacity(0.16)).text_color(lit))
+        .style_when(on, move |s| s.bg(move || lit().opacity(0.16)).text_color(lit))
         .child(when(move || label().is_none() || !crowded(), move || icon(glyph, size.icon())))
         .child(when(
             move || label().is_some(),
