@@ -265,7 +265,7 @@ fn paired_devices() -> impl IntoElement {
         panel()
             .child(hint(move || {
                 if paired() {
-                    tr("This device syncs on its own with these devices whenever both are open on the same network. Recordings over 500 MB are copied only when you sync yourself.")
+                    tr("This device syncs on its own with these devices whenever both are open on the same network or on Tailscale. Recordings over 500 MB are copied only when you sync yourself, and over Tailscale only when you ask for them.")
                 } else {
                     tr("This device is not paired with any other. Open Sync to pair one with a code.")
                 }

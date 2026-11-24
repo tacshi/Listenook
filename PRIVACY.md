@@ -38,15 +38,23 @@ renames, changes, or deletes source media. Discovery alone never uploads or
 transcribes a file; the user must still press **Transcribe**.
 
 Syncing the Library between your own devices is optional and stays on your
-local network. Until you open **Sync with another device**, Listenook neither
-listens for nor announces itself to other devices. Once a device is set
-visible there, it answers on TCP and UDP port 47823 with its name, platform
-and a random installation ID, and looks for other copies of Listenook on the
-same network (a multicast announcement and a query of the local /24). A sync
-copies recordings' manifests (transcripts, translations, AI Briefs, groups and
-tags), media files, which podcasts you follow or have unfollowed, and where
-you left each episode directly between your paired devices, encrypted with
-TLS 1.3. Devices pair once with a six-digit code shown on the other device;
+local network, or on your Tailscale network (tailnet) when both devices run
+Tailscale. Listenook does not include Tailscale or sign in to it; it uses the
+connection the Tailscale app already provides. Until you open **Sync with
+another device**, Listenook neither listens for nor announces itself to other
+devices. Once a device is set visible there, it answers on TCP and UDP port
+47823 with its name, platform and a random installation ID (over TCP, also its
+Tailscale addresses, if any), and looks for other copies of Listenook on the
+same network (a multicast announcement and a query of the local /24). It
+answers calls from the local network and, while it is on Tailscale itself,
+from Tailscale's address ranges; paired devices remember its Tailscale
+addresses to sync away from home. Over Tailscale, recordings over 500 MB are
+copied only when you ask for them. When Tailscale cannot connect two devices
+directly, it may relay their traffic through its servers, still encrypted end
+to end. A sync copies recordings' manifests (transcripts, translations, AI
+Briefs, groups and tags), media files, which podcasts you follow or have
+unfollowed, and where you left each episode directly between your paired
+devices, encrypted with TLS 1.3. Devices pair once with a six-digit code shown on the other device;
 the code is checked without being sent (SPAKE2), and each device keeps its own
 key in its data folder, by which the paired devices know it. A device answers
 a sync only from a device paired with it, and a device you remove can no

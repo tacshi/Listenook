@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket},
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex, MutexGuard, OnceLock,
@@ -48,6 +48,28 @@ const HANDLERS: usize = 32;
 const REPLIES_WITHIN: Duration = Duration::from_millis(1500);
 const MANIFEST_LIMIT: u64 = 256 * 1024 * 1024;
 pub(crate) const LARGE_MEDIA: u64 = 500 * 1024 * 1024;
+
+/// Which recordings over `LARGE_MEDIA` a sync copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Large {
+    /// None: the syncs that run on their own.
+    Left,
+    /// Those of a device on the same network. Over Tailscale, often a phone's data plan, they
+    /// are left for a sync by hand on the same network, or for `All`.
+    Nearby,
+    /// All of them, over Tailscale too: the person asked for them.
+    All,
+}
+
+impl Large {
+    fn leaves(self, address: SocketAddr) -> bool {
+        match self {
+            Large::Left => true,
+            Large::Nearby => is_tailscale(address.ip()),
+            Large::All => false,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Peer {
@@ -99,6 +121,8 @@ pub(crate) struct Serving {
 pub(crate) struct Summary {
     pub(crate) received: u32,
     pub(crate) sent: u32,
+    /// Recordings whose media over `LARGE_MEDIA` was left because the sync went over Tailscale.
+    pub(crate) left: u32,
 }
 
 #[derive(Debug, Default)]
@@ -132,10 +156,48 @@ struct Ledger {
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 #[serde(default)]
 struct Seen {
+    /// Where the device was last reached on a local network.
     address: String,
+    /// Where it can be reached on Tailscale: the addresses it last gave, or where it was reached.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tailscale: Vec<String>,
     synced_at: String,
     mine: String,
     theirs: String,
+}
+
+impl Seen {
+    /// Where the device can be reached, the local network first.
+    fn places(&self) -> impl Iterator<Item = SocketAddr> + '_ {
+        std::iter::once(&self.address).chain(&self.tailscale).filter_map(|place| place.parse().ok())
+    }
+
+    fn reached(&mut self, address: SocketAddr) {
+        let place = address.to_string();
+        if !is_tailscale(address.ip()) {
+            self.address = place;
+        } else if !self.tailscale.contains(&place) {
+            self.tailscale.insert(0, place);
+            self.tailscale.truncate(4);
+        }
+    }
+
+    /// Keeps the Tailscale addresses `device` gave. None given, as when Tailscale is off there
+    /// or it runs a version before them, keeps those known.
+    fn learn(&mut self, device: &Device) -> bool {
+        let given: Vec<String> = device
+            .tailscale
+            .iter()
+            .filter(|ip| is_tailscale(**ip))
+            .take(4)
+            .map(|ip| SocketAddr::new(*ip, device.port).to_string())
+            .collect();
+        if given.is_empty() || given == self.tailscale {
+            return false;
+        }
+        self.tailscale = given;
+        true
+    }
 }
 
 struct Pairing {
@@ -287,12 +349,25 @@ impl State {
 
     fn saw(&mut self, id: &str, address: SocketAddr, revisions: Option<(String, String)>) {
         let seen = self.ledger.seen.entry(id.to_owned()).or_default();
-        seen.address = address.to_string();
+        seen.reached(address);
         if let Some((mine, theirs)) = revisions {
             seen.synced_at = now_iso();
             (seen.mine, seen.theirs) = (mine, theirs);
         }
         self.save();
+    }
+
+    /// Where the paired device `id` may be: where it was seen last, then where it was reached
+    /// before, the local network ahead of Tailscale.
+    fn places(&self, id: &str) -> Vec<SocketAddr> {
+        let mut places: Vec<SocketAddr> = self.peers.get(id).map(|(peer, _)| peer.address).into_iter().collect();
+        for place in self.ledger.seen.get(id).into_iter().flat_map(Seen::places) {
+            if !places.contains(&place) {
+                places.push(place);
+            }
+        }
+        places.sort_by_key(|place| is_tailscale(place.ip()));
+        places
     }
 
     fn adopt(&mut self, circle: Circle) {
@@ -434,6 +509,7 @@ pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible
         platform: platform().into(),
         port: port(),
         revision: String::new(),
+        tailscale: Vec::new(),
     };
     let me = state.me.clone();
     let renamed = state
@@ -469,6 +545,7 @@ pub(crate) fn configure(root: Option<PathBuf>, id: String, name: String, visible
     }
     if visible {
         thread::spawn(move || serve(turn));
+        thread::spawn(move || serve_v6(turn));
         thread::spawn(move || listen(turn));
     }
 }
@@ -535,18 +612,12 @@ pub(crate) fn leave() {
         let Some(circle) = state.ledger.circle.clone() else {
             return;
         };
-        let places: Vec<(SocketAddr, String)> = circle
+        let places: Vec<(Vec<SocketAddr>, String)> = circle
             .members
             .iter()
             .filter(|(id, member)| **id != state.me.id && !member.key.is_empty())
-            .filter_map(|(id, member)| {
-                let address = state
-                    .peers
-                    .get(id)
-                    .map(|(peer, _)| peer.address)
-                    .or_else(|| state.ledger.seen.get(id).and_then(|seen| seen.address.parse().ok()))?;
-                Some((address, member.key.clone()))
-            })
+            .map(|(id, member)| (state.places(id), member.key.clone()))
+            .filter(|(places, _)| !places.is_empty())
             .collect();
         let identity = state.identity.clone();
         state.leave();
@@ -555,11 +626,16 @@ pub(crate) fn leave() {
     let Some(identity) = identity else {
         return;
     };
-    for (address, key) in places {
+    for (addresses, key) in places {
         let identity = identity.clone();
         thread::spawn(move || {
             let agent = identity.agent(Some(&key), None, Duration::from_secs(3));
-            let _ = agent.post(&format!("https://{address}/listenook/leave")).send_bytes(b"{}");
+            for address in addresses {
+                let told = agent.post(&format!("https://{address}/listenook/leave")).send_bytes(b"{}");
+                if !matches!(told, Err(ureq::Error::Transport(_))) {
+                    break;
+                }
+            }
         });
     }
 }
@@ -647,7 +723,9 @@ struct Announcement {
 
 fn wake(serving_on: Option<u16>) {
     if let Some(port) = serving_on {
-        let _ = TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), Duration::from_millis(500));
+        for host in [IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)] {
+            let _ = TcpStream::connect_timeout(&SocketAddr::new(host, port), Duration::from_millis(500));
+        }
     }
     if let Ok(socket) = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)) {
         let _ = socket.send_to(&[], (Ipv4Addr::LOCALHOST, PORT));
@@ -810,26 +888,93 @@ pub(crate) fn search() {
 }
 
 pub(crate) fn find_at(text: &str) -> Option<Peer> {
-    let text = text.trim().trim_start_matches("http://").trim_end_matches('/');
-    let with_port = if text.rsplit_once(':').is_some_and(|(_, port)| port.parse::<u16>().is_ok()) {
-        text.to_owned()
-    } else {
-        format!("{text}:{PORT}")
-    };
-    let address = with_port.to_socket_addrs().ok()?.find(SocketAddr::is_ipv4)?;
-    let device = ask(address)?;
-    remember(device.clone(), address);
-    Some(Peer { device, address })
+    places_at(text).into_iter().find_map(|address| {
+        let device = ask(address)?;
+        remember(device.clone(), address);
+        Some(Peer { device, address })
+    })
 }
 
-fn is_local(address: IpAddr) -> bool {
-    match address {
+/// The places `text` names, IPv4 first: an IP address, or a name, MagicDNS names on Tailscale
+/// among them; with a port or without.
+fn places_at(text: &str) -> Vec<SocketAddr> {
+    let text = text.trim().trim_start_matches("http://").trim_start_matches("https://").trim_end_matches('/');
+    let mut places: Vec<SocketAddr> = if let Ok(ip) = text.trim_start_matches('[').trim_end_matches(']').parse() {
+        vec![SocketAddr::new(ip, PORT)]
+    } else if let Ok(address) = text.parse() {
+        vec![address]
+    } else if text.rsplit_once(':').is_some_and(|(_, port)| port.parse::<u16>().is_ok()) {
+        text.to_socket_addrs().map(Iterator::collect).unwrap_or_default()
+    } else {
+        (text, PORT).to_socket_addrs().map(Iterator::collect).unwrap_or_default()
+    };
+    places.sort_by_key(SocketAddr::is_ipv6);
+    places.dedup();
+    places
+}
+
+/// Whether `ip` is in the ranges Tailscale gives its devices addresses from: 100.64.0.0/10,
+/// which carriers use too, and fd7a:115c:a1e0::/48.
+pub(crate) fn is_tailscale(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => is_shared(v4),
+        IpAddr::V6(v6) => v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
+    }
+}
+
+/// 100.64.0.0/10, shared by carriers and Tailscale.
+fn is_shared(v4: Ipv4Addr) -> bool {
+    let [first, second, ..] = v4.octets();
+    first == 100 && second & 0xc0 == 64
+}
+
+/// This device's addresses on Tailscale, IPv4 first.
+fn tailscale_addresses() -> Vec<IpAddr> {
+    let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+    tailscale_of(interfaces.into_iter().filter(|interface| !interface.is_loopback()).map(|i| (i.name.clone(), i.ip())))
+}
+
+/// The Tailscale addresses among `interfaces`, by name and address. A carrier's address in
+/// 100.64.0.0/10 is told from Tailscale's by its interface: Tailscale's has an address in
+/// Tailscale's IPv6 range too, unless IPv6 is turned off in the tailnet.
+fn tailscale_of(interfaces: impl Iterator<Item = (String, IpAddr)>) -> Vec<IpAddr> {
+    let interfaces: Vec<(String, IpAddr)> = interfaces.collect();
+    let tunnels: HashSet<&str> =
+        interfaces.iter().filter(|(_, ip)| ip.is_ipv6() && is_tailscale(*ip)).map(|(name, _)| name.as_str()).collect();
+    let mut addresses: Vec<IpAddr> = interfaces
+        .iter()
+        .filter(|(name, ip)| {
+            is_tailscale(*ip) && (ip.is_ipv6() || tunnels.is_empty() || tunnels.contains(name.as_str()))
+        })
+        .map(|(_, ip)| *ip)
+        .collect();
+    addresses.sort_by_key(IpAddr::is_ipv6);
+    addresses.dedup();
+    addresses
+}
+
+/// Whether this device is on Tailscale, with an IPv4 address there.
+fn on_tailscale() -> bool {
+    tailscale_addresses().iter().any(IpAddr::is_ipv4)
+}
+
+/// This device as it tells of itself to the devices it calls or that call it, with its
+/// Tailscale addresses as they are now.
+fn told(me: Device) -> Device {
+    Device { tailscale: tailscale_addresses(), ..me }
+}
+
+/// Whether a call from `address` is answered: from this device's own network, or from
+/// Tailscale. Carriers give out addresses in Tailscale's 100.64.0.0/10 too, so a call from there
+/// is answered only while this device is on Tailscale itself (`on_tailscale`, asked only then).
+/// Either way, a device has to pair with the code shown here, or show a paired device's
+/// certificate, before it gets anything.
+fn is_local(address: IpAddr, on_tailscale: impl FnOnce() -> bool) -> bool {
+    match address.to_canonical() {
+        IpAddr::V4(v4) if is_shared(v4) => on_tailscale(),
         IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
         IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_private() || v4.is_loopback() || v4.is_link_local())
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
+            v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80
         }
     }
 }
@@ -853,6 +998,36 @@ fn serve(turn: u64) {
     }
 }
 
+/// Answers calls to this device's IPv6 addresses, Tailscale's among them, on a port of their
+/// own beside the IPv4 one. A device without IPv6 goes without.
+fn serve_v6(turn: u64) {
+    let what = format!("IPv6 port {}", port());
+    while let Some(listener) = bind_for(turn, &what, || listen_v6(port())) {
+        if state().turn != turn {
+            return;
+        }
+        let Err(error) = accept_from(turn, &listener) else {
+            return;
+        };
+        log::debug!("sync: {what} stopped working, opening it again: {error}");
+        drop(listener);
+        thread::sleep(REOPEN_AFTER);
+    }
+}
+
+/// A listener on IPv6 alone, which leaves IPv4 to `serve`'s on every system.
+fn listen_v6(port: u16) -> io::Result<TcpListener> {
+    let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
+    socket.set_only_v6(true)?;
+    // As std does for its own listeners: a port just closed can be opened again at once.
+    if cfg!(unix) {
+        socket.set_reuse_address(true)?;
+    }
+    socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)).into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
+}
+
 fn accept_from(turn: u64, listener: &TcpListener) -> io::Result<()> {
     loop {
         if state().turn != turn {
@@ -867,14 +1042,15 @@ fn accept_from(turn: u64, listener: &TcpListener) -> io::Result<()> {
             return Ok(());
         }
         static ANSWERING: AtomicUsize = AtomicUsize::new(0);
-        if is_local(from.ip()) && ANSWERING.fetch_add(1, Ordering::SeqCst) < HANDLERS {
+        let local = is_local(from.ip(), on_tailscale);
+        if local && ANSWERING.fetch_add(1, Ordering::SeqCst) < HANDLERS {
             thread::spawn(move || {
                 if let Err(error) = handle(stream, from.ip()) {
                     log::debug!("sync: {error}");
                 }
                 ANSWERING.fetch_sub(1, Ordering::SeqCst);
             });
-        } else if is_local(from.ip()) {
+        } else if local {
             ANSWERING.fetch_sub(1, Ordering::SeqCst);
         }
     }
@@ -1144,7 +1320,7 @@ fn route(call: &mut Call) -> io::Result<()> {
     }
     let (method, peer) = (call.method.clone(), call.peer.clone());
     match (method.as_str(), parts.as_slice()) {
-        ("GET", ["info"]) => reply_json(call.out(), &Device { revision: library(&root).1, ..me }),
+        ("GET", ["info"]) => reply_json(call.out(), &Device { revision: library(&root).1, ..told(me) }),
         ("POST", ["pair"]) => {
             let asked: PairAsk = serde_json::from_slice(&read_body(call, 256 * 1024)?)?;
             answer_pairing(call.out(), me, asked, peer)
@@ -1295,7 +1471,7 @@ fn answer_pairing(out: &mut Wire, me: Device, asked: PairAsk, asker: String) -> 
     });
     state.tell(Event::Pairing { serial, device: asked.device, code });
     drop(state);
-    reply_json(out, &PairAnswer { device: me, circle })
+    reply_json(out, &PairAnswer { device: told(me), circle })
 }
 
 /// The pairing the device holding `asker` started, while it may still finish.
@@ -1474,6 +1650,7 @@ pub(crate) fn confirm(code: &str) -> Result<(), &'static str> {
     merge_members(&mut circle.members, &done.circle.members);
     join(&mut circle, [(&me, &identity.fingerprint), (&asking.device, &asking.answerer)]);
     state.adopt(circle);
+    state.ledger.seen.entry(asking.device.id.clone()).or_default().learn(&asking.device);
     state.saw(&asking.device.id, asking.address, None);
     Ok(())
 }
@@ -1534,9 +1711,10 @@ fn welcome(out: &mut Wire, root: &Path, me: Device, hello: Hello, from: IpAddr, 
         } else {
             Ok(circle.members.clone())
         };
+        let learned = verdict.is_ok() && state.ledger.seen.entry(id.clone()).or_default().learn(&hello.device);
         match verdict {
             Err("unpaired") => state.leave(),
-            _ if changed => state.save(),
+            _ if changed || learned => state.save(),
             _ => {}
         }
         verdict
@@ -1572,7 +1750,7 @@ fn welcome(out: &mut Wire, root: &Path, me: Device, hello: Hello, from: IpAddr, 
     };
     let (index, _) = index_of(root, &busy);
     in_session(&token, |_| {});
-    let sent = reply_json(out, &Welcome { token: token.clone(), device: me, index, revision, members });
+    let sent = reply_json(out, &Welcome { token: token.clone(), device: told(me), index, revision, members });
     if sent.is_err() {
         in_session(&token, |session| session.broken = Some(Instant::now()));
     }
@@ -1740,18 +1918,22 @@ fn code_of(error: ureq::Error) -> &'static str {
     }
 }
 
-pub(crate) fn round(busy: &HashSet<String>, force: bool) -> u32 {
+/// Syncs with each paired device that answers; `large` other than `Left` syncs even with those
+/// already in step. How many it synced with, and how many recordings over `LARGE_MEDIA` it left
+/// because it went over Tailscale.
+pub(crate) fn round(busy: &HashSet<String>, large: Large) -> (u32, u32) {
+    let force = large != Large::Left;
     let (root, turn) = {
         let state = state();
         match &state.root {
             Some(root) if state.visible && state.ledger.circle.is_some() => (root.clone(), state.turn),
-            _ => return 0,
+            _ => return (0, 0),
         }
     };
     let mut mates = mates();
     mates.sort_by(|a, b| a.synced_at.cmp(&b.synced_at));
     let mut looked = false;
-    let mut synced = 0;
+    let (mut synced, mut left) = (0, 0);
     for mate in mates {
         // A round belongs to the library and devices it started with: once sync is set up
         // again (turned off and on, another library), it stops rather than go on with theirs.
@@ -1766,12 +1948,15 @@ pub(crate) fn round(busy: &HashSet<String>, force: bool) -> u32 {
         if !force && !device.revision.is_empty() && seen.mine == mine && seen.theirs == device.revision {
             continue;
         }
-        match sync_with(address, &mate.id, busy.clone(), &Progress::default(), true, force) {
-            Ok(_) => synced += 1,
+        match sync_with(address, &mate.id, busy.clone(), &Progress::default(), true, large) {
+            Ok(summary) => {
+                synced += 1;
+                left += summary.left;
+            }
             Err(code) => log::debug!("sync: with {}: {code}", mate.name),
         }
     }
-    synced
+    (synced, left)
 }
 
 fn reach(id: &str, looked: &mut bool, turn: u64) -> Option<(SocketAddr, Device)> {
@@ -1781,13 +1966,7 @@ fn reach(id: &str, looked: &mut bool, turn: u64) -> Option<(SocketAddr, Device)>
             if state.turn != turn {
                 return None;
             }
-            let mut places: Vec<SocketAddr> = state.peers.get(id).map(|(peer, _)| peer.address).into_iter().collect();
-            if let Some(known) = state.ledger.seen.get(id).and_then(|seen| seen.address.parse().ok())
-                && !places.contains(&known)
-            {
-                places.push(known);
-            }
-            places
+            state.places(id)
         };
         for address in places {
             if let Some(device) = ask_within(address, Duration::from_millis(1500)).filter(|device| device.id == id) {
@@ -1809,7 +1988,7 @@ pub(crate) fn sync_with(
     busy: HashSet<String>,
     progress: &Progress,
     auto: bool,
-    whole: bool,
+    large: Large,
 ) -> Result<Summary, &'static str> {
     let (identity, key) = (identity()?, key_of(id)?);
     let (root, me, mine) = {
@@ -1824,7 +2003,7 @@ pub(crate) fn sync_with(
         (state.root.clone(), state.me.clone(), mine)
     };
     let result = match root {
-        Some(root) => persist_with((address, &key, &identity), &root, &me, &busy, progress, (auto, whole)),
+        Some(root) => persist_with((address, &key, &identity), &root, &me, &busy, progress, (auto, large)),
         None => Err("sync_failed"),
     };
     progress.waiting.store(false, Ordering::Relaxed);
@@ -1843,7 +2022,7 @@ fn persist_with(
     me: &Device,
     busy: &HashSet<String>,
     progress: &Progress,
-    (auto, whole): (bool, bool),
+    (auto, large): (bool, Large),
 ) -> Result<Summary, &'static str> {
     let mut summary = Summary::default();
     let mut lost: Option<Instant> = None;
@@ -1855,7 +2034,7 @@ fn persist_with(
             me.clone(),
             busy,
             progress,
-            (again, auto, whole),
+            (again, auto, large),
             &mut summary,
         ) {
             Ok(()) => return Ok(summary),
@@ -1884,12 +2063,18 @@ fn persist_with(
     }
 }
 
-fn leave_large_media(plan: &mut listenook_core::sync::Plan) {
+/// Leaves out of `plan` the media over `LARGE_MEDIA`: how many recordings' media it left.
+fn leave_large_media(plan: &mut listenook_core::sync::Plan) -> u32 {
+    let mut left = 0;
     for transfer in plan.pull.iter_mut().chain(plan.push.iter_mut()) {
-        transfer.media &= transfer.media_size <= LARGE_MEDIA;
+        if transfer.media && transfer.media_size > LARGE_MEDIA {
+            transfer.media = false;
+            left += 1;
+        }
     }
     plan.pull.retain(|transfer| transfer.manifest || transfer.media);
     plan.push.retain(|transfer| transfer.manifest || transfer.media);
+    left
 }
 
 fn recoverable(code: &str) -> bool {
@@ -1904,7 +2089,7 @@ fn exchange(
     me: Device,
     busy: &HashSet<String>,
     progress: &Progress,
-    (resume, auto, whole): (bool, bool, bool),
+    (resume, auto, large): (bool, bool, Large),
     summary: &mut Summary,
 ) -> Result<(), &'static str> {
     let base = format!("https://{address}/listenook");
@@ -1912,7 +2097,7 @@ fn exchange(
     let circle = state().ledger.circle.clone().ok_or("sync_unpaired")?;
     let (local, revision) = index_of(root, busy);
     let hello = Hello {
-        device: me,
+        device: told(me),
         catalog: local.catalog.clone(),
         resume,
         auto,
@@ -1948,10 +2133,12 @@ fn exchange(
         };
         merge_members(&mut mine.members, &welcome.members);
         let trusted = mine.has(&welcome.device.id) && mine.holder(key) == Some(welcome.device.id.as_str());
-        state.saw(&welcome.device.id, address, None);
         if !trusted {
+            state.saw(&welcome.device.id, address, None);
             return Err("sync_unpaired");
         }
+        state.ledger.seen.entry(welcome.device.id.clone()).or_default().learn(&welcome.device);
+        state.saw(&welcome.device.id, address, None);
     }
     if progress.halted() {
         return Err("sync_cancelled");
@@ -1963,9 +2150,8 @@ fn exchange(
     let http = agent(Duration::from_secs(30));
     let token = welcome.token.as_str();
     let mut plan = plan_with(&local.entries, &welcome.index.entries, &local.removed, &welcome.index.removed);
-    if !whole {
-        leave_large_media(&mut plan);
-    }
+    let left = if large.leaves(address) { leave_large_media(&mut plan) } else { 0 };
+    summary.left = if large == Large::Nearby { left } else { 0 };
     progress.items_total.store((plan.pull.len() + plan.push.len()) as u64, Ordering::Relaxed);
     progress.bytes_total.store(plan.media_bytes(), Ordering::Relaxed);
     {
@@ -2311,8 +2497,8 @@ mod tests {
         let mut summary = Summary::default();
         let (key, identity) = (fingerprint_of(&there), Identity::of(&here).unwrap());
         let reached = (address, key.as_str(), &*identity);
-        exchange(reached, &here, asker(), &HashSet::new(), &progress, (false, true, true), &mut summary).unwrap();
-        assert_eq!(summary, Summary { received: 2, sent: 2 });
+        exchange(reached, &here, asker(), &HashSet::new(), &progress, (false, true, Large::All), &mut summary).unwrap();
+        assert_eq!(summary, Summary { received: 2, sent: 2, left: 0 });
         assert_eq!(progress.items.load(Ordering::Relaxed), 4);
 
         let (incoming, events) = take();
@@ -2387,6 +2573,27 @@ mod tests {
         assert!(state().ledger.circle.is_some(), "a refusal does not leave the circle");
         configure(None, String::new(), String::new(), false);
         let _ = (fs::remove_dir_all(there), fs::remove_dir_all(here), fs::remove_dir_all(stranger));
+    }
+
+    #[test]
+    fn a_paired_device_that_syncs_is_remembered_at_its_tailscale_addresses() {
+        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (there, here) = (library("tailscale"), library("tailscale-here"));
+        paired(&there, &[("device-there", &there), ("device-here", &here)]);
+        let address = started(&there, 47937);
+        let on_tailscale = Device {
+            port: 47823,
+            tailscale: vec!["100.101.102.103".parse().unwrap(), "fd7a:115c:a1e0::5".parse().unwrap()],
+            ..asker()
+        };
+        let hello = Hello { device: on_tailscale, ..Hello::default() };
+        post(&client(&here, Some(&there)), &format!("https://{address}/listenook/sync"), &hello).unwrap();
+        let known = ["100.101.102.103:47823", "[fd7a:115c:a1e0::5]:47823"];
+        assert_eq!(state().ledger.seen["device-here"].tailscale, known);
+        let saved: Ledger = serde_json::from_slice(&fs::read(there.join("sync.json")).unwrap()).unwrap();
+        assert_eq!(saved.seen["device-here"].tailscale, known, "kept for the next time");
+        configure(None, String::new(), String::new(), false);
+        let _ = (fs::remove_dir_all(there), fs::remove_dir_all(here));
     }
 
     #[test]
@@ -2503,7 +2710,7 @@ mod tests {
             pull: vec![transfer("small", true, 10), transfer("large-new", true, LARGE_MEDIA + 1)],
             push: vec![transfer("large-media-only", false, LARGE_MEDIA + 1)],
         };
-        leave_large_media(&mut plan);
+        assert_eq!(leave_large_media(&mut plan), 2, "the recordings whose media was left are counted");
         assert!(plan.pull[0].media, "small media still goes");
         assert!(plan.pull[1].manifest && !plan.pull[1].media, "the transcript goes without the large media");
         assert!(plan.push.is_empty(), "nothing is left to send for large media alone");
@@ -2528,23 +2735,106 @@ mod tests {
     }
 
     #[test]
-    fn only_local_addresses_are_answered() {
-        assert!(is_local("192.168.1.4".parse().unwrap()));
-        assert!(is_local("127.0.0.1".parse().unwrap()));
-        assert!(is_local("fe80::1".parse().unwrap()));
-        assert!(!is_local("8.8.8.8".parse().unwrap()));
-        assert!(!is_local("2001:4860:4860::8888".parse().unwrap()));
+    fn media_over_500_mb_waits_over_tailscale_unless_asked_for() {
+        let (home, away): (SocketAddr, SocketAddr) =
+            ("192.168.1.20:47823".parse().unwrap(), "100.101.102.103:47823".parse().unwrap());
+        let away_v6: SocketAddr = "[fd7a:115c:a1e0::1]:47823".parse().unwrap();
+        assert!(Large::Left.leaves(home) && Large::Left.leaves(away), "a sync on its own never copies it");
+        assert!(!Large::Nearby.leaves(home), "a sync by hand on the same network copies it");
+        assert!(Large::Nearby.leaves(away) && Large::Nearby.leaves(away_v6), "over Tailscale it waits");
+        assert!(!Large::All.leaves(away), "unless it was asked for");
     }
 
     #[test]
-    fn turning_sync_off_frees_its_port_at_once() {
+    fn only_local_and_tailscale_addresses_are_answered() {
+        let answered = |address: &str, on_tailscale: bool| is_local(address.parse().unwrap(), || on_tailscale);
+        assert!(answered("192.168.1.4", false));
+        assert!(answered("127.0.0.1", false));
+        assert!(answered("fe80::1", false));
+        assert!(answered("::ffff:10.0.0.2", false));
+        assert!(!answered("8.8.8.8", true));
+        assert!(!answered("2001:4860:4860::8888", true));
+        assert!(answered("100.101.102.103", true), "Tailscale, while this device is on it");
+        assert!(answered("100.64.0.1", true) && answered("100.127.255.254", true));
+        assert!(answered("::ffff:100.101.102.103", true));
+        assert!(!answered("100.101.102.103", false), "a carrier's, while this device is not on Tailscale");
+        assert!(!answered("100.128.0.1", true) && !answered("100.63.255.255", true), "outside 100.64.0.0/10");
+        assert!(answered("fd7a:115c:a1e0::1", false), "Tailscale's IPv6 range is a local one");
+    }
+
+    #[test]
+    fn tailscale_addresses_are_told_from_a_carriers() {
+        let ip = |text: &str| -> IpAddr { text.parse().unwrap() };
+        assert!(is_tailscale(ip("100.64.0.1")) && is_tailscale(ip("fd7a:115c:a1e0:ab12::1")));
+        assert!(!is_tailscale(ip("192.168.1.20")) && !is_tailscale(ip("fd7a:115c:a1e1::1")));
+        let interfaces = |list: &[(&str, &str)]| {
+            tailscale_of(
+                list.iter().map(|(name, address)| ((*name).to_owned(), ip(address))).collect::<Vec<_>>().into_iter(),
+            )
+        };
+        let phone = [
+            ("pdp_ip0", "100.70.1.2"),
+            ("en0", "192.168.1.20"),
+            ("utun4", "fd7a:115c:a1e0::5"),
+            ("utun4", "100.101.102.103"),
+        ];
+        assert_eq!(interfaces(&phone), [ip("100.101.102.103"), ip("fd7a:115c:a1e0::5")], "IPv4 first, no carrier's");
+        let no_ipv6 = [("en0", "192.168.1.20"), ("tailscale0", "100.101.102.103")];
+        assert_eq!(interfaces(&no_ipv6), [ip("100.101.102.103")]);
+        assert!(interfaces(&[("en0", "192.168.1.20")]).is_empty());
+    }
+
+    #[test]
+    fn an_address_typed_is_found_with_or_without_a_port() {
+        let at = |text: &str| -> Vec<String> { places_at(text).iter().map(ToString::to_string).collect() };
+        assert_eq!(at(" 192.168.1.20 "), ["192.168.1.20:47823"]);
+        assert_eq!(at("http://100.101.102.103:5000/"), ["100.101.102.103:5000"]);
+        assert_eq!(at("fd7a:115c:a1e0::1"), ["[fd7a:115c:a1e0::1]:47823"]);
+        assert_eq!(at("[fd7a:115c:a1e0::1]"), ["[fd7a:115c:a1e0::1]:47823"]);
+        assert_eq!(at("[fd7a:115c:a1e0::1]:5000"), ["[fd7a:115c:a1e0::1]:5000"]);
+        let named = at("localhost");
+        assert!(!named.is_empty() && named.iter().all(|place| place.ends_with(":47823")), "{named:?}");
+        assert!(places_at("localhost")[0].is_ipv4(), "IPv4 is tried first: {named:?}");
+    }
+
+    #[test]
+    fn a_paired_device_is_sought_on_the_local_network_then_on_tailscale() {
+        let device = Device {
+            port: 47823,
+            tailscale: vec!["100.101.102.103".parse().unwrap(), "fd7a:115c:a1e0::5".parse().unwrap()],
+            ..asker()
+        };
+        let mut seen = Seen { address: "192.168.1.20:47823".into(), ..Seen::default() };
+        assert!(seen.learn(&device) && !seen.learn(&device), "learned once");
+        seen.reached("100.101.102.103:47823".parse().unwrap());
+        assert_eq!(seen.address, "192.168.1.20:47823", "reaching it on Tailscale keeps its local address");
+        seen.reached("10.0.0.7:47823".parse().unwrap());
+        let places: Vec<String> = seen.places().map(|place| place.to_string()).collect();
+        assert_eq!(places, ["10.0.0.7:47823", "100.101.102.103:47823", "[fd7a:115c:a1e0::5]:47823"]);
+        assert!(!seen.learn(&Device { tailscale: Vec::new(), ..device }), "none given keeps those known");
+        assert_eq!(seen.tailscale.len(), 2);
+
+        let older: Seen = serde_json::from_str(r#"{"address":"192.168.1.20:47823","synced_at":"x"}"#).unwrap();
+        assert_eq!(older.places().count(), 1, "a ledger from before reads as it was");
+        let mut state = State::default();
+        state.ledger.seen.insert("mate".into(), seen);
+        let live = Peer { device: asker(), address: "100.101.102.103:47823".parse().unwrap() };
+        state.peers.insert("mate".into(), (live, Instant::now()));
+        let places: Vec<String> = state.places("mate").iter().map(ToString::to_string).collect();
+        assert_eq!(places, ["10.0.0.7:47823", "100.101.102.103:47823", "[fd7a:115c:a1e0::5]:47823"]);
+    }
+
+    #[test]
+    fn turning_sync_off_frees_its_ports_at_once() {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = library("off");
         started(&root, 47941);
+        let on_ipv6 = ask(SocketAddr::from((Ipv6Addr::LOCALHOST, 47941)));
+        assert_eq!(on_ipv6.expect("the device answers on IPv6 too").name, "There");
         configure(None, String::new(), String::new(), false);
         let freed = (0..20).any(|_| {
             thread::sleep(Duration::from_millis(50));
-            TcpListener::bind((Ipv4Addr::UNSPECIFIED, 47941)).is_ok()
+            TcpListener::bind((Ipv4Addr::UNSPECIFIED, 47941)).is_ok() && listen_v6(47941).is_ok()
         });
         assert!(freed);
         let _ = fs::remove_dir_all(root);

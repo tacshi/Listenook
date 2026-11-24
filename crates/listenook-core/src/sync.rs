@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    net::IpAddr,
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -25,6 +28,10 @@ pub struct Device {
     pub port: u16,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub revision: String,
+    /// The device's addresses on Tailscale, at which its paired devices reach it away from
+    /// home. Versions before them neither give nor read them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tailscale: Vec<IpAddr>,
 }
 
 impl Device {
@@ -607,6 +614,19 @@ pub fn keep_title(job: &mut Job, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_reads_and_writes_as_before_its_tailscale_addresses() {
+        let older = r#"{"app":"listenook","protocol":3,"id":"mac","name":"Mac","platform":"macos","port":47823}"#;
+        let device: Device = serde_json::from_str(older).unwrap();
+        assert!(device.is_compatible() && device.tailscale.is_empty());
+        assert_eq!(serde_json::to_string(&device).unwrap(), older, "none given, none written");
+        let on_tailscale = Device { tailscale: vec!["100.101.102.103".parse().unwrap()], ..device };
+        let written = serde_json::to_string(&on_tailscale).unwrap();
+        assert!(written.ends_with(r#""tailscale":["100.101.102.103"]}"#), "{written}");
+        let read: Device = serde_json::from_str(&written).unwrap();
+        assert_eq!(read, on_tailscale);
+    }
 
     #[test]
     fn an_edit_saved_later_is_newer_and_a_missing_time_is_oldest() {

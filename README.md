@@ -85,9 +85,11 @@ takes files of up to 5 hours.
   media, and export TXT, Markdown, SRT, or WebVTT. Briefs export as Markdown.
 - **Sync between devices:** copy the Library, the podcasts you follow, and
   where you left each episode to and from another device running Listenook
-  on the same local network. Devices pair once with a code shown on the other
-  one, then sync on their own, encrypted, with no other device able to join
-  in. Devices paired by an earlier version pair again.
+  on the same local network, or anywhere when both devices run
+  [Tailscale](https://tailscale.com). Devices pair once with a code shown on
+  the other one, then sync on their own, encrypted, with no other device able
+  to join in. Over Tailscale, recordings over 500 MB are copied only when you
+  ask for them. Devices paired by an earlier version pair again.
 - **Monitor a folder:** new media in a watched folder is added to the Library,
   ready to transcribe. Listenook can stay in the macOS menu bar or the Windows
   tray to keep watching, and launch at login.
@@ -136,7 +138,7 @@ to the selected Soniox or MOSI provider when you start the job. Local
 transcription and subtitle import do not upload media. Folder monitoring
 discovers files without uploading them. Syncing sends the Library, the
 podcasts you follow, and where you left each episode only to the device you
-choose on your local network.
+choose on your local network or your Tailscale network.
 
 Manual or automatic LLM translation and user-requested AI Briefs send
 transcript text to your configured AI endpoint.
