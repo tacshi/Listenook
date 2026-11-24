@@ -10,8 +10,8 @@ use nsh_core::{element::Lifecycle, prelude::*};
 use super::{persist, store, tr};
 use crate::{
     platform,
-    services::sync::{self as service, Event, Incoming, Mate, Peer, Progress, Summary},
-    ui::{Tone, toast},
+    services::sync::{self as service, Event, Incoming, Large, Mate, Peer, Progress, Summary},
+    ui::{Tone, toast, toast_with_action},
 };
 
 const EVERY: Duration = Duration::from_secs(15 * 60);
@@ -73,6 +73,8 @@ pub(crate) struct SyncState {
     rounding: Signal<bool>,
     code: Signal<Option<Code>>,
     progress: Stored<Option<Arc<Progress>>>,
+    /// The device a sync started here left recordings over 500 MB with, to copy when asked.
+    left_with: Stored<Option<Peer>>,
     map: Stored<HashMap<String, String>>,
     ticks: Stored<u32>,
     schedule: Stored<Schedule>,
@@ -92,6 +94,7 @@ impl SyncState {
             rounding: signal(false),
             code: signal(None),
             progress: stored(None),
+            left_with: stored(None),
             map: stored(HashMap::new()),
             ticks: stored(0),
             schedule: stored(Schedule::default()),
@@ -176,7 +179,7 @@ impl SyncState {
     }
 
     pub(crate) fn start(&self, peer: Peer) {
-        if service::is_mate(&peer.device.id) { self.sync(peer) } else { self.pair(peer) }
+        if service::is_mate(&peer.device.id) { self.sync(peer, Large::Nearby) } else { self.pair(peer) }
     }
 
     fn pair(&self, peer: Peer) {
@@ -225,7 +228,7 @@ impl SyncState {
                 Ok(Ok(())) => {
                     state.mates.set(service::mates());
                     state.phase.set(Phase::Choosing);
-                    state.sync(peer);
+                    state.sync(peer, Large::Nearby);
                 }
                 Ok(Err("sync_wrong_code")) => state.wrong.set(true),
                 Ok(Err(code)) => state.phase.set(Phase::Failed(code)),
@@ -234,7 +237,7 @@ impl SyncState {
         });
     }
 
-    fn sync(&self, peer: Peer) {
+    fn sync(&self, peer: Peer, large: Large) {
         if !matches!(self.phase.get_untracked(), Phase::Choosing) {
             return;
         }
@@ -242,6 +245,7 @@ impl SyncState {
         let store = store();
         let progress = Arc::new(Progress::default());
         self.progress.replace(Some(progress.clone()));
+        self.left_with.replace(None);
         batch(|| {
             self.copied.set(Copied::default());
             self.phase.set(Phase::Asking(peer.clone()));
@@ -250,11 +254,14 @@ impl SyncState {
         store.run(async move {
             let (address, id) = (peer.address, peer.device.id.clone());
             let work = progress.clone();
-            let outcome = blocking(move || service::sync_with(address, &id, busy, &work, false, true)).await;
+            let outcome = blocking(move || service::sync_with(address, &id, busy, &work, false, large)).await;
             state.take_in();
             state.progress.replace(None);
             state.mates.set(service::mates());
             let stopped = progress.stop.load(Ordering::Relaxed);
+            if matches!(outcome, Ok(Ok(summary)) if summary.left > 0) {
+                state.left_with.replace(Some(peer.clone()));
+            }
             state.phase.set(match outcome {
                 Ok(Ok(summary)) => Phase::Done(peer.device.name, summary),
                 _ if stopped => Phase::Choosing,
@@ -262,6 +269,15 @@ impl SyncState {
                 Err(_) => Phase::Failed("sync_failed"),
             });
         });
+    }
+
+    /// Copies, over Tailscale too, the recordings over 500 MB the last sync left.
+    pub(crate) fn copy_left(&self) {
+        let Some(peer) = self.left_with.replace(None) else {
+            return;
+        };
+        self.phase.set(Phase::Choosing);
+        self.sync(peer, Large::All);
     }
 
     pub(crate) fn connect(&self, address: String) {
@@ -320,10 +336,11 @@ impl SyncState {
     }
 
     pub(crate) fn sync_now(&self) {
-        self.round(true);
+        self.round(Large::Nearby);
     }
 
-    fn round(&self, force: bool) {
+    /// Syncs with the paired devices that answer: on its own when `large` is `Left`, else asked.
+    fn round(&self, large: Large) {
         if self.rounding.get_untracked() {
             return;
         }
@@ -336,16 +353,26 @@ impl SyncState {
         self.rounding.set(true);
         let busy = store.busy_ids();
         store.run(async move {
-            let synced = blocking(move || service::round(&busy, force)).await.unwrap_or(0);
+            let (synced, left) = blocking(move || service::round(&busy, large)).await.unwrap_or((0, 0));
             state.take_in();
             state.settle();
             state.rounding.set(false);
             state.mates.set(service::mates());
-            if force
+            if large != Large::Left
                 && synced == 0
                 && state.mates.with_untracked(|mates| mates.iter().all(|mate| mate.nearby.is_none()))
             {
-                toast(Tone::Info, tr("None of your devices answered. Open Listenook on them, on this network."));
+                toast(
+                    Tone::Info,
+                    tr("None of your devices answered. Open Listenook on them, on this network or on Tailscale."),
+                );
+            } else if left > 0 {
+                toast_with_action(
+                    Tone::Info,
+                    tr("Recordings over 500 MB were left: over Tailscale, they are copied only when you ask."),
+                    tr("Copy them now"),
+                    move || state.round(Large::All),
+                );
             }
         });
     }
@@ -370,7 +397,7 @@ impl SyncState {
             leaving
         });
         if leaving && self.free() {
-            self.round(false);
+            self.round(Large::Left);
         } else if now == Lifecycle::Active {
             self.consider();
         }
@@ -429,7 +456,7 @@ impl SyncState {
             since >= if schedule.away { EVERY_AWAY } else { EVERY } || (schedule.back && since >= BACK_AFTER) || changed
         });
         if due {
-            self.round(false);
+            self.round(Large::Left);
         }
     }
 
@@ -475,7 +502,7 @@ impl SyncState {
                     let shown = matches!(self.phase.get_untracked(), Phase::Serving(_));
                     if shown {
                         self.phase.set(if complete {
-                            Phase::Done(name.clone(), Summary { received, sent })
+                            Phase::Done(name.clone(), Summary { received, sent, ..Summary::default() })
                         } else if lost {
                             Phase::Failed("sync_interrupted")
                         } else {

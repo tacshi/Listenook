@@ -1477,7 +1477,7 @@ fn this_device_pairs_by_entering_the_code_shown_on_the_other_one() {
 
     it.app.press("Sync").unwrap();
     it.app.wait_for("Nearby devices").unwrap();
-    it.app.type_text("text:IP address, such as 192.168.1.20", &format!("127.0.0.1:{port}")).unwrap();
+    it.app.type_text("text:192.168.1.20 or a Tailscale name", &format!("127.0.0.1:{port}")).unwrap();
     it.app.press("role:button[Connect]").unwrap();
     it.app.wait_for("Enter the code shown on “Studio Mac”.").unwrap();
     it.app.type_text("text:6-digit code", "111111").unwrap();
@@ -1751,7 +1751,7 @@ fn a_lost_connection_is_taken_up_again_where_it_broke_off() {
 
     it.app.press("Sync").unwrap();
     it.app.wait_for("My devices").unwrap();
-    it.app.type_text("text:IP address, such as 192.168.1.20", &format!("127.0.0.1:{port}")).unwrap();
+    it.app.type_text("text:192.168.1.20 or a Tailscale name", &format!("127.0.0.1:{port}")).unwrap();
     it.app.press("role:button[Connect]").unwrap();
     it.app.wait_for_within("Connection lost. Reconnecting…", Duration::from_secs(10)).unwrap();
     it.app.wait_for_within("Synced with Studio Mac", Duration::from_secs(20)).unwrap();

@@ -3,7 +3,7 @@ use nsh_base::theme;
 use nsh_core::prelude::*;
 
 use crate::{
-    services::sync::{Mate, Peer},
+    services::sync::{Mate, Peer, is_tailscale},
     state::{
         error_text, l, store,
         sync::{Phase, counts},
@@ -111,8 +111,17 @@ pub(crate) fn sync_dialog() -> impl IntoElement {
                     Step::Asking | Step::Running => {
                         button(Variant::Outline, Size::Md, l("Cancel")).on_press(move || sync.cancel()).into_element()
                     }
-                    Step::Done => button(Variant::Primary, Size::Md, l("Done"))
-                        .on_press(move || sync.open.set(false))
+                    Step::Done => view()
+                        .flex_row()
+                        .gap_2()
+                        .child(when(
+                            move || matches!(sync.phase(), Phase::Done(_, summary) if summary.left > 0),
+                            move || {
+                                button(Variant::Outline, Size::Md, l("Copy them now"))
+                                    .on_press(move || sync.copy_left())
+                            },
+                        ))
+                        .child(button(Variant::Primary, Size::Md, l("Done")).on_press(move || sync.open.set(false)))
                         .into_element(),
                     Step::Failed => view()
                         .flex_row()
@@ -143,13 +152,13 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
     view()
         .gap_4()
         .child(hint(l(
-            "Pair once with a code; then your devices sync recordings, transcripts and podcasts on their own over the same network.",
+            "Pair once with a code; then your devices sync recordings, transcripts and podcasts on their own over the same network, or over Tailscale when away.",
         )))
         .child(
             view()
                 .gap_3()
                 .child(switch(
-                    l("Visible to devices on this network"),
+                    l("Visible to devices on this network and on Tailscale"),
                     move || store.sync_visible(),
                     move |on| store.set_sync_visible(on),
                 ))
@@ -229,7 +238,7 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
                 .flex_row()
                 .gap_2()
                 .child(
-                    text_field_with(address, l("IP address, such as 192.168.1.20"), move |input| {
+                    text_field_with(address, l("192.168.1.20 or a Tailscale name"), move |input| {
                         input.auto_capitalize(AutoCapitalize::None).auto_correct(false).on_submit(move |_: &str| connect())
                     })
                     .flex_1(),
@@ -280,8 +289,9 @@ pub(crate) fn mate_row(mate: ReadSignal<Mate>) -> impl IntoElement {
                                 platform_name(&mate.platform),
                                 synced_words(mate.synced_at.as_deref())
                             );
-                            if mate.nearby.is_some() {
-                                line.push_str(&format!(" · {}", tr("Nearby")));
+                            if let Some(address) = mate.nearby {
+                                let here = if is_tailscale(address.ip()) { tr("On Tailscale") } else { tr("Nearby") };
+                                line.push_str(&format!(" · {here}"));
                             }
                             SharedString::from(line)
                         })
@@ -355,7 +365,9 @@ fn pairing(code: Signal<String>, enter: impl Fn() + Copy + 'static) -> impl Into
                 || error_hint(l("That code is not right. Check it on the other device and try again.")),
             )
             .otherwise(|| {
-                hint(l("Once paired, the two devices sync on their own whenever both are open on the same network."))
+                hint(l(
+                    "Once paired, the two devices sync on their own whenever both are open on the same network or on Tailscale.",
+                ))
             }),
         )
 }
@@ -445,7 +457,11 @@ fn ended() -> impl IntoElement {
                     Phase::Done(_, summary) => SharedString::from(sentence(&counts(summary.received, summary.sent))),
                     Phase::Failed(code) => error_text(code),
                     _ => SharedString::default(),
-                })),
+                }))
+                .child(when(
+                    move || matches!(sync.phase(), Phase::Done(_, summary) if summary.left > 0),
+                    || hint(l("Recordings over 500 MB were left: over Tailscale, they are copied only when you ask.")),
+                )),
         )
 }
 
@@ -496,7 +512,7 @@ pub(crate) fn sync_code_dialog() -> impl IntoElement {
                         .text_center(),
                 )
                 .child(hint(l(
-                    "Once paired, the two devices sync on their own whenever both are open on the same network.",
+                    "Once paired, the two devices sync on their own whenever both are open on the same network or on Tailscale.",
                 )))
                 .into_element()
         },

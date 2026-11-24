@@ -32,6 +32,8 @@ ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring"] }
 spake2 = "0.4"
+if-addrs = "0.15"
+socket2 = "0.6"
 
 # Only the desktop binary (src/main.rs) prints its log; phones and tablets log through nsh.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
