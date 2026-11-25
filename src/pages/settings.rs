@@ -8,7 +8,7 @@ use crate::{
         llm,
         local::{self, ModelState},
         remote::Provider,
-        updater::{self, UpdateState},
+        updater,
     },
     state::{
         SettingsTab as Tab, error_text, l,
@@ -811,63 +811,25 @@ fn shortcuts() -> impl IntoElement {
 
 fn about() -> impl IntoElement {
     let store = store();
-    let state = store.update();
-    let status = move || -> SharedString {
-        match state.get() {
-            UpdateState::Idle => SharedString::default(),
-            UpdateState::Checking => tr("Checking for updates…"),
-            UpdateState::UpToDate => tr("Listenook is up to date."),
-            UpdateState::Downloading(version) => format!("{} {version}…", tr("Downloading version")).into(),
-            UpdateState::Ready(version) => format!("{} {version}", tr("An update is ready:")).into(),
-            UpdateState::Manual(version, _) => {
-                format!("{} {version}. {}", tr("A new version is available:"), tr("Download it from the release page."))
-                    .into()
-            }
-            UpdateState::Installing => tr("Installing the update…"),
-            UpdateState::Unpackaged => tr("Updates apply to the installed app, not to a development run."),
-            UpdateState::Failed(message) => format!("{} {message}", tr("Couldn’t check for updates.")).into(),
-        }
-    };
     view().gap_6().child(section(
         move || SharedString::from(store.lang().app_name()),
-        panel()
-            .child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        view()
-                            .gap_1()
-                            .flex_1()
-                            .child(text(move || SharedString::from(format!("{} {VERSION}", tr("Version")))).text_sm().text_color(|| theme().foreground))
-                            .child(hint(status)),
-                    )
-                    .child(when(|| updater::SELF_UPDATING, move || {
-                        when(move || matches!(state.get(), UpdateState::Ready(_)), move || {
-                            button(Variant::Primary, Size::Md, l("Restart to update"))
-                                .on_press(move || updater::install_and_restart(state))
-                        })
-                        .otherwise(move || {
-                            button(Variant::Default, Size::Md, l("Check for updates"))
-                                .disabled(move || {
-                                    matches!(
-                                        state.get(),
-                                        UpdateState::Checking | UpdateState::Downloading(_) | UpdateState::Installing
-                                    )
-                                })
-                                .on_press(move || updater::check(state))
-                        })
-                    })),
-            )
-            .child(when(move || matches!(state.get(), UpdateState::Manual(..)), move || {
-                button(Variant::Outline, Size::Md, l("Open release page")).self_start().on_press(move || {
-                    if let UpdateState::Manual(_, url) = state.get_untracked() {
-                        drop(open_url(url.to_string()));
-                    }
-                })
-            })),
+        panel().child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    text(move || SharedString::from(format!("{} {VERSION}", tr("Version"))))
+                        .flex_1()
+                        .text_sm()
+                        .text_color(|| theme().foreground),
+                )
+                .child(when(
+                    || updater::SELF_UPDATING,
+                    || button(Variant::Default, Size::Md, l("Check for updates")).on_press(updater::check),
+                )),
+        ),
     ))
     .child(section(
         l("Privacy"),

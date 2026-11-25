@@ -2280,7 +2280,6 @@ dependencies = [
  "nsh-platform-macos",
  "nsh-platform-windows",
  "nsh-testing",
- "nsh-updater",
  "png",
  "qwen-asr",
  "rcgen",

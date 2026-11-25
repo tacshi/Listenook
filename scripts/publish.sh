@@ -272,6 +272,28 @@ if [[ -n "${LISTENOOK_ANDROID_LINK:-}" ]]; then
 elif [[ "$WITH_ANDROID" == true ]]; then
   MANIFEST_ARGS+=(--link "android=https://github.com/$RELEASE_REPO/releases/download/$TAG/$ANDROID_APK")
 fi
+# Patches from the previous release's archives: apps running that version download one of
+# these instead of the whole archive.
+PREVIOUS_DIR="$STAGE_DIR/previous"
+rm -rf "$PREVIOUS_DIR"
+rm -f "$STAGE_DIR"/*.patch
+PREVIOUS_RELEASE="$(gh release list --repo "$RELEASE_REPO" --exclude-drafts --exclude-pre-releases \
+  --limit 20 --json tagName --jq '.[].tagName' 2>/dev/null | grep -vx "$TAG" | head -1 || true)"
+if [[ -n "$PREVIOUS_RELEASE" ]]; then
+  mkdir -p "$PREVIOUS_DIR"
+  for artifact in "${UPDATES[@]}"; do
+    previous="${artifact/-$VERSION-/-${PREVIOUS_RELEASE#v}-}"
+    if gh release download "$PREVIOUS_RELEASE" --repo "$RELEASE_REPO" --pattern "$previous" \
+      --dir "$PREVIOUS_DIR" >/dev/null 2>&1; then
+      MANIFEST_ARGS+=(--previous "$PREVIOUS_DIR/$previous")
+      info "patch from $previous"
+    else
+      info "no $previous in $PREVIOUS_RELEASE: its users download the whole archive"
+    fi
+  done
+else
+  info "no earlier release to patch from"
+fi
 rm -f "$STAGE_DIR/latest.json" "$STAGE_DIR/latest.json.sig"
 (cd "$STAGE_DIR" && nsh update-manifest "${UPDATES[@]}" "${MANIFEST_ARGS[@]}")
 [[ -s "$STAGE_DIR/latest.json" ]] || die "nsh update-manifest wrote no latest.json"
@@ -284,6 +306,9 @@ fi
 
 ASSETS=()
 for artifact in "${INSTALLERS[@]}" "${UPDATES[@]}"; do ASSETS+=("$STAGE_DIR/$artifact"); done
+for patch in "$STAGE_DIR"/*.patch; do
+  [[ ! -f "$patch" ]] || ASSETS+=("$patch")
+done
 MANIFESTS=("$STAGE_DIR/latest.json")
 [[ ! -f "$STAGE_DIR/latest.json.sig" ]] || MANIFESTS+=("$STAGE_DIR/latest.json.sig")
 

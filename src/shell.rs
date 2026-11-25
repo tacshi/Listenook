@@ -17,10 +17,7 @@ use nsh_core::{
 
 use crate::{
     pages, platform,
-    services::{
-        media,
-        updater::{self, UpdateState},
-    },
+    services::{media, updater},
     state::{
         Filter, Place, l,
         podcast::{RATES, rate_label},
@@ -106,15 +103,9 @@ pub(crate) fn shell() -> impl IntoElement {
                 show_window();
                 store.settings_open().set(true);
             }));
-            items.push(if update_ready() {
-                MenuItem::new(tr("Restart to update").to_string())
-                    .on_select(move || updater::install_and_restart(store.update()))
-            } else {
-                MenuItem::new(tr("Check for updates…").to_string()).on_select(move || {
-                    show_window();
-                    store.check_for_updates();
-                })
-            });
+            if updater::SELF_UPDATING {
+                items.push(MenuItem::new(tr("Check for updates…").to_string()).on_select(updater::check));
+            }
             items.push(MenuItem::separator());
             items.push(MenuItem::new(tr("Quit Listenook").to_string()).on_select(nsh_core::element::desktop::quit));
             set_tray(
@@ -240,17 +231,13 @@ pub(crate) fn shell() -> impl IntoElement {
     nsh_core::element::desktop::on_app_quit(move || {
         store.activity.flush();
         store.capture.finish_on_quit();
-        updater::install_on_quit();
         async {}
     });
-    if updater::SELF_UPDATING {
-        updater::watch(store.update());
-    }
+    updater::watch();
     if is_desktop() {
         effect(move || {
             store.lang();
             store.capture.recording();
-            update_ready();
             set_application_menu(application_menu());
         });
     } else {
@@ -503,11 +490,7 @@ fn application_menu() -> Vec<MenuItem> {
     let role = |role: MenuRole, label: &'static str| MenuItem::role(role).label(named(label));
     let settings =
         MenuItem::new(named("Settings…")).shortcut("mod+,").on_select(move || store.settings_open().set(true));
-    let updates = if untracked(update_ready) {
-        MenuItem::new(named("Restart to update")).on_select(move || updater::install_and_restart(store.update()))
-    } else {
-        MenuItem::new(named("Check for updates…")).on_select(move || store.check_for_updates())
-    };
+    let updates = MenuItem::new(named("Check for updates…")).on_select(updater::check);
     let mut menus = Vec::new();
     let mac = os() == Os::MacOs;
     if mac {
@@ -672,18 +655,6 @@ fn heading(label: &'static str, add: &'static str, on_add: impl Fn() + 'static) 
                 .role(AccessibilityRole::Header),
         )
         .child(icon_button(Icon::Plus, tr(add), trailing_size(), on_add))
-}
-
-/// Whether a downloaded update waits for a restart (or is being put in place).
-fn update_ready() -> bool {
-    matches!(store().update().get(), UpdateState::Ready(_) | UpdateState::Installing)
-}
-
-fn update_version() -> SharedString {
-    match store().update().get() {
-        UpdateState::Ready(version) => version,
-        _ => SharedString::default(),
-    }
 }
 
 fn sync_status() -> SharedString {
@@ -983,18 +954,6 @@ fn sidebar() -> impl IntoElement {
                         )
                     },
                 ))
-                .child(when(update_ready, move || {
-                    row(
-                        Icon::Refresh,
-                        l("Restart to update"),
-                        || None,
-                        || false,
-                        move || updater::install_and_restart(store.update()),
-                    )
-                    .disabled(move || matches!(store.update().get(), UpdateState::Installing))
-                    .text_color(|| theme().primary)
-                    .child(text(update_version).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground))
-                }))
                 .child(
                     row(Icon::Devices, l("Sync"), || None, move || store.sync.open.get(), move || store.sync.show())
                         .child(text(sync_status).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground)),
