@@ -505,52 +505,59 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                 .flex_row()
                                                 .items_center()
                                                 .gap_2()
-                                                .child(dynamic(move || {
-                                                    let needle = needle();
-                                                    let runs = segment.with(|s| {
-                                                        let translated =
-                                                            s.as_ref().and_then(|s| s.translated_text.as_deref());
-                                                        highlights::found_runs(
-                                                            translated.unwrap_or_default(),
-                                                            &[],
-                                                            &needle,
-                                                        )
-                                                    });
-                                                    untracked(|| {
-                                                        text("")
-                                                            .select_none()
-                                                            .flex_shrink(1.0)
-                                                            .line_height(nsh_core::LineHeight::Multiple(1.5))
-                                                            .style_with(move |s| {
-                                                                if mode() == ContentMode::Translated {
-                                                                    s.text_base()
-                                                                } else {
-                                                                    s.text_sm()
-                                                                }
-                                                            })
-                                                            .text_color(move || {
-                                                                if mode() == ContentMode::Translated {
-                                                                    theme().foreground
-                                                                } else {
-                                                                    theme().muted_foreground
-                                                                }
-                                                            })
-                                                            .transition_opacity()
-                                                            .duration(motion::INSTANT)
-                                                            .opacity(
-                                                                move || if retranslating() { 0.45_f32 } else { 1.0 },
+                                                // Its own box, allowed narrower than the line it would
+                                                // fill, so the translation wraps rather than runs past
+                                                // the row (Chinese has no spaces to break at).
+                                                .child(view().flex_shrink(1.0).min_w(px(0.0)).child(dynamic(
+                                                    move || {
+                                                        let needle = needle();
+                                                        let runs = segment.with(|s| {
+                                                            let translated =
+                                                                s.as_ref().and_then(|s| s.translated_text.as_deref());
+                                                            highlights::found_runs(
+                                                                translated.unwrap_or_default(),
+                                                                &[],
+                                                                &needle,
                                                             )
-                                                            .children(runs.into_iter().map(|(run, _, found)| {
-                                                                let run = text(SharedString::from(run));
-                                                                if found {
-                                                                    run.rounded(tokens::radius_sm).bg(tokens::found)
-                                                                } else {
-                                                                    run
-                                                                }
-                                                            }))
-                                                            .into_element()
-                                                    })
-                                                }))
+                                                        });
+                                                        untracked(|| {
+                                                            text("")
+                                                                .select_none()
+                                                                .flex_shrink(1.0)
+                                                                .line_height(nsh_core::LineHeight::Multiple(1.5))
+                                                                .style_with(move |s| {
+                                                                    if mode() == ContentMode::Translated {
+                                                                        s.text_base()
+                                                                    } else {
+                                                                        s.text_sm()
+                                                                    }
+                                                                })
+                                                                .text_color(move || {
+                                                                    if mode() == ContentMode::Translated {
+                                                                        theme().foreground
+                                                                    } else {
+                                                                        theme().muted_foreground
+                                                                    }
+                                                                })
+                                                                .transition_opacity()
+                                                                .duration(motion::INSTANT)
+                                                                .opacity(
+                                                                    move || {
+                                                                        if retranslating() { 0.45_f32 } else { 1.0 }
+                                                                    },
+                                                                )
+                                                                .children(runs.into_iter().map(|(run, _, found)| {
+                                                                    let run = text(SharedString::from(run));
+                                                                    if found {
+                                                                        run.rounded(tokens::radius_sm).bg(tokens::found)
+                                                                    } else {
+                                                                        run
+                                                                    }
+                                                                }))
+                                                                .into_element()
+                                                        })
+                                                    },
+                                                )))
                                                 .child(when(retranslating, || {
                                                     view().label(tr("Translating")).child(ui::spinner(12.0))
                                                 }))
