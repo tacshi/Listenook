@@ -41,11 +41,6 @@ pub(crate) const VERSION: &str = match option_env!("LISTENOOK_VERSION") {
 pub(crate) fn settings_dialog() -> impl IntoElement {
     let open = store().settings_open();
     let tab = store().settings_tab();
-    effect(move || {
-        if store().update_check().get() {
-            tab.set(Tab::About);
-        }
-    });
     modal_sized(
         open,
         l("Settings"),
@@ -803,24 +798,19 @@ fn shortcuts() -> impl IntoElement {
 
 fn about() -> impl IntoElement {
     let store = store();
-    let state = signal(UpdateState::default());
-    effect(move || {
-        if store.update_check().get() {
-            store.update_check().set(false);
-            updater::check(state);
-        }
-    });
+    let state = store.update();
     let status = move || -> SharedString {
         match state.get() {
             UpdateState::Idle => SharedString::default(),
             UpdateState::Checking => tr("Checking for updates…"),
             UpdateState::UpToDate => tr("Listenook is up to date."),
-            UpdateState::Available(version) => format!("{} {version}", tr("A new version is available:")).into(),
+            UpdateState::Downloading(version) => format!("{} {version}…", tr("Downloading version")).into(),
+            UpdateState::Ready(version) => format!("{} {version}", tr("An update is ready:")).into(),
             UpdateState::Manual(version, _) => {
                 format!("{} {version}. {}", tr("A new version is available:"), tr("Download it from the release page."))
                     .into()
             }
-            UpdateState::Installing => tr("Downloading and installing the update…"),
+            UpdateState::Installing => tr("Installing the update…"),
             UpdateState::Unpackaged => tr("Updates apply to the installed app, not to a development run."),
             UpdateState::Failed(message) => format!("{} {message}", tr("Couldn’t check for updates.")).into(),
         }
@@ -842,13 +832,18 @@ fn about() -> impl IntoElement {
                             .child(hint(status)),
                     )
                     .child(when(|| updater::SELF_UPDATING, move || {
-                        when(move || matches!(state.get(), UpdateState::Available(_)), move || {
+                        when(move || matches!(state.get(), UpdateState::Ready(_)), move || {
                             button(Variant::Primary, Size::Md, l("Restart to update"))
                                 .on_press(move || updater::install_and_restart(state))
                         })
                         .otherwise(move || {
                             button(Variant::Default, Size::Md, l("Check for updates"))
-                                .disabled(move || matches!(state.get(), UpdateState::Checking | UpdateState::Installing))
+                                .disabled(move || {
+                                    matches!(
+                                        state.get(),
+                                        UpdateState::Checking | UpdateState::Downloading(_) | UpdateState::Installing
+                                    )
+                                })
                                 .on_press(move || updater::check(state))
                         })
                     })),
