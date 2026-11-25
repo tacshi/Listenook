@@ -2006,6 +2006,42 @@ fn a_corrected_sentence_with_its_translation_untouched_is_translated_again_on_sa
     assert_ne!(saved["translation_state"]["total_segments"], 1);
 }
 
+#[test]
+fn both_halves_of_a_split_sentence_are_translated_again() {
+    let routes = llm_routes("1. 欢迎收听节目。");
+    let mut it = start(
+        "translate-on-split",
+        |root| {
+            seed_transcript(root);
+            llm(root, "");
+        },
+        routes,
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for("欢迎回到节目。").unwrap();
+    it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.wait_for("id:translation-editor").unwrap();
+    // Headless typing keeps the caret at the end of the text: 13 characters put it there, and
+    // the sentence opened again reads "Welcome back to the show." around it.
+    it.app.clear("id:segment-editor").unwrap();
+    it.app.type_text("id:segment-editor", "Welcome back ").unwrap();
+    it.app.press("role:button[Cancel]").unwrap();
+    it.app.press("label:Edit >> nth=0").unwrap();
+    it.app.wait_for("id:translation-editor").unwrap();
+    it.app.press("role:button[Split at cursor]").unwrap();
+    it.app.wait_for("to the show.").unwrap();
+    it.app.wait_for_gone("欢迎回到节目。", GONE).unwrap();
+    it.app.wait_for_gone("label:Translating", GONE).unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(manifest(&it.root, "sample")).unwrap()).unwrap();
+    let segments = &saved["document"]["segments"];
+    assert_eq!(segments[0]["text"], "Welcome back");
+    assert_eq!(segments[1]["text"], "to the show.");
+    assert_eq!(segments[0]["translated_text"], "欢迎收听节目。", "the first half loses the whole sentence's");
+    assert_eq!(segments[1]["translated_text"], "欢迎收听节目。", "the second half gets one");
+}
+
 fn fake_capture(_: &Path) {
     unsafe { std::env::set_var("LISTENOOK_CAPTURE", "fake") };
 }

@@ -1562,20 +1562,32 @@ impl Review {
         let Some(index) = self.index_of(&editing.segment_id) else {
             return;
         };
+        // The halves of a translated sentence, to translate again: the first keeps the whole
+        // sentence's translation and the second has none.
+        let mut halves = Vec::new();
         let split = self.change("Sentence split", |document| {
             let mut trial = document.clone();
             trial.segments[index].text = text.clone();
             if let Some(translation) = &translation {
                 trial.segments[index].translated_text = (!translation.is_empty()).then(|| translation.clone());
             }
+            let translated = trial.segments[index].has_translation();
             let split = listenook_core::structure::split_at(&mut trial, index, caret);
             if split {
+                if translated {
+                    halves = trial.segments[index..=index + 1].iter().map(|s| (s.id.clone(), s.text.clone())).collect();
+                }
                 *document = trial;
             }
             split
         });
         if split {
             self.editing.set(None);
+            if self.can_translate() {
+                for (id, text) in halves {
+                    self.retranslate(id, text);
+                }
+            }
         }
     }
 
