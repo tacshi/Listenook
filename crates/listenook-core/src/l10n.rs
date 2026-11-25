@@ -540,6 +540,7 @@ const ZH: &[(&str, &str)] = &[
     ("Change folder", "更换文件夹"),
     ("Choose folder", "选择文件夹"),
     ("Open Settings", "打开设置"),
+    ("Notifications for Listenook are turned off in the system’s settings.", "系统设置中已关闭聆页的通知。"),
     ("Open video", "打开视频"),
     ("Refresh AI Brief", "刷新 AI 简报"),
     ("Export shown as ZIP", "将显示的项目导出为 ZIP"),

@@ -154,6 +154,7 @@ fn general() -> impl IntoElement {
                 move || store.setting(|s| s.extra.get("notify_when_done").and_then(|v| v.as_bool()).unwrap_or(true)),
                 move |on| store.update_settings(|s| drop(s.extra.insert("notify_when_done".into(), on.into()))),
             ))
+            .child(notifications_turned_off())
             .child(when(crate::platform::has_tray, move || {
                 view()
                     .gap_1()
@@ -807,6 +808,49 @@ fn shortcuts() -> impl IntoElement {
                 ("escape", "Cancel an edit, close search, or go back"),
             ],
         ))
+}
+
+/// What says the system keeps Listenook's notifications from showing while the app wants them,
+/// with the way to the app's page in the system's settings where there is one (iOS, Android).
+/// Looked at again each time the app comes back, as the user may have just changed it there.
+fn notifications_turned_off() -> impl IntoElement {
+    let store = store();
+    let (refused, can_open) = (signal(false), signal(false));
+    effect(move || {
+        let wanted = store.setting(|s| s.extra.get("notify_when_done").and_then(|v| v.as_bool()).unwrap_or(true));
+        if !store.focused() {
+            return;
+        }
+        if !wanted {
+            refused.set(false);
+            return;
+        }
+        store.run(async move {
+            let denied = notification_permission().await == nsh_core::notifications::NotificationPermission::Denied;
+            let _ = refused.try_set(denied);
+            if denied {
+                let _ = can_open.try_set(nsh_core::mobile::app_settings_available().await);
+            }
+        });
+    });
+    when(
+        move || refused.get(),
+        move || {
+            view()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(hint(l("Notifications for Listenook are turned off in the system’s settings.")).flex_1())
+                .child(when(
+                    move || can_open.get(),
+                    || {
+                        button(Variant::Outline, Size::Sm, l("Open Settings"))
+                            .on_press(|| drop(nsh_core::mobile::open_app_settings()))
+                    },
+                ))
+        },
+    )
 }
 
 fn about() -> impl IntoElement {
