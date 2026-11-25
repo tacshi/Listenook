@@ -118,7 +118,7 @@ pub(crate) struct Store {
     settings_open: Signal<bool>,
     settings_tab: Signal<SettingsTab>,
     home_search: Signal<bool>,
-    update_check: Signal<bool>,
+    update: Signal<crate::services::updater::UpdateState>,
     immersive: Signal<bool>,
     sidebar_hidden: Signal<bool>,
     focused: Signal<bool>,
@@ -220,7 +220,7 @@ impl Store {
             settings_open: signal(false),
             settings_tab: signal(SettingsTab::default()),
             home_search: signal(false),
-            update_check: signal(false),
+            update: signal(Default::default()),
             immersive: signal(false),
             sidebar_hidden: signal(false),
             focused: signal(true),
@@ -478,16 +478,17 @@ impl Store {
         });
     }
 
-    pub(crate) fn update_check(&self) -> Signal<bool> {
-        self.update_check
+    /// Where the app's own update stands, shared by Settings, the sidebar and the menus.
+    pub(crate) fn update(&self) -> Signal<crate::services::updater::UpdateState> {
+        self.update
     }
 
     pub(crate) fn check_for_updates(&self) {
         batch(|| {
-            self.update_check.set(true);
             self.settings_tab.set(SettingsTab::About);
             self.settings_open.set(true);
         });
+        crate::services::updater::check(self.update);
     }
 
     pub(crate) fn settings(&self) -> Settings {

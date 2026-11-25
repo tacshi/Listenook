@@ -294,6 +294,8 @@ const ZH: &[(&str, &str)] = &[
     ),
     ("Time each word of MOSS transcripts", "为 MOSS 转写生成逐词时间轴"),
     ("A new version is available:", "有新版本可用："),
+    ("An update is ready:", "更新已就绪："),
+    ("The downloaded update is gone. Check for updates again.", "已下载的更新不见了。请重新检查更新。"),
     (
         "A subtitle file with the same name can become its transcript. Up to 5 hours each.",
         "同名字幕文件可以作为它的转写。每个文件最长 5 小时。",
@@ -331,7 +333,8 @@ const ZH: &[(&str, &str)] = &[
     ("Delete group", "删除分组"),
     ("Delete group…", "删除分组…"),
     ("Download it from the release page.", "请从发布页面下载。"),
-    ("Downloading and installing the update…", "正在下载并安装更新…"),
+    ("Downloading version", "正在下载版本"),
+    ("Installing the update…", "正在安装更新…"),
     ("Drop audio or video here", "将音频或视频拖到这里"),
     (
         "Each sentence plays, then waits for you to say it. Press a sentence to practice it.",
