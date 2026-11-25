@@ -298,6 +298,7 @@ impl Store {
         }
         global::<Handle>().set(Handle(Some(store)));
         crate::services::transcribe::clean_up_left(store);
+        crate::services::transcribe::resume_when_online(store);
         if let Some(temporary) = store.data_root().map(|root| root.join("temporary")) {
             store.capture.recover(temporary);
         }

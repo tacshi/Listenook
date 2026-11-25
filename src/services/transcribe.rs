@@ -135,6 +135,40 @@ pub(crate) fn cancel(id: &str) {
     store.run(async move { clean_up(store, &id).await });
 }
 
+/// Waits until the device is on a network again.
+async fn until_online() {
+    while !untracked(|| network().online()) {
+        timer(Duration::from_secs(1)).await;
+    }
+}
+
+/// Starts again, once the device is back on a network, the jobs that failed for want of one.
+pub(crate) fn resume_when_online(store: Store) {
+    let offline = std::cell::Cell::new(false);
+    effect(move || {
+        let online = network().online();
+        if !offline.replace(!online) || !online {
+            return;
+        }
+        let failed: Vec<String> = untracked(|| {
+            store
+                .jobs()
+                .iter()
+                .filter(|job| job.status == JobStatus::Failed && job.error_code.as_deref() == Some("network_error"))
+                .map(|job| job.id.clone())
+                .collect()
+        });
+        for id in failed {
+            log::info!("job {id}: back online, transcribing again");
+            retry(&id);
+            // A podcast episode whose file is gone downloads first instead.
+            if store.job_now(&id).is_some_and(|job| job.status == JobStatus::Ready) {
+                start(&id);
+            }
+        }
+    });
+}
+
 pub(crate) fn retry(id: &str) {
     let store = store();
     if store
@@ -281,6 +315,12 @@ async fn run(store: Store, id: &str) -> Result<(), Failure> {
                     });
                 }
                 timer(wait).await;
+            }
+            // Offline (a laptop asleep, a train through a tunnel), asking again can't help: the
+            // provider keeps working on it meanwhile, so the job waits for the network instead.
+            Err(failure) if failure.retryable && !untracked(|| network().online()) => {
+                failures = 0;
+                until_online().await;
             }
             Err(failure) if failure.retryable && failures < 7 => {
                 failures += 1;

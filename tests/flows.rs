@@ -9,6 +9,7 @@ use listenook_core::{
     sync::{PROTOCOL, Pake, pake_proof},
 };
 use nsh_app_listenook::testing::{answer, client, device_key};
+use nsh_core::platform::NetworkKind;
 use nsh_engine::{
     EngineConfig, Points, Root, Size,
     geometry::{point, px},
@@ -944,6 +945,41 @@ fn a_failed_transcription_says_why_and_can_be_retried() {
     it.app.wait_for("The API key was rejected. Check it in Settings.").unwrap();
     it.app.press("role:button[Retry]").unwrap();
     it.app.wait_for_gone("The API key was rejected. Check it in Settings.", GONE).unwrap();
+}
+
+#[test]
+fn a_job_that_failed_offline_is_transcribed_once_the_network_is_back() {
+    let routes = vec![
+        ("POST https://api.soniox.com/v1/files".to_owned(), response(r#"{"id":"file-1"}"#)),
+        ("POST https://api.soniox.com/v1/transcriptions".to_owned(), response(r#"{"id":"tr-1"}"#)),
+        ("GET https://api.soniox.com/v1/transcriptions/tr-1".to_owned(), response(r#"{"status":"completed"}"#)),
+        (
+            "GET https://api.soniox.com/v1/transcriptions/tr-1/transcript".to_owned(),
+            response(
+                r#"{"tokens":[{"text":"Hello","start_ms":0,"end_ms":400,"speaker":"1"},{"text":" world.","start_ms":400,"end_ms":900,"speaker":"1"}]}"#,
+            ),
+        ),
+        ("DELETE https://api.soniox.com/v1/transcriptions/tr-1".to_owned(), response("")),
+        ("DELETE https://api.soniox.com/v1/files/file-1".to_owned(), response("")),
+    ];
+    let mut it = start(
+        "back-online",
+        |root| {
+            let media = root.join("Standup.mp3");
+            std::fs::write(&media, b"not really audio").unwrap();
+            let job = json!({"id": "dropped", "source_path": media, "status": "failed",
+                             "error_code": "network_error", "transcription_provider": "soniox"});
+            std::fs::create_dir_all(root.join("jobs/dropped")).unwrap();
+            std::fs::write(manifest(root, "dropped"), job.to_string()).unwrap();
+        },
+        routes,
+    );
+    it.app.wait_for("Standup").unwrap();
+    it.app.set_environment("offline", |env| env.network.kind = NetworkKind::None).unwrap();
+    it.app.press("Standup").unwrap();
+    assert!(!it.app.screen().matches("Hello world.").unwrap(), "nothing is sent while offline");
+    it.app.set_environment("online", |env| env.network.kind = NetworkKind::Wifi).unwrap();
+    it.app.wait_for("Hello world.").unwrap();
 }
 
 #[test]
