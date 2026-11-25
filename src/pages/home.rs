@@ -351,7 +351,7 @@ pub(crate) fn home() -> impl IntoElement {
                 )
             })
             .otherwise(move || {
-                scroll().flex_1().child(
+                scroll().flex_1().smooth_wheel(true).child(
                     view()
                         .w_full()
                         .max_w(px(960.0))

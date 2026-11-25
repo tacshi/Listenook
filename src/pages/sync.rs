@@ -101,6 +101,7 @@ pub(crate) fn sync_dialog() -> impl IntoElement {
                         .child(button(Variant::Outline, Size::Md, l("Cancel")).on_press(move || sync.cancel()))
                         .child(
                             button(Variant::Primary, Size::Md, l("Pair"))
+                                .busy(move || sync.checking())
                                 .disabled(move || {
                                     sync.checking()
                                         || code.with(|code| code.chars().filter(char::is_ascii_digit).count() != 6)
@@ -188,6 +189,7 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
                         .child(heading("My devices"))
                         .child(
                             button(Variant::Default, Size::Sm, l("Sync now"))
+                                .busy(move || sync.rounding())
                                 .disabled(move || sync.rounding() || !store.sync_visible())
                                 .on_press(move || sync.sync_now()),
                         ),
@@ -245,6 +247,7 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
                 )
                 .child(
                     button(Variant::Default, Size::Md, l("Connect"))
+                        .busy(move || sync.connecting())
                         .disabled(move || sync.connecting() || address.with(|a| a.trim().is_empty()))
                         .on_press(connect),
                 ),

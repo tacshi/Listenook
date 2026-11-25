@@ -173,7 +173,7 @@ pub fn field(label: impl IntoReactive<SharedString>, control: impl IntoElement) 
 }
 
 pub fn hint(label: impl IntoReactive<SharedString>) -> Text {
-    text(label).text_xs().text_color(|| theme().muted_foreground)
+    text(label).text_xs().text_pretty().text_color(|| theme().muted_foreground)
 }
 
 /// A hint saying what went wrong.

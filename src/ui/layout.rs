@@ -89,7 +89,12 @@ pub fn empty_state(
                 .gap_1()
                 .child(text(title).text_base().font_weight(FontWeight::SEMIBOLD).text_color(|| theme().foreground))
                 .child(
-                    text(description).text_sm().text_center().max_w(px(420.0)).text_color(|| theme().muted_foreground),
+                    text(description)
+                        .text_sm()
+                        .text_center()
+                        .text_pretty()
+                        .max_w(px(420.0))
+                        .text_color(|| theme().muted_foreground),
                 ),
         )
         .child(action)

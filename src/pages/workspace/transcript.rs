@@ -90,6 +90,7 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
         .child(search_bar(review))
         .child(
             virtual_list(move || review.shown.with(Vec::len), move |at| row(review, at, speaker))
+                .smooth_wheel(true)
                 .keys(move || {
                     review.shown.with(|shown| {
                         shown.iter().filter_map(|index| review.segment(*index).map(|s| s.id)).collect::<Vec<_>>()
