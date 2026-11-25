@@ -283,11 +283,13 @@ fn paired_devices() -> impl IntoElement {
 fn key_field(
     secret: Secret,
     keyless: impl Fn() -> bool + Copy + 'static,
-    test: impl Fn(String, Signal<SharedString>) + Copy + 'static,
+    test: impl Fn(String, Signal<SharedString>, Signal<Option<String>>) + Copy + 'static,
 ) -> impl IntoElement {
     let draft = signal(String::new());
     let saved = signal(secrets::read(secret).is_some());
     let status = signal(SharedString::default());
+    // The last key that passed Test. Save stays off until the key being typed is that one.
+    let verified = signal(None::<String>);
     let save = move || {
         let value = draft.get_untracked();
         match secrets::write(secret, &value) {
@@ -295,6 +297,7 @@ fn key_field(
                 batch(|| {
                     saved.set(!value.trim().is_empty());
                     draft.set(String::new());
+                    verified.set(None);
                     status.set(SharedString::default());
                 });
                 toast(
@@ -352,7 +355,12 @@ fn key_field(
                         .gap_2()
                         .child(
                             button(Variant::Default, Size::Md, l("Save"))
-                                .disabled(move || draft.with(|d| d.trim().is_empty()))
+                                .disabled(move || {
+                                    draft.with(|d| {
+                                        let typed = d.trim();
+                                        typed.is_empty() || verified.with(|v| v.as_deref() != Some(typed))
+                                    })
+                                })
                                 .on_press(save),
                         )
                         .child(
@@ -366,7 +374,8 @@ fn key_field(
                                         typed
                                     };
                                     status.set(tr("Testing…"));
-                                    test(key, status);
+                                    verified.set(None);
+                                    test(key, status, verified);
                                 }),
                         )
                         .child(
@@ -389,12 +398,15 @@ fn key_field(
         )
 }
 
-fn test_provider(provider: Provider) -> impl Fn(String, Signal<SharedString>) + Copy + 'static {
-    move |key, status| {
+fn test_provider(provider: Provider) -> impl Fn(String, Signal<SharedString>, Signal<Option<String>>) + Copy + 'static {
+    move |key, status, verified| {
         store().run(async move {
             let result = provider.validate_key(&key).await;
             status.try_set(match result {
-                Ok(()) => format!("{} {}", provider.name(), tr("key is valid.")).into(),
+                Ok(()) => {
+                    verified.try_set(Some(key));
+                    format!("{} {}", provider.name(), tr("key is valid.")).into()
+                }
                 Err(failure) => error_text(&failure.code),
             });
         });
@@ -632,14 +644,15 @@ fn ai() -> impl IntoElement {
     let store = store();
     let models = signal(Vec::<String>::new());
     let llm_settings = move || store.setting(|s| s.llm_provider_settings.clone());
-    let test = move |key: String, status: Signal<SharedString>| {
+    let test = move |key: String, status: Signal<SharedString>, verified: Signal<Option<String>>| {
         store.run(async move {
             let settings = store.settings().llm_provider_settings;
-            match llm::list_models(&settings, Some(key)).await {
+            match llm::list_models(&settings, Some(key.clone())).await {
                 Ok(found) => {
                     if !status.try_set(format!("{} {}", found.len(), tr("models available.")).into()) {
                         return;
                     }
+                    verified.try_set(Some(key));
                     if settings.model.is_empty()
                         && let Some(first) = found.first().cloned()
                     {
