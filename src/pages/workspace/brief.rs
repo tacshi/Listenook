@@ -5,14 +5,16 @@ use listenook_core::{
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
-use super::review::{BriefPart, Review, Side};
+use super::{
+    copy,
+    review::{BriefPart, Review, Side},
+};
 use crate::{
     services::llm,
     state::{AiSetup, SettingsTab, error_text, l, tr},
     ui::{
-        Icon, Size, Tone, Variant, button, card, checkbox, empty_state, field, hint, icon, icon_button,
-        icon_text_button, modal, modal_actions, moment_chip, progress_bar, section, select, text_area, text_field,
-        toast,
+        Icon, Size, Variant, button, card, checkbox, empty_state, field, hint, icon, icon_button, icon_text_button,
+        modal, modal_actions, moment_chip, progress_bar, section, select, text_area, text_field,
     },
 };
 
@@ -216,8 +218,7 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                             if let (Some(job), Some(brief)) =
                                                 (store.job_now(&review.id()), brief.get_untracked())
                                             {
-                                                set_clipboard(export::export_brief(&job, &brief));
-                                                toast(Tone::Success, tr("AI Brief copied"));
+                                                copy(export::export_brief(&job, &brief), Some("AI Brief copied"));
                                             }
                                         },
                                     ),

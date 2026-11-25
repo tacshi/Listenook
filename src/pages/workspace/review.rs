@@ -1367,7 +1367,7 @@ impl Review {
 
     pub(super) fn copy_selection(&self) {
         if let Some(picked) = self.selection.get_untracked() {
-            set_clipboard(picked.text);
+            super::copy(picked.text, None);
         }
     }
 

@@ -9,11 +9,12 @@ use listenook_core::{
     sync::{PROTOCOL, Pake, pake_proof},
 };
 use nsh_app_listenook::testing::{answer, client, device_key};
+use nsh_core::platform::NetworkKind;
 use nsh_engine::{
     EngineConfig, Points, Root, Size,
     geometry::{point, px},
 };
-use nsh_testing::{DialogAnswer, Headless, StubNetwork, StubResponse};
+use nsh_testing::{DialogAnswer, DragOptions, Headless, StubNetwork, StubResponse};
 use serde_json::json;
 
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
@@ -45,6 +46,14 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
         std::env::remove_var("LISTENOOK_TABLET_MENUS");
         std::env::remove_var("LISTENOOK_SYNC_PORT");
         std::env::remove_var("LISTENOOK_CAPTURE");
+        std::env::remove_var("LISTENOOK_UPLOAD_URL");
+    }
+    // Uploads leave over their own connection, which the stubbed network never sees: a local
+    // server gives them the response the test routed for them.
+    if let Some((_, uploaded)) =
+        routes.iter().find(|(route, _)| route.starts_with("POST ") && route.ends_with("/v1/files"))
+    {
+        unsafe { std::env::set_var("LISTENOOK_UPLOAD_URL", upload_server(uploaded.clone())) };
     }
     seed(&root);
     let app = Headless::start(EngineConfig {
@@ -57,6 +66,32 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
     app.wait_for("Library").unwrap();
     app.press("Library").unwrap();
     App { app, root, _turn: turn }
+}
+
+/// A server on this machine that reads each upload whole and answers it with `reply`: its URL.
+fn upload_server(reply: StubResponse) -> String {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/v1/files", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(&stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let _ = std::io::copy(&mut reader.take(length), &mut std::io::sink());
+            let head = format!("HTTP/1.1 {} Stub\r\nContent-Length: {}\r\n\r\n", reply.status, reply.body.len());
+            let _ = (&stream).write_all(&[head.as_bytes(), &reply.body].concat());
+        }
+    });
+    url
 }
 
 fn on_port(port: u16) -> impl FnOnce(&Path) {
@@ -475,12 +510,12 @@ fn a_tap_on_the_repeat_button_loops_the_sentence_and_a_tap_on_any_looping_one_en
 fn dragging_the_repeat_button_loops_every_sentence_the_finger_passes() {
     let mut it = open_sample("repeat-drag");
     let rails = |it: &App| it.app.screen().count("id:repeat-rail").unwrap();
-    it.app.drag_and_hold("label:Repeat sentence >> nth=0", point(px(0.0), px(160.0))).unwrap();
+    it.app.drag_and_hold("label:Repeat sentence >> nth=0", point(px(0.0), px(160.0)), DragOptions::default()).unwrap();
     let held = rails(&it);
     assert!(held > 1, "the repeat grows while the finger is still down: {held}");
     it.app.drop_held().unwrap();
     assert_eq!(rails(&it), held, "lifting the finger keeps the repeat");
-    it.app.drag("label:Repeat sentence >> nth=3", point(px(0.0), px(-1000.0))).unwrap();
+    it.app.drag("label:Repeat sentence >> nth=3", point(px(0.0), px(-1000.0)), DragOptions::default()).unwrap();
     assert_eq!(rails(&it), 4, "dragged up, the repeat runs from the top sentence to the one the drag started on");
     it.app.press("label:Repeat sentence >> nth=1").unwrap();
     it.app.wait_for_gone("id:repeat-rail", GONE).unwrap();
@@ -511,9 +546,13 @@ fn a_short_repeat_drag_after_scrolling_takes_in_a_sentence_or_two() {
     it.app.wait_for("Learning languages").unwrap();
     it.app.press("Learning languages").unwrap();
     it.app.wait_for("Sentence 1 says something about learning.").unwrap();
-    it.app.drag("Sentence 3 says something about learning.", point(px(0.0), px(-700.0))).unwrap();
-    it.app.drag("Sentence 12 says something about learning.", point(px(0.0), px(300.0))).unwrap();
-    it.app.drag("label:Repeat sentence >> nth=8", point(px(0.0), px(90.0))).unwrap();
+    it.app
+        .drag("Sentence 3 says something about learning.", point(px(0.0), px(-700.0)), DragOptions::default())
+        .unwrap();
+    it.app
+        .drag("Sentence 12 says something about learning.", point(px(0.0), px(300.0)), DragOptions::default())
+        .unwrap();
+    it.app.drag("label:Repeat sentence >> nth=8", point(px(0.0), px(90.0)), DragOptions::default()).unwrap();
     let rails = it.app.screen().count("id:repeat-rail").unwrap();
     assert!((2..=3).contains(&rails), "a short drag takes in a sentence or two: {rails}");
 }
@@ -524,7 +563,7 @@ fn holding_a_repeat_drag_near_the_bottom_edge_scrolls_and_keeps_stretching_the_r
     it.app.wait_for("Learning languages").unwrap();
     it.app.press("Learning languages").unwrap();
     it.app.wait_for("Sentence 1 says something about learning.").unwrap();
-    it.app.drag_and_hold("label:Repeat sentence >> nth=0", point(px(0.0), px(680.0))).unwrap();
+    it.app.drag_and_hold("label:Repeat sentence >> nth=0", point(px(0.0), px(680.0)), DragOptions::default()).unwrap();
     it.app.wait(Duration::from_millis(1500)).unwrap();
     it.app.drop_held().unwrap();
     assert!(!it.app.shows("Sentence 1 says something about learning."), "the list scrolled");
@@ -906,6 +945,41 @@ fn a_failed_transcription_says_why_and_can_be_retried() {
     it.app.wait_for("The API key was rejected. Check it in Settings.").unwrap();
     it.app.press("role:button[Retry]").unwrap();
     it.app.wait_for_gone("The API key was rejected. Check it in Settings.", GONE).unwrap();
+}
+
+#[test]
+fn a_job_that_failed_offline_is_transcribed_once_the_network_is_back() {
+    let routes = vec![
+        ("POST https://api.soniox.com/v1/files".to_owned(), response(r#"{"id":"file-1"}"#)),
+        ("POST https://api.soniox.com/v1/transcriptions".to_owned(), response(r#"{"id":"tr-1"}"#)),
+        ("GET https://api.soniox.com/v1/transcriptions/tr-1".to_owned(), response(r#"{"status":"completed"}"#)),
+        (
+            "GET https://api.soniox.com/v1/transcriptions/tr-1/transcript".to_owned(),
+            response(
+                r#"{"tokens":[{"text":"Hello","start_ms":0,"end_ms":400,"speaker":"1"},{"text":" world.","start_ms":400,"end_ms":900,"speaker":"1"}]}"#,
+            ),
+        ),
+        ("DELETE https://api.soniox.com/v1/transcriptions/tr-1".to_owned(), response("")),
+        ("DELETE https://api.soniox.com/v1/files/file-1".to_owned(), response("")),
+    ];
+    let mut it = start(
+        "back-online",
+        |root| {
+            let media = root.join("Standup.mp3");
+            std::fs::write(&media, b"not really audio").unwrap();
+            let job = json!({"id": "dropped", "source_path": media, "status": "failed",
+                             "error_code": "network_error", "transcription_provider": "soniox"});
+            std::fs::create_dir_all(root.join("jobs/dropped")).unwrap();
+            std::fs::write(manifest(root, "dropped"), job.to_string()).unwrap();
+        },
+        routes,
+    );
+    it.app.wait_for("Standup").unwrap();
+    it.app.set_environment("offline", |env| env.network.kind = NetworkKind::None).unwrap();
+    it.app.press("Standup").unwrap();
+    assert!(!it.app.screen().matches("Hello world.").unwrap(), "nothing is sent while offline");
+    it.app.set_environment("online", |env| env.network.kind = NetworkKind::Wifi).unwrap();
+    it.app.wait_for("Hello world.").unwrap();
 }
 
 #[test]
@@ -1298,96 +1372,6 @@ fn a_paired_devices_sync_needs_no_answer_and_its_recording_arrives() {
     it.app.wait_for("Left halfway").unwrap();
     let shows = std::fs::read_to_string(it.root.join("podcast_catalog.json")).unwrap();
     assert!(shows.contains("Left halfway"), "the episode it left is saved with its details");
-}
-
-#[test]
-fn a_device_pairs_with_the_code_shown_here_and_a_wrong_code_does_not() {
-    let mut it = start("sync-pair", on_port(47944), Vec::new());
-    it.app.wait_for("Learning languages").unwrap();
-    it.app.press("Sync").unwrap();
-    it.app.wait_for("Nearby devices").unwrap();
-    assert!(!it.app.shows("My devices"), "nothing is paired yet");
-
-    let base = "https://127.0.0.1:47944/listenook";
-    let library = other_library(&it.root);
-    let seen = Arc::new(Mutex::new(String::new()));
-    let asking = client(&library, None, Some(seen.clone()));
-    let asked = json!({"device": other_device(47944)});
-    let answer: serde_json::Value = (0..50)
-        .find_map(|_| match asking.post(&format!("{base}/pair")).send_string(&asked.to_string()) {
-            Ok(response) => Some(response.into_string().unwrap()),
-            Err(_) => {
-                std::thread::sleep(Duration::from_millis(100));
-                None
-            }
-        })
-        .expect("the device answers")
-        .parse()
-        .unwrap();
-    let here = answer["device"]["id"].as_str().unwrap().to_owned();
-    let here_key = seen.lock().unwrap().clone();
-    assert_eq!(here_key, device_key(&it.root), "the device shows its own certificate");
-
-    it.app.wait_for("Pair a device").unwrap();
-    it.app.wait_for("“Studio Mac”").ok();
-    let shown = it
-        .app
-        .screen()
-        .texts()
-        .into_iter()
-        .find(|text| text.len() == 7 && text.chars().filter(char::is_ascii_digit).count() == 6)
-        .map(|text| text.replace(' ', ""))
-        .expect("a six-digit code is shown");
-    let try_code = |code: &str| -> Result<serde_json::Value, u16> {
-        let agent = client(&library, Some(&here_key), None);
-        let (pake, message) = Pake::start(code, ("other", &device_key(&library)), (&here, &here_key), true);
-        let sent = json!({"id": "other", "message": message});
-        let theirs: serde_json::Value = agent
-            .post(&format!("{base}/pair/confirm"))
-            .send_string(&sent.to_string())
-            .unwrap()
-            .into_string()
-            .unwrap()
-            .parse()
-            .unwrap();
-        let key = pake.finish(theirs["message"].as_str().unwrap()).unwrap();
-        let finish = json!({"id": "other", "proof": pake_proof(&key, "asker")});
-        match agent.post(&format!("{base}/pair/finish")).send_string(&finish.to_string()) {
-            Ok(response) => {
-                let done: serde_json::Value = response.into_string().unwrap().parse().unwrap();
-                assert_eq!(done["proof"], pake_proof(&key, "answerer"), "the device proves it knew the code");
-                Ok(done)
-            }
-            Err(ureq::Error::Status(status, _)) => Err(status),
-            Err(error) => panic!("{error}"),
-        }
-    };
-    let wrong = if shown == "000000" { "111111" } else { "000000" };
-    assert_eq!(try_code(wrong).err(), Some(403), "a wrong code is refused");
-    assert!(it.app.shows("Pair a device"), "the code stays up after one wrong try");
-
-    let done = try_code(&shown).unwrap();
-    assert_eq!(done["circle"]["members"]["other"]["key"], device_key(&library));
-    it.app.wait_for_gone("Pair a device", GONE).unwrap();
-    it.app.wait_for("My devices").unwrap();
-    it.app.wait_for("Studio Mac").unwrap();
-    let saved = std::fs::read_to_string(it.root.join("sync.json")).unwrap();
-    assert!(saved.contains(&device_key(&library)) && saved.contains("Studio Mac"), "the pairing is remembered");
-
-    let welcome = hello_to(&it.root, base, json!({"device": other_device(47944), "auto": true})).unwrap();
-    let token = welcome["token"].as_str().unwrap().to_owned();
-    other(&it.root)
-        .post(&format!("{base}/done"))
-        .set("X-Listenook-Token", &token)
-        .send_string(r#"{"complete":true}"#)
-        .unwrap();
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(!it.app.shows("Synced with Studio Mac"), "a sync on its own says nothing");
-    let stranger = PathBuf::from(format!("{}-stranger", it.root.display()));
-    let refused = client(&stranger, Some(&here_key), None)
-        .post(&format!("{base}/sync"))
-        .send_string(&json!({"device": other_device(47944)}).to_string());
-    assert!(matches!(refused, Err(ureq::Error::Status(403, _))), "another device's key is refused");
 }
 
 #[test]

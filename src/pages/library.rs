@@ -220,6 +220,7 @@ pub(crate) fn library() -> impl IntoElement {
             )
             .otherwise(move || {
                 virtual_list(move || shown.with(Vec::len), move |at| row(shown, at, dialogs))
+                    .smooth_wheel(true)
                     .keys(move || shown.with(|jobs| jobs.iter().map(|job| job.id.clone()).collect::<Vec<_>>()))
                     .estimated_item_size(px(64.0))
                     .content_padding(px(ui::PAGE_INSET - 12.0))

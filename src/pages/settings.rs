@@ -8,7 +8,7 @@ use crate::{
         llm,
         local::{self, ModelState},
         remote::Provider,
-        updater::{self, UpdateState},
+        updater,
     },
     state::{
         SettingsTab as Tab, error_text, l,
@@ -37,6 +37,19 @@ pub(crate) const VERSION: &str = match option_env!("LISTENOOK_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };
+
+/// The version About shows: the installed app's, with its build number, as its package says;
+/// the one it was compiled as in a development run.
+fn shown_version() -> String {
+    match app_info() {
+        Some(info) if !info.development => match (info.version, info.build) {
+            (Some(version), Some(build)) => format!("{version} ({build})"),
+            (Some(version), None) => version,
+            _ => VERSION.to_owned(),
+        },
+        _ => VERSION.to_owned(),
+    }
+}
 
 pub(crate) fn settings_dialog() -> impl IntoElement {
     let open = store().settings_open();
@@ -154,6 +167,7 @@ fn general() -> impl IntoElement {
                 move || store.setting(|s| s.extra.get("notify_when_done").and_then(|v| v.as_bool()).unwrap_or(true)),
                 move |on| store.update_settings(|s| drop(s.extra.insert("notify_when_done".into(), on.into()))),
             ))
+            .child(notifications_turned_off())
             .child(when(crate::platform::has_tray, move || {
                 view()
                     .gap_1()
@@ -809,65 +823,70 @@ fn shortcuts() -> impl IntoElement {
         ))
 }
 
+/// What says the system keeps Listenook's notifications from showing while the app wants them,
+/// with the way to the app's page in the system's settings where there is one (iOS, Android).
+/// Looked at again each time the app comes back, as the user may have just changed it there.
+fn notifications_turned_off() -> impl IntoElement {
+    let store = store();
+    let (refused, can_open) = (signal(false), signal(false));
+    effect(move || {
+        let wanted = store.setting(|s| s.extra.get("notify_when_done").and_then(|v| v.as_bool()).unwrap_or(true));
+        if !store.focused() {
+            return;
+        }
+        if !wanted {
+            refused.set(false);
+            return;
+        }
+        store.run(async move {
+            let denied = notification_permission().await == nsh_core::notifications::NotificationPermission::Denied;
+            let _ = refused.try_set(denied);
+            if denied {
+                let _ = can_open.try_set(nsh_core::mobile::app_settings_available().await);
+            }
+        });
+    });
+    when(
+        move || refused.get(),
+        move || {
+            view()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(hint(l("Notifications for Listenook are turned off in the system’s settings.")).flex_1())
+                .child(when(
+                    move || can_open.get(),
+                    || {
+                        button(Variant::Outline, Size::Sm, l("Open Settings"))
+                            .on_press(|| drop(nsh_core::mobile::open_app_settings()))
+                    },
+                ))
+        },
+    )
+}
+
 fn about() -> impl IntoElement {
     let store = store();
-    let state = store.update();
-    let status = move || -> SharedString {
-        match state.get() {
-            UpdateState::Idle => SharedString::default(),
-            UpdateState::Checking => tr("Checking for updates…"),
-            UpdateState::UpToDate => tr("Listenook is up to date."),
-            UpdateState::Downloading(version) => format!("{} {version}…", tr("Downloading version")).into(),
-            UpdateState::Ready(version) => format!("{} {version}", tr("An update is ready:")).into(),
-            UpdateState::Manual(version, _) => {
-                format!("{} {version}. {}", tr("A new version is available:"), tr("Download it from the release page."))
-                    .into()
-            }
-            UpdateState::Installing => tr("Installing the update…"),
-            UpdateState::Unpackaged => tr("Updates apply to the installed app, not to a development run."),
-            UpdateState::Failed(message) => format!("{} {message}", tr("Couldn’t check for updates.")).into(),
-        }
-    };
     view().gap_6().child(section(
         move || SharedString::from(store.lang().app_name()),
-        panel()
-            .child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        view()
-                            .gap_1()
-                            .flex_1()
-                            .child(text(move || SharedString::from(format!("{} {VERSION}", tr("Version")))).text_sm().text_color(|| theme().foreground))
-                            .child(hint(status)),
-                    )
-                    .child(when(|| updater::SELF_UPDATING, move || {
-                        when(move || matches!(state.get(), UpdateState::Ready(_)), move || {
-                            button(Variant::Primary, Size::Md, l("Restart to update"))
-                                .on_press(move || updater::install_and_restart(state))
-                        })
-                        .otherwise(move || {
-                            button(Variant::Default, Size::Md, l("Check for updates"))
-                                .disabled(move || {
-                                    matches!(
-                                        state.get(),
-                                        UpdateState::Checking | UpdateState::Downloading(_) | UpdateState::Installing
-                                    )
-                                })
-                                .on_press(move || updater::check(state))
-                        })
-                    })),
-            )
-            .child(when(move || matches!(state.get(), UpdateState::Manual(..)), move || {
-                button(Variant::Outline, Size::Md, l("Open release page")).self_start().on_press(move || {
-                    if let UpdateState::Manual(_, url) = state.get_untracked() {
-                        drop(open_url(url.to_string()));
-                    }
-                })
-            })),
+        panel().child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    text(move || SharedString::from(format!("{} {}", tr("Version"), shown_version())))
+                        .flex_1()
+                        .text_sm()
+                        .text_color(|| theme().foreground),
+                )
+                .child(when(
+                    || updater::SELF_UPDATING,
+                    || button(Variant::Default, Size::Md, l("Check for updates")).on_press(updater::check),
+                )),
+        ),
     ))
     .child(section(
         l("Privacy"),

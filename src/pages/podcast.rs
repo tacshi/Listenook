@@ -454,6 +454,7 @@ fn show_page(page: Page) -> impl IntoElement {
             )
             .otherwise(move || {
                 virtual_list(move || shown.with(Vec::len), move |at| episode_row(page, shown, notes_open, at))
+                    .smooth_wheel(true)
                     .keys(move || shown.with(|e| e.iter().map(|e| e.id.clone()).collect::<Vec<_>>()))
                     .estimated_item_size(px(68.0))
                     .content_padding(px(ui::PAGE_INSET - 12.0))

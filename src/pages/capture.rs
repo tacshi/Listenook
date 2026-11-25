@@ -279,6 +279,7 @@ fn recording_actions() -> AnyElement {
         }))
         .child(
             icon_text_button(Variant::Primary, Size::Md, Icon::Stop, l("Stop"))
+                .busy(stopping)
                 .disabled(stopping)
                 .on_press(move || capture.stop()),
         )
@@ -501,6 +502,7 @@ fn trimming_actions() -> AnyElement {
         .child(ui::checkbox(l("Transcribe"), move || transcribe.get(), move |on| transcribe.set(on)))
         .child(
             button(Variant::Primary, Size::Md, move || tr(if saving() { "Saving…" } else { "Save to Library" }))
+                .busy(saving)
                 .disabled(move || saving() || capture.kept().is_empty())
                 .on_press(move || capture.save(transcribe.get_untracked())),
         )

@@ -59,6 +59,10 @@ pub(crate) enum Access {
     Granted,
     Denied,
     /// Not asked yet: the system asks when recording starts.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "only macOS asks before it lets Listenook hear other apps")
+    )]
     Unknown,
 }
 

@@ -804,8 +804,7 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                                     locale_code: store.lang().code().into(),
                                     ..ExportOptions::default()
                                 };
-                                set_clipboard(export::export_transcript(&job, &options));
-                                toast(Tone::Success, tr("Transcript copied"));
+                                copy(export::export_transcript(&job, &options), Some("Transcript copied"));
                             }
                         })
                     },
@@ -1491,6 +1490,21 @@ fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
             })
         },
     )
+}
+
+/// Puts `text` on the clipboard and says `copied` once it's there, or that it wasn't copied when
+/// the clipboard refused it, whether or not there is a `copied` to say.
+fn copy(text: String, copied: Option<&'static str>) {
+    spawn(async move {
+        match set_clipboard(text).await {
+            ClipboardWrite::Failed => toast(Tone::Error, tr("Couldn’t copy. Try again.")),
+            _ => {
+                if let Some(copied) = copied {
+                    toast(Tone::Success, tr(copied));
+                }
+            }
+        }
+    });
 }
 
 fn search_bar(review: Review) -> impl IntoElement {

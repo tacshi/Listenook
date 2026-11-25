@@ -6,7 +6,7 @@ use nsh_core::{
     prelude::*,
 };
 
-use super::{review::Review, search_bar};
+use super::{copy, review::Review, search_bar};
 use crate::{
     services::llm,
     state::{SettingsTab, error_text, l, tr},
@@ -90,6 +90,7 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
         .child(search_bar(review))
         .child(
             virtual_list(move || review.shown.with(Vec::len), move |at| row(review, at, speaker))
+                .smooth_wheel(true)
                 .keys(move || {
                     review.shown.with(|shown| {
                         shown.iter().filter_map(|index| review.segment(*index).map(|s| s.id)).collect::<Vec<_>>()
@@ -671,7 +672,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                             })
                         });
                         if let Some(shown) = shown {
-                            set_clipboard(shown);
+                            copy(shown, None);
                         }
                     })),
             ),

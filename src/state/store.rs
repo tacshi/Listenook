@@ -130,7 +130,6 @@ pub(crate) struct Store {
     /// Bumped whenever a key is saved or removed, so what shows whether one is there follows.
     keys: Signal<u32>,
     home_search: Signal<bool>,
-    update: Signal<crate::services::updater::UpdateState>,
     immersive: Signal<bool>,
     sidebar_hidden: Signal<bool>,
     focused: Signal<bool>,
@@ -233,7 +232,6 @@ impl Store {
             settings_tab: signal(SettingsTab::default()),
             keys: signal(0),
             home_search: signal(false),
-            update: signal(Default::default()),
             immersive: signal(false),
             sidebar_hidden: signal(false),
             focused: signal(true),
@@ -300,6 +298,7 @@ impl Store {
         }
         global::<Handle>().set(Handle(Some(store)));
         crate::services::transcribe::clean_up_left(store);
+        crate::services::transcribe::resume_when_online(store);
         if let Some(temporary) = store.data_root().map(|root| root.join("temporary")) {
             store.capture.recover(temporary);
         }
@@ -489,19 +488,6 @@ impl Store {
             self.settings_tab.set(tab);
             self.settings_open.set(true);
         });
-    }
-
-    /// Where the app's own update stands, shared by Settings, the sidebar and the menus.
-    pub(crate) fn update(&self) -> Signal<crate::services::updater::UpdateState> {
-        self.update
-    }
-
-    pub(crate) fn check_for_updates(&self) {
-        batch(|| {
-            self.settings_tab.set(SettingsTab::About);
-            self.settings_open.set(true);
-        });
-        crate::services::updater::check(self.update);
     }
 
     pub(crate) fn settings(&self) -> Settings {
