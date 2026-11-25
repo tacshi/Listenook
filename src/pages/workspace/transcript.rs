@@ -9,10 +9,10 @@ use nsh_core::{
 use super::{review::Review, search_bar};
 use crate::{
     services::llm,
-    state::{error_text, l, tr},
+    state::{SettingsTab, error_text, l, tr},
     ui::{
         self, Icon, Size, Tone, Variant, button, field, icon_button, modal, modal_actions, text_area, text_field_with,
-        toast,
+        toast, toast_with_action,
         tokens::{self, motion},
     },
 };
@@ -739,6 +739,11 @@ fn editor(review: Review) -> impl IntoElement {
             match result {
                 Ok(line) if review.translation_draft.get_untracked() == before => review.translation_draft.set(line),
                 Ok(_) => {}
+                Err(code) if llm::needs_setup(&code) => {
+                    toast_with_action(Tone::Error, error_text(&code), tr("Settings"), move || {
+                        review.store.open_settings(SettingsTab::Ai)
+                    })
+                }
                 Err(code) => toast(Tone::Error, error_text(&code)),
             }
         });
