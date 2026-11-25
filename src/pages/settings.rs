@@ -38,6 +38,19 @@ pub(crate) const VERSION: &str = match option_env!("LISTENOOK_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
+/// The version About shows: the installed app's, with its build number, as its package says;
+/// the one it was compiled as in a development run.
+fn shown_version() -> String {
+    match app_info() {
+        Some(info) if !info.development => match (info.version, info.build) {
+            (Some(version), Some(build)) => format!("{version} ({build})"),
+            (Some(version), None) => version,
+            _ => VERSION.to_owned(),
+        },
+        _ => VERSION.to_owned(),
+    }
+}
+
 pub(crate) fn settings_dialog() -> impl IntoElement {
     let open = store().settings_open();
     let tab = store().settings_tab();
@@ -864,7 +877,7 @@ fn about() -> impl IntoElement {
                 .justify_between()
                 .gap_3()
                 .child(
-                    text(move || SharedString::from(format!("{} {VERSION}", tr("Version"))))
+                    text(move || SharedString::from(format!("{} {}", tr("Version"), shown_version())))
                         .flex_1()
                         .text_sm()
                         .text_color(|| theme().foreground),
