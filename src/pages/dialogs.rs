@@ -6,7 +6,7 @@ use nsh_base::theme;
 use crate::{
     state::{l, store, tr},
     ui::{
-        Icon, Tone, card, checkbox, checkbox_row, field, hint, icon, modal, modal_actions, select, text_field,
+        Icon, Tone, card, checkbox, checkbox_row, field, hint, icon, modal, modal_actions, select, switch, text_field,
         text_field_with, toast, tokens,
     },
 };
@@ -496,15 +496,24 @@ pub(crate) fn export_zip(jobs: Vec<std::rc::Rc<listenook_core::Job>>) {
     save_zip("Listenook-transcripts.zip".to_owned(), files);
 }
 
+/// Asks whether a subtitle file found with a newly added recording becomes its transcript.
+/// It is off until turned on: subtitles from YouTube often read badly, and transcribing the
+/// audio usually does better.
 pub(crate) fn subtitle_choice_dialog() -> impl IntoElement {
     let store = store();
     let open = signal(false);
+    let showing = signal(String::new());
     let chosen = signal(SharedString::default());
+    let use_it = signal(false);
     effect(move || {
         let waiting = store.subtitle_choice();
         untracked(|| {
-            if let Some((_, files)) = &waiting {
+            if let Some((job, files)) = &waiting
+                && showing.get_untracked() != *job
+            {
+                showing.set(job.clone());
                 chosen.set(files[0].clone().into());
+                use_it.set(false);
             }
             open.set(waiting.is_some());
         });
@@ -516,7 +525,7 @@ pub(crate) fn subtitle_choice_dialog() -> impl IntoElement {
     });
     modal(
         open,
-        l("Choose a subtitle file"),
+        l("Use the subtitle file?"),
         460.0,
         move || {
             let (job, files) = store.subtitle_choice().unwrap_or_default();
@@ -524,29 +533,42 @@ pub(crate) fn subtitle_choice_dialog() -> impl IntoElement {
             let name = |path: &String| -> SharedString {
                 std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path).to_owned().into()
             };
-            let options = files.iter().map(|path| (SharedString::from(path.clone()), name(path))).collect();
+            let several = files.len() > 1;
+            let matched = tr(if several { "Several subtitle files match" } else { "A subtitle file matches" });
+            let file = if several {
+                let options = files.iter().map(|path| (SharedString::from(path.clone()), name(path))).collect();
+                select("Subtitle file", options, move || chosen.get(), move |value| chosen.set(value)).into_element()
+            } else {
+                let only = files.first().map(name).unwrap_or_default();
+                text(only).text_sm().text_color(|| theme().foreground).into_element()
+            };
             view()
                 .gap_4()
-                .child(hint(move || SharedString::from(format!("{} “{title}”.", tr("Several subtitle files match")))))
-                .child(field(
-                    l("Subtitle file"),
-                    select("Subtitle file", options, move || chosen.get(), move |value| chosen.set(value)),
-                ))
+                .child(hint(move || SharedString::from(format!("{matched} “{title}”."))))
+                .child(field(l("Subtitle file"), file))
+                .child(
+                    view()
+                        .gap_1()
+                        .child(switch(l("Use it as the transcript"), move || use_it.get(), move |on| use_it.set(on)))
+                        .child(hint(l(
+                            "Subtitles from YouTube are often auto-generated: sentences break in odd places and the \
+                             timing drifts, which makes reading and practice harder. Leave this off to transcribe \
+                             the audio instead.",
+                        ))),
+                )
                 .into_element()
         },
         move || {
-            modal_actions(
-                open,
-                l("Not now"),
-                l("Use it"),
-                || true,
-                move || {
-                    if let Some((job, _)) = store.subtitle_choice() {
+            crate::ui::button(crate::ui::Variant::Primary, crate::ui::Size::Md, l("Done"))
+                .on_press(move || {
+                    if use_it.get_untracked()
+                        && let Some((job, _)) = store.subtitle_choice()
+                    {
                         crate::util::import_subtitle_file(job, chosen.get_untracked().to_string());
                     }
                     open.set(false);
-                },
-            )
+                })
+                .into_element()
         },
     )
 }

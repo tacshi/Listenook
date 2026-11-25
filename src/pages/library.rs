@@ -129,6 +129,27 @@ pub(crate) fn library() -> impl IntoElement {
                         .window_drag(false),
                 )
                 .child(view().style_with(|s| if crate::shell::page_narrow() { s } else { s.flex_1() }))
+                .child(
+                    view().window_drag(false).child(
+                        popover(
+                            ui::menu_choice_trigger(
+                                Icon::Tune,
+                                tr("Transcription options"),
+                                engine_label,
+                                Size::Sm,
+                                options_open,
+                                crate::shell::page_narrow,
+                            ),
+                            || options().into_element(),
+                        )
+                        .open(move || Some(options_open.get()))
+                        .on_open_change(move |event: &nsh_base::PopoverEvent| {
+                            if let nsh_base::PopoverEvent::OpenChange(next, _) = event {
+                                options_open.set(*next);
+                            }
+                        }),
+                    ),
+                )
                 .child(when(
                     move || waiting() > 0,
                     move || {
@@ -156,18 +177,6 @@ pub(crate) fn library() -> impl IntoElement {
                                     menu_choice(l(label), move || sort.get() == choice, move || choice.save())
                                 })),
                         )
-                        .child(
-                            popover(
-                                ui::menu_trigger(Icon::Tune, tr("Transcription options"), Size::Sm, options_open),
-                                || options().into_element(),
-                            )
-                            .open(move || Some(options_open.get()))
-                            .on_open_change(move |event: &nsh_base::PopoverEvent| {
-                                if let nsh_base::PopoverEvent::OpenChange(next, _) = event {
-                                    options_open.set(*next);
-                                }
-                            }),
-                        )
                         .child(when(|| !crate::shell::system_header(), super::capture::add_button))
                         .child(ui::icon_button(Icon::Export, tr("Export shown as ZIP…"), Size::Sm, move || {
                             super::dialogs::export_zip(shown.get_untracked())
@@ -187,10 +196,10 @@ pub(crate) fn library() -> impl IntoElement {
                             } else if platform::is_phone() {
                                 "Put files in the Listenook folder in the Files app, then tap Add media. Up to 5 hours each."
                             } else if super::capture::offered() {
-                                "A subtitle file with the same name becomes its transcript. Or record a video or \
+                                "A subtitle file with the same name can become its transcript. Or record a video or \
                                  audio as it plays in another app. Up to 5 hours each."
                             } else {
-                                "A subtitle file with the same name becomes its transcript. Up to 5 hours each."
+                                "A subtitle file with the same name can become its transcript. Up to 5 hours each."
                             })
                         },
                         view()
@@ -599,6 +608,16 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         content.into_element()
     } else {
         row_menu(ui::context_menu(content), id, dialogs).into_element()
+    }
+}
+
+/// The engine the next transcription uses, as the toolbar names it.
+fn engine_label() -> SharedString {
+    match store().setting(|s| s.default_transcription_provider) {
+        TranscriptionProvider::Soniox => "Soniox".into(),
+        TranscriptionProvider::MossPro => "MOSS Pro".into(),
+        TranscriptionProvider::Qwen3Local => "Qwen3".into(),
+        TranscriptionProvider::MossLocal => "MOSS".into(),
     }
 }
 

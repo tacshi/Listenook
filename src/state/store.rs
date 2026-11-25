@@ -6,7 +6,7 @@ use std::{
 
 use listenook_core::{
     AiGenerationStatus, Document, Job, JobProgress, JobSourceOrigin, JobStatus, LibraryCatalog, LocaleMode, Named,
-    Settings, ThemeMode, TranscriptAcquisitionMode, TranslationStatus, l10n::Lang, subtitles,
+    Settings, ThemeMode, TranslationStatus, l10n::Lang, subtitles,
 };
 use nsh_core::prelude::*;
 
@@ -747,29 +747,23 @@ impl Store {
             if known {
                 continue;
             }
-            let mut job = self.new_job(path, JobSourceOrigin::Manual);
-            let subtitle =
-                paths.iter().find(|other| subtitles::is_subtitle(other) && subtitles::pairs_with(other, path)).cloned();
-            let beside = if subtitle.is_none() { sibling_subtitles(path) } else { Vec::new() };
-            let subtitle = subtitle.or_else(|| (beside.len() == 1).then(|| beside[0].clone()));
-            if let Some(subtitle) = subtitle {
-                match std::fs::read(&subtitle).map_err(|_| "subtitle_read_failed").and_then(|bytes| {
-                    subtitles::import_subtitles(&subtitles::decode(&bytes), &subtitles::extension(&subtitle), None)
-                }) {
-                    Ok(imported) => {
-                        job.document = Some(imported.document);
-                        job.status = JobStatus::Completed;
-                        job.progress = JobProgress { stage: "complete".into(), fraction: Some(1.0), detail: None };
-                        job.transcript_acquisition_mode = TranscriptAcquisitionMode::ImportedSubtitles;
-                    }
-                    Err(code) => log::warn!("subtitle {subtitle}: {code}"),
-                }
-            }
-            if beside.len() > 1 {
-                self.subtitle_choices.update(|choices| choices.push((job.id.clone(), beside)));
-            }
+            let job = self.new_job(path, JobSourceOrigin::Manual);
+            let id = job.id.clone();
             self.insert(job);
             added += 1;
+            // A matching subtitle file is only offered, never taken on its own: subtitles from
+            // YouTube are often auto-generated and read badly, so the person chooses.
+            let mut matching: Vec<String> = paths
+                .iter()
+                .filter(|other| subtitles::is_subtitle(other) && subtitles::pairs_with(other, path))
+                .cloned()
+                .chain(sibling_subtitles(path))
+                .collect();
+            matching.sort();
+            matching.dedup();
+            if !matching.is_empty() {
+                self.subtitle_choices.update(|choices| choices.push((id, matching)));
+            }
         }
         added
     }
