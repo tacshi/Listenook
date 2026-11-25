@@ -186,7 +186,10 @@ impl Provider {
         }
         // Sent from the file as it is read, not gathered in memory first: an hour of
         // uncompressed audio is hundreds of megabytes, enough for a phone to end the app.
-        let (url, auth) = (format!("{}/files", self.base()), format!("Bearer {key}"));
+        // The upload goes out over its own connection, not the engine's network a test stubs, so a
+        // test points it at a server of its own.
+        let url = std::env::var("LISTENOOK_UPLOAD_URL").unwrap_or_else(|_| format!("{}/files", self.base()));
+        let auth = format!("Bearer {key}");
         let parts = Multipart { head, path, size, tail: tail.into_bytes(), content_type };
         let _halt = Halt(sending.clone());
         let (status, body) = blocking(move || parts.post(&url, &auth, &sending))

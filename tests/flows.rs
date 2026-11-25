@@ -45,6 +45,14 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
         std::env::remove_var("LISTENOOK_TABLET_MENUS");
         std::env::remove_var("LISTENOOK_SYNC_PORT");
         std::env::remove_var("LISTENOOK_CAPTURE");
+        std::env::remove_var("LISTENOOK_UPLOAD_URL");
+    }
+    // Uploads leave over their own connection, which the stubbed network never sees: a local
+    // server gives them the response the test routed for them.
+    if let Some((_, uploaded)) =
+        routes.iter().find(|(route, _)| route.starts_with("POST ") && route.ends_with("/v1/files"))
+    {
+        unsafe { std::env::set_var("LISTENOOK_UPLOAD_URL", upload_server(uploaded.clone())) };
     }
     seed(&root);
     let app = Headless::start(EngineConfig {
@@ -57,6 +65,32 @@ fn start(name: &str, seed: impl FnOnce(&Path), routes: Vec<(String, StubResponse
     app.wait_for("Library").unwrap();
     app.press("Library").unwrap();
     App { app, root, _turn: turn }
+}
+
+/// A server on this machine that reads each upload whole and answers it with `reply`: its URL.
+fn upload_server(reply: StubResponse) -> String {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/v1/files", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(&stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let _ = std::io::copy(&mut reader.take(length), &mut std::io::sink());
+            let head = format!("HTTP/1.1 {} Stub\r\nContent-Length: {}\r\n\r\n", reply.status, reply.body.len());
+            let _ = (&stream).write_all(&[head.as_bytes(), &reply.body].concat());
+        }
+    });
+    url
 }
 
 fn on_port(port: u16) -> impl FnOnce(&Path) {
