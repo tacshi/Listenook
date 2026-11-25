@@ -1,4 +1,11 @@
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use listenook_core::Job;
 use nsh_core::prelude::*;
@@ -33,8 +40,6 @@ pub(crate) const SONIOX_MODEL: &str = "stt-async-v6";
 const MOSS_MODEL: &str = "moss-transcribe-diarize";
 const MOSS_VERSION: &str = "v20260410-streamparam-20260703";
 const MOSS_MAX_BYTES: usize = 512 * 1024 * 1024;
-/// Files larger than this are uploaded straight from the disk.
-const STREAM_FROM: u64 = 32 * 1024 * 1024;
 
 impl Provider {
     fn base(self) -> &'static str {
@@ -157,7 +162,9 @@ impl Provider {
         }
     }
 
-    pub(crate) async fn upload(self, path: PathBuf, key: &str) -> Result<String, Failure> {
+    /// Uploads the file at `path`, counting what is sent in `sending`. Dropping the upload before
+    /// it ends stops the sending.
+    pub(crate) async fn upload(self, path: PathBuf, key: &str, sending: Sending) -> Result<String, Failure> {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("audio").replace('"', "");
         let boundary = format!("listenook-{}", uuid::Uuid::new_v4().simple());
         let mut head = Vec::new();
@@ -177,26 +184,15 @@ impl Provider {
         if self == Provider::Moss && size > MOSS_MAX_BYTES as u64 {
             return Err(Failure::new("moss_file_too_large", "MOSS accepts files up to 512 MB."));
         }
-        if size > STREAM_FROM {
-            // Sent from the file as it is read, not gathered in memory first: an hour of
-            // uncompressed audio is hundreds of megabytes, enough for a phone to end the app.
-            let (url, auth) = (format!("{}/files", self.base()), format!("Bearer {key}"));
-            let parts = Multipart { head, path, size, tail: tail.into_bytes(), content_type };
-            let (status, body) =
-                blocking(move || parts.post(&url, &auth)).await.map_err(|e| Failure::network(e.to_string()))??;
-            return self.id_of(&self.answer(status, body)?, &["id"]);
-        }
-        let body = blocking(move || -> Result<Vec<u8>, Failure> {
-            let mut body = head;
-            body.extend(std::fs::read(path).map_err(missing)?);
-            body.extend(tail.bytes());
-            Ok(body)
-        })
-        .await
-        .map_err(|e| Failure::new("missing_source", e.to_string()))??;
-        let request = HttpRequest::post(format!("{}/files", self.base()), body).header("Content-Type", content_type);
-        let answer = self.send(request, key).await?;
-        self.id_of(&answer, &["id"])
+        // Sent from the file as it is read, not gathered in memory first: an hour of
+        // uncompressed audio is hundreds of megabytes, enough for a phone to end the app.
+        let (url, auth) = (format!("{}/files", self.base()), format!("Bearer {key}"));
+        let parts = Multipart { head, path, size, tail: tail.into_bytes(), content_type };
+        let _halt = Halt(sending.clone());
+        let (status, body) = blocking(move || parts.post(&url, &auth, &sending))
+            .await
+            .map_err(|e| Failure::network(e.to_string()))??;
+        self.id_of(&self.answer(status, body)?, &["id"])
     }
 
     pub(crate) async fn create(self, file_id: &str, job: &Job, key: &str) -> Result<String, Failure> {
@@ -289,11 +285,15 @@ struct Multipart {
 
 impl Multipart {
     /// Posts it to `url`: the status and the JSON that came back.
-    fn post(self, url: &str, auth: &str) -> Result<(u16, Value), Failure> {
+    fn post(self, url: &str, auth: &str, sending: &Sending) -> Result<(u16, Value), Failure> {
         use std::io::{Cursor, Read};
         let file = std::fs::File::open(&self.path).map_err(|e| Failure::new("missing_source", e.to_string()))?;
         let length = self.head.len() as u64 + self.size + self.tail.len() as u64;
-        let body = Cursor::new(self.head).chain(file.take(self.size)).chain(Cursor::new(self.tail));
+        sending.total.store(length, Ordering::Relaxed);
+        let body = Counted {
+            body: Cursor::new(self.head).chain(file.take(self.size)).chain(Cursor::new(self.tail)),
+            sending: sending.clone(),
+        };
         let sent = super::http()
             .post(url)
             .set("Authorization", auth)
@@ -307,6 +307,48 @@ impl Multipart {
         let status = response.status();
         let body = serde_json::from_reader(response.into_reader().take(16 * 1024 * 1024)).unwrap_or(Value::Null);
         Ok((status, body))
+    }
+}
+
+/// How much of an upload has been sent, shared with the thread sending it.
+#[derive(Clone, Default)]
+pub(crate) struct Sending {
+    sent: Arc<AtomicU64>,
+    total: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Sending {
+    /// How much has been sent, once it is known how much there is to send.
+    pub(crate) fn fraction(&self) -> Option<f64> {
+        let total = self.total.load(Ordering::Relaxed);
+        (total > 0).then(|| (self.sent.load(Ordering::Relaxed) as f64 / total as f64).min(1.0))
+    }
+}
+
+/// Stops the sending when dropped: when the upload ends, or is dropped before it ends.
+struct Halt(Sending);
+
+impl Drop for Halt {
+    fn drop(&mut self) {
+        self.0.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// A body that counts what is read from it to be sent, and ends the sending once stopped.
+struct Counted<R> {
+    body: R,
+    sending: Sending,
+}
+
+impl<R: std::io::Read> std::io::Read for Counted<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.sending.stop.load(Ordering::Relaxed) {
+            return Err(std::io::Error::other("the upload was stopped"));
+        }
+        let read = self.body.read(buffer)?;
+        self.sending.sent.fetch_add(read as u64, Ordering::Relaxed);
+        Ok(read)
     }
 }
 
@@ -325,7 +367,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_large_file_is_sent_from_the_disk_with_its_length() {
+    fn a_file_is_sent_from_the_disk_with_its_length_and_counted() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/v1/files", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
@@ -359,12 +401,27 @@ mod tests {
             tail: b"\r\n--b--\r\n".to_vec(),
             content_type: "multipart/form-data; boundary=b".into(),
         };
-        let (status, body) = parts.post(&url, "Bearer key").unwrap();
+        let sending = Sending::default();
+        assert_eq!(sending.fraction(), None, "nothing known before it starts");
+        let (status, body) = parts.post(&url, "Bearer key", &sending).unwrap();
         assert_eq!((status, body), (200, json!({"id": "file-1"})));
+        assert_eq!(sending.fraction(), Some(1.0));
         let (headers, sent) = server.join().unwrap();
         assert_eq!(sent, b"--b\r\n\r\nRIFF0123456789\r\n--b--\r\n");
         assert!(headers.contains(&"authorization: bearer key".to_owned()));
         assert!(!headers.iter().any(|header| header.starts_with("transfer-encoding")));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_stopped_upload_sends_nothing_more() {
+        let sending = Sending::default();
+        let mut body = Counted { body: &b"0123456789"[..], sending: sending.clone() };
+        let mut buffer = [0; 4];
+        assert_eq!(body.read(&mut buffer).unwrap(), 4);
+        assert_eq!(sending.sent.load(Ordering::Relaxed), 4);
+        drop(Halt(sending.clone()));
+        assert!(body.read(&mut buffer).is_err());
+        assert_eq!(sending.sent.load(Ordering::Relaxed), 4);
     }
 }

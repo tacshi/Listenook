@@ -6,13 +6,112 @@ use listenook_core::{
 };
 use symphonia::core::{
     audio::SampleBuffer,
-    codecs::{CODEC_TYPE_AAC, CODEC_TYPE_NULL, DecoderOptions},
+    codecs::{CODEC_TYPE_AAC, CODEC_TYPE_NULL, CODEC_TYPE_OPUS, CodecParameters, DecoderOptions},
     errors::Error,
-    formats::FormatOptions,
+    formats::{FormatOptions, Packet},
     io::MediaSourceStream,
     meta::MetadataOptions,
     probe::Hint,
 };
+use symphonia_next::{
+    codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions, well_known::CODEC_ID_OPUS},
+    packet::PacketBuilder,
+};
+
+/// What a packet decoded to.
+enum Decoded {
+    /// Its sound, at this many samples a second.
+    Sound(u32),
+    /// Nothing: the packet was damaged, and the ones after it may still be read.
+    Unreadable,
+    /// Nothing more can be read.
+    End,
+}
+
+/// Decodes a track's packets to mono. Opus, the sound of most videos saved from the web, has
+/// no decoder in symphonia: one written for its next version is handed the packets instead,
+/// which this version still reads from more files than the next one does.
+enum Decoder {
+    Symphonia(Box<dyn symphonia::core::codecs::Decoder>),
+    Opus(Box<symphonia_opus::OpusDecoder>),
+}
+
+impl Decoder {
+    fn new(params: &CodecParameters) -> Option<Decoder> {
+        if params.codec != CODEC_TYPE_OPUS {
+            let decoder = symphonia::default::get_codecs().make(params, &DecoderOptions::default()).ok()?;
+            return Some(Decoder::Symphonia(decoder));
+        }
+        let mut opus = AudioCodecParameters::new();
+        opus.for_codec(CODEC_ID_OPUS);
+        if let Some(rate) = params.sample_rate {
+            opus.with_sample_rate(rate);
+        }
+        if let Some(header) = &params.extra_data {
+            opus.with_extra_data(header.clone());
+        }
+        let decoder = symphonia_opus::OpusDecoder::try_new(&opus, &AudioDecoderOptions::default()).ok()?;
+        Some(Decoder::Opus(Box::new(decoder)))
+    }
+
+    /// The samples the encoder put before the sound, when the file doesn't say.
+    fn priming(&self) -> usize {
+        match self {
+            Decoder::Symphonia(_) => 0,
+            Decoder::Opus(opus) => {
+                let rate = opus.codec_params().sample_rate.unwrap_or(48_000);
+                (u64::from(opus.pre_skip()) * u64::from(rate) / 48_000) as usize
+            }
+        }
+    }
+
+    /// Decodes `packet` into `mono`, in place of what it held.
+    fn decode(&mut self, packet: &Packet, mono: &mut Vec<f32>) -> Decoded {
+        mono.clear();
+        match self {
+            Decoder::Symphonia(decoder) => {
+                let decoded = match decoder.decode(packet) {
+                    Ok(decoded) => decoded,
+                    Err(Error::DecodeError(_)) => return Decoded::Unreadable,
+                    Err(_) => return Decoded::End,
+                };
+                let spec = *decoded.spec();
+                let mut buffer = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+                buffer.copy_interleaved_ref(decoded);
+                downmix(buffer.samples(), spec.channels.count(), mono);
+                Decoded::Sound(spec.rate)
+            }
+            Decoder::Opus(decoder) => {
+                let next = PacketBuilder::new()
+                    .track_id(packet.track_id())
+                    .pts(Default::default())
+                    .dur(Default::default())
+                    .data_by_ref(packet.buf())
+                    .build_packet_ref();
+                let decoded = match decoder.decode_ref(&next) {
+                    Ok(decoded) => decoded,
+                    Err(symphonia_next::errors::Error::DecodeError(_)) => return Decoded::Unreadable,
+                    Err(_) => return Decoded::End,
+                };
+                let (rate, channels) = (decoded.spec().rate(), decoded.spec().channels().count());
+                let mut samples = Vec::new();
+                decoded.copy_to_vec_interleaved(&mut samples);
+                downmix(&samples, channels, mono);
+                // Symphonia's own decoders leave out what the file marks as gap; this one can't
+                // know of it.
+                let end = mono.len().saturating_sub(packet.trim_end() as usize);
+                mono.truncate(end);
+                mono.drain(..(packet.trim_start() as usize).min(end));
+                Decoded::Sound(rate)
+            }
+        }
+    }
+}
+
+fn downmix(interleaved: &[f32], channels: usize, mono: &mut Vec<f32>) {
+    let channels = channels.max(1);
+    mono.extend(interleaved.chunks(channels).map(|frame| frame.iter().sum::<f32>() / channels as f32));
+}
 
 fn decode_with_symphonia(path: &Path, rate: u32) -> Option<Vec<i16>> {
     let mut out = Vec::new();
@@ -51,15 +150,15 @@ fn each_with_symphonia(path: &Path, rate: u32, each: &mut dyn FnMut(&[i16])) -> 
     let track_id = track.id;
     // Leave out the encoder's priming as players do: what an MP4's edit list
     // says, else the usual 2112 samples of AAC, unless symphonia knows it.
+    let mut decoder = Decoder::new(&track.codec_params)?;
     let mut priming = match track.codec_params.delay {
         Some(_) => 0,
         None => match (edit_list_skip(path), track.codec_params.sample_rate) {
             (Some(seconds), Some(native)) => (seconds * f64::from(native)).round() as usize,
             _ if track.codec_params.codec == CODEC_TYPE_AAC => 2112,
-            _ => 0,
+            _ => decoder.priming(),
         },
     };
-    let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
     let mut out = Vec::new();
     let mut resampler: Option<(u32, Resampler)> = None;
     let mut mono = Vec::new();
@@ -67,22 +166,16 @@ fn each_with_symphonia(path: &Path, rate: u32, each: &mut dyn FnMut(&[i16])) -> 
         if packet.track_id() != track_id {
             continue;
         }
-        let decoded = match decoder.decode(&packet) {
-            Ok(decoded) => decoded,
-            Err(Error::DecodeError(_)) => continue,
-            Err(_) => break,
+        let native = match decoder.decode(&packet, &mut mono) {
+            Decoded::Sound(native) => native,
+            Decoded::Unreadable => continue,
+            Decoded::End => break,
         };
-        let spec = *decoded.spec();
-        let channels = spec.channels.count().max(1);
-        let mut buffer = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-        buffer.copy_interleaved_ref(decoded);
-        mono.clear();
-        mono.extend(buffer.samples().chunks(channels).map(|frame| frame.iter().sum::<f32>() / channels as f32));
         let skipped = priming.min(mono.len());
         priming -= skipped;
         let mono = &mono[skipped..];
-        if resampler.as_ref().is_none_or(|(from, _)| *from != spec.rate) {
-            resampler = Some((spec.rate, Resampler::new(spec.rate, rate)));
+        if resampler.as_ref().is_none_or(|(from, _)| *from != native) {
+            resampler = Some((native, Resampler::new(native, rate)));
         }
         if let Some((_, resampler)) = &mut resampler {
             resampler.push(mono, &mut out);
@@ -203,5 +296,21 @@ mod tests {
         let mut wav = b"RIFF\0\0\0\0WAVEfmt \x02\0\0\0\x01\0data\x04\0\0\0".to_vec();
         wav.extend([1, 0, 0xff, 0x7f]);
         assert_eq!(wav_samples(&wav), [1, i16::MAX]);
+    }
+}
+
+#[cfg(test)]
+mod opus_tests {
+    use super::*;
+
+    #[test]
+    fn the_opus_sound_of_a_matroska_video_is_decoded() {
+        let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/tone-opus.mkv"));
+        let samples = decode_with_symphonia(path, 16_000).expect("Opus is decoded");
+        // One second of a 440 Hz tone in 20 ms packets, the encoder's priming left out: the
+        // last packet's padding stays, as this file doesn't mark it.
+        assert_eq!(samples.len(), (51 * 960 - 312) / 3);
+        let loudest = samples.iter().map(|sample| sample.unsigned_abs()).max().unwrap_or(0);
+        assert!(loudest > 2_000, "a tone, not silence: {loudest}");
     }
 }
