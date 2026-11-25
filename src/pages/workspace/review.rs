@@ -9,7 +9,7 @@ use nsh_core::prelude::*;
 
 use crate::{
     services::llm,
-    state::{Store, error_text, store, tr},
+    state::{SettingsTab, Store, error_text, store, tr},
     ui::{Tone, toast_with_action},
 };
 
@@ -1448,7 +1448,7 @@ impl Review {
 
     /// Whether the AI is set up to translate a sentence.
     pub(super) fn can_translate(&self) -> bool {
-        self.store.setting(|s| s.llm_provider_settings.validate().is_none())
+        self.store.ai_ready()
     }
 
     /// Translates sentence `segment_id` again on its own, from `source`,
@@ -1472,6 +1472,12 @@ impl Review {
             }
             let line = match result {
                 Ok(line) => line,
+                Err(code) if llm::needs_setup(&code) => {
+                    toast_with_action(Tone::Error, error_text(&code), tr("Settings"), move || {
+                        review.store.open_settings(SettingsTab::Ai)
+                    });
+                    return;
+                }
                 Err(code) => {
                     toast_with_action(Tone::Error, error_text(&code), tr("Retry"), move || {
                         review.retranslate(segment_id.clone(), source.clone())

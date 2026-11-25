@@ -8,7 +8,7 @@ use nsh_core::prelude::*;
 use super::review::{BriefPart, Review, Side};
 use crate::{
     services::llm,
-    state::{SettingsTab, error_text, l, tr},
+    state::{AiSetup, SettingsTab, error_text, l, tr},
     ui::{
         Icon, Size, Tone, Variant, button, card, checkbox, empty_state, field, hint, icon, icon_button,
         icon_text_button, modal, modal_actions, moment_chip, progress_bar, section, select, text_area, text_field,
@@ -34,7 +34,7 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
         move || review.job.with(|job| job.as_ref().map(|job| job.ai_generation_state.clone()).unwrap_or_default());
     let generating = move || state().status == AiGenerationStatus::Generating;
     let brief = computed(move || review.job.with(|job| job.as_ref().and_then(|job| job.ai_brief.clone())));
-    let configured = computed(move || store.setting(|s| s.llm_provider_settings.validate().is_none()));
+    let configured = computed(move || store.ai_ready());
     let unseen = move || {
         review.job.with(|job| {
             let Some(job) = job.as_ref() else {
@@ -90,7 +90,12 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                             if configured.get() {
                                 tr("Create an evidence-backed overview, chapters, decisions, actions, and open questions.")
                             } else {
-                                tr("Configure the AI provider in Settings before creating a brief.")
+                                tr(match store.ai_setup() {
+                                    Some(AiSetup::Key) => {
+                                        "Add an API key for the AI provider in Settings to create a brief."
+                                    }
+                                    _ => "Configure the AI provider in Settings before creating a brief.",
+                                })
                             }
                         })
                     },

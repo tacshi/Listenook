@@ -304,6 +304,14 @@ const ZH: &[(&str, &str)] = &[
     ("AI provider", "AI 服务商"),
     ("AI-generated draft · verify against evidence", "AI 生成的草稿 · 请对照原文核实"),
     ("Add", "添加"),
+    (
+        "Add an API key for the AI provider in Settings to create a brief.",
+        "请先在设置中为 AI 服务商添加 API 密钥，再生成简报。",
+    ),
+    (
+        "Add an API key for the AI provider in Settings to translate.",
+        "请先在设置中为 AI 服务商添加 API 密钥，再进行翻译。",
+    ),
     ("Added to your Library.", "已添加到资料库。"),
     ("Analyzing the transcript…", "正在分析转写…"),
     ("Appearance", "外观"),

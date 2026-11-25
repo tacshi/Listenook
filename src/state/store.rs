@@ -16,6 +16,7 @@ use super::{
     monitor::{self, MonitorConfig, MonitorFile, Seen},
     persist,
     podcast::PodcastState,
+    secrets::{self, Secret},
     sleep::SleepState,
     sync::SyncState,
 };
@@ -56,6 +57,15 @@ pub(crate) enum SettingsTab {
     Ai,
     Shortcuts,
     About,
+}
+
+/// What the AI provider lacks before it can take a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AiSetup {
+    /// Its endpoint or model.
+    Provider,
+    /// Only an API key.
+    Key,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +127,8 @@ pub(crate) struct Store {
     video_only: Signal<bool>,
     settings_open: Signal<bool>,
     settings_tab: Signal<SettingsTab>,
+    /// Bumped whenever a key is saved or removed, so what shows whether one is there follows.
+    keys: Signal<u32>,
     home_search: Signal<bool>,
     update: Signal<crate::services::updater::UpdateState>,
     immersive: Signal<bool>,
@@ -219,6 +231,7 @@ impl Store {
             filter: signal(Filter::default()),
             settings_open: signal(false),
             settings_tab: signal(SettingsTab::default()),
+            keys: signal(0),
             home_search: signal(false),
             update: signal(Default::default()),
             immersive: signal(false),
@@ -497,6 +510,38 @@ impl Store {
 
     pub(crate) fn setting<T>(&self, read: impl FnOnce(&Settings) -> T) -> T {
         self.settings.with(read)
+    }
+
+    /// Whether `secret` has a key, followed reactively as keys are saved and removed.
+    pub(crate) fn has_key(&self, secret: Secret) -> bool {
+        self.keys.with(|_| ());
+        secrets::read(secret).is_some()
+    }
+
+    /// Saves `secret` (or removes it when `value` is empty), telling what follows `has_key`.
+    pub(crate) fn write_key(&self, secret: Secret, value: &str) -> Result<(), String> {
+        secrets::write(secret, value)?;
+        self.keys.update(|keys| *keys += 1);
+        Ok(())
+    }
+
+    /// What the AI provider still needs before it can translate or write a brief, if anything.
+    pub(crate) fn ai_setup(&self) -> Option<AiSetup> {
+        let (invalid, local) =
+            self.setting(|s| (s.llm_provider_settings.validate().is_some(), s.llm_provider_settings.is_loopback()));
+        if invalid {
+            Some(AiSetup::Provider)
+        } else if !local && !self.has_key(Secret::Llm) {
+            Some(AiSetup::Key)
+        } else {
+            None
+        }
+    }
+
+    /// Whether the AI provider can take a request: an endpoint, a model, and an API key unless
+    /// it runs on this computer.
+    pub(crate) fn ai_ready(&self) -> bool {
+        self.ai_setup().is_none()
     }
 
     pub(crate) fn update_settings(&self, change: impl FnOnce(&mut Settings)) {

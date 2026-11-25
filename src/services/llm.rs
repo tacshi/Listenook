@@ -170,6 +170,24 @@ fn recoded(failure: Failure, prefix: &str) -> String {
     failure.code.strip_prefix("llm_").map_or(failure.code.clone(), |rest| format!("{prefix}{rest}"))
 }
 
+/// Whether failure `code` is put right in Settings › AI (a missing or rejected key, a wrong
+/// endpoint or model) rather than by trying again.
+pub(crate) fn needs_setup(code: &str) -> bool {
+    let code = ["llm_", "translation_", "ai_brief_", "ad_scan_"]
+        .iter()
+        .find_map(|prefix| code.strip_prefix(prefix))
+        .unwrap_or(code);
+    matches!(
+        code,
+        "missing_credentials"
+            | "bad_credentials"
+            | "invalid_url"
+            | "https_required"
+            | "model_required"
+            | "endpoint_or_model_not_found"
+    )
+}
+
 pub(crate) fn translation_key(id: &str) -> String {
     format!("{id}:translate")
 }
@@ -463,5 +481,15 @@ mod tests {
         assert_eq!(reply_text(broken.as_bytes()).unwrap_err().code, "llm_server_failure");
         assert_eq!(reply_text(b"data: [DONE]\n").unwrap_err().code, "llm_invalid_response");
         assert_eq!(reply_text(b"").unwrap_err().code, "llm_invalid_response");
+    }
+
+    #[test]
+    fn a_missing_key_or_endpoint_is_put_right_in_settings() {
+        for code in ["translation_missing_credentials", "translation_bad_credentials", "translation_model_required"] {
+            assert!(needs_setup(code), "{code}");
+        }
+        for code in ["translation_rate_limit", "translation_network_error", "translation_incomplete_response"] {
+            assert!(!needs_setup(code), "{code}");
+        }
     }
 }

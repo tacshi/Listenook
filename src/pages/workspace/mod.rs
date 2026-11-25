@@ -15,7 +15,7 @@ use super::dialogs::{ExportDialog, JobDialog, export_dialog, rename_dialog};
 use crate::{
     services::{llm, media, playable, podcasts},
     shell::{rate_menu, sleep_menu, time_text, top_bar},
-    state::{SettingsTab, error_text, l, store, tr},
+    state::{AiSetup, SettingsTab, error_text, l, store, tr},
     ui::{
         self, Icon, Size, Tone, Variant, button, checkbox, empty_state, field, hint, icon_button, menu, menu_action,
         menu_divider, menu_toggle, modal, modal_actions, progress_bar, select, toast, toggle_icon_button,
@@ -782,7 +782,7 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                     move || review.has_text(),
                     move || {
                         menu_action(Icon::Scissors, l("Find ads"), move || {
-                            if store.setting(|s| s.llm_provider_settings.validate().is_none()) {
+                            if store.ai_ready() {
                                 llm::start_ad_scan(&review.id());
                             } else {
                                 toast(Tone::Info, tr("Set up AI in Settings to find ads."));
@@ -956,14 +956,28 @@ fn translation_strip(review: Review) -> impl IntoElement {
                         .on_press(move || llm::cancel_translation(&review.id()))
                 })
                 .otherwise(move || {
-                    view().flex_1().items_end().child(button(Variant::Ghost, Size::Sm, l("Dismiss")).on_press(
-                        move || {
-                            store().update_job(&review.id(), |job| {
-                                job.translation_state.status = TranslationStatus::Idle;
-                                job.translation_state.error_code = None;
-                            });
-                        },
-                    ))
+                    let dismiss = move || {
+                        store().update_job(&review.id(), |job| {
+                            job.translation_state.status = TranslationStatus::Idle;
+                            job.translation_state.error_code = None;
+                        });
+                    };
+                    view()
+                        .flex_1()
+                        .flex_row()
+                        .justify_end()
+                        .gap_2()
+                        // A missing or rejected key is put right in Settings, not by trying again.
+                        .child(when(
+                            move || state().error_code.as_deref().is_some_and(llm::needs_setup),
+                            move || {
+                                button(Variant::Outline, Size::Sm, l("Settings")).on_press(move || {
+                                    dismiss();
+                                    store().open_settings(SettingsTab::Ai);
+                                })
+                            },
+                        ))
+                        .child(button(Variant::Ghost, Size::Sm, l("Dismiss")).on_press(dismiss))
                 }),
             )
     })
@@ -1404,7 +1418,7 @@ fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
             .unwrap_or_else(|| "en".into()),
     ));
     let replace = signal(false);
-    let configured = move || store.setting(|s| s.llm_provider_settings.validate().is_none());
+    let configured = move || store.ai_ready();
     modal(
         open,
         l("Translate"),
@@ -1439,7 +1453,17 @@ fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
                             .flex_row()
                             .items_center()
                             .gap_2()
-                            .child(hint(l("Configure the AI provider in Settings before translating.")).flex_1())
+                            .child(
+                                hint(move || {
+                                    tr(match store.ai_setup() {
+                                        Some(AiSetup::Key) => {
+                                            "Add an API key for the AI provider in Settings to translate."
+                                        }
+                                        _ => "Configure the AI provider in Settings before translating.",
+                                    })
+                                })
+                                .flex_1(),
+                            )
                             .child(button(Variant::Outline, Size::Sm, l("Settings")).on_press(move || {
                                 open.set(false);
                                 store.open_settings(SettingsTab::Ai);

@@ -292,7 +292,7 @@ fn key_field(
     let verified = signal(None::<String>);
     let save = move || {
         let value = draft.get_untracked();
-        match secrets::write(secret, &value) {
+        match store().write_key(secret, &value) {
             Ok(()) => {
                 batch(|| {
                     saved.set(!value.trim().is_empty());
@@ -318,7 +318,7 @@ fn key_field(
             tr("Cancel"),
             tr("Remove"),
             move || {
-                if secrets::write(secret, "").is_ok() {
+                if store().write_key(secret, "").is_ok() {
                     saved.set(false);
                     status.set(SharedString::default());
                 }

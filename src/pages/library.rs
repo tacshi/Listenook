@@ -13,7 +13,7 @@ use crate::{
     platform,
     services::{llm, local, podcasts, transcribe},
     shell::top_bar,
-    state::{Filter, SettingsTab, error_text, l, secrets, store, tr},
+    state::{AiSetup, Filter, SettingsTab, error_text, l, secrets, store, tr},
     ui::{
         self, Icon, Size, Status, Variant, button, confirm_destructive, empty_state, field, hint, icon_of,
         icon_text_button, menu_action, menu_choice, menu_danger, menu_divider, popover, progress_bar, search_field_ref,
@@ -626,8 +626,8 @@ fn options() -> impl IntoElement {
     let provider = move || store.setting(|s| s.default_transcription_provider);
     let is_local = move || local::is_local(provider());
     let has_key = move || match provider() {
-        TranscriptionProvider::MossPro => secrets::read(secrets::Secret::Moss).is_some(),
-        TranscriptionProvider::Soniox => secrets::read(secrets::Secret::Soniox).is_some(),
+        TranscriptionProvider::MossPro => store.has_key(secrets::Secret::Moss),
+        TranscriptionProvider::Soniox => store.has_key(secrets::Secret::Soniox),
         other => local::provider_ready(other),
     };
     let mut providers: Vec<(SharedString, SharedString)> =
@@ -706,6 +706,28 @@ fn options() -> impl IntoElement {
             l("Translate after transcription"),
             move || store.setting(|s| s.translation_preferences.auto_translate),
             move |on| store.update_settings(|s| s.translation_preferences.auto_translate = on),
+        ))
+        .child(when(
+            move || store.setting(|s| s.translation_preferences.auto_translate) && !store.ai_ready(),
+            move || {
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        hint(move || {
+                            tr(match store.ai_setup() {
+                                Some(AiSetup::Key) => "Add an API key for the AI provider in Settings to translate.",
+                                _ => "Configure the AI provider in Settings before translating.",
+                            })
+                        })
+                        .flex_1(),
+                    )
+                    .child(
+                        button(Variant::Outline, Size::Sm, l("Settings"))
+                            .on_press(move || store.open_settings(SettingsTab::Ai)),
+                    )
+            },
         ))
         .child(when(
             move || store.setting(|s| s.translation_preferences.auto_translate),
