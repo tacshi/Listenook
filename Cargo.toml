@@ -23,6 +23,10 @@ ureq = "2"
 sha2 = "0.10"
 matrixmultiply = { version = "0.3", features = ["threading"] }
 symphonia = { version = "0.5", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
+# Decodes Opus, which symphonia 0.5 cannot. It is written for symphonia 0.6, whose readers open
+# fewer files than 0.5's (some HEVC MP4s, MKVs with chapters), so 0.5 still reads the files.
+symphonia-opus = "0.1.3"
+symphonia-next = { package = "symphonia-core", version = "0.6.1" }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 nsh-updater = { version = "0.6.1" }
 uuid = { version = "1", features = ["v4"] }
@@ -74,6 +78,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.symphonia-core]
+opt-level = 3
+
+[profile.dev.package.symphonia-opus]
 opt-level = 3
 
 [profile.dev.package.listenook-core]

@@ -8,7 +8,7 @@ use nsh_core::prelude::*;
 
 use super::{
     llm, local,
-    remote::{Failure, Progress, Provider, SONIOX_MODEL},
+    remote::{Failure, Progress, Provider, SONIOX_MODEL, Sending},
 };
 use crate::{
     state::{Store, error_text, secrets, store, tr},
@@ -224,7 +224,17 @@ async fn run(store: Store, id: &str) -> Result<(), Failure> {
             let upload = upload_source(&job).await;
             store.update_job(id, |job| job.status = JobStatus::Uploading);
             store.set_progress(id, "uploading", None);
-            let result = provider.upload(upload.clone(), &key).await;
+            let sending = Sending::default();
+            let (watched, seen) = (id.to_owned(), sending.clone());
+            let _watcher = super::Ends::with(spawn(async move {
+                loop {
+                    timer(Duration::from_millis(400)).await;
+                    if let Some(fraction) = seen.fraction() {
+                        store.set_progress(&watched, "uploading", Some(fraction));
+                    }
+                }
+            }));
+            let result = provider.upload(upload.clone(), &key, sending).await;
             if upload != source {
                 let _ = std::fs::remove_file(&upload);
             }
