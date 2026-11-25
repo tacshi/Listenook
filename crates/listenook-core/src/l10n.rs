@@ -295,8 +295,8 @@ const ZH: &[(&str, &str)] = &[
     ("Time each word of MOSS transcripts", "为 MOSS 转写生成逐词时间轴"),
     ("A new version is available:", "有新版本可用："),
     (
-        "A subtitle file with the same name becomes its transcript. Up to 5 hours each.",
-        "同名字幕文件会成为它的转写。每个文件最长 5 小时。",
+        "A subtitle file with the same name can become its transcript. Up to 5 hours each.",
+        "同名字幕文件可以作为它的转写。每个文件最长 5 小时。",
     ),
     ("AI Brief copied", "AI 简报已复制"),
     ("AI provider", "AI 服务商"),
@@ -521,11 +521,15 @@ const ZH: &[(&str, &str)] = &[
     ("Media relinked.", "媒体已重新关联。"),
     ("Save episode as…", "将单集另存为…"),
     ("Saved.", "已保存。"),
-    ("Choose a subtitle file", "选择字幕文件"),
+    ("Use the subtitle file?", "使用字幕文件？"),
+    ("A subtitle file matches", "有字幕文件匹配"),
     ("Several subtitle files match", "有多个字幕文件匹配"),
     ("Subtitle file", "字幕文件"),
-    ("Not now", "暂不"),
-    ("Use it", "使用"),
+    ("Use it as the transcript", "用它作为转写"),
+    (
+        "Subtitles from YouTube are often auto-generated: sentences break in odd places and the timing drifts, which makes reading and practice harder. Leave this off to transcribe the audio instead.",
+        "YouTube 的字幕常常是自动生成的：断句位置奇怪，时间轴也会漂移，阅读和练习体验都会变差。保持关闭则改为转写音频。",
+    ),
     ("Open Listenook at login", "登录时打开聆页"),
     ("Open video…", "打开视频…"),
     ("Subtitles off", "关闭字幕"),
@@ -793,8 +797,8 @@ const ZH: &[(&str, &str)] = &[
     ("Saved to your Library. Transcribing now.", "已保存到资料库，正在转写。"),
     ("Show", "查看"),
     (
-        "A subtitle file with the same name becomes its transcript. Or record a video or audio as it plays in another app. Up to 5 hours each.",
-        "同名字幕文件会成为它的转写。也可以录制其他 App 中正在播放的视频或音频。每个文件最长 5 小时。",
+        "A subtitle file with the same name can become its transcript. Or record a video or audio as it plays in another app. Up to 5 hours each.",
+        "同名字幕文件可以作为它的转写。也可以录制其他 App 中正在播放的视频或音频。每个文件最长 5 小时。",
     ),
 ];
 

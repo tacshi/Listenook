@@ -354,6 +354,28 @@ pub fn menu_trigger(glyph: Icon, name: impl Into<SharedString>, size: Size, open
         .child(icon(glyph, size.icon()))
 }
 
+/// [`menu_trigger`] that says what is chosen: `label` and a ⌄ beside the glyph, outlined
+/// like a select so it reads as a choice to change. While `crowded` it is the glyph alone.
+pub fn menu_choice_trigger(
+    glyph: Icon,
+    name: impl Into<SharedString>,
+    label: impl Fn() -> SharedString + Copy + 'static,
+    size: Size,
+    open: Signal<bool>,
+    crowded: impl Fn() -> bool + Copy + 'static,
+) -> View {
+    let name: SharedString = name.into();
+    dressed_trigger(name.clone(), Variant::Outline, size, false)
+        .tooltip(tip(name))
+        .px(px((size.height() - size.icon()) / 2.0))
+        .min_w(px(size.height()))
+        .text_color(|| theme().foreground)
+        .style_when(move || open.get(), |s| s.bg(|| theme().muted))
+        .child(icon(glyph, size.icon()))
+        .child(when(move || !crowded(), move || label_text(label, size)))
+        .child(when(move || !crowded(), move || icon(Icon::ChevronDown, size.icon() - 2.0)))
+}
+
 pub fn toggle_icon_button(
     glyph: impl Fn() -> Icon + 'static,
     name: impl Fn() -> SharedString + Clone + 'static,

@@ -71,7 +71,9 @@ takes files of up to 5 hours.
   you use the rest of the app; **⇧⌘R** / **Ctrl+Shift+R** starts or stops it.
   macOS asks once for permission to record system audio.
 - **Import subtitles:** a SRT, WebVTT, or ASS/SSA file with the same name as
-  the media becomes its transcript; when several files match, you choose one.
+  the media can become its transcript. Listenook asks first and leaves it off
+  unless you turn it on, since subtitles from YouTube are often auto-generated
+  and read badly; when several files match, you choose one.
   Imported subtitles use their parsed cue timings; they do not run speech
   recognition.
 - **Transcribe recordings:** batch files with speaker labels where supported,
