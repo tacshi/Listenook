@@ -228,6 +228,7 @@ const ZH: &[(&str, &str)] = &[
     ("Language notes", "语言笔记"),
     ("Generate", "生成"),
     ("Transcript copied", "已复制转写"),
+    ("Couldn’t copy. Try again.", "未能复制，请重试。"),
     ("Export complete", "导出完成"),
     ("Something went wrong. Try again.", "出了点问题，请重试。"),
     ("The new brief wasn’t made. This is the previous one.", "新简报未能生成，下面是之前的简报。"),

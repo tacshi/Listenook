@@ -14,8 +14,8 @@ exclude = ["vendor"]
 
 [dependencies]
 listenook-core = { path = "crates/listenook-core" }
-nsh-core = { version = "0.6.1" }
-nsh-base = { version = "0.6.1" }
+nsh-core = { version = "0.7.0" }
+nsh-base = { version = "0.7.0" }
 log = "0.4"
 serde_json = "1"
 serde = "1"
@@ -28,7 +28,7 @@ symphonia = { version = "0.5", default-features = false, features = ["aac", "ala
 symphonia-opus = "0.1.3"
 symphonia-next = { package = "symphonia-core", version = "0.6.1" }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-nsh-updater = { version = "0.6.1" }
+nsh-updater = { version = "0.7.0" }
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", default-features = false, features = ["sync"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
@@ -44,19 +44,19 @@ socket2 = "0.6"
 env_logger = "0.11"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { version = "0.6.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "svg", "net"] }
+nsh-platform-linux = { version = "0.7.0", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "svg", "net"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { version = "0.6.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "svg"] }
+nsh-platform-macos = { version = "0.7.0", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "svg"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-nsh-platform-windows = { version = "0.6.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "svg", "net", "media"] }
+nsh-platform-windows = { version = "0.7.0", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "svg", "net", "media"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_KernelStreaming", "Win32_Media_MediaFoundation", "Win32_Media_Multimedia", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell"] }
 png = "0.18"
 
 [dev-dependencies]
-nsh-engine = { version = "0.6.1", default-features = false }
-nsh-testing = { version = "0.6.1", default-features = false }
+nsh-engine = { version = "0.7.0", default-features = false }
+nsh-testing = { version = "0.7.0", default-features = false }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 qwen-asr = { path = "vendor/qwen-asr" }

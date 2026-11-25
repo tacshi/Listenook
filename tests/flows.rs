@@ -13,7 +13,7 @@ use nsh_engine::{
     EngineConfig, Points, Root, Size,
     geometry::{point, px},
 };
-use nsh_testing::{DialogAnswer, Headless, StubNetwork, StubResponse};
+use nsh_testing::{DialogAnswer, DragOptions, Headless, StubNetwork, StubResponse};
 use serde_json::json;
 
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
@@ -475,12 +475,12 @@ fn a_tap_on_the_repeat_button_loops_the_sentence_and_a_tap_on_any_looping_one_en
 fn dragging_the_repeat_button_loops_every_sentence_the_finger_passes() {
     let mut it = open_sample("repeat-drag");
     let rails = |it: &App| it.app.screen().count("id:repeat-rail").unwrap();
-    it.app.drag_and_hold("label:Repeat sentence >> nth=0", point(px(0.0), px(160.0))).unwrap();
+    it.app.drag_and_hold("label:Repeat sentence >> nth=0", point(px(0.0), px(160.0)), DragOptions::default()).unwrap();
     let held = rails(&it);
     assert!(held > 1, "the repeat grows while the finger is still down: {held}");
     it.app.drop_held().unwrap();
     assert_eq!(rails(&it), held, "lifting the finger keeps the repeat");
-    it.app.drag("label:Repeat sentence >> nth=3", point(px(0.0), px(-1000.0))).unwrap();
+    it.app.drag("label:Repeat sentence >> nth=3", point(px(0.0), px(-1000.0)), DragOptions::default()).unwrap();
     assert_eq!(rails(&it), 4, "dragged up, the repeat runs from the top sentence to the one the drag started on");
     it.app.press("label:Repeat sentence >> nth=1").unwrap();
     it.app.wait_for_gone("id:repeat-rail", GONE).unwrap();
@@ -511,9 +511,13 @@ fn a_short_repeat_drag_after_scrolling_takes_in_a_sentence_or_two() {
     it.app.wait_for("Learning languages").unwrap();
     it.app.press("Learning languages").unwrap();
     it.app.wait_for("Sentence 1 says something about learning.").unwrap();
-    it.app.drag("Sentence 3 says something about learning.", point(px(0.0), px(-700.0))).unwrap();
-    it.app.drag("Sentence 12 says something about learning.", point(px(0.0), px(300.0))).unwrap();
-    it.app.drag("label:Repeat sentence >> nth=8", point(px(0.0), px(90.0))).unwrap();
+    it.app
+        .drag("Sentence 3 says something about learning.", point(px(0.0), px(-700.0)), DragOptions::default())
+        .unwrap();
+    it.app
+        .drag("Sentence 12 says something about learning.", point(px(0.0), px(300.0)), DragOptions::default())
+        .unwrap();
+    it.app.drag("label:Repeat sentence >> nth=8", point(px(0.0), px(90.0)), DragOptions::default()).unwrap();
     let rails = it.app.screen().count("id:repeat-rail").unwrap();
     assert!((2..=3).contains(&rails), "a short drag takes in a sentence or two: {rails}");
 }
@@ -524,7 +528,7 @@ fn holding_a_repeat_drag_near_the_bottom_edge_scrolls_and_keeps_stretching_the_r
     it.app.wait_for("Learning languages").unwrap();
     it.app.press("Learning languages").unwrap();
     it.app.wait_for("Sentence 1 says something about learning.").unwrap();
-    it.app.drag_and_hold("label:Repeat sentence >> nth=0", point(px(0.0), px(680.0))).unwrap();
+    it.app.drag_and_hold("label:Repeat sentence >> nth=0", point(px(0.0), px(680.0)), DragOptions::default()).unwrap();
     it.app.wait(Duration::from_millis(1500)).unwrap();
     it.app.drop_held().unwrap();
     assert!(!it.app.shows("Sentence 1 says something about learning."), "the list scrolled");

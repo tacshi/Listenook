@@ -212,7 +212,7 @@ mod desktop {
                 None => Err(tr("The downloaded update is gone. Check for updates again.").to_string()),
             };
             match result {
-                Ok(()) => desktop::restart(),
+                Ok(_) => desktop::restart(),
                 Err(message) => drop(state.try_set(UpdateState::Failed(message.into()))),
             }
         });

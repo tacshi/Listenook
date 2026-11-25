@@ -6,7 +6,7 @@ use nsh_core::{
     prelude::*,
 };
 
-use super::{review::Review, search_bar};
+use super::{copy, review::Review, search_bar};
 use crate::{
     services::llm,
     state::{SettingsTab, error_text, l, tr},
@@ -671,7 +671,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                             })
                         });
                         if let Some(shown) = shown {
-                            set_clipboard(shown);
+                            copy(shown, None);
                         }
                     })),
             ),
