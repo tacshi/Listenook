@@ -96,6 +96,36 @@ pub fn text_area(value: Signal<String>, placeholder: impl Fn() -> SharedString +
     .min_h(px(72.0))
 }
 
+/// A text area with a control in its top right corner, inside its border: the control sits
+/// beside the text rather than over it, since on macOS the field is an AppKit view that takes
+/// the clicks of anything drawn over it.
+pub fn text_area_beside(
+    value: Signal<String>,
+    placeholder: impl Fn() -> SharedString + 'static,
+    more: impl FnOnce(Input) -> Input,
+    control: impl IntoElement,
+) -> View {
+    let field = more(field_text(
+        input()
+            .value(move || value.get())
+            .on_change(move |text: &str| value.set(text.to_owned()))
+            .placeholder(move || placeholder().to_string())
+            .multiline(true),
+    ));
+    view()
+        .flex_row()
+        .items_start()
+        .rounded(tokens::radius)
+        .border_1()
+        .border_color(tokens::control_border)
+        .bg(|| theme().card)
+        .transition_colors()
+        .duration(motion::INSTANT)
+        .focus_within(|s| s.border_color(|| theme().ring))
+        .child(field.flex_1().min_w(px(0.0)).pl_3().py_2().min_h(px(70.0)))
+        .child(view().w(px(Size::Sm.height() + 8.0)).p(px(4.0)).flex_shrink_0().child(control))
+}
+
 pub fn search_field_ref(
     value: Signal<String>,
     placeholder: impl Fn() -> SharedString + 'static,

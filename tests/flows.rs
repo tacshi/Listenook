@@ -1893,9 +1893,11 @@ fn the_editor_actions_sit_on_one_row_with_the_rest_in_a_menu() {
     assert!(split.origin.x < more.origin.x && more.origin.x < save.origin.x, "Split, More, then Save");
     let again = bounds("label:Translate again");
     let box_ = nodes.iter().find(|node| node.id == screen.id("id:translation-editor").unwrap()).unwrap().bounds;
+    // Beside the field, at its top: on macOS the field is an AppKit view that takes the clicks of
+    // anything drawn over it.
     assert!(
-        again.origin.x > box_.origin.x + box_.size.width * 0.5 && again.origin.y < box_.origin.y + box_.size.height,
-        "Translate again {again:?} sits in the translation box {box_:?}"
+        again.origin.x >= box_.origin.x + box_.size.width && again.origin.y < box_.origin.y + box_.size.height * 0.5,
+        "Translate again {again:?} sits beside the translation field {box_:?}, not over it"
     );
     it.app.press("label:More sentence actions").unwrap();
     it.app.wait_for("Skip from here…").unwrap();
