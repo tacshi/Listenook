@@ -7,7 +7,7 @@ use nsh_base::{nav_page, nav_stack, theme};
 use nsh_core::{
     desktop::{MenuRole, TitleBarOptions, TitleBarStyle, WindowAttributes},
     element::desktop::{
-        MenuItem, current_window, register_global_shortcut, set_application_menu, set_tray, title_bar, tray,
+        MenuItem, current_window, on_reopen, register_global_shortcut, set_application_menu, set_tray, title_bar, tray,
         unregister_global_shortcut,
     },
     mobile::TabBarItem,
@@ -74,6 +74,8 @@ pub(crate) fn shell() -> impl IntoElement {
         current_window().show();
         current_window().focus();
     };
+    // A click on the Dock icon brings back the window the tray icon hid: nothing shows on its own.
+    on_reopen(show_window);
     effect(move || {
         let stays = in_tray();
         if stays {

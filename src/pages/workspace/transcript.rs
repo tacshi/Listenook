@@ -758,27 +758,20 @@ fn editor(review: Review) -> impl IntoElement {
                 .test_id("segment-editor")
         }))
         .child(when(translation, move || {
-            view()
-                .child(
-                    text_area(review.translation_draft, SharedString::default)
-                        .auto_focus(!untracked(original))
-                        .text_sm()
-                        .pr(px(40.0))
-                        .test_id("translation-editor"),
-                )
-                .child(when(
+            ui::text_area_beside(
+                review.translation_draft,
+                SharedString::default,
+                |input| input.auto_focus(!untracked(original)).test_id("translation-editor"),
+                when(
                     move || translating.get() || review.can_translate(),
                     move || {
-                        view().absolute().top(px(4.0)).right(px(4.0)).child(
-                            when(translating, || {
-                                view().size(px(32.0)).items_center().justify_center().child(ui::spinner(14.0))
-                            })
-                            .otherwise(move || {
-                                icon_button(Icon::Languages, tr("Translate again"), Size::Sm, translate)
-                            }),
-                        )
+                        when(translating, || {
+                            view().size(px(32.0)).items_center().justify_center().child(ui::spinner(14.0))
+                        })
+                        .otherwise(move || icon_button(Icon::Languages, tr("Translate again"), Size::Sm, translate))
                     },
-                ))
+                ),
+            )
         }))
         .child(
             view()

@@ -7,7 +7,11 @@ mod ui;
 mod util;
 
 use nsh_base::theme;
-use nsh_core::prelude::*;
+use nsh_core::{
+    desktop::QuitMode,
+    element::desktop::{set_quit_mode, window},
+    prelude::*,
+};
 
 /// What the headless flows need to play another device in a sync: its key, and TLS as sync
 /// speaks it. Not part of the app.
@@ -51,6 +55,14 @@ fn native(registry: &mut Registry) {
 pub fn App() -> impl IntoElement {
     let store = state::Store::install();
     effect(move || set_color_scheme(if store.immersive() { Appearance::Dark } else { store.appearance() }));
+    // The app's own window: nsh's launch window is an invisible host that never shows. Closing
+    // it quits, as closing the launch window did; with the tray icon on, Close hides it instead
+    // (`shell`).
+    set_quit_mode(QuitMode::LastWindowClosed);
+    window().id("main").title("Listenook").default_size(size(px(1180.0), px(760.0))).content(move || content(store))
+}
+
+fn content(store: state::Store) -> impl IntoElement {
     view()
         .flex_1()
         // Full screen, the picture reaches every edge: the pages keep their own controls clear of them.

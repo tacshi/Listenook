@@ -14,8 +14,8 @@ pub(crate) use button::{
 };
 pub(crate) use form::{
     bound_field, bound_field_with, checkbox, checkbox_row, error_hint, field, focused_search_field, hint, progress_bar,
-    range_slider, search_field_ref, segmented, select, slider, slider_on_picture, switch, text_area, text_field,
-    text_field_with,
+    range_slider, search_field_ref, segmented, select, slider, slider_on_picture, switch, text_area, text_area_beside,
+    text_field, text_field_with,
 };
 pub(crate) use icons::{Icon, icon, icon_of, tray_icon_url};
 pub(crate) use layout::{
