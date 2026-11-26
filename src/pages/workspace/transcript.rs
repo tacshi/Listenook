@@ -493,7 +493,10 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                             })
                                         }))
                                         .child(when(shows_translation, move || {
+                                            // As wide as the sentence: in a column that doesn't stretch
+                                            // its items, a row takes the width of its text on one line.
                                             view()
+                                                .self_stretch()
                                                 .flex_row()
                                                 .items_center()
                                                 .gap_2()

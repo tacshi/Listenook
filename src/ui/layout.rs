@@ -253,6 +253,8 @@ pub fn veil<E: IntoElement>(
     when(hidden, move || {
         view()
             .self_start()
+            // No wider than the sentence it hides, which its content's one-line width can be
+            .max_w(relative(1.0))
             .rounded(|| tokens::corner(tokens::Corner::Small))
             .bg(|| theme().foreground.opacity(0.1))
             .label(super::tr("Hidden sentence"))

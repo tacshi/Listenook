@@ -54,6 +54,49 @@ fn view_modes_show_the_original_the_translation_or_both() {
 }
 
 #[test]
+fn a_long_translation_wraps_within_its_sentence_shown_or_hidden() {
+    // Chinese has no spaces to break at, so only the sentence's width can make it wrap.
+    const LONG: &str = concat!(
+        "这些措施是为了阻止船只出海。可一旦到了海上，就是另一回事了。总有人提议把船拖回法国，",
+        "但法国的政策是，移民一旦出海，就不再干预。海事数据也印证了这一点。",
+        "这些措施是为了阻止船只出海。可一旦到了海上，就是另一回事了。总有人提议把船拖回法国，",
+        "但法国的政策是，移民一旦出海，就不再干预。",
+    );
+    let mut it = start(
+        "long-translation",
+        |root| {
+            seed_transcript(root);
+            let path = manifest(root, "sample");
+            let mut job: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            job["document"]["segments"][0]["translated_text"] = json!(LONG);
+            std::fs::write(path, job.to_string()).unwrap();
+        },
+        Vec::new(),
+    );
+    it.app.wait_for("Learning languages").unwrap();
+    it.app.press("Learning languages").unwrap();
+    it.app.wait_for(LONG).unwrap();
+    let right_of = |it: &App, selector: &str| {
+        let screen = it.app.screen();
+        let id = screen.id(selector).unwrap();
+        let bounds = screen.layout_nodes().into_iter().find(|node| node.id == id).unwrap().bounds;
+        bounds.origin.x + bounds.size.width
+    };
+    let edit = {
+        let screen = it.app.screen();
+        let id = screen.press_target("label:Edit >> nth=0").unwrap().unwrap();
+        screen.layout_nodes().into_iter().find(|node| node.id == id).unwrap().bounds.origin.x
+    };
+    let shown = right_of(&it, LONG);
+    assert!(shown <= edit, "the translation ends at {shown:?}, past its sentence's Edit button at {edit:?}");
+    it.app.press("label:Practice").unwrap();
+    it.app.press("Type answer").unwrap();
+    it.app.wait_for("label:Hidden sentence").unwrap();
+    let hidden = right_of(&it, "label:Hidden sentence >> nth=0");
+    assert!(hidden <= edit, "the hidden sentence ends at {hidden:?}, past its Edit button at {edit:?}");
+}
+
+#[test]
 fn an_edited_sentence_is_saved_to_the_manifest() {
     let mut it = open_sample("edit");
     it.app.press("role:button[Bilingual]").unwrap();
