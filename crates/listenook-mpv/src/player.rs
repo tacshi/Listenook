@@ -279,10 +279,15 @@ fn video_size(mpv: &Mpv) -> Option<(f64, f64)> {
 
 /// What mpv loads for a source: a path for a `file://` URL, the source itself otherwise.
 fn location(source: &str) -> String {
-    match source.strip_prefix("file://") {
-        Some(path) => percent_decoded(path),
-        None => source.to_owned(),
+    let Some(path) = source.strip_prefix("file://") else { return source.to_owned() };
+    let path = percent_decoded(path);
+    // `file:///C:/a.mkv` is the Windows path `C:/a.mkv`: mpv reads `/C:/a.mkv` as one under
+    // the current drive.
+    let drive = path.as_bytes();
+    if drive.len() >= 3 && drive[0] == b'/' && drive[1].is_ascii_alphabetic() && drive[2] == b':' {
+        return path[1..].to_owned();
     }
+    path
 }
 
 fn percent_decoded(text: &str) -> String {
@@ -515,5 +520,6 @@ mod tests {
     fn file_urls_become_paths() {
         assert_eq!(location("file:///Users/me/My%20Videos/a%E2%80%9Cb.mkv"), "/Users/me/My Videos/a\u{201c}b.mkv");
         assert_eq!(location("https://example.com/a%20b.mp3"), "https://example.com/a%20b.mp3");
+        assert_eq!(location("file:///C:/Users/me/My%20Videos/a.mkv"), "C:/Users/me/My Videos/a.mkv");
     }
 }
