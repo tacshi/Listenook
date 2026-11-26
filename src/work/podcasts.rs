@@ -201,6 +201,7 @@ pub(crate) fn download(id: &str) {
                 break;
             }
         }
+        let captioned = document.is_some();
         store.update_job(&id, |job| {
             job.apply(listenook_core::Change::NoteMedia(MediaMetadata {
                 size_bytes: size,
@@ -220,6 +221,9 @@ pub(crate) fn download(id: &str) {
                 None => job.apply(listenook_core::Change::AwaitsTranscription),
             }
         });
+        if captioned {
+            super::timing::add_word_timing(store, &id, None).await;
+        }
     });
 }
 

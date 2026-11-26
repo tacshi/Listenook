@@ -10,7 +10,7 @@ use nsh_core::{element::Position, prelude::*};
 use super::dialogs::{ExportDialog, JobDialog, export_dialog, group_dialog, rename_dialog, tags_dialog};
 use crate::services::secrets;
 use crate::ui::{error_text, l, tr};
-use crate::work::{ai, podcasts, transcribe};
+use crate::work::{ai, podcasts, timing, transcribe};
 use crate::{
     pages::chrome::top_bar,
     platform,
@@ -342,7 +342,7 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
             move || MenuAction {
                 glyph: Icon::Wave,
                 label: l("Time the words"),
-                on_select: move || transcribe::align(&id()),
+                on_select: move || timing::align(&id()),
             },
         ))
         .child(when(

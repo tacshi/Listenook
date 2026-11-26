@@ -247,11 +247,21 @@ fn decode_entities(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
+/// A subtitle file as a transcript: its cues joined into sentences, with words timed from the
+/// cues ([`crate::transcript::cues`]).
 pub fn import_subtitles(
     text: &str,
     extension: &str,
     duration_ms: Option<i64>,
 ) -> Result<ImportedSubtitles, &'static str> {
+    let mut imported = import_cues(text, extension, duration_ms)?;
+    crate::transcript::cues::into_sentences(&mut imported.document);
+    Ok(imported)
+}
+
+/// A subtitle file's cues as they show on screen, a segment each, cleaned of markup: what a
+/// video player shows.
+pub fn import_cues(text: &str, extension: &str, duration_ms: Option<i64>) -> Result<ImportedSubtitles, &'static str> {
     let (cues, invalid) = match extension {
         "srt" => block_cues(text, false),
         "vtt" => block_cues(text, true),
@@ -352,8 +362,9 @@ mod tests {
         let imported = import_subtitles(srt, "srt", None).unwrap();
         assert_eq!(imported.document.segments.len(), 1);
         assert_eq!(imported.document.segments[0].text, "Hello\nthere");
-        assert_eq!(imported.document.segments[0].id, "subtitle-cue-1");
-        assert!(imported.document.segments[0].preserve_boundary_before);
+        assert_eq!(imported.document.segments[0].id, "subtitle-1");
+        let words: Vec<_> = imported.document.tokens.iter().map(|t| (t.text.as_str(), t.start_ms, t.end_ms)).collect();
+        assert_eq!(words, [("Hello", 1000, 1750), (" there", 1750, 2500)]);
         assert_eq!(imported.ignored, 2);
     }
 

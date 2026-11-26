@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::{
     media::subtitles,
-    models::{Document, PodcastTranscriptReference, Segment, now_iso},
+    models::{Document, PodcastTranscriptReference, now_iso},
 };
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -614,33 +614,9 @@ pub fn publisher_transcript(body: &str, reference: &PodcastTranscriptReference) 
     } else {
         return Err("podcast_transcript_untimed");
     };
-    let imported = subtitles::import_subtitles(body, extension, None).map_err(|_| "podcast_transcript_failed")?;
-    let mut segments: Vec<Segment> = Vec::new();
-    for cue in imported.document.segments {
-        let text = cue.text.replace('\n', " ");
-        match segments.last_mut() {
-            Some(last)
-                if last.speaker == cue.speaker
-                    && !last.text.trim_end().ends_with(['.', '!', '?', '"', '\''])
-                    && (0..=800).contains(&(cue.start_ms - last.end_ms))
-                    && cue.end_ms - last.start_ms <= 24_000
-                    && last.text.len() + text.len() < 280 =>
-            {
-                last.text = format!("{} {text}", last.text);
-                last.end_ms = cue.end_ms;
-            }
-            _ => segments.push(Segment {
-                id: cue.id,
-                start_ms: cue.start_ms,
-                end_ms: cue.end_ms,
-                text,
-                speaker: cue.speaker,
-                preserve_boundary_before: true,
-                ..Segment::default()
-            }),
-        }
-    }
-    Ok(Document { tokens: Vec::new(), segments, speakers: imported.document.speakers, updated_at: now_iso() })
+    subtitles::import_subtitles(body, extension, None)
+        .map(|imported| imported.document)
+        .map_err(|_| "podcast_transcript_failed")
 }
 
 pub fn download_file_name(episode: &Episode) -> String {

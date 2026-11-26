@@ -12,7 +12,7 @@ use std::{
 };
 
 use listenook_core::{
-    Document, Job, TranscriptionProvider,
+    Document, Job, TranscriptAcquisitionMode, TranscriptionProvider,
     media::audio,
     transcript::local::{self, Model, Word},
 };
@@ -773,14 +773,24 @@ pub(crate) async fn transcribe(
     Ok(local::moss_document(&result?, duration_ms))
 }
 
+/// Whether the words of `job`'s transcript can be timed on this device: one that times only its
+/// sentences (a local transcription, subtitles), on a processor the aligner runs on, with the
+/// aligner downloaded. Elsewhere subtitles keep the word times their cues give.
 pub(crate) fn can_align(job: &Job) -> bool {
-    supported()
-        && matches!(
-            job.transcription_provider,
-            TranscriptionProvider::MossPro | TranscriptionProvider::MossLocal | TranscriptionProvider::Qwen3Local
-        )
-        && job.has_transcript()
-        && installed(&local::ALIGNER)
+    let sentences_only = matches!(
+        job.transcription_provider,
+        TranscriptionProvider::MossPro | TranscriptionProvider::MossLocal | TranscriptionProvider::Qwen3Local
+    ) || from_subtitles(job);
+    supported() && sentences_only && job.has_transcript() && installed(&local::ALIGNER)
+}
+
+/// Whether `job`'s transcript was written beside its recording (subtitles, a podcast's captions)
+/// rather than heard in it, and so may be in another language than it.
+fn from_subtitles(job: &Job) -> bool {
+    matches!(
+        job.transcript_acquisition_mode,
+        TranscriptAcquisitionMode::ImportedSubtitles | TranscriptAcquisitionMode::PublisherCaptions
+    )
 }
 
 /// Times each word of `job`'s transcript in its `samples`, telling `progress` how far it is:
@@ -791,23 +801,30 @@ pub(crate) async fn align(
     progress: impl Fn(f64) + 'static,
 ) -> (Value, Vec<listenook_core::Token>) {
     let unavailable = |code: &str| (json!({"status": "unavailable", "warning_code": code}), Vec::new());
-    let Some(document) = job.document() else {
+    let Some(mut document) = job.document() else {
         return unavailable("alignment_source_missing");
     };
     if !installed(&local::ALIGNER) {
         return unavailable("alignment_model_missing");
     }
-    let plan = local::plan(&document);
+    let hints = job.options.language_hints.clone();
     let total = document.segments.len();
+    if from_subtitles(job) {
+        // Sentences in another language than the recording's keep the times their cues give.
+        Arc::make_mut(&mut document).segments.retain(|sentence| local::may_be_said_in(&sentence.text, &hints));
+    }
+    let other_language = total - document.segments.len();
+    let plan = local::plan(&document);
     if plan.windows.is_empty() {
-        return unavailable(if plan.too_long > 0 {
+        return unavailable(if other_language == total {
+            "alignment_language_mismatch"
+        } else if plan.too_long > 0 {
             "alignment_segment_too_long"
         } else {
             "alignment_no_eligible_segments"
         });
     }
     let id = job.id.clone();
-    let hints = job.options.language_hints.clone();
     let automatic = hints.len() != 1;
     let result =
         engine(progress, move |stop, fraction| run_alignment(&samples, &document, &hints, stop, fraction)).await;
@@ -825,6 +842,7 @@ pub(crate) async fn align(
         (0, failure) => ("failed", Some(failure.unwrap_or_else(|| "alignment_failed".into()))),
         (count, None) if count == total => ("completed", None),
         (_, _) if plan.too_long > 0 => ("partial", Some("alignment_segment_too_long".to_owned())),
+        (_, _) if other_language > 0 => ("partial", Some("alignment_language_mismatch".to_owned())),
         _ => ("partial", Some("alignment_partial".to_owned())),
     };
     let mut record = json!({
