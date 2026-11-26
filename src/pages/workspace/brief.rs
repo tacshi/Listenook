@@ -1,6 +1,6 @@
 use listenook_core::{
     AiBrief, AiBriefSection, AiGenerationStatus, AiInsightType, AiLanguageNote, AiLanguageNoteKind, AiLearningLevel,
-    BriefAnchor, TRANSLATION_LANGUAGES, brief::BriefRequest, export, format::clock, highlights,
+    BriefAnchor, TRANSLATION_LANGUAGES, ai::brief::BriefRequest, format, transcript::export, transcript::highlights,
 };
 use nsh_base::theme;
 use nsh_core::prelude::*;
@@ -9,12 +9,13 @@ use super::{
     copy,
     review::{BriefPart, Review, Side},
 };
+use crate::ui::{error_text, l, tr};
+use crate::work::ai;
 use crate::{
-    services::llm,
-    state::{AiSetup, SettingsTab, error_text, l, tr},
+    state::{AiSetup, SettingsTab},
     ui::{
-        Icon, Size, Variant, button, card, checkbox, empty_state, field, hint, icon, icon_button, icon_text_button,
-        modal, modal_actions, moment_chip, progress_bar, section, select, text_area, text_field,
+        EmptyState, Icon, IconButton, Modal, ModalActions, Size, TextField, Variant, button, card, checkbox, field,
+        hint, icon, icon_text_button, moment_chip, progress_bar, section, select, text_area,
     },
 };
 
@@ -31,19 +32,19 @@ fn section_label(section: AiBriefSection) -> &'static str {
 }
 
 pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoElement {
-    let store = review.store;
+    let store = crate::state::store();
     let state =
-        move || review.job.with(|job| job.as_ref().map(|job| job.ai_generation_state.clone()).unwrap_or_default());
+        move || review.job_with(|job| job.as_ref().map(|job| job.ai_generation_state.clone()).unwrap_or_default());
     let generating = move || state().status == AiGenerationStatus::Generating;
-    let brief = computed(move || review.job.with(|job| job.as_ref().and_then(|job| job.ai_brief.clone())));
+    let brief = computed(move || review.job_with(|job| job.as_ref().and_then(|job| job.ai_brief.clone())));
     let configured = computed(move || store.ai_ready());
     let unseen = move || {
-        review.job.with(|job| {
+        review.job_with(|job| {
             let Some(job) = job.as_ref() else {
                 return 0;
             };
-            match (job.document.as_ref(), job.ai_brief.as_ref()) {
-                (Some(document), Some(brief)) => highlights::unseen(document, &brief.highlights_seen),
+            match (job.document(), job.brief()) {
+                (Some(document), Some(brief)) => highlights::unseen(&document, &brief.highlights_seen),
                 _ => 0,
             }
         })
@@ -80,14 +81,11 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                         })
                         .w(px(280.0)),
                     )
-                    .child(button(Variant::Outline, Size::Md, l("Cancel")).on_press(move || llm::cancel_brief(&review.id())))
+                    .child(button(Variant::Outline, Size::Md, l("Cancel")).on_press(move || ai::cancel_brief(&review.id())))
                     .into_element();
             }
             if !has_brief {
-                return empty_state(
-                    Icon::Sparkles,
-                    l("No AI Brief yet"),
-                    move || {
+                return EmptyState { glyph: Icon::Sparkles, title: l("No AI Brief yet"), description: move || {
                         error().unwrap_or_else(|| {
                             if configured.get() {
                                 tr("Create an evidence-backed overview, chapters, decisions, actions, and open questions.")
@@ -100,8 +98,7 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                 })
                             }
                         })
-                    },
-                    dynamic(move || {
+                    }, action: dynamic(move || {
                         let configured = configured.get();
                         untracked(|| {
                             if configured {
@@ -110,12 +107,11 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                     .into_element()
                             } else {
                                 button(Variant::Default, Size::Md, l("Open Settings"))
-                                    .on_press(move || store.open_settings(SettingsTab::Ai))
+                                    .on_press(move || store.act(crate::state::Action::OpenSettings(SettingsTab::Ai)))
                                     .into_element()
                             }
                         })
-                    }),
-                )
+                    }) }
                 .into_element();
             }
             let job_id = review.id();
@@ -127,9 +123,8 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                 let Some(held) = anchor.with(|anchor| anchor.clone()).filter(|_| !moving.get()) else {
                     return;
                 };
-                let target = review.brief_items.with(|items| {
-                    items.iter().find(|(part, _)| *part == held.part).map(|(_, target)| *target)
-                });
+                let target =
+                    review.brief_items().into_iter().find(|(part, _)| *part == held.part).map(|(_, target)| target);
                 spawn(async move {
                     let (top, origin) = (pane.measure(), column.measure());
                     let at = target.map(|target| target.measure());
@@ -151,7 +146,7 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                 });
             };
             let remember = move || {
-                let items = review.brief_items.with(|items| items.clone());
+                let items = review.brief_items();
                 let job_id = job_id.clone();
                 spawn(async move {
                     let (top, origin) = (pane.measure(), column.measure());
@@ -218,7 +213,7 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                             if let (Some(job), Some(brief)) =
                                                 (store.job_now(&review.id()), brief.get_untracked())
                                             {
-                                                copy(export::export_brief(&job, &brief), Some("AI Brief copied"));
+                                                copy(export::export(&job, export::Export::Brief(&brief)).contents, Some("AI Brief copied"));
                                             }
                                         },
                                     ),
@@ -269,8 +264,8 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
 }
 
 fn evidence(review: Review, ids: &[String]) -> impl IntoElement {
-    let moments: Vec<(usize, i64)> = review.job.with_untracked(|job| {
-        let Some(document) = job.as_ref().and_then(|job| job.document.as_ref()) else {
+    let moments: Vec<(usize, i64)> = review.job_now_with(|job| {
+        let Some(document) = job.as_ref().and_then(|job| job.document()) else {
             return Vec::new();
         };
         document
@@ -283,12 +278,12 @@ fn evidence(review: Review, ids: &[String]) -> impl IntoElement {
             .collect()
     });
     view().flex_row().flex_wrap().gap_1().children(moments.into_iter().map(move |(index, start_ms)| {
-        moment_chip(clock(start_ms)).accessibility_label(format!("{} {}", tr("Play from"), clock(start_ms))).on_press(
-            move || {
+        moment_chip(format::shown(format::Shown::Clock(start_ms)))
+            .accessibility_label(format!("{} {}", tr("Play from"), format::shown(format::Shown::Clock(start_ms))))
+            .on_press(move || {
                 review.follow();
                 review.play_from(index);
-            },
-        )
+            })
     }))
 }
 
@@ -303,13 +298,18 @@ fn part_key(part: &BriefPart) -> String {
 
 fn item(review: Review, part: BriefPart, body: impl IntoElement, ids: &[String]) -> View {
     let anchor = element_ref();
-    review.brief_items.with(|items| items.push((part_key(&part), anchor)));
+    review.add_brief_item(part_key(&part), anchor);
     card()
         .element_ref(&anchor)
         .p_3()
         .gap_2()
         .child(view().flex_row().items_start().gap_2().child(view().flex_1().min_w(px(0.0)).child(body)).child(
-            icon_button(Icon::Pencil, tr("Edit"), Size::Sm, move || review.brief_editing.set(Some(part.clone()))),
+            IconButton {
+                glyph: Icon::Pencil,
+                name: tr("Edit"),
+                size: Size::Sm,
+                on_press: move || review.edit_brief_part(Some(part.clone())),
+            },
         ))
         .child(evidence(review, ids))
 }
@@ -321,7 +321,7 @@ pub(super) fn edit_dialog(review: Review) -> impl IntoElement {
     effect(move || {
         let part = review.brief_editing.get();
         untracked(|| {
-            let brief = review.job.with_untracked(|job| job.as_ref().and_then(|job| job.ai_brief.clone()));
+            let brief = review.job_now_with(|job| job.as_ref().and_then(|job| job.ai_brief.clone()));
             let (Some(part), Some(brief)) = (part, brief) else {
                 open.set(false);
                 return;
@@ -349,20 +349,17 @@ pub(super) fn edit_dialog(review: Review) -> impl IntoElement {
     });
     effect(move || {
         if !open.get() {
-            untracked(|| review.brief_editing.set(None));
+            untracked(|| review.edit_brief_part(None));
         }
     });
     let save = move || {
-        let Some(part) = review.brief_editing.get_untracked() else {
+        let Some(part) = untracked(|| review.brief_part()) else {
             return;
         };
         let (new_title, new_body) = (title.get_untracked().trim().to_owned(), body.get_untracked().trim().to_owned());
-        let id = review.job.with_untracked(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
-        review.store.update_job(&id, |job| {
-            let Some(brief) = &mut job.ai_brief else {
-                return;
-            };
-            match &part {
+        let id = review.job_now_with(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
+        crate::state::store().update_job(&id, |job| {
+            job.edit_brief(|brief| match &part {
                 BriefPart::Overview => brief.overview = new_body,
                 BriefPart::Chapter(id) => {
                     if let Some(chapter) = brief.chapters.iter_mut().find(|c| &c.id == id) {
@@ -379,24 +376,34 @@ pub(super) fn edit_dialog(review: Review) -> impl IntoElement {
                         (note.term, note.explanation, note.edited) = (new_title, new_body, true);
                     }
                 }
-            }
-            brief.edited = true;
+            });
         });
         open.set(false);
     };
-    modal(
+    Modal {
         open,
-        l("Edit"),
-        520.0,
-        move || {
+        title: l("Edit"),
+        width: 520.0,
+        content: move || {
             view()
                 .gap_4()
-                .child(when(titled, move || field(l("Title"), text_field(title, SharedString::default))))
+                .child(when(titled, move || {
+                    field(l("Title"), TextField { value: title, placeholder: SharedString::default })
+                }))
                 .child(text_area(body, SharedString::default).h(px(180.0)))
                 .into_element()
         },
-        move || modal_actions(open, l("Cancel"), l("Save"), move || !body.with(|text| text.trim().is_empty()), save),
-    )
+        actions: move || {
+            ModalActions {
+                open,
+                cancel: l("Cancel"),
+                commit: l("Save"),
+                enabled: move || !body.with(|text| text.trim().is_empty()),
+                on_commit: save,
+            }
+            .into_element()
+        },
+    }
 }
 
 fn body_text(content: impl Into<SharedString>) -> Text {
@@ -460,7 +467,7 @@ fn language_note(review: Review, note: &AiLanguageNote) -> View {
 }
 
 fn content(review: Review, brief: &AiBrief) -> impl IntoElement {
-    review.brief_items.with(Vec::clear);
+    review.clear_brief_items();
     let mut sections: Vec<AnyElement> = Vec::new();
     if !brief.overview.trim().is_empty() {
         sections.push(
@@ -591,22 +598,22 @@ fn content(review: Review, brief: &AiBrief) -> impl IntoElement {
 }
 
 pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
-    let store = review.store;
+    let store = crate::state::store();
     let sections = signal(BriefRequest::default_sections());
     let output = signal(SharedString::from(if store.lang().code() == "zh" { "zh-Hans" } else { "en" }));
     let level = signal(AiLearningLevel::Intermediate);
     let languages: Vec<(SharedString, SharedString)> =
         TRANSLATION_LANGUAGES.iter().map(|(code, name)| ((*code).into(), (*name).into())).collect();
     let marked =
-        move || review.job.with(|job| job.as_ref().and_then(|job| job.document.as_ref()).map_or(0, highlights::count));
+        move || review.job_with(|job| job.as_ref().and_then(|job| job.document()).map_or(0, |d| highlights::count(&d)));
     effect(move || {
         if !open.get() {
             return;
         }
         untracked(|| {
-            let last = review.job.with(|job| {
+            let last = review.job_with(|job| {
                 let job = job.as_ref()?;
-                let state = &job.ai_generation_state;
+                let state = job.brief_state();
                 if !state.selected_sections.is_empty() {
                     return Some((
                         state.selected_sections.clone(),
@@ -614,8 +621,7 @@ pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoEl
                         state.learning_level,
                     ));
                 }
-                job.ai_brief
-                    .as_ref()
+                job.brief()
                     .filter(|brief| !brief.selected_sections.is_empty())
                     .map(|brief| (brief.selected_sections.clone(), brief.output_language.clone(), brief.learning_level))
             });
@@ -633,10 +639,10 @@ pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoEl
                 });
                 return;
             }
-            let learning = review.job.with(|job| {
+            let learning = review.job_with(|job| {
                 job.as_ref()
-                    .and_then(|job| job.document.as_ref())
-                    .is_some_and(|d| highlights::looks_like_learning(d, &output.get()))
+                    .and_then(|job| job.document())
+                    .is_some_and(|d| highlights::looks_like_learning(&d, &output.get()))
             });
             batch(|| {
                 if learning {
@@ -655,11 +661,11 @@ pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoEl
             });
         });
     });
-    modal(
+    Modal {
         open,
-        l("Create AI Brief"),
-        460.0,
-        move || {
+        title: l("Create AI Brief"),
+        width: 460.0,
+        content: move || {
             view()
                 .gap_4()
                 .child(field(
@@ -726,33 +732,34 @@ pub(super) fn generate_dialog(review: Review, open: Signal<bool>) -> impl IntoEl
                 }))
                 .into_element()
         },
-        move || {
-            modal_actions(
+        actions: move || {
+            ModalActions {
                 open,
-                l("Cancel"),
-                l("Generate"),
-                move || !sections.with(Vec::is_empty),
-                move || {
+                cancel: l("Cancel"),
+                commit: l("Generate"),
+                enabled: move || !sections.with(Vec::is_empty),
+                on_commit: move || {
                     let request = BriefRequest {
                         sections: sections.get_untracked(),
                         output_language: output.get_untracked().to_string(),
                         learning_language: None,
                         learning_level: level.get_untracked(),
                         model: store.settings().llm_provider_settings.model,
-                        highlights: review.job.with_untracked(|job| {
+                        highlights: review.job_now_with(|job| {
                             job.as_ref()
-                                .and_then(|job| job.document.as_ref())
-                                .map(highlights::contexts)
+                                .and_then(|job| job.document())
+                                .map(|d| highlights::contexts(&d))
                                 .unwrap_or_default()
                         }),
                     };
-                    llm::start_brief(&review.id(), request);
+                    ai::start_brief(&review.id(), request);
                     batch(|| {
-                        review.side.set(Side::Brief);
+                        review.set_side(Side::Brief);
                         open.set(false);
                     });
                 },
-            )
+            }
+            .into_element()
         },
-    )
+    }
 }

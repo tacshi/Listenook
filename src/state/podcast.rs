@@ -4,7 +4,7 @@ use listenook_core::{
 };
 use nsh_core::prelude::*;
 
-use super::persist;
+use crate::services::persist;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Playing {
@@ -22,9 +22,9 @@ pub(crate) struct PodcastState {
     position_ms: Signal<i64>,
     duration_ms: Signal<i64>,
     rate: Signal<f32>,
-    pub(crate) open_show: Signal<Option<String>>,
+    open_show: Signal<Option<String>>,
     pub(crate) query: Signal<String>,
-    pub(crate) adding: Signal<bool>,
+    adding: Signal<bool>,
     seek: Signal<(u32, i64)>,
     listened: Signal<Vec<ListenProgress>>,
     reports: Stored<u32>,
@@ -36,8 +36,55 @@ pub(crate) fn rate_label(rate: f32) -> SharedString {
     format!("{rate}×").into()
 }
 
+/// What the app asks of the podcast player and the shows followed.
+#[derive(Debug)]
+pub(crate) enum PodcastAction<'a> {
+    Show(&'a str),
+    CloseShow,
+    AddShow,
+    CacheFeed(Feed),
+    SetFollowed(&'a Feed, bool),
+    Play(Episode, SharedString, String),
+    SetPaused(bool),
+    Stop,
+    Report(i64, i64),
+    SetRate(f32),
+    SeekTo(i64),
+}
+
 impl PodcastState {
-    pub(super) fn new(mut catalog: Catalog, listened: Vec<ListenProgress>) -> Self {
+    /// Does `action`.
+    pub(crate) fn act(&self, action: PodcastAction<'_>) {
+        match action {
+            PodcastAction::Show(feed_url) => self.show(feed_url),
+            PodcastAction::CloseShow => self.close_show(),
+            PodcastAction::AddShow => self.add_show(),
+            PodcastAction::CacheFeed(feed) => self.cache_feed(feed),
+            PodcastAction::SetFollowed(feed, followed) => self.set_followed(feed, followed),
+            PodcastAction::Play(episode, show_title, source) => self.play(episode, show_title, source),
+            PodcastAction::SetPaused(paused) => self.set_paused(paused),
+            PodcastAction::Stop => self.stop(),
+            PodcastAction::Report(position_ms, duration_ms) => self.report(position_ms, duration_ms),
+            PodcastAction::SetRate(rate) => self.set_rate(rate),
+            PodcastAction::SeekTo(position_ms) => self.seek_to(position_ms),
+        }
+    }
+
+    /// Makes the podcast state from what the library keeps, playing at the rate chosen last.
+    pub(crate) fn install(store: super::Store) {
+        let root = persist::data_root();
+        let catalog = root.as_deref().map(persist::load_catalog).unwrap_or_default();
+        let listened = root.as_deref().map(persist::load_listening).unwrap_or_default();
+        let state = Self::new(catalog, listened);
+        state.set_rate(store.saved_rate("podcast_rate"));
+        super::install(state);
+    }
+
+    pub(crate) fn get() -> Self {
+        super::installed()
+    }
+
+    fn new(mut catalog: Catalog, listened: Vec<ListenProgress>) -> Self {
         let repaired = catalog.drop_duplicate_follows(&now_iso());
         let state = Self {
             catalog: signal(catalog),
@@ -68,71 +115,63 @@ impl PodcastState {
         }
     }
 
+    /// The feed of the show open on its own page, for the page to follow and close.
+    pub(crate) fn open_show(&self) -> Signal<Option<String>> {
+        self.open_show
+    }
+
+    fn show(&self, feed_url: &str) {
+        self.open_show.set(Some(feed_url.to_owned()));
+    }
+
+    fn close_show(&self) {
+        self.open_show.set(None);
+    }
+
+    /// Whether the dialog for adding a show by its feed's address shows.
+    pub(crate) fn adding(&self) -> Signal<bool> {
+        self.adding
+    }
+
+    fn add_show(&self) {
+        self.adding.set(true);
+    }
+
     pub(crate) fn followed(&self) -> Vec<Followed> {
         self.catalog.with(|catalog| catalog.followed.clone())
     }
 
     pub(crate) fn is_followed(&self, feed_url: &str) -> bool {
-        self.catalog.with(|catalog| catalog.followed.iter().any(|f| f.feed_url == feed_url))
+        self.catalog.with(|catalog| catalog.is_followed(feed_url))
     }
 
     pub(crate) fn feed(&self, feed_url: &str) -> Option<Feed> {
-        self.catalog.with(|catalog| catalog.feeds.iter().find(|f| f.feed_url == feed_url).cloned())
+        self.catalog.with(|catalog| catalog.feed(feed_url))
     }
 
     pub(crate) fn feed_url_of(&self, episode_id: &str) -> Option<String> {
-        self.catalog.with(|catalog| {
-            catalog.feeds.iter().find(|f| f.episodes.iter().any(|e| e.id == episode_id)).map(|f| f.feed_url.clone())
-        })
+        self.catalog.with(|catalog| catalog.feed_of(episode_id).map(|feed| feed.feed_url.clone()))
     }
 
-    pub(crate) fn cache_feed(&self, feed: Feed) {
+    fn cache_feed(&self, feed: Feed) {
         let heard = self.listened.get_untracked();
         self.catalog.update(|catalog| catalog.cache(feed, &heard));
         self.save();
     }
 
-    pub(crate) fn set_followed(&self, feed: &Feed, followed: bool) {
-        self.catalog.update(|catalog| {
-            catalog.followed.retain(|f| f.feed_url != feed.feed_url);
-            if followed {
-                catalog.unfollowed.remove(&feed.feed_url);
-            } else {
-                catalog.unfollowed.insert(feed.feed_url.clone(), now_iso());
-            }
-            if followed {
-                catalog.followed.insert(
-                    0,
-                    Followed {
-                        extra: Default::default(),
-                        feed_url: feed.feed_url.clone(),
-                        title: feed.title.clone(),
-                        followed_at: now_iso(),
-                        author: feed.author.clone(),
-                        artwork_url: feed.artwork_url.clone(),
-                        last_seen_episode_ids: feed.episodes.iter().map(|e| e.id.clone()).collect(),
-                        unseen_episode_count: 0,
-                    },
-                );
-                catalog.drop_duplicate_follows(&now_iso());
-            }
-        });
+    fn set_followed(&self, feed: &Feed, followed: bool) {
+        self.catalog.update(|catalog| catalog.set_followed(feed, followed, &now_iso()));
         self.save();
     }
 
-    pub(crate) fn adopt(&self, remote: &listenook_core::sync::Podcasts) {
+    /// Takes in what another device follows and has heard. The feeds it follows that this
+    /// device has never loaded, to load now.
+    pub(crate) fn adopt(&self, remote: &listenook_core::sync::Podcasts) -> Vec<String> {
         let (mut catalog, mut listened) = (self.catalog.get_untracked(), self.listened.get_untracked());
         if !listenook_core::sync::merge_podcasts(&mut catalog, &mut listened, remote) {
-            return;
+            return Vec::new();
         }
-        let missing: Vec<String> = catalog
-            .followed
-            .iter()
-            .filter(|followed| {
-                !catalog.feeds.iter().any(|feed| feed.feed_url == followed.feed_url && feed.fetched_at.is_some())
-            })
-            .map(|followed| followed.feed_url.clone())
-            .collect();
+        let missing = catalog.never_loaded();
         let moved = self
             .playing
             .with_untracked(|playing| playing.as_ref().map(|playing| playing.episode.id.clone()))
@@ -151,9 +190,7 @@ impl PodcastState {
         {
             log::error!("saving listening progress: {error}");
         }
-        for url in missing {
-            spawn(crate::services::podcasts::refresh(url));
-        }
+        missing
     }
 
     pub(crate) fn feeds(&self) -> Vec<Feed> {
@@ -210,11 +247,11 @@ impl PodcastState {
         }
     }
 
-    pub(crate) fn play(&self, episode: Episode, show_title: SharedString, source: String) {
+    fn play(&self, episode: Episode, show_title: SharedString, source: String) {
         batch(|| {
             if !self.playing.with_untracked(|p| p.as_ref().is_some_and(|p| p.episode.id == episode.id)) {
                 self.remember();
-                super::store().shelve(super::Shelf::Continue, &episode.id, true);
+                super::store().act(crate::state::Action::Shelve(super::Shelf::Continue, &episode.id, true));
                 self.position_ms.set(self.left_at(&episode.id).unwrap_or(0));
                 self.duration_ms.set(episode.duration_ms.unwrap_or(0));
                 let artwork = self.artwork_of(&episode);
@@ -227,24 +264,19 @@ impl PodcastState {
     fn artwork_of(&self, episode: &Episode) -> String {
         episode.artwork_url.clone().filter(|url| !url.is_empty()).unwrap_or_else(|| {
             self.catalog.with_untracked(|catalog| {
-                catalog
-                    .feeds
-                    .iter()
-                    .find(|feed| feed.episodes.iter().any(|e| e.id == episode.id))
-                    .and_then(|feed| feed.artwork_url.clone())
-                    .unwrap_or_default()
+                catalog.feed_of(&episode.id).and_then(|feed| feed.artwork_url.clone()).unwrap_or_default()
             })
         })
     }
 
-    pub(crate) fn set_paused(&self, paused: bool) {
+    fn set_paused(&self, paused: bool) {
         self.paused.set(paused);
         if paused {
             self.remember();
         }
     }
 
-    pub(crate) fn stop(&self) {
+    fn stop(&self) {
         self.remember();
         batch(|| {
             self.paused.set(true);
@@ -260,7 +292,7 @@ impl PodcastState {
         self.duration_ms.get()
     }
 
-    pub(crate) fn report(&self, position_ms: i64, duration_ms: i64) {
+    fn report(&self, position_ms: i64, duration_ms: i64) {
         batch(|| {
             self.position_ms.set(position_ms);
             if duration_ms > 0 {
@@ -279,11 +311,11 @@ impl PodcastState {
         self.rate.get()
     }
 
-    pub(crate) fn set_rate(&self, rate: f32) {
+    fn set_rate(&self, rate: f32) {
         self.rate.set(rate);
     }
 
-    pub(crate) fn seek_to(&self, position_ms: i64) {
+    fn seek_to(&self, position_ms: i64) {
         let position_ms = position_ms.max(0);
         batch(|| {
             self.position_ms.set(position_ms);

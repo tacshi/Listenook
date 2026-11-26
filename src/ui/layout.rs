@@ -9,7 +9,11 @@ use super::{
 pub const PAGE_INSET: f32 = 24.0;
 
 pub fn card() -> View {
-    view().rounded(tokens::radius_lg).border_1().border_color(|| theme().border).bg(|| theme().card)
+    view()
+        .rounded(|| tokens::corner(tokens::Corner::Large))
+        .border_1()
+        .border_color(|| theme().border)
+        .bg(|| theme().card)
 }
 
 pub fn section(title: impl IntoReactive<SharedString>, content: impl IntoElement) -> View {
@@ -25,8 +29,16 @@ pub fn section(title: impl IntoReactive<SharedString>, content: impl IntoElement
         .child(content)
 }
 
-pub fn separator() -> View {
+pub(super) fn separator() -> View {
     view().h(px(1.0)).flex_shrink_0().bg(|| theme().border)
+}
+
+pub struct Separator;
+
+impl IntoElement for Separator {
+    fn into_element(self) -> AnyElement {
+        separator().into_element()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,23 +55,34 @@ impl Status {
         match self {
             Status::Neutral => theme().muted_foreground,
             Status::Active => theme().primary,
-            Status::Success => tokens::success(),
-            Status::Warning => tokens::warning(),
+            Status::Success => tokens::ink(tokens::Ink::Success),
+            Status::Warning => tokens::ink(tokens::Ink::Warning),
             Status::Danger => theme().destructive,
         }
     }
 }
 
-pub fn badge(label: impl IntoReactive<SharedString>, status: impl Fn() -> Status + Copy + 'static) -> View {
+pub(super) fn badge(label: impl IntoReactive<SharedString>, status: impl Fn() -> Status + Copy + 'static) -> View {
     view()
         .px_1p5()
         .py(px(1.0))
-        .rounded(tokens::radius_sm)
+        .rounded(|| tokens::corner(tokens::Corner::Small))
         .bg(move || status().color().opacity(0.12))
         .child(text(label).text_xs().font_weight(FontWeight::MEDIUM).text_color(move || status().color()))
 }
 
-pub fn empty_state(
+pub struct Badge<P0, P1> {
+    pub label: P0,
+    pub status: P1,
+}
+
+impl<P0: IntoReactive<SharedString>, P1: Fn() -> Status + Copy + 'static> IntoElement for Badge<P0, P1> {
+    fn into_element(self) -> AnyElement {
+        badge(self.label, self.status).into_element()
+    }
+}
+
+pub(super) fn empty_state(
     glyph: Icon,
     title: impl IntoReactive<SharedString>,
     description: impl IntoReactive<SharedString>,
@@ -100,7 +123,22 @@ pub fn empty_state(
         .child(action)
 }
 
-pub fn spinner(size: f32) -> impl IntoElement {
+pub struct EmptyState<P1, P2, P3> {
+    pub glyph: Icon,
+    pub title: P1,
+    pub description: P2,
+    pub action: P3,
+}
+
+impl<P1: IntoReactive<SharedString>, P2: IntoReactive<SharedString>, P3: IntoElement> IntoElement
+    for EmptyState<P1, P2, P3>
+{
+    fn into_element(self) -> AnyElement {
+        empty_state(self.glyph, self.title, self.description, self.action).into_element()
+    }
+}
+
+pub(super) fn spinner(size: f32) -> impl IntoElement {
     let turn = motion();
     if !reduce_motion() {
         let _ = turn.play(MotionPreset::Spin);
@@ -109,8 +147,18 @@ pub fn spinner(size: f32) -> impl IntoElement {
         .bind_motion(&turn)
         .size(px(size))
         .text_color(|| theme().muted_foreground)
-        .label(crate::state::tr("Loading"))
+        .label(super::tr("Loading"))
         .child(icon(Icon::Refresh, size))
+}
+
+pub struct Spinner {
+    pub size: f32,
+}
+
+impl IntoElement for Spinner {
+    fn into_element(self) -> AnyElement {
+        spinner(self.size).into_element()
+    }
 }
 
 pub fn list_row(selected: impl Fn() -> bool + 'static) -> nsh_base::ButtonElement {
@@ -121,10 +169,10 @@ pub fn list_row(selected: impl Fn() -> bool + 'static) -> nsh_base::ButtonElemen
         .gap_3()
         .px_3()
         .py_2()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .transition_colors()
         .duration(motion::INSTANT)
-        .hover(|s| s.bg(tokens::hover_wash))
+        .hover(|s| s.bg(|| tokens::ink(tokens::Ink::HoverWash)))
         .active(|s| s.bg(|| theme().input))
         .selected_style(|s| s.bg(|| theme().accent))
         .disabled_style(|s| s.bg(|| theme().background.opacity(0.0)))
@@ -134,10 +182,10 @@ pub fn list_row(selected: impl Fn() -> bool + 'static) -> nsh_base::ButtonElemen
 /// card): it washes under the pointer, deeper while pressed.
 pub fn pressable_card() -> nsh_base::ButtonElement {
     nsh_base::button()
-        .rounded(tokens::radius_lg)
+        .rounded(|| tokens::corner(tokens::Corner::Large))
         .transition_colors()
         .duration(motion::INSTANT)
-        .hover(|s| s.bg(tokens::hover_wash))
+        .hover(|s| s.bg(|| tokens::ink(tokens::Ink::HoverWash)))
         .active(|s| s.bg(|| theme().accent))
 }
 
@@ -150,7 +198,7 @@ pub fn moment_chip(time: impl IntoReactive<SharedString>) -> nsh_base::ButtonEle
         .gap_1()
         .h(px(24.0))
         .px_2()
-        .rounded(tokens::radius_sm)
+        .rounded(|| tokens::corner(tokens::Corner::Small))
         .bg(|| theme().muted)
         .text_color(|| theme().muted_foreground)
         .transition_colors()
@@ -161,11 +209,11 @@ pub fn moment_chip(time: impl IntoReactive<SharedString>) -> nsh_base::ButtonEle
         .child(text(time).text_xs().tabular_nums())
 }
 
-pub fn key_cap(keystroke: &'static str) -> View {
+pub(super) fn key_cap(keystroke: &'static str) -> View {
     view()
         .px_1p5()
         .py(px(1.0))
-        .rounded(tokens::radius_sm)
+        .rounded(|| tokens::corner(tokens::Corner::Small))
         .border_1()
         .border_color(|| theme().border)
         .bg(|| theme().muted)
@@ -175,6 +223,16 @@ pub fn key_cap(keystroke: &'static str) -> View {
                 .font_family(|| theme().font_mono.clone().unwrap_or_else(|| mono_font().into()))
                 .text_color(|| theme().muted_foreground),
         )
+}
+
+pub struct KeyCap {
+    pub keystroke: &'static str,
+}
+
+impl IntoElement for KeyCap {
+    fn into_element(self) -> AnyElement {
+        key_cap(self.keystroke).into_element()
+    }
 }
 
 fn mono_font() -> &'static str {
@@ -195,15 +253,15 @@ pub fn veil<E: IntoElement>(
     when(hidden, move || {
         view()
             .self_start()
-            .rounded(tokens::radius_sm)
+            .rounded(|| tokens::corner(tokens::Corner::Small))
             .bg(|| theme().foreground.opacity(0.1))
-            .label(crate::state::tr("Hidden sentence"))
+            .label(super::tr("Hidden sentence"))
             .child(view().opacity(0.0).child(veiled()))
     })
     .otherwise(content)
 }
 
-pub fn chip(
+pub(super) fn chip(
     label: impl IntoReactive<SharedString>,
     selected: impl Fn() -> bool + Copy + 'static,
     on_press: impl Fn() + 'static,
@@ -215,12 +273,12 @@ pub fn chip(
         .px_3()
         .items_center()
         .justify_center()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .border_1()
         .border_color(move || if selected() { theme().primary } else { theme().border })
         .transition_colors()
         .duration(motion::INSTANT)
-        .hover(|s| s.bg(tokens::hover_wash))
+        .hover(|s| s.bg(|| tokens::ink(tokens::Ink::HoverWash)))
         .active(|s| s.bg(|| theme().accent))
         .child(
             text(label)
@@ -228,6 +286,20 @@ pub fn chip(
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(move || if selected() { theme().primary } else { theme().muted_foreground }),
         )
+}
+
+pub struct Chip<P0, P1, P2> {
+    pub label: P0,
+    pub selected: P1,
+    pub on_press: P2,
+}
+
+impl<P0: IntoReactive<SharedString>, P1: Fn() -> bool + Copy + 'static, P2: Fn() + 'static> IntoElement
+    for Chip<P0, P1, P2>
+{
+    fn into_element(self) -> AnyElement {
+        chip(self.label, self.selected, self.on_press).into_element()
+    }
 }
 
 /// How wide a composer card grows on a desktop: a comfortable measure for

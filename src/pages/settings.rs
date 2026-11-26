@@ -1,23 +1,21 @@
-use listenook_core::{LlmProvider, LocaleMode, ThemeMode, local::Model};
+use listenook_core::{LlmProvider, LocaleMode, ThemeMode, transcript::local::Model};
 
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
+use crate::services::secrets::{self, Secret};
+use crate::state::monitor::MonitorState;
+use crate::ui::{error_text, l, tr};
+use crate::work::{ai, updater};
 use crate::{
     services::{
-        llm,
         local::{self, ModelState},
         remote::Provider,
-        updater,
     },
-    state::{
-        SettingsTab as Tab, error_text, l,
-        secrets::{self, Secret},
-        store, tr,
-    },
+    state::{SettingsTab as Tab, store},
     ui::{
-        Size, Status, Tone, Variant, badge, bound_field_with, button, card, confirm_destructive, field, hint, key_cap,
-        modal_sized, progress_bar, section, segmented, select, separator, switch, text_field_with, toast,
+        Badge, BoundFieldWith, KeyCap, ModalSized, Segmented, Separator, Size, Status, Tone, Variant, button, card,
+        confirm_destructive, field, hint, progress_bar, section, select, switch, text_field_with, toast,
     },
 };
 
@@ -54,28 +52,26 @@ fn shown_version() -> String {
 pub(crate) fn settings_dialog() -> impl IntoElement {
     let open = store().settings_open();
     let tab = store().settings_tab();
-    modal_sized(
+    ModalSized {
         open,
-        l("Settings"),
-        720.0,
-        Some(620.0),
-        move || {
+        title: l("Settings"),
+        width: 720.0,
+        height: Some(620.0),
+        content: move || {
             view()
                 .gap_5()
                 .child(
                     when(crate::platform::compact, move || {
-                        scroll().horizontal().scrollbar(false).child(segmented(
-                            TABS.iter().map(|tab| (*tab, tab_key(*tab))).collect(),
-                            move || tab.get(),
-                            move |next| tab.set(next),
-                        ))
+                        scroll().horizontal().scrollbar(false).child(Segmented {
+                            options: TABS.iter().map(|tab| (*tab, tab_key(*tab))).collect(),
+                            value: move || tab.get(),
+                            on_change: move |next| tab.set(next),
+                        })
                     })
-                    .otherwise(move || {
-                        segmented(
-                            TABS.iter().map(|tab| (*tab, tab_key(*tab))).collect(),
-                            move || tab.get(),
-                            move |next| tab.set(next),
-                        )
+                    .otherwise(move || Segmented {
+                        options: TABS.iter().map(|tab| (*tab, tab_key(*tab))).collect(),
+                        value: move || tab.get(),
+                        on_change: move |next| tab.set(next),
                     }),
                 )
                 .child(dynamic(move || {
@@ -90,8 +86,8 @@ pub(crate) fn settings_dialog() -> impl IntoElement {
                 }))
                 .into_element()
         },
-        move || button(Variant::Default, Size::Md, l("Done")).on_press(move || open.set(false)).into_element(),
-    )
+        actions: move || button(Variant::Default, Size::Md, l("Done")).on_press(move || open.set(false)).into_element(),
+    }
 }
 
 fn panel() -> View {
@@ -105,27 +101,19 @@ fn general() -> impl IntoElement {
         panel()
             .child(field(
                 l("Theme"),
-                segmented(
-                    vec![
+                Segmented { options: vec![
                         (ThemeMode::System, "System"),
                         (ThemeMode::Light, "Light"),
                         (ThemeMode::Dark, "Dark"),
-                    ],
-                    move || store.setting(|s| s.theme_mode),
-                    move |mode| store.update_settings(|s| s.theme_mode = mode),
-                ),
+                    ], value: move || store.setting(|s| s.theme_mode), on_change: move |mode| store.update_settings(|s| s.theme_mode = mode) },
             ))
             .child(field(
                 l("Language"),
-                segmented(
-                    vec![
+                Segmented { options: vec![
                         (LocaleMode::System, "System"),
                         (LocaleMode::English, "English"),
                         (LocaleMode::SimplifiedChinese, "简体中文"),
-                    ],
-                    move || store.setting(|s| s.locale_mode),
-                    move |mode| store.update_settings(|s| s.locale_mode = mode),
-                ),
+                    ], value: move || store.setting(|s| s.locale_mode), on_change: move |mode| store.update_settings(|s| s.locale_mode = mode) },
             ))
     ))
     .child(section(
@@ -147,7 +135,7 @@ fn general() -> impl IntoElement {
                             move || SharedString::from(store.daily_goal_minutes().to_string()),
                             move |value| {
                                 if let Ok(minutes) = value.parse() {
-                                    store.set_daily_goal_minutes(minutes);
+                                    store.act(crate::state::Action::SetDailyGoalMinutes(minutes));
                                 }
                             },
                         )
@@ -162,27 +150,19 @@ fn general() -> impl IntoElement {
     .child(section(
         l("Background"),
         panel()
-            .child(switch(
-                l("Notify me when transcriptions and downloads finish"),
-                move || store.setting(|s| s.extra.get("notify_when_done").and_then(|v| v.as_bool()).unwrap_or(true)),
-                move |on| store.update_settings(|s| drop(s.extra.insert("notify_when_done".into(), on.into()))),
-            ))
+            .child(switch(l("Notify me when transcriptions and downloads finish"), move || store.setting(|s| s.extra.get("notify_when_done").and_then(|v| v.as_bool()).unwrap_or(true)), move |on| store.update_settings(|s| drop(s.extra.insert("notify_when_done".into(), on.into())))))
             .child(notifications_turned_off())
             .child(when(crate::platform::has_tray, move || {
                 view()
                     .gap_1()
-                    .child(switch(
-                        l(if cfg!(target_os = "macos") {
+                    .child(switch(l(if cfg!(target_os = "macos") {
                             "Keep Listenook in the menu bar"
                         } else {
                             "Keep Listenook in the tray"
-                        }),
-                        move || store.tray_enabled(),
-                        move |on| store.set_tray_enabled(on),
-                    )
-                    .disabled(move || !store.dock_visible()))
+                        }), move || MonitorState::get().tray_enabled(), move |on| MonitorState::get().act(crate::state::monitor::MonitorAction::SetTrayEnabled(on)))
+                    .disabled(move || !MonitorState::get().dock_visible()))
                     .child(hint(move || {
-                        tr(if store.dock_visible() {
+                        tr(if MonitorState::get().dock_visible() {
                             "Closing the window then hides it; Listenook keeps running."
                         } else {
                             "Show the Dock icon first, so Listenook stays reachable."
@@ -193,11 +173,11 @@ fn general() -> impl IntoElement {
                 view()
                     .gap_1()
                     .child(
-                        switch(l("Show Dock icon"), move || store.dock_visible(), move |on| store.set_dock_visible(on))
-                            .disabled(move || !store.tray_enabled()),
+                        switch(l("Show Dock icon"), move || MonitorState::get().dock_visible(), move |on| MonitorState::get().act(crate::state::monitor::MonitorAction::SetDockVisible(on)))
+                            .disabled(move || !MonitorState::get().tray_enabled()),
                     )
                     .child(hint(move || {
-                        tr(if store.tray_enabled() {
+                        tr(if MonitorState::get().tray_enabled() {
                             "When hidden, the menu bar icon opens Listenook and its settings."
                         } else {
                             "Show the menu bar icon first, so Listenook stays reachable."
@@ -207,12 +187,8 @@ fn general() -> impl IntoElement {
             .child(when(crate::services::login::supported, move || {
                 view()
                     .gap_1()
-                    .child(switch(
-                        l("Open Listenook at login"),
-                        move || store.opens_at_login(),
-                        move |on| store.set_opens_at_login(on),
-                    ))
-                    .child(when(move || store.tray_enabled(), || {
+                    .child(switch(l("Open Listenook at login"), move || MonitorState::get().opens_at_login(), move |on| MonitorState::get().act(crate::state::monitor::MonitorAction::SetOpensAtLogin(on))))
+                    .child(when(move || MonitorState::get().tray_enabled(), || {
                         hint(l(if cfg!(target_os = "macos") {
                             "Starts hidden in the menu bar."
                         } else {
@@ -226,29 +202,25 @@ fn general() -> impl IntoElement {
         panel()
             .child(hint(l("Audio and video that appear in this folder, and its subfolders, are added to the Library. Nothing is transcribed until you ask.")))
             .child(
-                when(move || store.monitor().folder_path.is_empty(), move || {
+                when(move || MonitorState::get().config().folder_path.is_empty(), move || {
                     button(Variant::Default, Size::Md, l("Choose folder")).self_start().on_press(choose_watched_folder)
                 })
                 .otherwise(move || {
                     view()
                         .gap_3()
                         .child(
-                            text(move || SharedString::from(store.monitor().folder_path))
+                            text(move || SharedString::from(MonitorState::get().config().folder_path))
                                 .text_sm()
                                 .number_of_lines(2)
                                 .text_color(|| theme().foreground),
                         )
-                        .child(switch(
-                            l("Watching"),
-                            move || !store.monitor().paused,
-                            move |on| store.set_monitor_paused(!on),
-                        ))
+                        .child(switch(l("Watching"), move || !MonitorState::get().config().paused, move |on| MonitorState::get().act(crate::state::monitor::MonitorAction::SetPaused(!on))))
                         .child(
                             view()
                                 .flex_row()
                                 .gap_2()
                                 .child(button(Variant::Outline, Size::Md, l("Change folder")).on_press(choose_watched_folder))
-                                .child(button(Variant::Ghost, Size::Md, l("Stop watching")).on_press(move || store.watch_folder(""))),
+                                .child(button(Variant::Ghost, Size::Md, l("Stop watching")).on_press(move || MonitorState::get().act(crate::state::monitor::MonitorAction::WatchFolder("")))),
                         )
                 }),
             ),
@@ -258,7 +230,7 @@ fn general() -> impl IntoElement {
 
 fn paired_devices() -> impl IntoElement {
     let store = store();
-    let sync = store.sync;
+    let sync = crate::work::sync::SyncState::get();
     let paired = move || !sync.mates().is_empty();
     let leave = move || {
         confirm_destructive(
@@ -266,7 +238,7 @@ fn paired_devices() -> impl IntoElement {
             tr("It stops syncing with all your devices, and they forget it. What is already here stays."),
             tr("Cancel"),
             tr("Unpair"),
-            move || sync.leave(),
+            move || sync.act(crate::work::sync::SyncAction::Leave),
         );
     };
     section(
@@ -287,7 +259,7 @@ fn paired_devices() -> impl IntoElement {
                 .otherwise(move || {
                     button(Variant::Default, Size::Md, l("Open Sync")).self_start().on_press(move || {
                         store.settings_open().set(false);
-                        sync.show();
+                        sync.act(crate::work::sync::SyncAction::Show);
                     })
                 }),
             ),
@@ -405,8 +377,8 @@ fn key_field(
                 .items_center()
                 .gap_2()
                 .child(
-                    when(saved, || badge(l("Saved"), || Status::Success))
-                        .otherwise(|| badge(l("Setup required"), || Status::Warning)),
+                    when(saved, || Badge { label: l("Saved"), status: || Status::Success })
+                        .otherwise(|| Badge { label: l("Setup required"), status: || Status::Warning }),
                 )
                 .child(hint(status)),
         )
@@ -444,7 +416,7 @@ fn transcription() -> impl IntoElement {
                     "Speaker labels, word timing, language detection and optional translation during transcription.",
                 )))
                 .child(field(l("API key"), key_field(Secret::Soniox, || false, test_provider(Provider::Soniox))))
-                .child(separator())
+                .child(Separator)
                 .child(switch(
                     l("Translate during transcription"),
                     move || store.setting(|s| s.soniox_translation.enabled),
@@ -514,7 +486,9 @@ fn state_of(models: &'static [Model]) -> ModelState {
 fn model_row(title: &'static str, about: &'static str, models: &'static [Model]) -> impl IntoElement {
     let store = store();
     let state = move || state_of(models);
-    let size = listenook_core::format::bytes(models.iter().map(Model::size).sum::<u64>() as i64);
+    let size = listenook_core::format::shown(listenook_core::format::Shown::Size(
+        models.iter().map(Model::size).sum::<u64>() as i64,
+    ));
     let failed = move || models.iter().find_map(local::model_error);
     let downloading = move || matches!(state(), ModelState::Downloading(_));
     view()
@@ -536,7 +510,7 @@ fn model_row(title: &'static str, about: &'static str, models: &'static [Model])
                                 .child(text(l(title)).text_sm().font_weight(FontWeight::MEDIUM))
                                 .child(when(
                                     move || state() == ModelState::Ready,
-                                    || badge(l("Ready"), || Status::Success),
+                                    || Badge { label: l("Ready"), status: || Status::Success },
                                 )),
                         )
                         .child(hint(move || SharedString::from(format!("{} · {size}", tr(about))))),
@@ -568,8 +542,10 @@ fn model_row(title: &'static str, about: &'static str, models: &'static [Model])
                             })
                             .on_press(move || {
                                 for model in models {
-                                    if local::model_state(model) != ModelState::Ready {
-                                        local::download_model(store, model);
+                                    if local::model_state(model) != ModelState::Ready
+                                        && let Some(download) = local::download_model(model)
+                                    {
+                                        store.run(download);
                                     }
                                 }
                             })
@@ -613,24 +589,24 @@ fn on_this_mac() -> impl IntoElement {
                 move || {
                     field(
                         l("Qwen3 model"),
-                        segmented(
-                            vec![("0.6b", "Standard"), ("1.7b", "Large")],
-                            move || {
+                        Segmented {
+                            options: vec![("0.6b", "Standard"), ("1.7b", "Large")],
+                            value: move || {
                                 let large = store.setting(|s| {
                                     s.extra.get("qwen3_local_model").and_then(|v| v.as_str()) == Some("1.7b")
                                 });
                                 if large { "1.7b" } else { "0.6b" }
                             },
-                            move |value: &'static str| {
+                            on_change: move |value: &'static str| {
                                 store.update_settings(|s| {
                                     s.extra.insert("qwen3_local_model".into(), value.into());
                                 })
                             },
-                        ),
+                        },
                     )
                 },
             ))
-            .child(separator())
+            .child(Separator)
             .child(model_row(
                 "Word timing",
                 "Needed by Qwen3 for sentence times; highlights each word as it is spoken",
@@ -644,7 +620,7 @@ fn on_this_mac() -> impl IntoElement {
             .child(when(
                 || local::offered(listenook_core::TranscriptionProvider::MossLocal),
                 || {
-                    view().gap_4().child(separator()).child(model_row(
+                    view().gap_4().child(Separator).child(model_row(
                         "MOSS",
                         "Multilingual, with speaker labels",
                         &[local::catalog::MOSS],
@@ -661,7 +637,7 @@ fn ai() -> impl IntoElement {
     let test = move |key: String, status: Signal<SharedString>, verified: Signal<Option<String>>| {
         store.run(async move {
             let settings = store.settings().llm_provider_settings;
-            match llm::list_models(&settings, Some(key.clone())).await {
+            match ai::list_models(&settings, Some(key.clone())).await {
                 Ok(found) => {
                     if !status.try_set(format!("{} {}", found.len(), tr("models available.")).into()) {
                         return;
@@ -743,12 +719,12 @@ fn settings_input(
     set: impl Fn(String) + 'static,
     placeholder: &'static str,
 ) -> impl IntoElement {
-    bound_field_with(
+    BoundFieldWith {
         value,
         set,
-        move || placeholder.into(),
-        |input| input.auto_capitalize(AutoCapitalize::None).auto_correct(false),
-    )
+        placeholder: move || SharedString::from(placeholder),
+        more: |input: Input| input.auto_capitalize(AutoCapitalize::None).auto_correct(false),
+    }
 }
 
 fn shortcuts() -> impl IntoElement {
@@ -764,7 +740,7 @@ fn shortcuts() -> impl IntoElement {
                     .py_2()
                     .when(index > 0, |row| row.border_t_1().border_color(|| theme().border))
                     .child(text(l(action)).text_sm().text_color(|| theme().foreground))
-                    .child(key_cap(keystroke))
+                    .child(KeyCap { keystroke })
             })),
         )
     };
@@ -773,11 +749,7 @@ fn shortcuts() -> impl IntoElement {
         section(
         l("From any app"),
         panel()
-            .child(switch(
-                l(if cfg!(target_os = "macos") { "Play or pause with ⌃⌥Space" } else { "Play or pause with Ctrl+Alt+Space" }),
-                move || store.setting(|s| s.extra.get("global_play_pause").and_then(|v| v.as_bool()).unwrap_or(false)),
-                move |on| store.update_settings(|s| drop(s.extra.insert("global_play_pause".into(), on.into()))),
-            ))
+            .child(switch(l(if cfg!(target_os = "macos") { "Play or pause with ⌃⌥Space" } else { "Play or pause with Ctrl+Alt+Space" }), move || store.setting(|s| s.extra.get("global_play_pause").and_then(|v| v.as_bool()).unwrap_or(false)), move |on| store.update_settings(|s| drop(s.extra.insert("global_play_pause".into(), on.into())))))
             .child(hint(l("Works while another app is in front. Off unless you turn it on: it takes the keystroke from every app."))),
     )
     };
@@ -904,7 +876,7 @@ fn choose_watched_folder() {
         if let Ok(Some(paths)) = answer.await
             && let Some(folder) = paths.first().and_then(|path| path.to_str())
         {
-            store().watch_folder(folder);
+            MonitorState::get().act(crate::state::monitor::MonitorAction::WatchFolder(folder));
         }
     });
 }

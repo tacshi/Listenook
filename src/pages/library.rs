@@ -1,26 +1,28 @@
 use std::rc::Rc;
 
 use listenook_core::{
-    Job, JobSourceOrigin, JobStatus, TRANSLATION_LANGUAGES, TranscriptionProvider, TranslationStatus,
-    format::{clock, date},
+    Job, JobSourceOrigin, JobStatus, TRANSLATION_LANGUAGES, TranscriptionProvider, TranslationStatus, format,
     l10n::status_label,
 };
 use nsh_base::theme;
 use nsh_core::{element::Position, prelude::*};
 
 use super::dialogs::{ExportDialog, JobDialog, export_dialog, group_dialog, rename_dialog, tags_dialog};
+use crate::services::secrets;
+use crate::ui::{error_text, l, tr};
+use crate::work::{ai, podcasts, transcribe};
 use crate::{
+    pages::chrome::top_bar,
     platform,
-    services::{llm, local, podcasts, transcribe},
-    shell::top_bar,
-    state::{AiSetup, Filter, SettingsTab, error_text, l, secrets, store, tr},
+    services::local,
+    state::{AiSetup, Filter, SettingsTab, store},
     ui::{
-        self, Icon, Size, Status, Variant, button, confirm_destructive, empty_state, field, hint, icon_of,
-        icon_text_button, menu_action, menu_choice, menu_danger, menu_divider, popover, progress_bar, search_field_ref,
-        select, separator, switch, text_area, text_field,
+        self, EmptyState, Icon, MenuAction, MenuChoice, MenuDanger, MenuDivider, Separator, Size, Status, TextField,
+        Variant, button, confirm_destructive, field, hint, icon_of, icon_text_button, popover, progress_bar,
+        search_field_ref, select, switch, text_area,
         tokens::{self, motion},
     },
-    util,
+    work::import,
 };
 
 #[derive(Clone, Copy)]
@@ -74,7 +76,7 @@ impl Sort {
 
     /// Never played and unknown lengths go last; ties keep the newest first.
     fn apply(self, jobs: &mut [Rc<Job>]) {
-        jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        jobs.sort_by(|a, b| b.cmp_added(a));
         match self {
             Sort::Added => {}
             Sort::Played => {
@@ -111,7 +113,7 @@ pub(crate) fn library() -> impl IntoElement {
         sort.get().apply(&mut jobs);
         jobs
     });
-    let waiting = move || store.jobs().iter().filter(|job| job.status.is_transcribable()).count();
+    let waiting = move || store.jobs().iter().filter(|job| job.status().is_transcribable()).count();
     let search_input = element_ref();
     on_key("mod+enter", move |_| transcribe::start_ready());
     on_key("mod+f", move |_| search_input.focus());
@@ -128,7 +130,7 @@ pub(crate) fn library() -> impl IntoElement {
                         .max_w(px(420.0))
                         .window_drag(false),
                 )
-                .child(view().style_with(|s| if crate::shell::page_narrow() { s } else { s.flex_1() }))
+                .child(view().style_with(|s| if crate::pages::chrome::page_narrow() { s } else { s.flex_1() }))
                 .child(
                     view().window_drag(false).child(
                         popover(
@@ -138,7 +140,7 @@ pub(crate) fn library() -> impl IntoElement {
                                 engine_label,
                                 Size::Sm,
                                 options_open,
-                                crate::shell::page_narrow,
+                                crate::pages::chrome::page_narrow,
                             ),
                             || options().into_element(),
                         )
@@ -155,7 +157,7 @@ pub(crate) fn library() -> impl IntoElement {
                     move || {
                         view().flex_row().items_center().gap_1().window_drag(false).child(
                             icon_text_button(Variant::Primary, Size::Sm, Icon::Transcribe, move || -> SharedString {
-                                if crate::shell::page_narrow() {
+                                if crate::pages::chrome::page_narrow() {
                                     waiting().to_string().into()
                                 } else {
                                     format!("{} ({})", tr("Transcribe all"), waiting()).into()
@@ -174,23 +176,20 @@ pub(crate) fn library() -> impl IntoElement {
                         .child(
                             ui::menu_with(sort_open, ui::menu_trigger(Icon::Sort, tr("Sort"), Size::Sm, sort_open))
                                 .children(Sort::ALL.map(|(choice, label)| {
-                                    menu_choice(l(label), move || sort.get() == choice, move || choice.save())
+                                    MenuChoice { label: l(label), checked: move || sort.get() == choice, on_select: move || choice.save() }
                                 })),
                         )
-                        .child(when(|| !crate::shell::system_header(), super::capture::add_button))
-                        .child(ui::icon_button(Icon::Export, tr("Export shown as ZIP…"), Size::Sm, move || {
+                        .child(when(|| !crate::pages::chrome::system_header(), super::capture::add_button))
+                        .child(ui::IconButton { glyph: Icon::Export, name: tr("Export shown as ZIP…"), size: Size::Sm, on_press: move || {
                             super::dialogs::export_zip(shown.get_untracked())
-                        })),
+                        } }),
                 ),
         )
         .child(
             when(
                 move || store.jobs().is_empty(),
                 move || {
-                    empty_state(
-                        Icon::Wave,
-                        move || tr(if platform::is_phone() { "Add audio or video" } else { "Drop audio or video here" }),
-                        move || {
+                    EmptyState { glyph: Icon::Wave, title: move || tr(if platform::is_phone() { "Add audio or video" } else { "Drop audio or video here" }), description: move || {
                             tr(if cfg!(target_os = "ios") {
                                 "Choose audio or video from the Files app. Up to 5 hours each."
                             } else if platform::is_phone() {
@@ -201,21 +200,19 @@ pub(crate) fn library() -> impl IntoElement {
                             } else {
                                 "A subtitle file with the same name can become its transcript. Up to 5 hours each."
                             })
-                        },
-                        view()
+                        }, action: view()
                             .flex_row()
                             .flex_wrap()
                             .justify_center()
                             .gap_2()
                             .child(
                                 icon_text_button(Variant::Primary, Size::Md, Icon::Plus, l("Add media…"))
-                                    .on_press(util::pick_media),
+                                    .on_press(import::pick_media),
                             )
                             .child(when(super::capture::offered, move || {
                                 icon_text_button(Variant::Outline, Size::Md, Icon::Record, l("Record what’s playing"))
-                                    .on_press(move || store.capture.record())
-                            })),
-                    )
+                                    .on_press(move || crate::work::capture::CaptureState::get().act(crate::work::capture::CaptureAction::Record))
+                            })) }
                 },
             )
             .otherwise(move || {
@@ -264,7 +261,7 @@ pub(super) fn kind_icon(job: &Job) -> Icon {
     } else if job.source_origin == JobSourceOrigin::Podcast {
         Icon::Podcast
     } else if job.has_video()
-        || matches!(listenook_core::subtitles::extension(&job.source_path).as_str(), "mp4" | "mkv" | "avi")
+        || matches!(listenook_core::media::subtitles::extension(&job.source_path).as_str(), "mp4" | "mkv" | "avi")
     {
         Icon::Film
     } else {
@@ -273,56 +270,68 @@ pub(super) fn kind_icon(job: &Job) -> Icon {
 }
 
 pub(super) fn detail(job: &Job) -> SharedString {
-    if let Some(code) = job.error_code.as_deref().filter(|_| !job.status.is_active() && !job.has_transcript()) {
+    if let Some(code) = job.error_code.as_deref().filter(|_| !job.status().is_active() && !job.has_transcript()) {
         return error_text(code);
     }
     let translating = job.translation_state.status == TranslationStatus::Translating;
     let mut parts = Vec::new();
-    if job.status.is_transcribable() {
+    if job.status().is_transcribable() {
         parts.push(tr("Not transcribed").to_string());
-    } else if job.status.is_active() || !job.has_transcript() {
+    } else if job.status().is_active() || !job.has_transcript() {
         parts.push(tr(status_label(job.status)).to_string());
     } else if translating {
-        let state = &job.translation_state;
+        let state = job.translation();
         parts.push(format!("{} {}/{}", tr("Translating"), state.completed_segments, state.total_segments));
     }
     if job.duration_ms() > 0 {
-        parts.push(clock(job.duration_ms()));
+        parts.push(format::shown(format::Shown::Clock(job.duration_ms())));
     }
     if job.has_transcript() && !translating {
-        if job.document.as_ref().is_some_and(|d| d.segments.iter().any(|s| s.has_translation())) {
+        if job.document().is_some_and(|d| d.segments.iter().any(|s| s.has_translation())) {
             parts.push(tr("Bilingual").to_string());
         }
-        if job.ai_brief.is_some() {
+        if job.has_brief() {
             parts.push(tr("AI Brief").to_string());
         }
     }
-    if let Some(podcast) = &job.podcast_provenance {
+    if let Some(podcast) = job.podcast() {
         parts.push(podcast.show_title.clone());
     }
-    parts.push(date(&job.created_at));
+    parts.push(format::shown(format::Shown::Date(&job.created_at)));
     parts.join(" · ").into()
 }
 
 fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: Dialogs) -> ui::Menu {
     let store = store();
-    menu.child(menu_action(Icon::Pencil, l("Rename…"), move || dialogs.rename.show(&id())))
-        .child(menu_action(Icon::Folder, l("Group…"), move || dialogs.group.show(&id())))
-        .child(menu_action(Icon::Tag, l("Tags…"), move || dialogs.tags.show(&id())))
-        .child(menu_action(Icon::Export, l("Export…"), move || {
-            if store.job_now(&id()).is_some_and(|job| job.has_transcript()) {
-                dialogs.export.show(&id());
-            } else {
-                ui::toast(ui::Tone::Info, tr("There is no transcript to export yet."));
-            }
-        }))
+    menu.child(MenuAction { glyph: Icon::Pencil, label: l("Rename…"), on_select: move || dialogs.rename.show(&id()) })
+        .child(MenuAction { glyph: Icon::Folder, label: l("Group…"), on_select: move || dialogs.group.show(&id()) })
+        .child(MenuAction { glyph: Icon::Tag, label: l("Tags…"), on_select: move || dialogs.tags.show(&id()) })
+        .child(MenuAction {
+            glyph: Icon::Export,
+            label: l("Export…"),
+            on_select: move || {
+                if store.job_now(&id()).is_some_and(|job| job.has_transcript()) {
+                    dialogs.export.show(&id());
+                } else {
+                    ui::toast(ui::Tone::Info, tr("There is no transcript to export yet."));
+                }
+            },
+        })
         .child(when(
             || !platform::is_phone(),
-            move || menu_action(Icon::Languages, l("Use a subtitle file…"), move || util::attach_subtitles(id())),
+            move || MenuAction {
+                glyph: Icon::Languages,
+                label: l("Use a subtitle file…"),
+                on_select: move || import::attach_subtitles(id()),
+            },
         ))
         .child(when(
             move || store.job(&id()).is_some_and(|job| can_transcribe_again(&job)),
-            move || menu_action(Icon::Transcribe, l("Transcribe again…"), move || transcribe_again(&id())),
+            move || MenuAction {
+                glyph: Icon::Transcribe,
+                label: l("Transcribe again…"),
+                on_select: move || transcribe_again(&id()),
+            },
         ))
         .child(when(
             move || {
@@ -330,25 +339,31 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
                     .job(&id())
                     .is_some_and(|job| job.status == listenook_core::JobStatus::Completed && local::can_align(&job))
             },
-            move || menu_action(Icon::Wave, l("Time the words"), move || transcribe::align(&id())),
+            move || MenuAction {
+                glyph: Icon::Wave,
+                label: l("Time the words"),
+                on_select: move || transcribe::align(&id()),
+            },
         ))
         .child(when(
             || !platform::is_phone(),
-            move || {
-                menu_action(
-                    Icon::Open,
-                    l(if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in folder" }),
-                    move || {
-                        if let Some(job) = store.job_now(&id()) {
-                            util::reveal(job.source_path.clone());
-                        }
-                    },
-                )
+            move || MenuAction {
+                glyph: Icon::Open,
+                label: l(if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in folder" }),
+                on_select: move || {
+                    if let Some(job) = store.job_now(&id()) {
+                        import::reveal(job.source_path.clone());
+                    }
+                },
             },
         ))
         .child(when(
             || !platform::is_phone() || cfg!(target_os = "ios"),
-            move || menu_action(Icon::Refresh, l("Relink media…"), move || util::relink(id())),
+            move || MenuAction {
+                glyph: Icon::Refresh,
+                label: l("Relink media…"),
+                on_select: move || import::relink(id()),
+            },
         ))
         .child(when(
             move || {
@@ -356,37 +371,44 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
                     job.source_origin == JobSourceOrigin::Podcast && std::path::Path::new(&job.source_path).exists()
                 })
             },
-            move || {
-                menu_action(Icon::Export, l("Save episode as…"), move || {
+            move || MenuAction {
+                glyph: Icon::Export,
+                label: l("Save episode as…"),
+                on_select: move || {
                     if let Some(job) = store.job_now(&id()) {
-                        util::save_copy(job.source_path.clone());
+                        import::save_copy(job.source_path.clone());
                     }
-                })
+                },
             },
         ))
-        .child(menu_divider())
-        .child(menu_danger(Icon::Trash, l("Remove…"), move || {
-            let id = id();
-            let Some(job) = store.job_now(&id) else {
-                return;
-            };
-            let owned = store.data_root().is_some_and(|root| std::path::Path::new(&job.source_path).starts_with(root));
-            if !job.has_transcript() && !owned && !job.status.is_active() {
-                store.remove_job(&id);
-                return;
-            }
-            confirm_destructive(
-                format!("{} “{}”?", tr("Remove"), job.title()),
-                tr(if owned {
-                    "Its transcript, translation and AI Brief are deleted, and so is Listenook’s copy of the media."
-                } else {
-                    "Its transcript, translation and AI Brief are deleted. The media file stays where it is."
-                }),
-                tr("Cancel"),
-                tr("Remove"),
-                move || store.remove_job(&id),
-            );
-        }))
+        .child(MenuDivider)
+        .child(MenuDanger {
+            glyph: Icon::Trash,
+            label: l("Remove…"),
+            on_select: move || {
+                let id = id();
+                let Some(job) = store.job_now(&id) else {
+                    return;
+                };
+                let owned =
+                    store.data_root().is_some_and(|root| std::path::Path::new(&job.source_path).starts_with(root));
+                if !job.has_transcript() && !owned && !job.status().is_active() {
+                    store.act(crate::state::Action::RemoveJob(&id));
+                    return;
+                }
+                confirm_destructive(
+                    format!("{} “{}”?", tr("Remove"), job.title()),
+                    tr(if owned {
+                        "Its transcript, translation and AI Brief are deleted, and so is Listenook’s copy of the media."
+                    } else {
+                        "Its transcript, translation and AI Brief are deleted. The media file stays where it is."
+                    }),
+                    tr("Cancel"),
+                    tr("Remove"),
+                    move || store.act(crate::state::Action::RemoveJob(&id)),
+                );
+            },
+        })
 }
 
 pub(crate) fn retry(id: &str) {
@@ -428,7 +450,7 @@ pub(crate) fn transcribe_again(id: &str) {
 fn missing_source(id: String) {
     if !platform::is_phone() || cfg!(target_os = "ios") {
         ui::toast_with_action(ui::Tone::Info, error_text("missing_source"), tr("Relink media…"), move || {
-            util::relink(id.clone())
+            import::relink(id.clone())
         });
     } else {
         ui::toast(ui::Tone::Info, error_text("missing_source"));
@@ -447,7 +469,7 @@ pub(crate) fn open(id: &str) {
         return;
     };
     if can_open(&job) {
-        return store.open_transcript(id);
+        return store.act(crate::state::Action::OpenTranscript(id));
     }
     let id = id.to_owned();
     if job.status == JobStatus::Downloading {
@@ -463,7 +485,7 @@ fn tag_pill(name: impl Into<SharedString>) -> View {
     view()
         .px_1p5()
         .py(px(1.0))
-        .rounded(tokens::radius_sm)
+        .rounded(|| tokens::corner(tokens::Corner::Small))
         .bg(|| theme().muted)
         .child(text(name.into()).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground))
 }
@@ -480,9 +502,9 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         if carried.is_empty() {
             return Vec::new();
         }
-        store.catalog().tags.into_iter().filter(|tag| carried.contains(&tag.id)).map(|tag| tag.name).collect::<Vec<_>>()
+        store.tags().into_iter().filter(|tag| carried.contains(&tag.id)).map(|tag| tag.name).collect::<Vec<_>>()
     });
-    let tag_room = computed(|| if crate::shell::page_narrow() { 1 } else { 2 });
+    let tag_room = computed(|| if crate::pages::chrome::page_narrow() { 1 } else { 2 });
     let more_open = signal(false);
     let content = view()
         .flex_row()
@@ -498,7 +520,7 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                         .size(px(36.0))
                         .items_center()
                         .justify_center()
-                        .rounded(tokens::radius)
+                        .rounded(|| tokens::corner(tokens::Corner::Medium))
                         .transition_colors()
                         .duration(motion::BASE)
                         .bg(move || status().color().opacity(0.12))
@@ -571,10 +593,10 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                                 job.with(|job| {
                                     let job = job.as_ref()?;
                                     if job.translation_state.status == TranslationStatus::Translating {
-                                        let state = &job.translation_state;
+                                        let state = job.translation();
                                         Some(state.completed_segments as f32 / state.total_segments.max(1) as f32)
                                     } else {
-                                        job.progress.fraction.map(|fraction| fraction as f32)
+                                        job.fraction()
                                     }
                                 })
                             })
@@ -583,21 +605,21 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                 ),
         )
         .child(when(
-            move || read(|job| job.status.is_transcribable()),
+            move || read(|job| job.status().is_transcribable()),
             move || button(Variant::Outline, Size::Sm, l("Transcribe")).on_press(move || transcribe::start(&id())),
         ))
         .child(when(busy, move || {
             button(Variant::Ghost, Size::Sm, l("Cancel")).on_press(move || {
                 let id = id();
-                llm::cancel_translation(&id);
-                llm::cancel_brief(&id);
-                if store.job_now(&id).is_some_and(|job| job.status.is_active()) {
+                ai::cancel_translation(&id);
+                ai::cancel_brief(&id);
+                if store.job_now(&id).is_some_and(|job| job.status().is_active()) {
                     transcribe::cancel(&id);
                 }
             })
         }))
         .child(when(
-            move || read(|job| job.status.is_retryable() && !job.has_transcript()),
+            move || read(|job| job.status().is_retryable() && !job.has_transcript()),
             move || button(Variant::Outline, Size::Sm, l("Retry")).on_press(move || retry(&id())),
         ))
         .child(row_menu(
@@ -629,7 +651,7 @@ fn options() -> impl IntoElement {
     let has_key = move || match provider() {
         TranscriptionProvider::MossPro => store.has_key(secrets::Secret::Moss),
         TranscriptionProvider::Soniox => store.has_key(secrets::Secret::Soniox),
-        other => local::provider_ready(other),
+        other => local::provider_ready(other, store.large_local_model()),
     };
     let mut providers: Vec<(SharedString, SharedString)> =
         vec![("soniox".into(), "Soniox".into()), ("mossPro".into(), "MOSS Pro".into())];
@@ -680,10 +702,9 @@ fn options() -> impl IntoElement {
                             })
                             .flex_1(),
                         )
-                        .child(
-                            button(Variant::Outline, Size::Sm, l("Settings"))
-                                .on_press(move || store.open_settings(SettingsTab::Transcription)),
-                        )
+                        .child(button(Variant::Outline, Size::Sm, l("Settings")).on_press(move || {
+                            store.act(crate::state::Action::OpenSettings(SettingsTab::Transcription))
+                        }))
                 },
             )),
         )
@@ -693,8 +714,14 @@ fn options() -> impl IntoElement {
                 view()
                     .gap_4()
                     .child(
-                        field(l("Language hints"), text_field(store.language_hints(), || "en, zh, ja".into()))
-                            .child(hint(l("Language codes separated by commas. Leave empty to detect automatically."))),
+                        field(
+                            l("Language hints"),
+                            TextField {
+                                value: store.language_hints(),
+                                placeholder: || SharedString::from("en, zh, ja"),
+                            },
+                        )
+                        .child(hint(l("Language codes separated by commas. Leave empty to detect automatically."))),
                     )
                     .child(field(
                         l("Names and context terms"),
@@ -702,7 +729,7 @@ fn options() -> impl IntoElement {
                     ))
             },
         ))
-        .child(separator())
+        .child(Separator)
         .child(switch(
             l("Translate after transcription"),
             move || store.setting(|s| s.translation_preferences.auto_translate),
@@ -726,7 +753,7 @@ fn options() -> impl IntoElement {
                     )
                     .child(
                         button(Variant::Outline, Size::Sm, l("Settings"))
-                            .on_press(move || store.open_settings(SettingsTab::Ai)),
+                            .on_press(move || store.act(crate::state::Action::OpenSettings(SettingsTab::Ai))),
                     )
             },
         ))

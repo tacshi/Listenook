@@ -1,14 +1,11 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    net::IpAddr,
-};
+use std::{collections::BTreeMap, net::IpAddr};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
     activity::Activity,
-    models::{Job, LibraryCatalog, Named},
+    models::{Job, LibraryCatalog, Mark},
     podcast::{Catalog, Feed, Followed, ListenProgress},
 };
 
@@ -79,13 +76,6 @@ pub struct Index {
     /// Each device's learning time; older peers send none.
     #[serde(skip_serializing_if = "Activity::is_empty")]
     pub activity: Activity,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Mark {
-    pub hidden: bool,
-    pub at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -216,19 +206,7 @@ pub const LISTENED_KEPT: usize = 200;
 impl Podcasts {
     pub fn of(catalog: &Catalog, listened: &[ListenProgress]) -> Podcasts {
         let listened: Vec<ListenProgress> = listened.iter().take(LISTENED_KEPT).cloned().collect();
-        let played = catalog
-            .feeds
-            .iter()
-            .filter_map(|feed| {
-                let episodes: Vec<_> = feed
-                    .episodes
-                    .iter()
-                    .filter(|episode| listened.iter().any(|entry| entry.episode_id == episode.id))
-                    .cloned()
-                    .collect();
-                (!episodes.is_empty()).then(|| Feed { episodes, ..feed.clone() })
-            })
-            .collect();
+        let played = catalog.played(&listened);
         Podcasts { followed: catalog.followed.clone(), unfollowed: catalog.unfollowed.clone(), listened, played }
     }
 }
@@ -239,24 +217,8 @@ fn later(a: &str, b: &str) -> bool {
 
 pub fn merge_podcasts(catalog: &mut Catalog, listened: &mut Vec<ListenProgress>, remote: &Podcasts) -> bool {
     let before = (catalog.clone(), listened.clone());
-    for (url, at) in &remote.unfollowed {
-        if catalog.unfollowed.get(url).is_none_or(|mine| later(at, mine)) {
-            catalog.unfollowed.insert(url.clone(), at.clone());
-        }
-    }
-    for other in &remote.followed {
-        match catalog.followed.iter_mut().find(|mine| mine.feed_url == other.feed_url) {
-            Some(mine) if later(&other.followed_at, &mine.followed_at) => *mine = other.clone(),
-            Some(_) => {}
-            None => catalog.followed.push(other.clone()),
-        }
-    }
-    let unfollowed = catalog.unfollowed.clone();
-    catalog
-        .followed
-        .retain(|followed| unfollowed.get(&followed.feed_url).is_none_or(|at| later(&followed.followed_at, at)));
-    catalog.drop_duplicate_follows(&crate::models::now_iso());
-    catalog.followed.sort_by_key(|followed| std::cmp::Reverse(millis(&followed.followed_at)));
+    catalog.merge_follows(&remote.followed, &remote.unfollowed, later);
+    catalog.sort_follows(millis);
 
     let at = |entry: &ListenProgress| entry.updated_at.as_deref().map_or(i64::MIN, millis);
     for other in &remote.listened {
@@ -269,19 +231,7 @@ pub fn merge_podcasts(catalog: &mut Catalog, listened: &mut Vec<ListenProgress>,
     listened.sort_by_key(|entry| std::cmp::Reverse(at(entry)));
     listened.truncate(LISTENED_KEPT);
 
-    for feed in &remote.played {
-        match catalog.feeds.iter_mut().find(|mine| mine.feed_url == feed.feed_url) {
-            Some(mine) => {
-                for episode in &feed.episodes {
-                    if !mine.episodes.iter().any(|known| known.id == episode.id) {
-                        mine.episodes.push(episode.clone());
-                    }
-                }
-                mine.episodes.sort_by(|a, b| b.published_at.cmp(&a.published_at));
-            }
-            None => catalog.feeds.push(Feed { fetched_at: None, ..feed.clone() }),
-        }
-    }
+    catalog.take_played(&remote.played);
     (catalog.clone(), listened.clone()) != before
 }
 
@@ -531,51 +481,6 @@ pub fn plan_with(local: &[Entry], remote: &[Entry], removed_here: &Removed, remo
     plan
 }
 
-pub fn merge_catalog(local: &mut LibraryCatalog, remote: &LibraryCatalog) -> HashMap<String, String> {
-    fn merge(local: &mut Vec<Named>, remote: &[Named], removed: &Removed, map: &mut HashMap<String, String>) {
-        local.retain(|named| !removed.contains_key(&named.id));
-        for other in remote {
-            if other.id.is_empty() || removed.contains_key(&other.id) || local.iter().any(|named| named.id == other.id)
-            {
-                continue;
-            }
-            match local.iter().find(|named| named.name == other.name) {
-                Some(same) => drop(map.insert(other.id.clone(), same.id.clone())),
-                None => local.push(other.clone()),
-            }
-        }
-    }
-    for (id, at) in &remote.removed {
-        local.removed.entry(id.clone()).or_insert_with(|| at.clone());
-    }
-    let removed = local.removed.clone();
-    let mut map = HashMap::new();
-    merge(&mut local.groups, &remote.groups, &removed, &mut map);
-    merge(&mut local.tags, &remote.tags, &removed, &mut map);
-    map
-}
-
-/// Moves a recording from the other device onto this device's groups and tags, and out of any
-/// that were deleted.
-pub fn rehome(job: &mut Job, map: &HashMap<String, String>, removed: &Removed) {
-    if let Some(group) = &mut job.group_id
-        && let Some(here) = map.get(group)
-    {
-        *group = here.clone();
-    }
-    if job.group_id.as_ref().is_some_and(|group| removed.contains_key(group)) {
-        job.group_id = None;
-    }
-    for tag in &mut job.tag_ids {
-        if let Some(here) = map.get(tag) {
-            *tag = here.clone();
-        }
-    }
-    job.tag_ids.retain(|tag| !removed.contains_key(tag));
-    job.tag_ids.sort();
-    job.tag_ids.dedup();
-}
-
 pub fn media_extension(name: &str) -> String {
     let extension: String = name
         .rsplit_once('.')
@@ -597,23 +502,12 @@ pub fn is_sync_name(job_id: &str, name: &str) -> bool {
     name.strip_prefix("sync-").and_then(|rest| rest.strip_prefix(job_id)).is_some_and(|rest| rest.starts_with('.'))
 }
 
-pub fn keep_title(job: &mut Job, name: &str) -> bool {
-    let lost = format!("sync-{}", job.id);
-    let title = match name.rsplit_once('.') {
-        Some((stem, _)) if !stem.is_empty() => stem,
-        _ => name,
-    }
-    .trim();
-    if job.title() != lost || title.is_empty() || title == lost {
-        return false;
-    }
-    job.display_title = Some(title.to_owned());
-    true
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::models::Named;
 
     #[test]
     fn a_device_reads_and_writes_as_before_its_tailscale_addresses() {
@@ -640,14 +534,14 @@ mod tests {
     fn a_synced_recording_keeps_the_name_of_its_file() {
         let mut job = Job { id: "a-1".into(), source_path: "/there/Talk about it.mp3".into(), ..Job::default() };
         let name = job.file_name();
-        assert!(!keep_title(&mut job, &name));
+        assert!(!job.keep_title(&name));
         job.source_path = format!("/here/media/{}", media_file_name("a-1", &name));
         assert_eq!(job.title(), "sync-a-1");
-        assert!(keep_title(&mut job, &name));
+        assert!(job.keep_title(&name));
         assert_eq!(job.title(), "Talk about it");
-        assert!(!keep_title(&mut job, "Other.mp3"));
+        assert!(!job.keep_title("Other.mp3"));
         job.display_title = None;
-        assert!(!keep_title(&mut job, "sync-a-1.mp3"));
+        assert!(!job.keep_title("sync-a-1.mp3"));
         assert_eq!(job.title(), "sync-a-1");
         assert!(is_sync_name("a-1", "sync-a-1.mp3"));
         assert!(!is_sync_name("a-1", "sync-a-12.mp3"));
@@ -717,12 +611,12 @@ mod tests {
             tags: vec![named("t7", "todo"), named("t8", "idea")],
             ..Default::default()
         };
-        let map = merge_catalog(&mut local, &remote);
+        let map = local.merge(&remote);
         assert_eq!(local.groups.len(), 2);
         assert_eq!(local.tags.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t1", "t8"]);
         assert_eq!(map.get("t7").map(String::as_str), Some("t1"));
         let mut job = Job { tag_ids: vec!["t8".into(), "t7".into(), "t1".into()], ..Job::default() };
-        rehome(&mut job, &map, &local.removed);
+        job.refile(&map, &local);
         assert_eq!(job.tag_ids, ["t1", "t8"]);
     }
 
@@ -738,23 +632,23 @@ mod tests {
         here.remove("g1");
         here.remove("t1");
 
-        assert!(merge_catalog(&mut here, &there).is_empty());
+        assert!(here.merge(&there).is_empty());
         assert_eq!(here.groups, [named("g2", "Work")]);
         assert!(here.tags.is_empty());
 
-        merge_catalog(&mut there, &here);
+        there.merge(&here);
         assert_eq!(there.groups, [named("g2", "Work")]);
         assert!(there.tags.is_empty());
         assert!(there.removed.contains_key("g1") && there.removed.contains_key("t1"));
 
         let mut job = Job { group_id: Some("g1".into()), tag_ids: vec!["t1".into()], ..Job::default() };
-        rehome(&mut job, &HashMap::new(), &there.removed);
+        job.refile(&HashMap::new(), &there);
         assert_eq!(job.group_id, None);
         assert!(job.tag_ids.is_empty());
 
         let mut again = here.clone();
         again.groups.push(named("g3", "English"));
-        merge_catalog(&mut there, &again);
+        there.merge(&again);
         assert!(there.groups.iter().any(|group| group.id == "g3"));
     }
 

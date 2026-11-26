@@ -74,7 +74,7 @@ fn anchored_popover(open: Signal<bool>) -> nsh_base::PopoverElement {
         })
         .offset(px(6.0))
         .margin(px(8.0))
-        .popup_style(|s| tokens::popup_surface(s).min_w(px(240.0)).p_2())
+        .popup_style(|s| tokens::surface(tokens::Surface::Popup, s).min_w(px(240.0)).p_2())
         .popup_starting_class(tokens::POPUP_STARTING)
         .popup_ending_class(tokens::POPUP_ENDING)
 }
@@ -100,10 +100,10 @@ pub fn menu_with(open: Signal<bool>, trigger: View) -> Menu {
             })
             .offset(px(4.0))
             .margin(px(8.0))
-            .popup_style(tokens::menu_surface)
+            .popup_style(|s| tokens::surface(tokens::Surface::Menu, s))
             .popup_starting_class(tokens::POPUP_STARTING)
             .popup_ending_class(tokens::POPUP_ENDING)
-            .backdrop_style(|s| s.bg(tokens::scrim))
+            .backdrop_style(|s| s.bg(|| tokens::ink(tokens::Ink::Scrim)))
             .trigger(trigger),
     )
 }
@@ -125,7 +125,7 @@ pub fn context_menu(target: impl IntoElement) -> Menu {
         nsh_base::context_menu()
             .offset(px(4.0))
             .margin(px(8.0))
-            .popup_style(tokens::popup_surface)
+            .popup_style(|s| tokens::surface(tokens::Surface::Popup, s))
             .popup_starting_class(tokens::POPUP_STARTING)
             .popup_ending_class(tokens::POPUP_ENDING)
             .trigger(target),
@@ -136,7 +136,7 @@ pub fn popover(trigger: impl IntoElement, content: impl Fn() -> AnyElement + 'st
     nsh_base::popover()
         .offset(px(6.0))
         .margin(px(8.0))
-        .popup_style(|s| tokens::popup_surface(s).w(px(340.0)).p_4())
+        .popup_style(|s| tokens::surface(tokens::Surface::Popup, s).w(px(340.0)).p_4())
         .popup_starting_class(tokens::POPUP_STARTING)
         .popup_ending_class(tokens::POPUP_ENDING)
         .trigger(trigger)
@@ -171,7 +171,7 @@ fn menu_row(
             .gap_3()
             .px_3()
             .min_h(px(44.0))
-            .rounded(tokens::radius_sm)
+            .rounded(|| tokens::corner(tokens::Corner::Small))
             .text_color(ink)
             .hover(|s| s.bg(|| theme().accent))
             .active(|s| s.bg(|| theme().input))
@@ -187,7 +187,7 @@ fn menu_row(
     let row = if touch { row.gap_3().px_3().min_h(px(44.0)) } else { row.gap_2().px_2().py_1p5() };
     row.flex_row()
         .items_center()
-        .rounded(tokens::radius_sm)
+        .rounded(|| tokens::corner(tokens::Corner::Small))
         .text_color(ink)
         .hover(|s| s.bg(|| theme().accent))
         .focus(|s| s.bg(|| theme().accent))
@@ -202,14 +202,30 @@ fn mark_size() -> f32 {
     if crate::platform::is_phone() { 18.0 } else { 14.0 }
 }
 
-pub fn menu_action(glyph: Icon, label: impl IntoReactive<SharedString>, on_select: impl Fn() + 'static) -> AnyElement {
+pub(super) fn menu_action(
+    glyph: Icon,
+    label: impl IntoReactive<SharedString>,
+    on_select: impl Fn() + 'static,
+) -> AnyElement {
     menu_row(icon(glyph, mark_size()).into_element(), label, false, false, None, on_select)
+}
+
+pub struct MenuAction<P1, P2> {
+    pub glyph: Icon,
+    pub label: P1,
+    pub on_select: P2,
+}
+
+impl<P1: IntoReactive<SharedString>, P2: Fn() + 'static> IntoElement for MenuAction<P1, P2> {
+    fn into_element(self) -> AnyElement {
+        menu_action(self.glyph, self.label, self.on_select).into_element()
+    }
 }
 
 /// A menu row offering a source of something, as a menu of where to add
 /// from lists them: its glyph, what it is, a line saying more under it, and
 /// its shortcut at the end, as the menu bar shows it.
-pub fn menu_source(
+pub(super) fn menu_source(
     glyph: Icon,
     label: impl IntoReactive<SharedString>,
     detail: impl IntoReactive<SharedString>,
@@ -240,7 +256,7 @@ pub fn menu_source(
             .px_3()
             .py_2()
             .min_h(px(44.0))
-            .rounded(tokens::radius_sm)
+            .rounded(|| tokens::corner(tokens::Corner::Small))
             .hover(|s| s.bg(|| theme().accent))
             .active(|s| s.bg(|| theme().input))
             .child(glyph)
@@ -255,7 +271,7 @@ pub fn menu_source(
         .gap_2p5()
         .px_2()
         .py_2()
-        .rounded(tokens::radius_sm)
+        .rounded(|| tokens::corner(tokens::Corner::Small))
         .hover(|s| s.bg(|| theme().accent))
         .focus(|s| s.bg(|| theme().accent))
         .active(|s| s.bg(|| theme().input))
@@ -266,11 +282,46 @@ pub fn menu_source(
         .into_element()
 }
 
-pub fn menu_danger(glyph: Icon, label: impl IntoReactive<SharedString>, on_select: impl Fn() + 'static) -> AnyElement {
+/// A menu row offering a source of something, as a menu of where to add
+/// from lists them: its glyph, what it is, a line saying more under it, and
+/// its shortcut at the end, as the menu bar shows it.
+pub struct MenuSource<P1, P2, P4> {
+    pub glyph: Icon,
+    pub label: P1,
+    pub detail: P2,
+    pub shortcut: &'static str,
+    pub on_select: P4,
+}
+
+impl<P1: IntoReactive<SharedString>, P2: IntoReactive<SharedString>, P4: Fn() + 'static> IntoElement
+    for MenuSource<P1, P2, P4>
+{
+    fn into_element(self) -> AnyElement {
+        menu_source(self.glyph, self.label, self.detail, self.shortcut, self.on_select).into_element()
+    }
+}
+
+pub(super) fn menu_danger(
+    glyph: Icon,
+    label: impl IntoReactive<SharedString>,
+    on_select: impl Fn() + 'static,
+) -> AnyElement {
     menu_row(icon(glyph, mark_size()).into_element(), label, true, false, None, on_select)
 }
 
-pub fn menu_toggle(
+pub struct MenuDanger<P1, P2> {
+    pub glyph: Icon,
+    pub label: P1,
+    pub on_select: P2,
+}
+
+impl<P1: IntoReactive<SharedString>, P2: Fn() + 'static> IntoElement for MenuDanger<P1, P2> {
+    fn into_element(self) -> AnyElement {
+        menu_danger(self.glyph, self.label, self.on_select).into_element()
+    }
+}
+
+pub(super) fn menu_toggle(
     label: impl IntoReactive<SharedString>,
     checked: impl Fn() -> bool + Copy + 'static,
     on_select: impl Fn() + 'static,
@@ -280,7 +331,21 @@ pub fn menu_toggle(
     menu_row(mark, label, false, true, Some(Box::new(checked)), on_select)
 }
 
-pub fn menu_choice(
+pub struct MenuToggle<P0, P1, P2> {
+    pub label: P0,
+    pub checked: P1,
+    pub on_select: P2,
+}
+
+impl<P0: IntoReactive<SharedString>, P1: Fn() -> bool + Copy + 'static, P2: Fn() + 'static> IntoElement
+    for MenuToggle<P0, P1, P2>
+{
+    fn into_element(self) -> AnyElement {
+        menu_toggle(self.label, self.checked, self.on_select).into_element()
+    }
+}
+
+pub(super) fn menu_choice(
     label: impl IntoReactive<SharedString>,
     checked: impl Fn() -> bool + Copy + 'static,
     on_select: impl Fn() + 'static,
@@ -290,14 +355,36 @@ pub fn menu_choice(
     menu_row(mark, label, false, false, Some(Box::new(checked)), on_select)
 }
 
-pub fn menu_divider() -> AnyElement {
+pub struct MenuChoice<P0, P1, P2> {
+    pub label: P0,
+    pub checked: P1,
+    pub on_select: P2,
+}
+
+impl<P0: IntoReactive<SharedString>, P1: Fn() -> bool + Copy + 'static, P2: Fn() + 'static> IntoElement
+    for MenuChoice<P0, P1, P2>
+{
+    fn into_element(self) -> AnyElement {
+        menu_choice(self.label, self.checked, self.on_select).into_element()
+    }
+}
+
+pub(super) fn menu_divider() -> AnyElement {
     if anchored() {
         return view().h(px(1.0)).my_1().bg(|| theme().border).into_element();
     }
     menu_separator().h(px(1.0)).my_1().bg(|| theme().border).into_element()
 }
 
-pub fn modal(
+pub struct MenuDivider;
+
+impl IntoElement for MenuDivider {
+    fn into_element(self) -> AnyElement {
+        menu_divider().into_element()
+    }
+}
+
+pub(super) fn modal(
     open: Signal<bool>,
     title: impl Fn() -> SharedString + Copy + 'static,
     width: f32,
@@ -307,7 +394,23 @@ pub fn modal(
     modal_sized(open, title, width, None, content, actions)
 }
 
-pub fn modal_sized(
+pub struct Modal<P1, P3, P4> {
+    pub open: Signal<bool>,
+    pub title: P1,
+    pub width: f32,
+    pub content: P3,
+    pub actions: P4,
+}
+
+impl<P1: Fn() -> SharedString + Copy + 'static, P3: Fn() -> AnyElement + 'static, P4: Fn() -> AnyElement + 'static>
+    IntoElement for Modal<P1, P3, P4>
+{
+    fn into_element(self) -> AnyElement {
+        modal(self.open, self.title, self.width, self.content, self.actions).into_element()
+    }
+}
+
+pub(super) fn modal_sized(
     open: Signal<bool>,
     title: impl Fn() -> SharedString + Copy + 'static,
     width: f32,
@@ -341,7 +444,7 @@ pub fn modal_sized(
                                 .text_color(|| theme().card_foreground)
                                 .role(AccessibilityRole::Header),
                         )
-                        .child(icon_button(Icon::Close, crate::state::tr("Close"), Size::Md, move || open.set(false))),
+                        .child(icon_button(Icon::Close, super::tr("Close"), Size::Md, move || open.set(false))),
                 )
                 .child(scroll().flex_1().child(view().px_5().py_4().gap_4().child(content())))
                 .child(
@@ -368,7 +471,7 @@ pub fn modal_sized(
             .items_center()
             .justify_center()
             .style_with(|s| if window().width.0 < 700.0 { s.p_3() } else { s.p_6() })
-            .bg(tokens::scrim)
+            .bg(|| tokens::ink(tokens::Ink::Scrim))
             .child(
                 view()
                     .bind_motion(&card)
@@ -379,7 +482,7 @@ pub fn modal_sized(
                         Some(height) => s.h(move || px(height.min(window().height.0 - 48.0))),
                         None => s,
                     })
-                    .rounded(tokens::radius_lg)
+                    .rounded(|| tokens::corner(tokens::Corner::Large))
                     .border_1()
                     .border_color(|| theme().border)
                     .bg(|| theme().card)
@@ -400,9 +503,7 @@ pub fn modal_sized(
                                     .text_color(|| theme().card_foreground)
                                     .role(AccessibilityRole::Header),
                             )
-                            .child(icon_button(Icon::Close, crate::state::tr("Close"), Size::Sm, move || {
-                                open.set(false)
-                            })),
+                            .child(icon_button(Icon::Close, super::tr("Close"), Size::Sm, move || open.set(false))),
                     )
                     .child(
                         scroll()
@@ -426,7 +527,24 @@ pub fn modal_sized(
     .into_element()
 }
 
-pub fn modal_actions(
+pub struct ModalSized<P1, P4, P5> {
+    pub open: Signal<bool>,
+    pub title: P1,
+    pub width: f32,
+    pub height: Option<f32>,
+    pub content: P4,
+    pub actions: P5,
+}
+
+impl<P1: Fn() -> SharedString + Copy + 'static, P4: Fn() -> AnyElement + 'static, P5: Fn() -> AnyElement + 'static>
+    IntoElement for ModalSized<P1, P4, P5>
+{
+    fn into_element(self) -> AnyElement {
+        modal_sized(self.open, self.title, self.width, self.height, self.content, self.actions).into_element()
+    }
+}
+
+pub(super) fn modal_actions(
     open: Signal<bool>,
     cancel: impl IntoReactive<SharedString>,
     commit: impl IntoReactive<SharedString>,
@@ -439,6 +557,22 @@ pub fn modal_actions(
         .child(button(Variant::Outline, Size::Md, cancel).on_press(move || open.set(false)))
         .child(button(Variant::Primary, Size::Md, commit).disabled(move || !enabled()).on_press(on_commit))
         .into_element()
+}
+
+pub struct ModalActions<P1, P2, P3, P4> {
+    pub open: Signal<bool>,
+    pub cancel: P1,
+    pub commit: P2,
+    pub enabled: P3,
+    pub on_commit: P4,
+}
+
+impl<P1: IntoReactive<SharedString>, P2: IntoReactive<SharedString>, P3: Fn() -> bool + 'static, P4: Fn() + 'static>
+    IntoElement for ModalActions<P1, P2, P3, P4>
+{
+    fn into_element(self) -> AnyElement {
+        modal_actions(self.open, self.cancel, self.commit, self.enabled, self.on_commit).into_element()
+    }
 }
 
 pub fn confirm_destructive(
@@ -520,7 +654,7 @@ fn push_toast(data: ToastData) {
     });
 }
 
-pub fn toast_host() -> impl IntoElement {
+pub(super) fn toast_host() -> impl IntoElement {
     let manager = stored(ToastManager::<u64, ToastData>::new(ToastMotion::sonner()));
     let shown = signal(Vec::new());
     let state = ToastStackState::new();
@@ -588,7 +722,7 @@ pub fn toast_host() -> impl IntoElement {
                     .gap_3()
                     .px_4()
                     .py_3()
-                    .rounded(tokens::radius_lg)
+                    .rounded(|| tokens::corner(tokens::Corner::Large))
                     .border_1()
                     .border_color(|| theme().border)
                     .bg(|| theme().popover)
@@ -601,7 +735,7 @@ pub fn toast_host() -> impl IntoElement {
                         view()
                             .text_color(move || match tone {
                                 Tone::Info => theme().muted_foreground,
-                                Tone::Success => tokens::success(),
+                                Tone::Success => tokens::ink(tokens::Ink::Success),
                                 Tone::Error => theme().destructive,
                             })
                             .child(icon(
@@ -623,4 +757,12 @@ pub fn toast_host() -> impl IntoElement {
                     }))
             },
         ))
+}
+
+pub struct ToastHost;
+
+impl IntoElement for ToastHost {
+    fn into_element(self) -> AnyElement {
+        toast_host().into_element()
+    }
 }

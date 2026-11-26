@@ -1,11 +1,6 @@
 use std::rc::Rc;
 
-use listenook_core::{
-    Job,
-    format::{clock, date, duration_words},
-    iso_from_millis,
-    podcast::Episode,
-};
+use listenook_core::{Job, format, iso_from_millis, podcast::Episode};
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
@@ -13,16 +8,19 @@ use super::{
     home_stats,
     library::{detail, kind_icon},
 };
+use crate::ui::{l, tr};
+use crate::work::{podcasts, transcribe};
 use crate::{
+    pages::chrome::{page_narrow, system_header, top_bar},
     platform,
-    services::{artwork, podcasts, transcribe},
-    shell::{page_narrow, system_header, top_bar},
-    state::{Filter, Place, Shelf, l, store, tr},
+    platform::file_url,
+    services::artwork,
+    state::{Filter, Place, Shelf, store},
     ui::{
-        self, Icon, Size, Tone, Variant, card, empty_state, focused_search_field, icon, icon_text_button, list_row,
+        self, EmptyState, Icon, Size, Tone, Variant, card, focused_search_field, icon, icon_text_button, list_row,
         progress_bar, toast_with_action, toggle_icon_button, tokens,
     },
-    util::{self, file_url},
+    work::import,
 };
 
 const CONTINUED: usize = 3;
@@ -104,8 +102,15 @@ impl Resume {
 
     fn meta(&self) -> String {
         let (position, duration) = self.progress();
-        let mut parts =
-            vec![if duration > 0 { format!("{} / {}", clock(position), clock(duration)) } else { clock(position) }];
+        let mut parts = vec![if duration > 0 {
+            format!(
+                "{} / {}",
+                format::shown(format::Shown::Clock(position)),
+                format::shown(format::Shown::Clock(duration))
+            )
+        } else {
+            format::shown(format::Shown::Clock(position))
+        }];
         match self {
             Resume::Episode { show, .. } | Resume::Recording { show: Some(show), .. } => parts.push(show.clone()),
             Resume::Recording { show: None, .. } => {}
@@ -115,7 +120,7 @@ impl Resume {
 
     fn resume(&self) {
         match self {
-            Resume::Recording { id, .. } => store().resume(id),
+            Resume::Recording { id, .. } => store().act(crate::state::Action::Resume(id)),
             Resume::Episode { episode, show, .. } => play_episode((**episode).clone(), show.clone()),
         }
     }
@@ -155,10 +160,9 @@ fn resumable() -> Vec<Resume> {
             })
         })
         .collect();
-    let feeds = store.podcast.feeds();
+    let feeds = crate::state::podcast::PodcastState::get().feeds();
     items.extend(
-        store
-            .podcast
+        crate::state::podcast::PodcastState::get()
             .listening()
             .into_iter()
             .filter(|entry| entry.is_continuable() && store.shelved(Shelf::Continue, &entry.episode_id))
@@ -183,13 +187,13 @@ fn resumable() -> Vec<Resume> {
 
 fn fresh_episodes() -> Vec<Fresh> {
     let store = store();
-    let followed: Vec<String> = store.podcast.followed().into_iter().map(|f| f.feed_url).collect();
-    let heard: Vec<String> = store.podcast.listening().into_iter().map(|entry| entry.episode_id).collect();
-    let kept: Vec<String> =
-        store.jobs().iter().filter_map(|job| job.podcast_provenance.as_ref().map(|p| p.episode_id.clone())).collect();
+    let followed: Vec<String> =
+        crate::state::podcast::PodcastState::get().followed().into_iter().map(|f| f.feed_url).collect();
+    let heard: Vec<String> =
+        crate::state::podcast::PodcastState::get().listening().into_iter().map(|entry| entry.episode_id).collect();
+    let kept: Vec<String> = store.jobs().iter().filter_map(|job| job.podcast().map(|p| p.episode_id)).collect();
     let since = iso_from_millis(now_ms() - NEW_FOR_DAYS * 24 * 60 * 60 * 1000).unwrap_or_default();
-    let mut fresh: Vec<Fresh> = store
-        .podcast
+    let mut fresh: Vec<Fresh> = crate::state::podcast::PodcastState::get()
         .feeds()
         .into_iter()
         .filter(|feed| followed.contains(&feed.feed_url))
@@ -214,10 +218,10 @@ fn fresh_episodes() -> Vec<Fresh> {
 }
 
 fn refresh_followed() {
-    let store = store();
     let stale = iso_from_millis(now_ms() - FEED_STALE_MS).unwrap_or_default();
-    for followed in store.podcast.followed() {
-        let fetched = store.podcast.feed(&followed.feed_url).and_then(|feed| feed.fetched_at);
+    for followed in crate::state::podcast::PodcastState::get().followed() {
+        let fetched =
+            crate::state::podcast::PodcastState::get().feed(&followed.feed_url).and_then(|feed| feed.fetched_at);
         if fetched.is_some_and(|at| at >= stale) {
             continue;
         }
@@ -227,22 +231,22 @@ fn refresh_followed() {
 
 fn play_episode(episode: Episode, show: String) {
     let store = store();
-    let player = store.podcast;
+    let player = crate::state::podcast::PodcastState::get();
     if player.is_current(&episode.id) {
-        player.set_paused(false);
+        player.act(crate::state::podcast::PodcastAction::SetPaused(false));
         return;
     }
     let local = podcasts::job_of(&episode.id)
         .and_then(|id| store.job_now(&id))
         .filter(|job| std::path::Path::new(&job.source_path).exists());
     let source = local.map_or_else(|| episode.enclosure_url.clone(), |job| file_url(&job.source_path));
-    player.play(episode, show.into(), source);
+    player.act(crate::state::podcast::PodcastAction::Play(episode, show.into(), source));
 }
 
 fn open_show(feed_url: &str) {
     let store = store();
-    store.go(Place::Podcasts);
-    store.podcast.open_show.set(Some(feed_url.to_owned()));
+    store.act(crate::state::Action::Go(Place::Podcasts));
+    crate::state::podcast::PodcastState::get().act(crate::state::podcast::PodcastAction::Show(feed_url));
 }
 
 pub(crate) fn home() -> impl IntoElement {
@@ -253,12 +257,12 @@ pub(crate) fn home() -> impl IntoElement {
     let recent = computed(move || {
         let mut jobs: Vec<Rc<Job>> =
             store.jobs().into_iter().filter(|job| store.shelved(Shelf::Recent, &job.id)).collect();
-        jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        jobs.sort_by(|a, b| b.cmp_added(a));
         jobs.truncate(RECENT);
         jobs
     });
     let processing = computed(move || store.jobs().into_iter().filter(|job| job.is_busy()).collect::<Vec<_>>());
-    let waiting = computed(move || store.jobs().iter().filter(|job| job.status.is_transcribable()).count());
+    let waiting = computed(move || store.jobs().iter().filter(|job| job.status().is_transcribable()).count());
     let fresh = computed(fresh_episodes);
     let found = computed(move || {
         let needle = query.with(|q| q.trim().to_lowercase());
@@ -282,7 +286,9 @@ pub(crate) fn home() -> impl IntoElement {
     on_key("mod+f", move |_| open.set(true));
     let searching = move || query.with(|q| !q.trim().is_empty());
     let bare = move || {
-        store.jobs().is_empty() && store.podcast.followed().is_empty() && continued.with(|items| items.is_empty())
+        store.jobs().is_empty()
+            && crate::state::podcast::PodcastState::get().followed().is_empty()
+            && continued.with(|items| items.is_empty())
     };
     view()
         .flex_1()
@@ -295,7 +301,12 @@ pub(crate) fn home() -> impl IntoElement {
                         .items_center()
                         .gap_1()
                         .window_drag(false)
-                        .child(ui::icon_button(Icon::Search, tr("Search"), Size::Sm, move || open.set(true)))
+                        .child(ui::IconButton {
+                            glyph: Icon::Search,
+                            name: tr("Search"),
+                            size: Size::Sm,
+                            on_press: move || open.set(true),
+                        })
                         .child(super::capture::add_button()),
                 )
             },
@@ -324,31 +335,33 @@ pub(crate) fn home() -> impl IntoElement {
             },
         ))
         .child(
-            when(bare, || {
-                empty_state(
-                    Icon::Wave,
-                    l("Start your library"),
-                    move || {
-                        tr(if platform::is_phone() {
-                            "Add audio or video, or follow a podcast. What you play shows up here."
-                        } else {
-                            "Drop audio or video here, or follow a podcast. What you play shows up here."
-                        })
-                    },
-                    view()
-                        .flex_row()
-                        .flex_wrap()
-                        .justify_center()
-                        .gap_2()
-                        .child(
-                            icon_text_button(Variant::Primary, Size::Md, Icon::Plus, l("Add media…"))
-                                .on_press(util::pick_media),
+            when(bare, || EmptyState {
+                glyph: Icon::Wave,
+                title: l("Start your library"),
+                description: move || {
+                    tr(if platform::is_phone() {
+                        "Add audio or video, or follow a podcast. What you play shows up here."
+                    } else {
+                        "Drop audio or video here, or follow a podcast. What you play shows up here."
+                    })
+                },
+                action: view()
+                    .flex_row()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap_2()
+                    .child(
+                        icon_text_button(Variant::Primary, Size::Md, Icon::Plus, l("Add media…"))
+                            .on_press(import::pick_media),
+                    )
+                    .child(when(super::capture::offered, || {
+                        icon_text_button(Variant::Outline, Size::Md, Icon::Record, l("Record what’s playing")).on_press(
+                            || {
+                                crate::work::capture::CaptureState::get()
+                                    .act(crate::work::capture::CaptureAction::Record)
+                            },
                         )
-                        .child(when(super::capture::offered, || {
-                            icon_text_button(Variant::Outline, Size::Md, Icon::Record, l("Record what’s playing"))
-                                .on_press(|| crate::state::store().capture.record())
-                        })),
-                )
+                    })),
             })
             .otherwise(move || {
                 scroll().flex_1().smooth_wheel(true).child(
@@ -396,7 +409,10 @@ pub(crate) fn home() -> impl IntoElement {
                                     move || {
                                         section(
                                             "Recently added",
-                                            Some(("See all", Rc::new(move || store.show(Filter::All)))),
+                                            Some((
+                                                "See all",
+                                                Rc::new(move || store.act(crate::state::Action::Show(Filter::All))),
+                                            )),
                                             recent_grid(recent),
                                         )
                                     },
@@ -406,7 +422,10 @@ pub(crate) fn home() -> impl IntoElement {
                                     move || {
                                         section(
                                             "New episodes",
-                                            Some(("Podcasts", Rc::new(move || store.go(Place::Podcasts)))),
+                                            Some((
+                                                "Podcasts",
+                                                Rc::new(move || store.act(crate::state::Action::Go(Place::Podcasts))),
+                                            )),
                                             fresh_list(fresh),
                                         )
                                     },
@@ -436,12 +455,14 @@ fn section(title: &'static str, link: Option<Link>, content: impl IntoElement) -
 
 fn take_off(shelf: Shelf, id: String) {
     let store = store();
-    store.shelve(shelf, &id, false);
+    store.act(crate::state::Action::Shelve(shelf, &id, false));
     let done = match shelf {
         Shelf::Continue => "Removed from Continue",
         Shelf::Recent => "Removed from Recently added",
     };
-    toast_with_action(Tone::Info, tr(done), tr("Undo"), move || store.shelve(shelf, &id, true));
+    toast_with_action(Tone::Info, tr(done), tr("Undo"), move || {
+        store.act(crate::state::Action::Shelve(shelf, &id, true))
+    });
 }
 
 fn removable(shelf: Shelf, id: String, target: impl IntoElement) -> impl IntoElement {
@@ -449,14 +470,18 @@ fn removable(shelf: Shelf, id: String, target: impl IntoElement) -> impl IntoEle
         Shelf::Continue => "Remove from Continue",
         Shelf::Recent => "Remove from Recently added",
     };
-    ui::context_menu(target).child(ui::menu_action(Icon::Close, l(label), move || take_off(shelf, id.clone())))
+    ui::context_menu(target).child(ui::MenuAction {
+        glyph: Icon::Close,
+        label: l(label),
+        on_select: move || take_off(shelf, id.clone()),
+    })
 }
 
 fn tile_icon(glyph: Icon, artwork: Art, size: f32) -> View {
     let tile = view()
         .size(px(size))
         .flex_shrink_0()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .overflow_hidden()
         .items_center()
         .justify_center()
@@ -623,9 +648,9 @@ fn processing_section(processing: Memo<Vec<Rc<Job>>>, waiting: Memo<usize>) -> i
             |job| job.id.clone(),
             move |job, _| {
                 let id = job.with_untracked(|job| job.id.clone());
-                let fraction = computed(move || store.job(&id).and_then(|job| job.progress.fraction.map(|f| f as f32)));
+                let fraction = computed(move || store.job(&id).and_then(|job| job.fraction()));
                 list_row(|| false)
-                    .on_press(move || store.show(Filter::InProgress))
+                    .on_press(move || store.act(crate::state::Action::Show(Filter::InProgress)))
                     .child(job.with_untracked(|job| job_tile(job)))
                     .child(
                         view()
@@ -710,9 +735,9 @@ fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
                                     job.with(|job| {
                                         let mut parts = Vec::new();
                                         if job.duration_ms() > 0 {
-                                            parts.push(clock(job.duration_ms()));
+                                            parts.push(format::shown(format::Shown::Clock(job.duration_ms())));
                                         }
-                                        parts.push(date(&job.created_at));
+                                        parts.push(format::shown(format::Shown::Date(&job.created_at)));
                                         parts.extend(podcasts::show_of(job));
                                         SharedString::from(parts.join(" · "))
                                     })
@@ -730,7 +755,7 @@ fn recent_grid(recent: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
 }
 
 fn fresh_list(fresh: Memo<Vec<Fresh>>) -> impl IntoElement {
-    let player = store().podcast;
+    let player = crate::state::podcast::PodcastState::get();
     view().child(each(
         move || fresh.get(),
         |fresh| fresh.episode.id.clone(),
@@ -742,10 +767,10 @@ fn fresh_list(fresh: Memo<Vec<Fresh>>) -> impl IntoElement {
             let mut parts = Vec::new();
             parts.push(show.clone());
             if let Some(published) = &episode.published_at {
-                parts.push(date(published));
+                parts.push(format::shown(format::Shown::Date(published)));
             }
             if let Some(duration) = episode.duration_ms {
-                parts.push(duration_words(duration));
+                parts.push(format::shown(format::Shown::Duration(duration)));
             }
             let title = episode.title.clone();
             view()
@@ -787,7 +812,7 @@ fn fresh_list(fresh: Memo<Vec<Fresh>>) -> impl IntoElement {
                     )
                     .on_press(move || {
                         if playing() {
-                            player.set_paused(true);
+                            player.act(crate::state::podcast::PodcastAction::SetPaused(true));
                         } else {
                             play_episode(episode.clone(), show.clone());
                         }

@@ -2,26 +2,29 @@ mod brief;
 mod practice;
 mod review;
 mod transcript;
+mod undo;
 
 use listenook_core::{
-    AiGenerationStatus, ContentMode, ExportOptions, Segment, TRANSLATION_LANGUAGES, TranslationStatus, caption, export,
-    format::track_position,
+    AiGenerationStatus, ContentMode, ExportOptions, Segment, TRANSLATION_LANGUAGES, TranslationStatus,
+    format::track_position, transcript::caption, transcript::export,
 };
 use nsh_base::theme;
 use nsh_core::{desktop::WindowMode, element::desktop::current_window, prelude::*};
 use review::{Practice, Review, Side};
 
 use super::dialogs::{ExportDialog, JobDialog, export_dialog, rename_dialog};
+use crate::ui::{error_text, l, tr};
+use crate::work::{ai, podcasts};
 use crate::{
-    services::{llm, media, playable, podcasts},
-    shell::{rate_menu, sleep_menu, time_text, top_bar},
-    state::{AiSetup, SettingsTab, error_text, l, store, tr},
+    pages::chrome::{rate_menu, sleep_menu, time_text, top_bar},
+    platform::file_url,
+    services::{media, playable},
+    state::{AiSetup, SettingsTab, store},
     ui::{
-        self, Icon, Size, Tone, Variant, button, checkbox, empty_state, field, hint, icon_button, menu, menu_action,
-        menu_divider, menu_toggle, modal, modal_actions, progress_bar, select, toast, toggle_icon_button,
+        self, EmptyState, Icon, IconButton, MenuAction, MenuDivider, MenuToggle, Modal, ModalActions, Size, Tone,
+        Variant, button, checkbox, field, hint, menu, progress_bar, select, toast, toggle_icon_button,
         tokens::{self, motion},
     },
-    util::file_url,
 };
 
 pub(crate) fn reader(id: &str) -> impl IntoElement {
@@ -32,12 +35,13 @@ pub(crate) fn reader(id: &str) -> impl IntoElement {
     view()
         .flex_1()
         .child(top_bar())
-        .child(empty_state(
-            Icon::Workspace,
-            l("This recording can’t be opened"),
-            l("Its media file is missing and it has no transcript."),
-            button(Variant::Default, Size::Md, l("Back to Library")).on_press(move || store.close_reader()),
-        ))
+        .child(EmptyState {
+            glyph: Icon::Workspace,
+            title: l("This recording can’t be opened"),
+            description: l("Its media file is missing and it has no transcript."),
+            action: button(Variant::Default, Size::Md, l("Back to Library"))
+                .on_press(move || store.act(crate::state::Action::CloseReader)),
+        })
         .into_element()
 }
 
@@ -51,7 +55,7 @@ const SOFT_KEYBOARD: f32 = 120.0;
 
 fn opened(id: &str) -> impl IntoElement {
     let review = Review::new(id);
-    let store = review.store;
+    let store = crate::state::store();
     effect(move || {
         let open = review.side.get() == Side::Brief;
         untracked(|| {
@@ -70,7 +74,7 @@ fn opened(id: &str) -> impl IntoElement {
     let waiting_for_source = signal(false);
     let loaded = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
     effect(move || {
-        let path = review.job.with(|job| job.as_ref().map(|job| job.source_path.clone()).unwrap_or_default());
+        let path = review.job_with(|job| job.as_ref().map(|job| job.source_path.clone()).unwrap_or_default());
         if loaded.borrow().as_deref() == Some(path.as_str()) {
             return;
         }
@@ -84,7 +88,7 @@ fn opened(id: &str) -> impl IntoElement {
             if !helps {
                 return;
             }
-            let job_id = review.job.with(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
+            let job_id = review.job_with(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
             if playable::made(&job_id, &path).is_none() {
                 toast(Tone::Info, tr("Preparing this recording for playback…"));
             }
@@ -98,18 +102,15 @@ fn opened(id: &str) -> impl IntoElement {
     });
     let plays_on_load = std::cell::Cell::new(store.take_play_on_open(id));
     let restore = move || {
-        if review.fullscreen.get_untracked() {
-            batch(|| {
-                review.fullscreen.set(false);
-                review.store.set_immersive(false);
-            });
+        if untracked(|| review.is_fullscreen()) {
+            batch(|| review.set_fullscreen(false));
         }
     };
     let leaving = std::rc::Rc::new(std::cell::Cell::new(false));
     {
         let leaving = leaving.clone();
         current_window().on_mode_change(move |mode, _| {
-            if mode != WindowMode::FullScreen && review.fullscreen.get_untracked() {
+            if mode != WindowMode::FullScreen && untracked(|| review.is_fullscreen()) {
                 leaving.set(true);
                 let leaving = leaving.clone();
                 spawn(async move {
@@ -148,7 +149,7 @@ fn opened(id: &str) -> impl IntoElement {
             let Some(index) = review.target_or_first() else {
                 return;
             };
-            let before = review.repeating.get_untracked();
+            let before = untracked(|| review.repeating());
             review.hold_repeat(index);
             held.replace(Some(Hold { before, last: now, repeated: false }));
             let held = held.clone();
@@ -177,11 +178,11 @@ fn opened(id: &str) -> impl IntoElement {
     }
     on_key("s", move |_| {
         let current = untracked(|| review.target()).and_then(|index| review.segment(index)).map(|segment| segment.id);
-        review.revealed.update(|revealed| *revealed = if revealed.is_some() { None } else { current });
+        review.toggle_revealed(current);
     });
     on_key("mod+f", move |_| {
         if untracked(|| review.has_text()) {
-            review.searching.set(true);
+            review.set_searching(true);
         }
     });
     on_key("mod+z", move |_| {
@@ -193,33 +194,33 @@ fn opened(id: &str) -> impl IntoElement {
         }
     });
     on_key("escape", move |_| {
-        if review.skip_from.get_untracked().is_some() {
-            review.skip_from.set(None);
-        } else if review.fullscreen.get_untracked() {
+        if untracked(|| review.is_picking_skip()) {
+            review.stop_picking_skip();
+        } else if untracked(|| review.is_fullscreen()) {
             set_fullscreen(review, false);
-        } else if review.editing.get_untracked().is_some() {
-            review.editing.set(None);
-        } else if review.searching.get_untracked() {
-            review.searching.set(false);
-        } else if review.repeating.get_untracked().is_some() && review.practice.get_untracked() != Practice::Mimic {
-            review.repeating.set(None);
-        } else if matches!(review.side.get_untracked(), Side::Practice | Side::Brief) {
-            if review.side.get_untracked() == Side::Practice {
+        } else if untracked(|| review.is_editing()) {
+            review.close_editor();
+        } else if untracked(|| review.is_searching()) {
+            review.set_searching(false);
+        } else if untracked(|| review.repeating()).is_some() && untracked(|| review.practice()) != Practice::Mimic {
+            review.stop_repeating();
+        } else if matches!(untracked(|| review.side()), Side::Practice | Side::Brief) {
+            if untracked(|| review.side()) == Side::Practice {
                 practice::stop(review);
             }
-            review.side.set(Side::None);
+            review.set_side(Side::None);
         } else {
-            store.close_reader();
+            store.act(crate::state::Action::CloseReader);
         }
     });
     let controls = std::rc::Rc::new(media::claim(move |command| match command {
         media::Command::Play => {
-            if review.paused.get_untracked() {
+            if untracked(|| review.is_paused()) {
                 review.toggle_play();
             }
         }
         media::Command::Pause => {
-            if !review.paused.get_untracked() {
+            if !untracked(|| review.is_paused()) {
                 review.toggle_play();
             }
         }
@@ -228,38 +229,38 @@ fn opened(id: &str) -> impl IntoElement {
         media::Command::Previous => review.step(-1),
         media::Command::Seek(position_ms) => review.seek(position_ms),
     }));
-    let sleeps = untracked(|| store.sleep.stops());
+    let sleeps = untracked(|| crate::state::sleep::SleepState::get().stops());
     effect(move || {
-        if store.sleep.stops() != sleeps {
+        if crate::state::sleep::SleepState::get().stops() != sleeps {
             untracked(|| review.pause());
         }
     });
     let beat = computed(move || review.position_ms.get() / 5000);
     effect(move || {
         beat.get();
-        let (title, artist) = review.job.with(|job| {
+        let (title, artist) = review.job_with(|job| {
             let title = job.as_ref().map(|job| job.title()).unwrap_or_default();
             (title, job.as_deref().and_then(podcasts::show_of).unwrap_or_else(|| "Listenook".into()))
         });
         controls.publish(Some(media::Now {
             title,
             artist,
-            position_ms: review.position_ms.get_untracked(),
+            position_ms: untracked(|| review.position_ms()),
             duration_ms: review.duration_ms.get(),
-            playing: !review.paused.get(),
+            playing: !review.is_paused(),
             rate: review.rate.get(),
         }));
     });
-    let last = std::rc::Rc::new(std::cell::Cell::new((review.position_ms.get_untracked(), 0_i64, false, true)));
+    let last = std::rc::Rc::new(std::cell::Cell::new((untracked(|| review.position_ms()), 0_i64, false, true)));
     {
         let last = last.clone();
         effect(move || {
-            last.set((review.position_ms.get(), review.duration_ms.get(), review.fullscreen.get(), review.paused.get()))
+            last.set((review.position_ms.get(), review.duration_ms.get(), review.fullscreen.get(), review.is_paused()))
         });
     }
     let remember = move |job_id: &str, position: i64, duration: i64| {
         let resume = position > 3000 && (duration <= 0 || position < duration - 3000);
-        store.remember_position(job_id, resume.then_some(position));
+        store.act(crate::state::Action::RememberPosition(job_id, resume.then_some(position)));
     };
     {
         let (job_id, pulse) = (id.to_owned(), computed(move || review.position_ms.get() / 15_000));
@@ -275,30 +276,23 @@ fn opened(id: &str) -> impl IntoElement {
     cleanup(move || {
         let (position, duration, fullscreen, paused) = last.get();
         remember(&job_id, position, duration);
-        store.left_reader(&job_id, paused);
+        store.act(crate::state::Action::LeftReader(&job_id, paused));
         if fullscreen {
-            store.set_immersive(false);
+            store.act(crate::state::Action::SetImmersive(false));
             current_window().set_mode(WindowMode::Normal);
         }
     });
     let (boost, volume) = (signal(false), signal(1.0_f32));
     let media = video(move || source.get())
-        .element_ref(&review.player)
-        .paused(move || review.paused.get() && !review.holding.get())
+        .element_ref(&review.player())
+        .paused(move || review.is_paused() && !review.holding.get())
         .muted(move || review.hushed.get())
         .volume(move || volume.get())
         .rate(move || if boost.get() { super::gestures::BOOST } else { review.rate.get() })
         .audio_session(|| nsh_core::AudioSession::Playback)
         .progress_interval(move || if review.ticks_often() { 50.0_f32 } else { 500.0 })
         .on_load(move |info: &VideoInfo| {
-            review.duration_ms.set((info.duration * 1000.0) as i64);
-            let start_at = review.position_ms.get_untracked();
-            if start_at > 0 {
-                review.player.seek(start_at as f64 / 1000.0);
-            }
-            if plays_on_load.replace(false) {
-                review.paused.set(false);
-            }
+            review.loaded((info.duration * 1000.0) as i64, plays_on_load.replace(false));
         })
         .on_progress(move |progress: &VideoProgress| {
             review.on_progress((progress.current_time * 1000.0) as i64, (progress.duration * 1000.0) as i64);
@@ -307,10 +301,10 @@ fn opened(id: &str) -> impl IntoElement {
         // before the player reports it, would otherwise be undone by the loop
         // starting over (seen on the iPad, Space pressed at the last word).
         // Played again, a recording paused at its end starts from the top.
-        .repeat(move || review.looping.get() && !review.paused.get())
+        .repeat(move || review.looping.get() && !review.is_paused())
         .on_end(move || {
-            if review.store.sleep.ended() || !review.looping.get_untracked() {
-                review.paused.set(true);
+            if crate::state::sleep::SleepState::get().ended() || !untracked(|| review.is_looping()) {
+                review.set_paused(true);
             }
         })
         .on_error(move |_: &str| {
@@ -323,7 +317,8 @@ fn opened(id: &str) -> impl IntoElement {
 
     let side = move || review.side.get();
     let dock = move || review.docked();
-    let narrow = move || (crate::shell::page_stacks() && side() != Side::None && !review.fullscreen.get()) || dock();
+    let narrow =
+        move || (crate::pages::chrome::page_stacks() && side() != Side::None && !review.fullscreen.get()) || dock();
     let on_top = move || {
         has_video && side() == Side::Video && !review.fullscreen.get() && (review.video_on_top.get() || narrow())
     };
@@ -338,12 +333,12 @@ fn opened(id: &str) -> impl IntoElement {
     let hud = signal(true);
     let wait = std::rc::Rc::new(std::cell::RefCell::new(None::<Spawned<()>>));
     let wake = move || {
-        if !review.fullscreen.get_untracked() {
+        if !untracked(|| review.is_fullscreen()) {
             return;
         }
         hud.set(true);
         let later = set_timeout(std::time::Duration::from_millis(2500), move || {
-            if !review.paused.get_untracked() {
+            if !untracked(|| review.is_paused()) {
                 hud.try_set(false);
             }
         });
@@ -354,7 +349,7 @@ fn opened(id: &str) -> impl IntoElement {
     effect({
         let wake = wake.clone();
         move || {
-            let _ = (review.fullscreen.get(), review.paused.get());
+            let _ = (review.fullscreen.get(), review.is_paused());
             hud.set(true);
             untracked(&wake);
         }
@@ -372,7 +367,9 @@ fn opened(id: &str) -> impl IntoElement {
                 };
                 s.w_full().h(px(height))
             }
-            (false, Side::Video) if narrow() => s.w_full().h(px(crate::shell::page_width() * 9.0 / 16.0)).border_b_1(),
+            (false, Side::Video) if narrow() => {
+                s.w_full().h(px(crate::pages::chrome::page_width() * 9.0 / 16.0)).border_b_1()
+            }
             (false, _) if narrow() => s.w_full().h(px(window().height.0 * 0.45)).border_t_1(),
             (false, _) if on_top() => s.w_full().h(px(review.video_height.get())).border_b_1(),
             (false, _) => s.w(px(review.side_width.get())).border_l_1(),
@@ -381,7 +378,7 @@ fn opened(id: &str) -> impl IntoElement {
         .overflow_hidden()
         .border_color(|| theme().border)
         .bg(move || match (review.fullscreen.get(), dock()) {
-            (true, _) => tokens::stage(),
+            (true, _) => tokens::ink(tokens::Ink::Stage),
             (false, true) => theme().background,
             (false, false) => theme().card,
         })
@@ -393,7 +390,11 @@ fn opened(id: &str) -> impl IntoElement {
                 .flex_1()
                 .child(
                     view()
-                        .bg(move || if review.fullscreen.get() { tokens::stage() } else { theme().muted })
+                        .bg(
+                            move || {
+                                if review.fullscreen.get() { tokens::ink(tokens::Ink::Stage) } else { theme().muted }
+                            },
+                        )
                         .style_with(move |s| match (has_video, side(), review.fullscreen.get()) {
                             (true, Side::Video, _) | (true, _, true) => s.flex_1(),
                             _ => s.h(px(1.0)).opacity(0.0),
@@ -403,7 +404,7 @@ fn opened(id: &str) -> impl IntoElement {
                         .child(when(
                             move || {
                                 crate::platform::is_phone()
-                                    && crate::shell::page_narrow()
+                                    && crate::pages::chrome::page_narrow()
                                     && side() == Side::Video
                                     && !review.fullscreen.get()
                             },
@@ -417,14 +418,14 @@ fn opened(id: &str) -> impl IntoElement {
                                     .pt_3()
                                     .pb_8()
                                     .bg_linear_to_b()
-                                    .gradient_from(|| tokens::stage().opacity(0.6))
-                                    .gradient_to(|| tokens::stage().opacity(0.0))
-                                    .opacity(move || if review.paused.get() { 1.0_f32 } else { 0.0 })
+                                    .gradient_from(|| tokens::ink(tokens::Ink::Stage).opacity(0.6))
+                                    .gradient_to(|| tokens::ink(tokens::Ink::Stage).opacity(0.0))
+                                    .opacity(move || if review.is_paused() { 1.0_f32 } else { 0.0 })
                                     .transition_opacity()
                                     .duration(motion::BASE)
                                     .child(
                                         text(move || {
-                                            review.job.with(|job| {
+                                            review.job_with(|job| {
                                                 job.as_ref()
                                                     .map(|job| SharedString::from(job.title()))
                                                     .unwrap_or_default()
@@ -450,11 +451,11 @@ fn opened(id: &str) -> impl IntoElement {
                                     let wake = wake.clone();
                                     // Full screen a tap shows or hides the controls; beside the transcript it plays or pauses.
                                     super::gestures::layer(super::gestures::Video {
-                                        position: std::rc::Rc::new(move || review.position_ms.get_untracked()),
-                                        duration: std::rc::Rc::new(move || review.duration_ms.get_untracked()),
+                                        position: std::rc::Rc::new(move || untracked(|| review.position_ms())),
+                                        duration: std::rc::Rc::new(move || untracked(|| review.duration_ms())),
                                         seek: std::rc::Rc::new(move |ms| review.seek(ms)),
                                         tap: std::rc::Rc::new(move || {
-                                            if !review.fullscreen.get_untracked() {
+                                            if !untracked(|| review.is_fullscreen()) {
                                                 review.toggle_play();
                                             } else if hud.get_untracked() {
                                                 hud.set(false);
@@ -527,41 +528,36 @@ fn opened(id: &str) -> impl IntoElement {
 /// way to make one. The recording plays meanwhile, and the transcript takes
 /// this place once it is done.
 fn untranscribed(review: Review) -> impl IntoElement {
-    let status = move || review.job.with(|job| job.as_ref().map(|job| job.status).unwrap_or_default());
+    let status = move || review.job_with(|job| job.as_ref().map(|job| job.status).unwrap_or_default());
     let active = move || status().is_active();
     let description = move || -> SharedString {
-        review.job.with(|job| {
+        review.job_with(|job| {
             let Some(job) = job.as_ref() else {
                 return SharedString::default();
             };
-            if job.status.is_transcribable() {
+            if job.status().is_transcribable() {
                 tr("Transcribe it to read along, practice sentence by sentence and get an AI Brief.")
-            } else if let Some(code) = job.error_code.as_deref().filter(|_| job.status.is_retryable()) {
+            } else if let Some(code) = job.error_code.as_deref().filter(|_| job.status().is_retryable()) {
                 error_text(code)
             } else {
                 tr(listenook_core::l10n::status_label(job.status))
             }
         })
     };
-    empty_state(
-        Icon::Workspace,
-        l("No transcript yet"),
+    EmptyState {
+        glyph: Icon::Workspace,
+        title: l("No transcript yet"),
         description,
-        view()
+        action: view()
             .w(px(240.0))
             .items_center()
             .gap_3()
-            .child(when(active, move || {
-                progress_bar(move || {
-                    review.job.with(|job| job.as_ref()?.progress.fraction.map(|fraction| fraction as f32))
-                })
-                .w_full()
-            }))
+            .child(when(active, move || progress_bar(move || review.job_with(|job| job.as_ref()?.fraction())).w_full()))
             .child(when(
                 move || status().is_transcribable(),
                 move || {
                     button(Variant::Default, Size::Md, l("Transcribe"))
-                        .on_press(move || crate::services::transcribe::start(&review.id()))
+                        .on_press(move || crate::work::transcribe::start(&review.id()))
                 },
             ))
             .child(when(
@@ -572,16 +568,16 @@ fn untranscribed(review: Review) -> impl IntoElement {
             ))
             .child(when(active, move || {
                 button(Variant::Ghost, Size::Sm, l("Cancel"))
-                    .on_press(move || crate::services::transcribe::cancel(&review.id()))
+                    .on_press(move || crate::work::transcribe::cancel(&review.id()))
             })),
-    )
+    }
 }
 
 /// ⌘B bolds the selected words: bound only while words are selected, so
 /// with none it shows or hides the sidebar, as everywhere else.
 fn highlight_key(review: Review) -> impl IntoElement {
     when(
-        move || review.selection.with(Option::is_some),
+        move || review.has_selection(),
         move || {
             on_key("mod+b", move |_| review.toggle_highlight());
             view().absolute()
@@ -590,55 +586,58 @@ fn highlight_key(review: Review) -> impl IntoElement {
 }
 
 fn has_translation(review: Review) -> bool {
-    review.job.with(|job| {
-        job.as_ref()
-            .and_then(|job| job.document.as_ref())
-            .is_some_and(|d| d.segments.iter().any(Segment::has_translation))
+    review.job_with(|job| {
+        job.as_ref().and_then(|job| job.document()).is_some_and(|d| d.segments.iter().any(Segment::has_translation))
     })
 }
 
 fn side_toggle(review: Review, side: Side, glyph: Icon, name: &'static str) -> impl IntoElement {
     let on = move || review.side.get() == side;
-    view().window_drag(false).child(ui::toggle_button(Variant::Ghost, glyph, tr(name), Size::Sm, on, move || {
-        let closing = untracked(on);
-        let next = if closing { Side::None } else { side };
-        if side == Side::Video {
-            review.store.update_settings(|s| {
-                s.extra.insert("reader_video_wanted".into(), (!closing).into());
-            });
-        }
-        match next {
-            Side::Practice => practice::start(review, practice::last_mode(review)),
-            _ => {
-                if review.side.get_untracked() == Side::Practice {
-                    practice::stop(review);
-                }
-                review.side.set(next);
+    view().window_drag(false).child(ui::ToggleButton {
+        variant: Variant::Ghost,
+        glyph,
+        name: tr(name),
+        size: Size::Sm,
+        on,
+        on_press: move || {
+            let closing = untracked(on);
+            let next = if closing { Side::None } else { side };
+            if side == Side::Video {
+                crate::state::store().update_settings(|s| {
+                    s.extra.insert("reader_video_wanted".into(), (!closing).into());
+                });
             }
-        }
-    }))
+            match next {
+                Side::Practice => practice::start(review, practice::last_mode()),
+                _ => {
+                    if untracked(|| review.side()) == Side::Practice {
+                        practice::stop(review);
+                    }
+                    review.set_side(next);
+                }
+            }
+        },
+    })
 }
 
 fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Signal<bool>) -> AnyElement {
-    let store = review.store;
+    let store = crate::state::store();
     let title =
-        move || review.job.with(|job| job.as_ref().map(|job| SharedString::from(job.title())).unwrap_or_default());
+        move || review.job_with(|job| job.as_ref().map(|job| SharedString::from(job.title())).unwrap_or_default());
     let mode_label = move || match review.mode.get() {
         ContentMode::Original => tr("Original"),
         ContentMode::Translated => tr("Translated"),
         ContentMode::Bilingual => tr("Bilingual"),
     };
-    let mode_item = move |mode: ContentMode, label: &'static str| {
-        ui::menu_choice(
-            l(label),
-            move || review.mode.get() == mode,
-            move || {
-                review.mode.set(mode);
-                store.update_settings(|s| {
-                    s.extra.insert("reader_content_mode".into(), mode.as_str().into());
-                });
-            },
-        )
+    let mode_item = move |mode: ContentMode, label: &'static str| ui::MenuChoice {
+        label: l(label),
+        checked: move || review.mode.get() == mode,
+        on_select: move || {
+            review.set_mode(mode);
+            store.update_settings(|s| {
+                s.extra.insert("reader_content_mode".into(), mode.as_str().into());
+            });
+        },
     };
     let touch = crate::platform::is_phone();
     let lead = if touch {
@@ -650,11 +649,12 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
             .flex_row()
             .items_center()
             .gap_2()
-            .child(
-                view()
-                    .window_drag(false)
-                    .child(icon_button(Icon::ChevronLeft, tr("Back"), Size::Sm, move || store.close_reader())),
-            )
+            .child(view().window_drag(false).child(IconButton {
+                glyph: Icon::ChevronLeft,
+                name: tr("Back"),
+                size: Size::Sm,
+                on_press: move || store.act(crate::state::Action::CloseReader),
+            }))
             .child(
                 text(title)
                     .text_base()
@@ -675,7 +675,7 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
             .gap_1()
             .px_1p5()
             .rounded_full()
-            .style_with(tokens::bar_glass)
+            .style_with(|s| tokens::surface(tokens::Surface::BarGlass, s))
     } else {
         top_bar().child(lead)
     };
@@ -704,33 +704,33 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                     .flex_row()
                     .items_center()
                     .gap_1()
-                    .child(view().window_drag(false).child(icon_button(
-                        Icon::Search,
-                        tr("Search transcript"),
-                        Size::Sm,
-                        move || review.searching.set(!review.searching.get_untracked()),
-                    )))
+                    .child(view().window_drag(false).child(IconButton {
+                        glyph: Icon::Search,
+                        name: tr("Search transcript"),
+                        size: Size::Sm,
+                        on_press: move || review.set_searching(!untracked(|| review.is_searching())),
+                    }))
                     .child(side_toggle(review, Side::Practice, Icon::Practice, "Practice"))
                     .child(side_toggle(review, Side::Brief, Icon::Sparkles, "AI Brief"))
             },
         ))
         .child(when(move || review.has_video, move || side_toggle(review, Side::Video, Icon::Film, "Video")))
         .child(when(
-            move || review.has_video && review.side.get() == Side::Video && !crate::shell::page_stacks(),
+            move || review.has_video && review.side.get() == Side::Video && !crate::pages::chrome::page_stacks(),
             move || {
                 view().window_drag(false).child(dynamic(move || {
                     let on_top = review.video_on_top.get();
-                    icon_button(
-                        if on_top { Icon::Columns } else { Icon::Rows },
-                        tr(if on_top { "Video at the side" } else { "Video on top" }),
-                        Size::Sm,
-                        move || {
-                            review.video_on_top.set(!on_top);
-                            review.store.update_settings(|s| {
+                    IconButton {
+                        glyph: if on_top { Icon::Columns } else { Icon::Rows },
+                        name: tr(if on_top { "Video at the side" } else { "Video on top" }),
+                        size: Size::Sm,
+                        on_press: move || {
+                            review.set_video_on_top(!on_top);
+                            crate::state::store().update_settings(|s| {
                                 s.extra.insert("reader_video_on_top".into(), (!on_top).into());
                             });
                         },
-                    )
+                    }
                 }))
             },
         ))
@@ -742,95 +742,112 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                         review.has_text()
                             && !(review.side.get() == Side::Practice && review.practice.get() == Practice::Dictation)
                     },
-                    move || {
-                        menu_toggle(
-                            l("Blind listening"),
-                            move || review.blind_listening(),
-                            move || {
-                                store.update_settings(|s| s.blind_listening_enabled = !s.blind_listening_enabled);
-                                review.revealed.set(None);
-                            },
-                        )
+                    move || MenuToggle {
+                        label: l("Blind listening"),
+                        checked: move || review.blind_listening(),
+                        on_select: move || {
+                            store.update_settings(|s| s.blind_listening_enabled = !s.blind_listening_enabled);
+                            review.hide_revealed();
+                        },
                     },
                 ))
                 .child(when(
                     move || review.has_text(),
-                    move || {
-                        menu_toggle(
-                            l("Speaker labels"),
-                            move || store.setting(|s| s.show_speakers),
-                            move || store.update_settings(|s| s.show_speakers = !s.show_speakers),
-                        )
+                    move || MenuToggle {
+                        label: l("Speaker labels"),
+                        checked: move || store.setting(|s| s.show_speakers),
+                        on_select: move || store.update_settings(|s| s.show_speakers = !s.show_speakers),
                     },
                 ))
                 .child(when(
                     move || review.has_text(),
-                    move || {
-                        menu_toggle(
-                            l("Timestamps"),
-                            move || store.setting(|s| s.show_timestamps),
-                            move || store.update_settings(|s| s.show_timestamps = !s.show_timestamps),
-                        )
+                    move || MenuToggle {
+                        label: l("Timestamps"),
+                        checked: move || store.setting(|s| s.show_timestamps),
+                        on_select: move || store.update_settings(|s| s.show_timestamps = !s.show_timestamps),
                     },
                 ))
-                .child(when(move || review.has_text(), menu_divider))
+                .child(when(move || review.has_text(), || MenuDivider))
                 .child(when(
                     move || review.has_text(),
-                    move || menu_action(Icon::Languages, l("Translate…"), move || translate.set(true)),
+                    move || MenuAction {
+                        glyph: Icon::Languages,
+                        label: l("Translate…"),
+                        on_select: move || translate.set(true),
+                    },
                 ))
                 .child(when(
                     move || review.has_text(),
-                    move || {
-                        menu_action(Icon::Scissors, l("Find ads"), move || {
+                    move || MenuAction {
+                        glyph: Icon::Scissors,
+                        label: l("Find ads"),
+                        on_select: move || {
                             if store.ai_ready() {
-                                llm::start_ad_scan(&review.id());
+                                ai::start_ad_scan(&review.id());
                             } else {
                                 toast(Tone::Info, tr("Set up AI in Settings to find ads."));
-                                store.open_settings(SettingsTab::Ai);
+                                store.act(crate::state::Action::OpenSettings(SettingsTab::Ai));
                             }
-                        })
+                        },
                     },
                 ))
                 .child(when(
                     move || review.has_text(),
-                    move || {
-                        menu_action(Icon::Copy, l("Copy transcript"), move || {
+                    move || MenuAction {
+                        glyph: Icon::Copy,
+                        label: l("Copy transcript"),
+                        on_select: move || {
                             if let Some(job) = store.job_now(&review.id()) {
                                 let settings = store.settings();
                                 let options = ExportOptions {
                                     show_speakers: settings.show_speakers,
                                     show_timestamps: settings.show_timestamps,
-                                    content_mode: review.mode.get_untracked(),
+                                    content_mode: untracked(|| review.mode()),
                                     locale_code: store.lang().code().into(),
                                     ..ExportOptions::default()
                                 };
-                                copy(export::export_transcript(&job, &options), Some("Transcript copied"));
+                                copy(
+                                    export::export(&job, export::Export::Transcript(&options)).contents,
+                                    Some("Transcript copied"),
+                                );
                             }
-                        })
+                        },
                     },
                 ))
                 .child(when(
                     move || review.has_text(),
-                    move || menu_action(Icon::Export, l("Export…"), move || export.show(&review.id())),
+                    move || MenuAction {
+                        glyph: Icon::Export,
+                        label: l("Export…"),
+                        on_select: move || export.show(&review.id()),
+                    },
                 ))
-                .child(menu_action(Icon::Pencil, l("Rename…"), move || rename.show(&review.id())))
+                .child(MenuAction {
+                    glyph: Icon::Pencil,
+                    label: l("Rename…"),
+                    on_select: move || rename.show(&review.id()),
+                })
                 .child(when(
-                    move || review.job.with(|job| job.as_deref().is_some_and(super::library::can_transcribe_again)),
-                    move || {
-                        menu_action(Icon::Transcribe, l("Transcribe again…"), move || {
-                            super::library::transcribe_again(&review.id())
-                        })
+                    move || review.job_with(|job| job.as_deref().is_some_and(super::library::can_transcribe_again)),
+                    move || MenuAction {
+                        glyph: Icon::Transcribe,
+                        label: l("Transcribe again…"),
+                        on_select: move || super::library::transcribe_again(&review.id()),
                     },
                 ))
                 .child(when(
                     || !crate::platform::is_phone() || cfg!(target_os = "ios"),
-                    move || menu_action(Icon::Refresh, l("Relink media…"), move || crate::util::relink(review.id())),
+                    move || MenuAction {
+                        glyph: Icon::Refresh,
+                        label: l("Relink media…"),
+                        on_select: move || crate::work::import::relink(review.id()),
+                    },
                 ))
         }));
     if !touch {
         return bar.into_element();
     }
-    let tight = crate::shell::page_narrow;
+    let tight = crate::pages::chrome::page_narrow;
     let pictured = move || review.has_video && review.side.get() == Side::Video;
     view()
         .border_b_1()
@@ -841,10 +858,18 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
                 .items_center()
                 .gap_2()
                 .p_2()
-                .child(ui::bar_button(Icon::Back, tr("Back"), move || store.close_reader()))
+                .child(ui::BarButton {
+                    glyph: Icon::Back,
+                    name: tr("Back"),
+                    on_press: move || store.act(crate::state::Action::CloseReader),
+                })
                 .child(when(
                     || !crate::platform::compact(),
-                    move || ui::bar_button(Icon::Sidebar, tr("Sidebar"), move || store.toggle_sidebar()),
+                    move || ui::BarButton {
+                        glyph: Icon::Sidebar,
+                        name: tr("Sidebar"),
+                        on_press: move || store.act(crate::state::Action::ToggleSidebar),
+                    },
                 ))
                 .child(when(tight, || view().flex_1()).otherwise(move || {
                     text(title)
@@ -878,8 +903,8 @@ fn header(review: Review, export: ExportDialog, rename: JobDialog, translate: Si
 /// While a recording that has a transcript is transcribed again, or its words are timed: what it
 /// is doing, how far it is, and a way to stop it. The transcript it has stays readable meanwhile.
 fn transcribe_strip(review: Review) -> impl IntoElement {
-    let job = move |f: fn(&listenook_core::Job) -> bool| review.job.with(|job| job.as_deref().is_some_and(f));
-    let visible = move || job(|job| job.status.is_active() && job.has_transcript());
+    let job = move |f: fn(&listenook_core::Job) -> bool| review.job_with(|job| job.as_deref().is_some_and(f));
+    let visible = move || job(|job| job.status().is_active() && job.has_transcript());
     when(visible, move || {
         view()
             .flex_row()
@@ -892,26 +917,24 @@ fn transcribe_strip(review: Review) -> impl IntoElement {
             .bg(|| theme().muted)
             .child(
                 text(move || {
-                    review.job.with(|job| {
+                    review.job_with(|job| {
                         job.as_ref().map(|job| tr(listenook_core::l10n::status_label(job.status))).unwrap_or_default()
                     })
                 })
                 .text_xs()
                 .text_color(|| theme().muted_foreground),
             )
-            .child(
-                progress_bar(move || review.job.with(|job| job.as_ref()?.progress.fraction.map(|f| f as f32))).flex_1(),
-            )
+            .child(progress_bar(move || review.job_with(|job| job.as_ref()?.fraction())).flex_1())
             .child(
                 button(Variant::Ghost, Size::Sm, l("Cancel"))
-                    .on_press(move || crate::services::transcribe::cancel(&review.id())),
+                    .on_press(move || crate::work::transcribe::cancel(&review.id())),
             )
     })
 }
 
 fn translation_strip(review: Review) -> impl IntoElement {
     let state =
-        move || review.job.with(|job| job.as_ref().map(|job| job.translation_state.clone()).unwrap_or_default());
+        move || review.job_with(|job| job.as_ref().map(|job| job.translation_state.clone()).unwrap_or_default());
     let visible = move || !matches!(state().status, TranslationStatus::Idle | TranslationStatus::Completed);
     when(visible, move || {
         let running = move || state().status == TranslationStatus::Translating;
@@ -951,15 +974,11 @@ fn translation_strip(review: Review) -> impl IntoElement {
             }))
             .child(
                 when(running, move || {
-                    button(Variant::Ghost, Size::Sm, l("Cancel"))
-                        .on_press(move || llm::cancel_translation(&review.id()))
+                    button(Variant::Ghost, Size::Sm, l("Cancel")).on_press(move || ai::cancel_translation(&review.id()))
                 })
                 .otherwise(move || {
                     let dismiss = move || {
-                        store().update_job(&review.id(), |job| {
-                            job.translation_state.status = TranslationStatus::Idle;
-                            job.translation_state.error_code = None;
-                        });
+                        store().update_job(&review.id(), |job| job.apply(listenook_core::Change::DismissTranslation));
                     };
                     view()
                         .flex_1()
@@ -968,11 +987,11 @@ fn translation_strip(review: Review) -> impl IntoElement {
                         .gap_2()
                         // A missing or rejected key is put right in Settings, not by trying again.
                         .child(when(
-                            move || state().error_code.as_deref().is_some_and(llm::needs_setup),
+                            move || state().error_code.as_deref().is_some_and(ai::needs_setup),
                             move || {
                                 button(Variant::Outline, Size::Sm, l("Settings")).on_press(move || {
                                     dismiss();
-                                    store().open_settings(SettingsTab::Ai);
+                                    store().act(crate::state::Action::OpenSettings(SettingsTab::Ai));
                                 })
                             },
                         ))
@@ -985,12 +1004,12 @@ fn translation_strip(review: Review) -> impl IntoElement {
 /// While a stretch to skip is picked: what to do next, and a way out.
 fn skip_strip(review: Review) -> impl IntoElement {
     when(
-        move || review.skip_from.with(Option::is_some),
+        move || review.is_picking_skip(),
         move || {
             on_key_with(
                 "escape",
                 KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() },
-                move |_| review.skip_from.set(None),
+                move |_| review.stop_picking_skip(),
             );
             view()
                 .flex_row()
@@ -1006,26 +1025,26 @@ fn skip_strip(review: Review) -> impl IntoElement {
                 .child(
                     text(l("Now tap the last sentence to skip.")).text_sm().flex_1().text_color(|| theme().foreground),
                 )
-                .child(button(Variant::Ghost, Size::Sm, l("Cancel")).on_press(move || review.skip_from.set(None)))
+                .child(button(Variant::Ghost, Size::Sm, l("Cancel")).on_press(move || review.stop_picking_skip()))
         },
     )
 }
 
 /// The search for ads: while it runs, and what it found, to skip or not.
 fn ad_strip(review: Review) -> impl IntoElement {
-    let scan = move || review.job.with(|job| job.as_ref().map(|job| job.ad_scan.clone()).unwrap_or_default());
+    let scan = move || review.job_with(|job| job.as_ref().map(|job| job.ad_scan.clone()).unwrap_or_default());
     let visible = move || !scan().is_idle();
     when(visible, move || {
         let running = move || scan().status == AiGenerationStatus::Generating;
         let found = move || scan().found.len();
         let length = move || {
             let scan = scan();
-            review.job.with(|job| {
-                let document = job.as_ref()?.document.as_ref()?;
+            review.job_with(|job| {
+                let document = job.as_ref()?.document()?;
                 Some(
                     scan.found
                         .iter()
-                        .filter_map(|finding| listenook_core::ads::locate(finding, document))
+                        .filter_map(|finding| listenook_core::ai::ads::locate(finding, &document))
                         .map(|(first, last)| document.span_ms(first, last))
                         .sum::<i64>(),
                 )
@@ -1059,7 +1078,9 @@ fn ad_strip(review: Review) -> impl IntoElement {
                             "{} {} · {}",
                             tr("Ads found:"),
                             scan.found.len(),
-                            listenook_core::format::clock(length().unwrap_or_default())
+                            listenook_core::format::shown(listenook_core::format::Shown::Clock(
+                                length().unwrap_or_default()
+                            ))
                         )
                         .into(),
                     }
@@ -1077,7 +1098,7 @@ fn ad_strip(review: Review) -> impl IntoElement {
             .child(view().flex_1())
             .child(
                 when(running, move || {
-                    button(Variant::Ghost, Size::Sm, l("Cancel")).on_press(move || llm::cancel_ad_scan(&review.id()))
+                    button(Variant::Ghost, Size::Sm, l("Cancel")).on_press(move || ai::cancel_ad_scan(&review.id()))
                 })
                 .otherwise(move || {
                     view()
@@ -1105,7 +1126,7 @@ fn ad_strip(review: Review) -> impl IntoElement {
 }
 
 fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
-    let active = move || !review.paused.get() || review.waiting.get();
+    let active = move || !review.is_paused() || review.waiting.get();
     let variant = move |picture: bool| if picture { Variant::Picture } else { Variant::Ghost };
     let on_track = computed(move || track_position(review.position_ms.get(), review.duration_ms.get()));
     let second = computed(move || review.position_ms.get() / 1000 * 1000);
@@ -1114,10 +1135,10 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             tr("Position"),
             move || review.scrub.get().unwrap_or_else(|| on_track.get()) as f64,
             move || review.duration_ms.get() as f64,
-            move |value| review.scrub.set(Some(value as i64)),
+            move |value| review.scrub_to(Some(value as i64)),
             move |value| {
                 review.seek(value as i64);
-                review.scrub.set(None);
+                review.scrub_to(None);
             },
         )
         .flex_1()
@@ -1132,7 +1153,13 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             .flex_row()
             .items_center()
             .gap_3()
-            .child(ui::icon_button_as(variant(picture), back, tr(back_name), size, move || review.step(-1)))
+            .child(ui::IconButtonAs {
+                variant: variant(picture),
+                glyph: back,
+                name: tr(back_name),
+                size,
+                on_press: move || review.step(-1),
+            })
             .child(
                 toggle_icon_button(
                     move || if active() { Icon::Pause } else { Icon::Play },
@@ -1142,7 +1169,13 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                 )
                 .on_press(move || review.toggle_play()),
             )
-            .child(ui::icon_button_as(variant(picture), on, tr(on_name), size, move || review.step(1)))
+            .child(ui::IconButtonAs {
+                variant: variant(picture),
+                glyph: on,
+                name: tr(on_name),
+                size,
+                on_press: move || review.step(1),
+            })
     };
     let on_picture = |time: Text, picture: bool| {
         if picture { time.text_color(|| theme().foreground.dark.opacity(0.8)) } else { time }
@@ -1150,15 +1183,13 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
     let at =
         move |picture: bool| on_picture(time_text(move || review.scrub.get().unwrap_or_else(|| second.get())), picture);
     let length = move |picture: bool| on_picture(time_text(move || review.duration_ms.get()), picture);
-    let repeat = move |picture: bool| {
-        ui::toggle_button(
-            variant(picture),
-            Icon::Repeat,
-            tr("Repeat all"),
-            Size::Sm,
-            move || review.looping.get(),
-            move || review.looping.set(!review.looping.get_untracked()),
-        )
+    let repeat = move |picture: bool| ui::ToggleButton {
+        variant: variant(picture),
+        glyph: Icon::Repeat,
+        name: tr("Repeat all"),
+        size: Size::Sm,
+        on: move || review.looping.get(),
+        on_press: move || review.toggle_looping(),
     };
     let sleep = move |picture: bool| sleep_menu(variant(picture), "When this recording ends");
     let rate = move |picture: bool| {
@@ -1166,8 +1197,8 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             variant(picture),
             move || review.rate.get(),
             move |rate| {
-                review.rate.set(rate);
-                store().save_rate("playback_rate", rate);
+                review.set_rate(rate);
+                store().act(crate::state::Action::SaveRate("playback_rate", rate));
             },
         )
     };
@@ -1176,11 +1207,22 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             move || review.has_video,
             move || {
                 if picture {
-                    ui::icon_button_as(Variant::Picture, Icon::Minimize, tr("Exit full screen"), Size::Sm, move || {
-                        set_fullscreen(review, false)
-                    })
+                    ui::IconButtonAs {
+                        variant: Variant::Picture,
+                        glyph: Icon::Minimize,
+                        name: tr("Exit full screen"),
+                        size: Size::Sm,
+                        on_press: move || set_fullscreen(review, false),
+                    }
+                    .into_element()
                 } else {
-                    icon_button(Icon::Maximize, tr("Full screen"), Size::Sm, move || set_fullscreen(review, true))
+                    IconButton {
+                        glyph: Icon::Maximize,
+                        name: tr("Full screen"),
+                        size: Size::Sm,
+                        on_press: move || set_fullscreen(review, true),
+                    }
+                    .into_element()
                 }
             },
         )
@@ -1244,13 +1286,13 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                     ),
             )
     };
-    let layout = computed(move || (crate::shell::page_narrow(), review.fullscreen.get(), review.has_text()));
+    let layout = computed(move || (crate::pages::chrome::page_narrow(), review.fullscreen.get(), review.has_text()));
     view()
         .flex_shrink_0()
         .px(px(ui::PAGE_INSET))
         .border_color(|| theme().border)
         .bg(move || if review.fullscreen.get() { theme().card.opacity(0.0) } else { theme().card })
-        .style_when(move || review.fullscreen.get(), tokens::glass)
+        .style_when(move || review.fullscreen.get(), |s| tokens::surface(tokens::Surface::Glass, s))
         .transition_opacity()
         .duration(motion::BASE)
         .style_with(move |s| {
@@ -1260,7 +1302,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                     .left(px(16.0 + edge.left.0))
                     .right(px(16.0 + edge.right.0))
                     .bottom(px(16.0 + edge.bottom.0))
-                    .rounded(tokens::radius_lg)
+                    .rounded(|| tokens::corner(tokens::Corner::Large))
                     .border_1()
                     .border_color(|| theme().foreground.dark.opacity(0.16))
                     .shadow_xl()
@@ -1288,21 +1330,15 @@ const FIRST_REPEAT: std::time::Duration =
 const REPEAT_GAP: std::time::Duration = std::time::Duration::from_millis(450);
 
 fn set_fullscreen(review: Review, on: bool) {
-    if review.fullscreen.get_untracked() == on {
+    if untracked(|| review.is_fullscreen()) == on {
         return;
     }
     if crate::platform::is_phone() {
-        batch(|| {
-            review.fullscreen.set(on);
-            review.store.set_immersive(on);
-        });
+        batch(|| review.set_fullscreen(on));
         return;
     }
     if on {
-        batch(|| {
-            review.fullscreen.set(true);
-            review.store.set_immersive(true);
-        });
+        batch(|| review.set_fullscreen(true));
         current_window().set_mode(WindowMode::FullScreen);
     } else {
         current_window().set_mode(WindowMode::Normal);
@@ -1349,8 +1385,8 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
                     .py_2()
                     .gap_1()
                     .items_center()
-                    .rounded(tokens::radius)
-                    .bg(|| tokens::stage().opacity(0.7))
+                    .rounded(|| tokens::corner(tokens::Corner::Medium))
+                    .bg(|| tokens::ink(tokens::Ink::Stage).opacity(0.7))
                     .child(when(shows_translation, move || {
                         subtitle_text(text(move || {
                             current()
@@ -1373,7 +1409,8 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
                                             .children(
                                                 spans.into_iter().enumerate().skip(first).take(line.len()).flat_map(
                                                     |(at, (word, ..))| {
-                                                        let (lead, word) = listenook_core::local::lead_and_word(&word);
+                                                        let (lead, word) =
+                                                            listenook_core::transcript::local::lead_and_word(&word);
                                                         let word = text(SharedString::from(word.to_owned()));
                                                         [
                                                             text(SharedString::from(
@@ -1381,7 +1418,7 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
                                                                     .to_owned(),
                                                             )),
                                                             if Some(at) == said {
-                                                                word.rounded(tokens::radius_sm)
+                                                                word.rounded(|| tokens::corner(tokens::Corner::Small))
                                                                     .bg(|| theme().primary.opacity(0.45))
                                                             } else {
                                                                 word
@@ -1410,7 +1447,7 @@ fn subtitle_text(line: Text) -> Text {
 }
 
 fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
-    let store = review.store;
+    let store = crate::state::store();
     let target = signal(SharedString::from(
         Some(store.settings().translation_preferences.target_language)
             .filter(|t| !t.is_empty())
@@ -1418,11 +1455,11 @@ fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
     ));
     let replace = signal(false);
     let configured = move || store.ai_ready();
-    modal(
+    Modal {
         open,
-        l("Translate"),
-        420.0,
-        move || {
+        title: l("Translate"),
+        width: 420.0,
+        content: move || {
             view()
                 .gap_4()
                 .child(field(
@@ -1465,31 +1502,38 @@ fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {
                             )
                             .child(button(Variant::Outline, Size::Sm, l("Settings")).on_press(move || {
                                 open.set(false);
-                                store.open_settings(SettingsTab::Ai);
+                                store.act(crate::state::Action::OpenSettings(SettingsTab::Ai));
                             }))
                     }),
                 )
                 .into_element()
         },
-        move || {
-            modal_actions(open, l("Cancel"), l("Translate"), configured, move || {
-                let (id, language) = (review.id(), target.get_untracked().to_string());
-                if replace.get_untracked() {
-                    store.update_document(&id, |document| {
-                        for segment in &mut document.segments {
-                            segment.translated_text = None;
-                        }
+        actions: move || {
+            ModalActions {
+                open,
+                cancel: l("Cancel"),
+                commit: l("Translate"),
+                enabled: configured,
+                on_commit: move || {
+                    let (id, language) = (review.id(), target.get_untracked().to_string());
+                    if replace.get_untracked() {
+                        store.update_document(&id, |document| {
+                            for segment in &mut document.segments {
+                                segment.translated_text = None;
+                            }
+                        });
+                    }
+                    store.update_settings(|s| s.translation_preferences.target_language = language.clone());
+                    ai::start_translation(&id, &language, None);
+                    batch(|| {
+                        review.set_mode(ContentMode::Bilingual);
+                        open.set(false);
                     });
-                }
-                store.update_settings(|s| s.translation_preferences.target_language = language.clone());
-                llm::start_translation(&id, &language, None);
-                batch(|| {
-                    review.mode.set(ContentMode::Bilingual);
-                    open.set(false);
-                });
-            })
+                },
+            }
+            .into_element()
         },
-    )
+    }
 }
 
 /// Puts `text` on the clipboard and says `copied` once it's there, or that it wasn't copied when
@@ -1514,7 +1558,7 @@ fn search_bar(review: Review) -> impl IntoElement {
             on_key_with(
                 "escape",
                 KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() },
-                move |_| review.searching.set(false),
+                move |_| review.set_searching(false),
             );
             let entrance = motion().entering(MotionPreset::FadeInDown);
             view()
@@ -1526,11 +1570,14 @@ fn search_bar(review: Review) -> impl IntoElement {
                 .py_2()
                 .border_b_1()
                 .border_color(|| theme().border)
-                .child(ui::focused_search_field(review.query, l("Search transcript")).flex_1())
-                .child(hint(move || -> SharedString {
-                    format!("{} {}", review.shown.with(Vec::len), tr("sentences")).into()
-                }))
-                .child(icon_button(Icon::Close, tr("Close"), Size::Md, move || review.searching.set(false)))
+                .child(ui::focused_search_field(review.query(), l("Search transcript")).flex_1())
+                .child(hint(move || -> SharedString { format!("{} {}", review.shown_count(), tr("sentences")).into() }))
+                .child(IconButton {
+                    glyph: Icon::Close,
+                    name: tr("Close"),
+                    size: Size::Md,
+                    on_press: move || review.set_searching(false),
+                })
         },
     )
 }
@@ -1572,7 +1619,7 @@ fn divider(review: Review, under: bool) -> impl IntoElement {
                     from.set(None);
                     let kept = f64::from(size.get_untracked().round());
                     let key = if under { "reader_video_height" } else { "reader_side_width" };
-                    review.store.update_settings(|s| {
+                    crate::state::store().update_settings(|s| {
                         s.extra.insert(key.into(), kept.into());
                     });
                 }

@@ -10,9 +10,9 @@ use super::{
 fn field_look(field: Input) -> Input {
     field_text(field)
         .px_3()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .border_1()
-        .border_color(tokens::control_border)
+        .border_color(|| tokens::ink(tokens::Ink::ControlBorder))
         .bg(|| theme().card)
         .transition_colors()
         .duration(motion::INSTANT)
@@ -34,9 +34,9 @@ fn line_field(input: Input) -> View {
             .items_center()
             .h(px(Size::Md.height()))
             .px_3()
-            .rounded(tokens::radius)
+            .rounded(|| tokens::corner(tokens::Corner::Medium))
             .border_1()
-            .border_color(tokens::control_border)
+            .border_color(|| tokens::ink(tokens::Ink::ControlBorder))
             .bg(|| theme().card)
             .focus_within(|s| s.border_color(|| theme().ring))
             .child(field_text(input).flex_1().h_full())
@@ -45,7 +45,7 @@ fn line_field(input: Input) -> View {
     }
 }
 
-pub fn bound_field(
+pub(super) fn bound_field(
     value: impl Fn() -> String + 'static,
     set: impl Fn(String) + 'static,
     placeholder: impl Fn() -> SharedString + 'static,
@@ -53,7 +53,21 @@ pub fn bound_field(
     bound_field_with(value, set, placeholder, |input| input)
 }
 
-pub fn bound_field_with(
+pub struct BoundField<P0, P1, P2> {
+    pub value: P0,
+    pub set: P1,
+    pub placeholder: P2,
+}
+
+impl<P0: Fn() -> String + 'static, P1: Fn(String) + 'static, P2: Fn() -> SharedString + 'static> IntoElement
+    for BoundField<P0, P1, P2>
+{
+    fn into_element(self) -> AnyElement {
+        bound_field(self.value, self.set, self.placeholder).into_element()
+    }
+}
+
+pub(super) fn bound_field_with(
     value: impl Fn() -> String + 'static,
     set: impl Fn(String) + 'static,
     placeholder: impl Fn() -> SharedString + 'static,
@@ -67,8 +81,38 @@ pub fn bound_field_with(
     ))
 }
 
-pub fn text_field(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> View {
+pub struct BoundFieldWith<P0, P1, P2, P3> {
+    pub value: P0,
+    pub set: P1,
+    pub placeholder: P2,
+    pub more: P3,
+}
+
+impl<
+    P0: Fn() -> String + 'static,
+    P1: Fn(String) + 'static,
+    P2: Fn() -> SharedString + 'static,
+    P3: FnOnce(Input) -> Input,
+> IntoElement for BoundFieldWith<P0, P1, P2, P3>
+{
+    fn into_element(self) -> AnyElement {
+        bound_field_with(self.value, self.set, self.placeholder, self.more).into_element()
+    }
+}
+
+pub(super) fn text_field(value: Signal<String>, placeholder: impl Fn() -> SharedString + 'static) -> View {
     text_field_with(value, placeholder, |input| input)
+}
+
+pub struct TextField<P1> {
+    pub value: Signal<String>,
+    pub placeholder: P1,
+}
+
+impl<P1: Fn() -> SharedString + 'static> IntoElement for TextField<P1> {
+    fn into_element(self) -> AnyElement {
+        text_field(self.value, self.placeholder).into_element()
+    }
 }
 
 pub fn text_field_with(
@@ -99,7 +143,7 @@ pub fn text_area(value: Signal<String>, placeholder: impl Fn() -> SharedString +
 /// A text area with a control in its top right corner, inside its border: the control sits
 /// beside the text rather than over it, since on macOS the field is an AppKit view that takes
 /// the clicks of anything drawn over it.
-pub fn text_area_beside(
+pub(super) fn text_area_beside(
     value: Signal<String>,
     placeholder: impl Fn() -> SharedString + 'static,
     more: impl FnOnce(Input) -> Input,
@@ -115,15 +159,33 @@ pub fn text_area_beside(
     view()
         .flex_row()
         .items_start()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .border_1()
-        .border_color(tokens::control_border)
+        .border_color(|| tokens::ink(tokens::Ink::ControlBorder))
         .bg(|| theme().card)
         .transition_colors()
         .duration(motion::INSTANT)
         .focus_within(|s| s.border_color(|| theme().ring))
         .child(field.flex_1().min_w(px(0.0)).pl_3().py_2().min_h(px(70.0)))
         .child(view().w(px(Size::Sm.height() + 8.0)).p(px(4.0)).flex_shrink_0().child(control))
+}
+
+/// A text area with a control in its top right corner, inside its border: the control sits
+/// beside the text rather than over it, since on macOS the field is an AppKit view that takes
+/// the clicks of anything drawn over it.
+pub struct TextAreaBeside<P1, P2, P3> {
+    pub value: Signal<String>,
+    pub placeholder: P1,
+    pub more: P2,
+    pub control: P3,
+}
+
+impl<P1: Fn() -> SharedString + 'static, P2: FnOnce(Input) -> Input, P3: IntoElement> IntoElement
+    for TextAreaBeside<P1, P2, P3>
+{
+    fn into_element(self) -> AnyElement {
+        text_area_beside(self.value, self.placeholder, self.more, self.control).into_element()
+    }
 }
 
 pub fn search_field_ref(
@@ -163,9 +225,9 @@ fn search_field_with(
         .h(px(Size::Md.height()))
         .pl_3()
         .pr_1()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .border_1()
-        .border_color(tokens::control_border)
+        .border_color(|| tokens::ink(tokens::Ink::ControlBorder))
         .bg(|| theme().card)
         .text_color(|| theme().muted_foreground)
         .focus_within(|s| s.border_color(|| theme().ring))
@@ -176,7 +238,7 @@ fn search_field_with(
             move || value.with(|v| !v.is_empty()),
             move || {
                 nsh_base::button()
-                    .accessibility_label(crate::state::tr("Clear search"))
+                    .accessibility_label(super::tr("Clear search"))
                     .on_press(move || {
                         value.set(String::new());
                         target.focus();
@@ -184,7 +246,7 @@ fn search_field_with(
                     .size(px(Size::Sm.height()))
                     .items_center()
                     .justify_center()
-                    .rounded(tokens::radius_sm)
+                    .rounded(|| tokens::corner(tokens::Corner::Small))
                     .text_color(|| theme().muted_foreground)
                     .transition_colors()
                     .duration(motion::INSTANT)
@@ -207,8 +269,19 @@ pub fn hint(label: impl IntoReactive<SharedString>) -> Text {
 }
 
 /// A hint saying what went wrong.
-pub fn error_hint(label: impl IntoReactive<SharedString>) -> Text {
+pub(super) fn error_hint(label: impl IntoReactive<SharedString>) -> Text {
     text(label).text_xs().text_color(|| theme().destructive)
+}
+
+/// A hint saying what went wrong.
+pub struct ErrorHint<P0> {
+    pub label: P0,
+}
+
+impl<P0: IntoReactive<SharedString>> IntoElement for ErrorHint<P0> {
+    fn into_element(self) -> AnyElement {
+        error_hint(self.label).into_element()
+    }
 }
 
 pub fn switch(
@@ -257,9 +330,9 @@ fn ticked(
             s.size(px(side))
                 .items_center()
                 .justify_center()
-                .rounded(tokens::radius_sm)
+                .rounded(|| tokens::corner(tokens::Corner::Small))
                 .border_1()
-                .border_color(tokens::control_border)
+                .border_color(|| tokens::ink(tokens::Ink::ControlBorder))
                 .text_color(|| theme().primary_foreground)
                 .checked(|s| s.bg(|| theme().primary).border_color(|| theme().primary))
         })
@@ -297,7 +370,7 @@ pub fn checkbox_row(
         .py_2p5()
         .transition_colors()
         .duration(motion::INSTANT)
-        .hover(|s| s.bg(tokens::hover_wash))
+        .hover(|s| s.bg(|| tokens::ink(tokens::Ink::HoverWash)))
 }
 
 /// A choice of one of `options` (value, label). The desktops and narrow touch screens use the base select (a
@@ -328,7 +401,7 @@ pub fn select(
         .accessibility_label(name.into())
         .offset(px(4.0))
         .popup_style(move |s| {
-            let s = tokens::popup_surface(s).max_h(px(320.0));
+            let s = tokens::surface(tokens::Surface::Popup, s).max_h(px(320.0));
             if touch { s.pb_8() } else { s }
         })
         .item_class(if touch {
@@ -352,9 +425,9 @@ fn select_trigger(shown: impl Fn() -> SharedString + 'static) -> View {
         .justify_between()
         .gap_2()
         .px_3()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .border_1()
-        .border_color(tokens::control_border)
+        .border_color(|| tokens::ink(tokens::Ink::ControlBorder))
         .bg(|| theme().card)
         .text_color(|| theme().muted_foreground)
         .transition_colors()
@@ -397,7 +470,7 @@ fn anchored_select(
         .align(Align::Start)
         .offset(px(4.0))
         .margin(px(8.0))
-        .popup_style(|s| tokens::popup_surface(s).p_1())
+        .popup_style(|s| tokens::surface(tokens::Surface::Popup, s).p_1())
         .popup_starting_class(tokens::POPUP_STARTING)
         .popup_ending_class(tokens::POPUP_ENDING)
         .trigger(trigger)
@@ -420,7 +493,7 @@ fn anchored_select(
                     .gap_3()
                     .px_3()
                     .min_h(px(44.0))
-                    .rounded(tokens::radius_sm)
+                    .rounded(|| tokens::corner(tokens::Corner::Small))
                     .text_color(|| theme().popover_foreground)
                     .hover(|s| s.bg(|| theme().accent))
                     .active(|s| s.bg(|| theme().input))
@@ -438,7 +511,7 @@ fn anchored_select(
         .into_element()
 }
 
-pub fn segmented<T: Copy + PartialEq + 'static>(
+pub(super) fn segmented<T: Copy + PartialEq + 'static>(
     options: Vec<(T, &'static str)>,
     value: impl Fn() -> T + Copy + 'static,
     on_change: impl Fn(T) + Copy + 'static,
@@ -447,10 +520,12 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
         .flex_row()
         .self_start()
         .p(px(2.0))
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .border_1()
         .border_color(|| theme().border)
-        .indicator_style(|s| s.top(px(2.0)).bottom(px(2.0)).rounded(tokens::radius_sm).bg(|| theme().accent))
+        .indicator_style(|s| {
+            s.top(px(2.0)).bottom(px(2.0)).rounded(|| tokens::corner(tokens::Corner::Small)).bg(|| theme().accent)
+        })
         .children(options.into_iter().map(move |(option, label)| {
             let selected = move || value() == option;
             nsh_base::tab()
@@ -461,9 +536,9 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 .px_4()
                 .items_center()
                 .justify_center()
-                .rounded(tokens::radius_sm)
+                .rounded(|| tokens::corner(tokens::Corner::Small))
                 .child(
-                    text(crate::state::l(label))
+                    text(super::l(label))
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
                         .transition_colors()
@@ -471,6 +546,20 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                         .text_color(move || if selected() { theme().foreground } else { theme().muted_foreground }),
                 )
         }))
+}
+
+pub struct Segmented<T, P1, P2> {
+    pub options: Vec<(T, &'static str)>,
+    pub value: P1,
+    pub on_change: P2,
+}
+
+impl<T: Copy + PartialEq + 'static, P1: Fn() -> T + Copy + 'static, P2: Fn(T) + Copy + 'static> IntoElement
+    for Segmented<T, P1, P2>
+{
+    fn into_element(self) -> AnyElement {
+        segmented(self.options, self.value, self.on_change).into_element()
+    }
 }
 
 pub fn slider(
@@ -527,7 +616,7 @@ fn slider_in(
 /// A range picked along a track with a handle at each end, from 0 to
 /// `max`: where a recording starts and ends. Each handle moves by `step`
 /// from the keyboard.
-pub fn range_slider(
+pub(super) fn range_slider(
     name: impl Into<SharedString>,
     value: impl Fn() -> (f64, f64) + 'static,
     max: impl Fn() -> f64 + 'static,
@@ -550,6 +639,25 @@ pub fn range_slider(
         .indicator_style(|s| s.h(px(4.0)))
         .range_style(|s| s.h(px(4.0)).rounded_full().bg(|| color(theme().primary)))
         .thumb_style(|s| s.w(px(8.0)).h(px(20.0)).rounded_full().bg(|| color(theme().primary)).shadow_sm())
+}
+
+/// A range picked along a track with a handle at each end, from 0 to
+/// `max`: where a recording starts and ends. Each handle moves by `step`
+/// from the keyboard.
+pub struct RangeSlider<P0, P1, P2, P4> {
+    pub name: P0,
+    pub value: P1,
+    pub max: P2,
+    pub step: f64,
+    pub on_change: P4,
+}
+
+impl<P0: Into<SharedString>, P1: Fn() -> (f64, f64) + 'static, P2: Fn() -> f64 + 'static, P4: Fn(f64, f64) + 'static>
+    IntoElement for RangeSlider<P0, P1, P2, P4>
+{
+    fn into_element(self) -> AnyElement {
+        range_slider(self.name, self.value, self.max, self.step, self.on_change).into_element()
+    }
 }
 
 pub fn progress_bar(fraction: impl Fn() -> Option<f32> + Copy + 'static) -> nsh_base::ProgressElement {

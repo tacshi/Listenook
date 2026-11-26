@@ -1,13 +1,10 @@
-use listenook_core::{
-    format::{clock, track_position},
-    l10n::Lang,
-    sleep::Sleep,
-};
+use listenook_core::media::subtitles;
+use listenook_core::{format::track_position, l10n::Lang};
 use nsh_base::{nav_page, nav_stack, theme};
 use nsh_core::{
     desktop::{MenuRole, TitleBarOptions, TitleBarStyle, WindowAttributes},
     element::desktop::{
-        MenuItem, current_window, on_reopen, register_global_shortcut, set_application_menu, set_tray, title_bar, tray,
+        MenuItem, current_window, on_reopen, register_global_shortcut, set_application_menu, set_tray, tray,
         unregister_global_shortcut,
     },
     mobile::TabBarItem,
@@ -15,27 +12,27 @@ use nsh_core::{
     prelude::*,
 };
 
+use crate::state::monitor::MonitorState;
+use crate::ui::{l, tr};
+use crate::work::sync::Phase;
+use crate::work::updater;
 use crate::{
-    pages, platform,
-    services::{media, updater},
-    state::{
-        Filter, Place, l,
-        podcast::{RATES, rate_label},
-        store,
-        sync::Phase,
-        tr,
+    pages::{
+        self,
+        chrome::{BAR, rate_menu, sidebar_width, sleep_menu, system_header, time_text},
     },
+    platform,
+    services::media,
+    state::{Filter, Place, store},
     ui::{
-        self, Icon, Size, Variant, confirm_destructive, field, icon, icon_button, icon_of, menu, menu_action,
-        menu_danger, modal, modal_actions, slider, text_field_with,
+        self, Icon, IconButton, MenuAction, MenuDanger, Modal, ModalActions, Size, Variant, confirm_destructive, field,
+        icon, icon_of, slider, text_field_with,
         tokens::{self, motion},
     },
-    util,
+    work::import,
 };
 
-const BAR: f32 = 44.0;
 pub(crate) const GLOBAL_PLAY_PAUSE: &str = "ctrl+alt+space";
-const CONTROLS_GAP: f32 = 12.0;
 
 pub(crate) fn shell() -> impl IntoElement {
     let store = store();
@@ -52,7 +49,7 @@ pub(crate) fn shell() -> impl IntoElement {
             media::pump();
             let picked = crate::services::take_picked();
             if !picked.is_empty() {
-                util::import_picked(picked);
+                import::import_picked(picked);
             }
         }
     });
@@ -64,13 +61,13 @@ pub(crate) fn shell() -> impl IntoElement {
             }
         });
     }
-    let in_tray = move || platform::has_tray() && store.tray_enabled();
+    let in_tray = move || platform::has_tray() && MonitorState::get().tray_enabled();
     if std::env::args().any(|argument| argument == "--background") && untracked(in_tray) {
         current_window().hide();
     }
-    effect(move || crate::services::set_dock_icon(store.dock_visible()));
+    effect(move || crate::services::set_dock_icon(MonitorState::get().dock_visible()));
     let show_window = move || {
-        store.set_video_only(false);
+        store.act(crate::state::Action::SetVideoOnly(false));
         current_window().show();
         current_window().focus();
     };
@@ -80,23 +77,23 @@ pub(crate) fn shell() -> impl IntoElement {
         let stays = in_tray();
         if stays {
             let mut items = vec![MenuItem::new(tr("Open Listenook").to_string()).on_select(show_window)];
-            if !store.monitor().folder_path.is_empty() {
-                let watching = if store.monitor().paused { "Resume watching" } else { "Pause watching" };
-                items.push(
-                    MenuItem::new(tr(watching).to_string())
-                        .on_select(move || store.set_monitor_paused(!store.monitor().paused)),
-                );
+            if !MonitorState::get().config().folder_path.is_empty() {
+                let watching = if MonitorState::get().config().paused { "Resume watching" } else { "Pause watching" };
+                items.push(MenuItem::new(tr(watching).to_string()).on_select(move || {
+                    MonitorState::get()
+                        .act(crate::state::monitor::MonitorAction::SetPaused(!MonitorState::get().config().paused))
+                }));
             }
             if pages::capture_offered() {
-                let item = if store.capture.recording() {
+                let item = if crate::work::capture::CaptureState::get().recording() {
                     MenuItem::new(tr("Stop recording").to_string()).on_select(move || {
                         show_window();
-                        store.capture.stop();
+                        crate::work::capture::CaptureState::get().act(crate::work::capture::CaptureAction::Stop);
                     })
                 } else {
                     MenuItem::new(tr("Record what’s playing").to_string()).on_select(move || {
                         show_window();
-                        store.capture.record();
+                        crate::work::capture::CaptureState::get().act(crate::work::capture::CaptureAction::Record);
                     })
                 };
                 items.push(item);
@@ -121,31 +118,32 @@ pub(crate) fn shell() -> impl IntoElement {
         current_window().set(attributes);
     });
     let launched = std::time::Instant::now();
-    let open_media = move |paths: Vec<String>| match paths.iter().find(|path| pages::is_video(path)) {
-        Some(video) => {
-            store.open_video(video);
-            if launched.elapsed() < std::time::Duration::from_secs(2) && !platform::is_phone() {
-                store.set_video_only(true);
-                spawn(async move {
-                    for wait in [0, 60, 250] {
-                        timer(std::time::Duration::from_millis(wait)).await;
-                        if store.video_only() {
-                            current_window().hide();
+    let open_media =
+        move |paths: Vec<String>| match paths.iter().find(|path| subtitles::is(path, subtitles::Kind::Video)) {
+            Some(video) => {
+                pages::open_video(video);
+                if launched.elapsed() < std::time::Duration::from_secs(2) && !platform::is_phone() {
+                    store.act(crate::state::Action::SetVideoOnly(true));
+                    spawn(async move {
+                        for wait in [0, 60, 250] {
+                            timer(std::time::Duration::from_millis(wait)).await;
+                            if store.video_only() {
+                                current_window().hide();
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
-        }
-        None => {
-            util::add_media(paths);
-            show_window();
-        }
-    };
+            None => {
+                import::add_media(paths);
+                show_window();
+            }
+        };
     let open_paths = move |paths: Vec<String>| {
-        if platform::is_phone() && paths.iter().any(|path| listenook_core::subtitles::is_media(path)) {
-            let taken = util::import_opened(paths);
+        if platform::is_phone() && paths.iter().any(|path| subtitles::is(path, subtitles::Kind::Media)) {
+            let taken = import::import_opened(paths);
             if taken > 0 {
-                store.go(Place::Library);
+                store.act(crate::state::Action::Go(Place::Library));
                 ui::toast(ui::Tone::Success, tr("Added to your library"));
             } else {
                 ui::toast(ui::Tone::Error, tr("That file could not be added."));
@@ -154,8 +152,9 @@ pub(crate) fn shell() -> impl IntoElement {
         }
         open_media(paths)
     };
-    if let Some(video) =
-        std::env::args().nth(1).filter(|path| pages::is_video(path) && std::path::Path::new(path).is_file())
+    if let Some(video) = std::env::args()
+        .nth(1)
+        .filter(|path| subtitles::is(path, subtitles::Kind::Video) && std::path::Path::new(path).is_file())
     {
         open_paths(vec![video]);
     }
@@ -180,7 +179,7 @@ pub(crate) fn shell() -> impl IntoElement {
             }
         }
     });
-    current_window().on_focus_change(move |focused| store.set_focused(focused));
+    current_window().on_focus_change(move |focused| store.act(crate::state::Action::SetFocused(focused)));
     effect(move || {
         let on = store.setting(|s| s.extra.get("global_play_pause").and_then(|v| v.as_bool()).unwrap_or(false));
         if on {
@@ -195,22 +194,26 @@ pub(crate) fn shell() -> impl IntoElement {
         }
     });
 
-    set_interval(std::time::Duration::from_secs(5), move || store.scan_watched_folder());
-    set_interval(std::time::Duration::from_secs(1), move || store.activity.tick());
+    set_interval(std::time::Duration::from_secs(5), import::take_from_watched_folder);
+    set_interval(std::time::Duration::from_secs(1), move || {
+        crate::state::activity::ActivityState::get().act(crate::state::activity::ActivityAction::Tick)
+    });
     let owner = Owner::current();
     let ticker = stored(None::<Spawned<()>>);
-    let busy = computed(move || store.sync.busy());
+    let busy = computed(move || crate::work::sync::SyncState::get().busy());
     let visible = computed(move || store.sync_visible());
     effect(move || {
         let (busy, visible) = (busy.get(), visible.get());
         let next = untracked(|| {
             owner.run(|| match (busy, visible) {
-                (true, _) => Some(set_interval(std::time::Duration::from_millis(250), move || store.sync.tick())),
+                (true, _) => Some(set_interval(std::time::Duration::from_millis(250), move || {
+                    crate::work::sync::SyncState::get().act(crate::work::sync::SyncAction::Tick)
+                })),
                 (false, true) => Some(spawn(async move {
                     while untracked(|| store.sync_visible()) {
-                        let (within, seen) = untracked(|| store.sync.waiting());
+                        let (within, seen) = untracked(|| crate::work::sync::SyncState::get().waiting());
                         let _ = blocking(move || crate::services::sync::wait(within, seen)).await;
-                        store.sync.tick();
+                        crate::work::sync::SyncState::get().act(crate::work::sync::SyncAction::Tick);
                     }
                 })),
                 (false, false) => None,
@@ -219,41 +222,41 @@ pub(crate) fn shell() -> impl IntoElement {
         if let Some(previous) = ticker.replace(next) {
             previous.cancel();
         }
-        untracked(|| store.sync.tick());
+        untracked(|| crate::work::sync::SyncState::get().act(crate::work::sync::SyncAction::Tick));
     });
     effect(move || {
         let now = lifecycle();
         untracked(|| {
             if now == nsh_core::element::Lifecycle::Background {
-                store.activity.flush();
+                crate::state::activity::ActivityState::get().act(crate::state::activity::ActivityAction::Flush);
             }
-            store.sync.lifecycle(now);
+            crate::work::sync::SyncState::get().act(crate::work::sync::SyncAction::Lifecycle(now));
         });
     });
     nsh_core::element::desktop::on_app_quit(move || {
-        store.activity.flush();
-        store.capture.finish_on_quit();
+        crate::state::activity::ActivityState::get().act(crate::state::activity::ActivityAction::Flush);
+        crate::work::capture::CaptureState::get().act(crate::work::capture::CaptureAction::FinishOnQuit);
         async {}
     });
     updater::watch();
     if is_desktop() {
         effect(move || {
             store.lang();
-            store.capture.recording();
+            crate::work::capture::CaptureState::get().recording();
             set_application_menu(application_menu());
         });
     } else {
-        on_key("mod+1", move |_| store.go(Place::Home));
-        on_key("mod+2", move |_| store.show(Filter::All));
-        on_key("mod+3", move |_| store.go(Place::Podcasts));
+        on_key("mod+1", move |_| store.act(crate::state::Action::Go(Place::Home)));
+        on_key("mod+2", move |_| store.act(crate::state::Action::Show(Filter::All)));
+        on_key("mod+3", move |_| store.act(crate::state::Action::Go(Place::Podcasts)));
         on_key("mod+,", move |_| store.settings_open().set(true));
-        on_key("mod+o", |_| util::pick_media());
-        on_key("mod+b", move |_| store.toggle_sidebar());
-        on_key("mod+shift+o", |_| util::pick_video());
+        on_key("mod+o", |_| import::pick_media());
+        on_key("mod+b", move |_| store.act(crate::state::Action::ToggleSidebar));
+        on_key("mod+shift+o", |_| pages::pick_video());
     }
     effect(move || {
         let _ = (store.place(), store.filter(), store.open_job_id());
-        untracked(|| store.set_drawer(false));
+        untracked(|| store.act(crate::state::Action::SetDrawer(false)));
     });
     let lang = computed(move || store.lang());
     let shown_in = std::cell::Cell::new(untracked(|| store.lang()));
@@ -261,7 +264,7 @@ pub(crate) fn shell() -> impl IntoElement {
         .flex_1()
         .flex_row()
         .on_file_drop(|event: &FileDropEvent| {
-            util::add_media(event.uris.iter().map(|uri| util::path_of_url(uri)).collect());
+            import::add_media(event.uris.iter().map(|uri| platform::path_of_url(uri)).collect());
         })
         .child(when(move || !store.immersive() && !store.sidebar_hidden() && !platform::compact(), sidebar))
         .child(
@@ -283,7 +286,7 @@ pub(crate) fn shell() -> impl IntoElement {
                 }))
                 .child(when(
                     move || {
-                        store.podcast.playing().is_some()
+                        crate::state::podcast::PodcastState::get().playing().is_some()
                             && store.open_job_id().is_none()
                             && store.open_video_path().is_none()
                     },
@@ -291,17 +294,17 @@ pub(crate) fn shell() -> impl IntoElement {
                 ))
                 .child(when(tab_bar_shown, tab_bar)),
         )
-        .child(when(move || store.podcast.playing().is_some(), podcast_player))
+        .child(when(move || crate::state::podcast::PodcastState::get().playing().is_some(), podcast_player))
         .child(when(
             move || platform::compact() && store.drawer() && !store.immersive(),
             move || {
-                on_key("escape", move |_| store.set_drawer(false));
-                view()
-                    .absolute()
-                    .inset_0()
-                    .flex_row()
-                    .child(sidebar())
-                    .child(view().flex_1().bg(ui::tokens::scrim).on_press(move || store.set_drawer(false)))
+                on_key("escape", move |_| store.act(crate::state::Action::SetDrawer(false)));
+                view().absolute().inset_0().flex_row().child(sidebar()).child(
+                    view()
+                        .flex_1()
+                        .bg(|| ui::tokens::ink(ui::tokens::Ink::Scrim))
+                        .on_press(move || store.act(crate::state::Action::SetDrawer(false))),
+                )
             },
         ))
         .child(pages::settings_dialog())
@@ -323,7 +326,9 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
     let pushed = computed(move || {
         let lang = lang.get();
         let mut pages = Vec::new();
-        if let Some(show) = store.podcast.open_show.get().filter(|_| store.place() == Place::Podcasts) {
+        if let Some(show) =
+            crate::state::podcast::PodcastState::get().open_show().get().filter(|_| store.place() == Place::Podcasts)
+        {
             pages.push((lang, Pushed::Show(show)));
         }
         if let Some(id) = store.open_job_id() {
@@ -337,7 +342,7 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
     on_back_press(move || {
         let open = store.drawer_now();
         if open {
-            store.set_drawer(false);
+            store.act(crate::state::Action::SetDrawer(false));
         }
         open
     });
@@ -357,23 +362,41 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
                 })
                 .header_style_with(colors)
                 .header_left_symbol("sidebar.left")
-                .header_left(ui::header_button(Icon::Sidebar, tr("Sidebar"), move || store.toggle_sidebar()))
+                .header_left(ui::HeaderButton {
+                    glyph: Icon::Sidebar,
+                    name: tr("Sidebar"),
+                    on_press: move || store.act(crate::state::Action::ToggleSidebar),
+                })
                 .header_right_symbol(move || SharedString::from(if store.place() == Place::Home { "" } else { "plus" }))
                 .header_right(view().child(dynamic(move || {
                     match store.place() {
                         Place::Home => view()
                             .flex_row()
                             .gap_2()
-                            .child(ui::header_button(Icon::Search, tr("Search"), move || store.home_search().set(true)))
-                            .child(ui::header_button(Icon::Plus, tr("Add media"), util::pick_media))
+                            .child(ui::HeaderButton {
+                                glyph: Icon::Search,
+                                name: tr("Search"),
+                                on_press: move || store.home_search().set(true),
+                            })
+                            .child(ui::HeaderButton {
+                                glyph: Icon::Plus,
+                                name: tr("Add media"),
+                                on_press: import::pick_media,
+                            })
                             .into_element(),
                         Place::Library => {
-                            ui::header_button(Icon::Plus, tr("Add media"), util::pick_media).into_element()
-                        }
-                        Place::Podcasts => {
-                            ui::header_button(Icon::Plus, tr("Add by URL"), move || store.podcast.adding.set(true))
+                            ui::HeaderButton { glyph: Icon::Plus, name: tr("Add media"), on_press: import::pick_media }
                                 .into_element()
                         }
+                        Place::Podcasts => ui::HeaderButton {
+                            glyph: Icon::Plus,
+                            name: tr("Add by URL"),
+                            on_press: move || {
+                                crate::state::podcast::PodcastState::get()
+                                    .act(crate::state::podcast::PodcastAction::AddShow)
+                            },
+                        }
+                        .into_element(),
                     }
                 })))
                 .bg(|| theme().background)
@@ -395,21 +418,27 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
                 let screen = if untracked(platform::compact) {
                     screen
                 } else {
-                    screen.header_left_symbol("sidebar.left").header_left(ui::header_button(
-                        Icon::Sidebar,
-                        tr("Sidebar"),
-                        move || store.toggle_sidebar(),
-                    ))
+                    screen.header_left_symbol("sidebar.left").header_left(ui::HeaderButton {
+                        glyph: Icon::Sidebar,
+                        name: tr("Sidebar"),
+                        on_press: move || store.act(crate::state::Action::ToggleSidebar),
+                    })
                 };
                 match page.get_untracked().1 {
                     Pushed::Show(url) => screen
                         .hides_bottom_bar_when_pushed(false)
                         .title(move || {
-                            store.podcast.feed(&url).map(|feed| SharedString::from(feed.title)).unwrap_or_default()
+                            crate::state::podcast::PodcastState::get()
+                                .feed(&url)
+                                .map(|feed| SharedString::from(feed.title))
+                                .unwrap_or_default()
                         })
                         .header_style_with(colors)
                         .child(pages::podcast_show())
-                        .on_dismiss(move || store.podcast.open_show.set(None)),
+                        .on_dismiss(move || {
+                            crate::state::podcast::PodcastState::get()
+                                .act(crate::state::podcast::PodcastAction::CloseShow)
+                        }),
                     Pushed::Reader(id) => {
                         let job = id.clone();
                         screen
@@ -418,22 +447,17 @@ fn stacked(lang: Memo<Lang>) -> impl IntoElement {
                             })
                             .header_visible(false)
                             .child(below_status_bar(pages::reader(&id)))
-                            .on_dismiss(move || store.close_reader())
+                            .on_dismiss(move || store.act(crate::state::Action::CloseReader))
                     }
                     Pushed::Video(path) => screen
                         .header_visible(false)
-                        .child(
-                            below_status_bar(pages::player(&path))
-                                .bg(move || if store.immersive() { ui::tokens::stage() } else { theme().background }),
-                        )
-                        .on_dismiss(move || store.close_video()),
+                        .child(below_status_bar(pages::player(&path)).bg(move || {
+                            if store.immersive() { ui::tokens::ink(ui::tokens::Ink::Stage) } else { theme().background }
+                        }))
+                        .on_dismiss(move || store.act(crate::state::Action::CloseVideo)),
                 }
             },
         ))
-}
-
-pub(crate) fn system_header() -> bool {
-    platform::is_phone()
 }
 
 pub(crate) fn stack_reaches_top() -> bool {
@@ -479,9 +503,9 @@ fn tab_bar() -> impl IntoElement {
             }
         })
         .on_change(move |index: &u32| match index {
-            0 => store.go(Place::Home),
-            1 => store.show(Filter::All),
-            2 => store.go(Place::Podcasts),
+            0 => store.act(crate::state::Action::Go(Place::Home)),
+            1 => store.act(crate::state::Action::Show(Filter::All)),
+            2 => store.act(crate::state::Action::Go(Place::Podcasts)),
             _ => store.settings_open().set(true),
         })
 }
@@ -513,16 +537,18 @@ fn application_menu() -> Vec<MenuItem> {
         ));
     }
     let mut file = vec![
-        MenuItem::new(named("Add media…")).shortcut("mod+o").on_select(util::pick_media),
-        MenuItem::new(named("Open video…")).shortcut("mod+shift+o").on_select(util::pick_video),
+        MenuItem::new(named("Add media…")).shortcut("mod+o").on_select(import::pick_media),
+        MenuItem::new(named("Open video…")).shortcut("mod+shift+o").on_select(pages::pick_video),
     ];
     if pages::capture_offered() {
-        file.push(if untracked(|| store.capture.recording()) {
-            MenuItem::new(named("Stop recording")).shortcut("mod+shift+r").on_select(move || store.capture.stop())
+        file.push(if untracked(|| crate::work::capture::CaptureState::get().recording()) {
+            MenuItem::new(named("Stop recording")).shortcut("mod+shift+r").on_select(move || {
+                crate::work::capture::CaptureState::get().act(crate::work::capture::CaptureAction::Stop)
+            })
         } else {
-            MenuItem::new(named("Record what’s playing"))
-                .shortcut("mod+shift+r")
-                .on_select(move || store.capture.record())
+            MenuItem::new(named("Record what’s playing")).shortcut("mod+shift+r").on_select(move || {
+                crate::work::capture::CaptureState::get().act(crate::work::capture::CaptureAction::Record)
+            })
         });
     }
     file.extend([MenuItem::separator(), role(MenuRole::Close, "Close Window")]);
@@ -551,11 +577,19 @@ fn application_menu() -> Vec<MenuItem> {
     menus.push(MenuItem::submenu(
         named("View"),
         [
-            MenuItem::new(named("Home")).shortcut("mod+1").on_select(move || store.go(Place::Home)),
-            MenuItem::new(named("Library")).shortcut("mod+2").on_select(move || store.show(Filter::All)),
-            MenuItem::new(named("Podcasts")).shortcut("mod+3").on_select(move || store.go(Place::Podcasts)),
+            MenuItem::new(named("Home"))
+                .shortcut("mod+1")
+                .on_select(move || store.act(crate::state::Action::Go(Place::Home))),
+            MenuItem::new(named("Library"))
+                .shortcut("mod+2")
+                .on_select(move || store.act(crate::state::Action::Show(Filter::All))),
+            MenuItem::new(named("Podcasts"))
+                .shortcut("mod+3")
+                .on_select(move || store.act(crate::state::Action::Go(Place::Podcasts))),
             MenuItem::separator(),
-            MenuItem::new(named("Show or Hide Sidebar")).shortcut("mod+b").on_select(move || store.toggle_sidebar()),
+            MenuItem::new(named("Show or Hide Sidebar"))
+                .shortcut("mod+b")
+                .on_select(move || store.act(crate::state::Action::ToggleSidebar)),
             role(MenuRole::ToggleFullScreen, "Enter or Leave Full Screen"),
         ],
     ));
@@ -621,10 +655,10 @@ fn row(
         .flex_row()
         .items_center()
         .style_with(move |s| if touch { s.gap_3().px_3() } else { s.gap_2().px_2() })
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .transition_colors()
         .duration(motion::INSTANT)
-        .hover(|s| s.bg(tokens::hover_wash))
+        .hover(|s| s.bg(|| tokens::ink(tokens::Ink::HoverWash)))
         .active(|s| s.bg(|| theme().input))
         .selected_style(|s| s.bg(|| theme().sidebar_accent))
         .text_color(move || if chosen() { theme().foreground } else { theme().muted_foreground })
@@ -656,11 +690,11 @@ fn heading(label: &'static str, add: &'static str, on_add: impl Fn() + 'static) 
                 .flex_1()
                 .role(AccessibilityRole::Header),
         )
-        .child(icon_button(Icon::Plus, tr(add), trailing_size(), on_add))
+        .child(IconButton { glyph: Icon::Plus, name: tr(add), size: trailing_size(), on_press: on_add })
 }
 
 fn sync_status() -> SharedString {
-    let sync = store().sync;
+    let sync = crate::work::sync::SyncState::get();
     match sync.phase() {
         Phase::Asking(_) | Phase::Running(_) | Phase::Serving(_) => tr("Syncing…"),
         Phase::Pairing(_) => tr("Pairing…"),
@@ -684,24 +718,6 @@ fn sidebar_title() -> View {
 
 const TABLET_MIN_SIDE: f32 = 700.0;
 
-fn sidebar_width() -> f32 {
-    if platform::is_phone() { 288.0 } else { 216.0 }
-}
-
-pub(crate) fn page_narrow() -> bool {
-    page_width() < 700.0
-}
-
-pub(crate) fn page_stacks() -> bool {
-    page_narrow() || (platform::is_phone() && window().height.0 > window().width.0)
-}
-
-pub(crate) fn page_width() -> f32 {
-    let store = store();
-    let beside = if platform::compact() || store.sidebar_hidden() || store.immersive() { 0.0 } else { sidebar_width() };
-    window().width.0 - beside
-}
-
 fn sidebar() -> impl IntoElement {
     let store = store();
     let in_library = move |filter: Filter| store.place() == Place::Library && store.filter() == filter;
@@ -717,9 +733,9 @@ fn sidebar() -> impl IntoElement {
         let text = name.get_untracked();
         match named.get_untracked() {
             Named::NewGroup => drop(store.add_group(&text)),
-            Named::Group(id) => store.rename_group(&id, &text),
+            Named::Group(id) => store.act(crate::state::Action::RenameGroup(&id, &text)),
             Named::NewTag => drop(store.add_tag(&text)),
-            Named::Tag(id) => store.rename_tag(&id, &text),
+            Named::Tag(id) => store.act(crate::state::Action::RenameTag(&id, &text)),
         }
         naming.set(false);
     };
@@ -735,9 +751,12 @@ fn sidebar() -> impl IntoElement {
             sidebar_title()
         } else {
             view().h(px(BAR)).flex_row().items_center().justify_end().px_2().window_drag(true).child(
-                view()
-                    .window_drag(false)
-                    .child(icon_button(Icon::Sidebar, tr("Hide sidebar"), Size::Sm, move || store.toggle_sidebar())),
+                view().window_drag(false).child(IconButton {
+                    glyph: Icon::Sidebar,
+                    name: tr("Hide sidebar"),
+                    size: Size::Sm,
+                    on_press: move || store.act(crate::state::Action::ToggleSidebar),
+                }),
             )
         })
         .child(
@@ -756,7 +775,7 @@ fn sidebar() -> impl IntoElement {
                                     l("Home"),
                                     || None,
                                     move || store.place() == Place::Home && store.open_job_id().is_none(),
-                                    move || store.go(Place::Home),
+                                    move || store.act(crate::state::Action::Go(Place::Home)),
                                 )
                                 .flex_1(),
                             )
@@ -772,7 +791,7 @@ fn sidebar() -> impl IntoElement {
                                     l("Library"),
                                     move || Some(store.count(&Filter::All)),
                                     move || in_library(Filter::All),
-                                    move || store.show(Filter::All),
+                                    move || store.act(crate::state::Action::Show(Filter::All)),
                                 )
                                 .flex_1(),
                             )
@@ -790,7 +809,7 @@ fn sidebar() -> impl IntoElement {
                                         l("In progress"),
                                         move || Some(store.count(&Filter::InProgress)),
                                         move || in_library(Filter::InProgress),
-                                        move || store.show(Filter::InProgress),
+                                        move || store.act(crate::state::Action::Show(Filter::InProgress)),
                                     )
                                     .flex_1(),
                                 )
@@ -807,7 +826,7 @@ fn sidebar() -> impl IntoElement {
                                     l("Podcasts"),
                                     || None,
                                     move || store.place() == Place::Podcasts,
-                                    move || store.go(Place::Podcasts),
+                                    move || store.act(crate::state::Action::Go(Place::Podcasts)),
                                 )
                                 .flex_1(),
                             )
@@ -815,7 +834,7 @@ fn sidebar() -> impl IntoElement {
                     )
                     .child(heading("Groups", "New group", move || ask(Named::NewGroup, String::new())))
                     .child(each(
-                        move || store.catalog().groups,
+                        move || store.groups(),
                         |group| group.id.clone(),
                         move |group, _| {
                             let id = group.get_untracked().id;
@@ -833,32 +852,40 @@ fn sidebar() -> impl IntoElement {
                                             let selected = selected.clone();
                                             move || store.place() == Place::Library && store.filter() == selected
                                         },
-                                        move || store.show(shown.clone()),
+                                        move || store.act(crate::state::Action::Show(shown.clone())),
                                     )
                                     .flex_1(),
                                 )
                                 .child(
                                     more("Group actions")
-                                        .child(menu_action(Icon::Pencil, l("Rename…"), {
-                                            let id = deleted.clone();
-                                            move || ask(Named::Group(id.clone()), group.get_untracked().name)
-                                        }))
-                                        .child(menu_danger(Icon::Trash, l("Delete group…"), move || {
-                                            let id = deleted.clone();
-                                            confirm_destructive(
-                                                format!("{} “{}”?", tr("Delete group"), group.get_untracked().name),
-                                                tr("Its recordings stay in the Library."),
-                                                tr("Cancel"),
-                                                tr("Delete"),
-                                                move || store.delete_group(&id),
-                                            );
-                                        })),
+                                        .child(MenuAction {
+                                            glyph: Icon::Pencil,
+                                            label: l("Rename…"),
+                                            on_select: {
+                                                let id = deleted.clone();
+                                                move || ask(Named::Group(id.clone()), group.get_untracked().name)
+                                            },
+                                        })
+                                        .child(MenuDanger {
+                                            glyph: Icon::Trash,
+                                            label: l("Delete group…"),
+                                            on_select: move || {
+                                                let id = deleted.clone();
+                                                confirm_destructive(
+                                                    format!("{} “{}”?", tr("Delete group"), group.get_untracked().name),
+                                                    tr("Its recordings stay in the Library."),
+                                                    tr("Cancel"),
+                                                    tr("Delete"),
+                                                    move || store.act(crate::state::Action::DeleteGroup(&id)),
+                                                );
+                                            },
+                                        }),
                                 )
                         },
                     ))
                     .child(heading("Tags", "New tag", move || ask(Named::NewTag, String::new())))
                     .child(each(
-                        move || store.catalog().tags,
+                        move || store.tags(),
                         |tag| tag.id.clone(),
                         move |tag, _| {
                             let id = tag.get_untracked().id;
@@ -874,34 +901,42 @@ fn sidebar() -> impl IntoElement {
                                         move || tag.with(|t| SharedString::from(t.name.clone())),
                                         move || Some(store.count(&counted)),
                                         move || store.place() == Place::Library && store.filter() == selected,
-                                        move || store.show(shown.clone()),
+                                        move || store.act(crate::state::Action::Show(shown.clone())),
                                     )
                                     .flex_1(),
                                 )
                                 .child(
                                     more("Tag actions")
-                                        .child(menu_action(Icon::Pencil, l("Rename…"), move || {
-                                            let tag = tag.get_untracked();
-                                            ask(Named::Tag(tag.id), tag.name);
-                                        }))
-                                        .child(menu_danger(Icon::Trash, l("Delete tag…"), move || {
-                                            let id = deleted.clone();
-                                            confirm_destructive(
-                                                format!("{} “{}”?", tr("Delete tag"), tag.get_untracked().name),
-                                                tr("It is taken off its recordings, which stay in the Library."),
-                                                tr("Cancel"),
-                                                tr("Delete"),
-                                                move || store.delete_tag(&id),
-                                            );
-                                        })),
+                                        .child(MenuAction {
+                                            glyph: Icon::Pencil,
+                                            label: l("Rename…"),
+                                            on_select: move || {
+                                                let tag = tag.get_untracked();
+                                                ask(Named::Tag(tag.id), tag.name);
+                                            },
+                                        })
+                                        .child(MenuDanger {
+                                            glyph: Icon::Trash,
+                                            label: l("Delete tag…"),
+                                            on_select: move || {
+                                                let id = deleted.clone();
+                                                confirm_destructive(
+                                                    format!("{} “{}”?", tr("Delete tag"), tag.get_untracked().name),
+                                                    tr("It is taken off its recordings, which stay in the Library."),
+                                                    tr("Cancel"),
+                                                    tr("Delete"),
+                                                    move || store.act(crate::state::Action::DeleteTag(&id)),
+                                                );
+                                            },
+                                        }),
                                 )
                         },
                     )),
             ),
         )
-        .child(modal(
-            naming,
-            move || {
+        .child(Modal {
+            open: naming,
+            title: move || {
                 tr(match named.get() {
                     Named::NewGroup => "New group",
                     Named::Group(_) => "Rename group",
@@ -909,8 +944,8 @@ fn sidebar() -> impl IntoElement {
                     Named::Tag(_) => "Rename tag",
                 })
             },
-            380.0,
-            move || {
+            width: 380.0,
+            content: move || {
                 field(
                     l("Name"),
                     text_field_with(name, SharedString::default, move |input| {
@@ -919,33 +954,46 @@ fn sidebar() -> impl IntoElement {
                 )
                 .into_element()
             },
-            move || {
+            actions: move || {
                 let label = move || {
                     tr(match named.get() {
                         Named::NewGroup | Named::NewTag => "Create",
                         Named::Group(_) | Named::Tag(_) => "Rename",
                     })
                 };
-                modal_actions(naming, l("Cancel"), label, move || !name.with(|n| n.trim().is_empty()), commit)
+                ModalActions {
+                    open: naming,
+                    cancel: l("Cancel"),
+                    commit: label,
+                    enabled: move || !name.with(|n| n.trim().is_empty()),
+                    on_commit: commit,
+                }
+                .into_element()
             },
-        ))
+        })
         .child(
             view()
                 .p_2()
                 .gap(px(2.0))
                 .child(when(
-                    move || store.capture.pending(),
+                    move || crate::work::capture::CaptureState::get().pending(),
                     move || {
                         row(
                             Icon::Record,
                             l("Recording"),
                             || None,
-                            move || store.capture.open.get(),
-                            move || store.capture.open.set(true),
+                            move || crate::work::capture::CaptureState::get().is_open(),
+                            move || {
+                                crate::work::capture::CaptureState::get()
+                                    .act(crate::work::capture::CaptureAction::Reopen)
+                            },
                         )
                         .child(when(
-                            move || store.capture.recording(),
-                            move || ui::recording_dot(move || !store.capture.paused(), 8.0),
+                            move || crate::work::capture::CaptureState::get().recording(),
+                            move || ui::RecordingDot {
+                                live: move || !crate::work::capture::CaptureState::get().paused(),
+                                side: 8.0,
+                            },
                         ))
                         .child(
                             text(pages::capture_status)
@@ -957,8 +1005,14 @@ fn sidebar() -> impl IntoElement {
                     },
                 ))
                 .child(
-                    row(Icon::Devices, l("Sync"), || None, move || store.sync.open.get(), move || store.sync.show())
-                        .child(text(sync_status).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground)),
+                    row(
+                        Icon::Devices,
+                        l("Sync"),
+                        || None,
+                        move || crate::work::sync::SyncState::get().is_shown(),
+                        move || crate::work::sync::SyncState::get().act(crate::work::sync::SyncAction::Show),
+                    )
+                    .child(text(sync_status).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground)),
                 )
                 .child(row(
                     Icon::Settings,
@@ -972,20 +1026,22 @@ fn sidebar() -> impl IntoElement {
 
 fn podcast_player() -> impl IntoElement {
     let store = store();
-    let player = store.podcast;
+    let player = crate::state::podcast::PodcastState::get();
     let element = element_ref();
     let controls = std::rc::Rc::new(media::claim(move |command| match command {
-        media::Command::Play => player.set_paused(false),
-        media::Command::Pause => player.set_paused(true),
-        media::Command::Toggle => player.set_paused(!player.paused()),
-        media::Command::Next => player.seek_to(player.position_ms() + 30_000),
-        media::Command::Previous => player.seek_to(player.position_ms() - 15_000),
-        media::Command::Seek(position_ms) => player.seek_to(position_ms),
+        media::Command::Play => player.act(crate::state::podcast::PodcastAction::SetPaused(false)),
+        media::Command::Pause => player.act(crate::state::podcast::PodcastAction::SetPaused(true)),
+        media::Command::Toggle => player.act(crate::state::podcast::PodcastAction::SetPaused(!player.paused())),
+        media::Command::Next => player.act(crate::state::podcast::PodcastAction::SeekTo(player.position_ms() + 30_000)),
+        media::Command::Previous => {
+            player.act(crate::state::podcast::PodcastAction::SeekTo(player.position_ms() - 15_000))
+        }
+        media::Command::Seek(position_ms) => player.act(crate::state::podcast::PodcastAction::SeekTo(position_ms)),
     }));
-    let sleeps = untracked(|| store.sleep.stops());
+    let sleeps = untracked(|| crate::state::sleep::SleepState::get().stops());
     effect(move || {
-        if store.sleep.stops() != sleeps {
-            untracked(|| player.set_paused(true));
+        if crate::state::sleep::SleepState::get().stops() != sleeps {
+            untracked(|| player.act(crate::state::podcast::PodcastAction::SetPaused(true)));
         }
     });
     let beat = computed(move || player.position_ms() / 5000);
@@ -1008,7 +1064,7 @@ fn podcast_player() -> impl IntoElement {
     });
     effect(move || {
         if store.open_job_id().is_some() || store.video_playing() {
-            player.set_paused(true);
+            player.act(crate::state::podcast::PodcastAction::SetPaused(true));
         }
     });
     video(move || player.playing().map(|playing| playing.source).unwrap_or_default())
@@ -1024,15 +1080,19 @@ fn podcast_player() -> impl IntoElement {
             }
         })
         .on_progress(move |progress: &VideoProgress| {
-            player.report((progress.current_time * 1000.0) as i64, (progress.duration * 1000.0) as i64);
+            player.act(crate::state::podcast::PodcastAction::Report(
+                (progress.current_time * 1000.0) as i64,
+                (progress.duration * 1000.0) as i64,
+            ));
             if !untracked(|| player.paused()) {
-                store.activity.note(listenook_core::activity::Kind::Listen);
-                store.sleep.heard();
+                crate::state::activity::ActivityState::get()
+                    .act(crate::state::activity::ActivityAction::Note(listenook_core::activity::Kind::Listen));
+                crate::state::sleep::SleepState::get().act(crate::state::sleep::SleepAction::Heard);
             }
         })
         .on_end(move || {
-            store.sleep.ended();
-            player.set_paused(true);
+            crate::state::sleep::SleepState::get().ended();
+            player.act(crate::state::podcast::PodcastAction::SetPaused(true));
         })
         .absolute()
         .size(px(1.0))
@@ -1041,13 +1101,13 @@ fn podcast_player() -> impl IntoElement {
 
 fn mini_player() -> impl IntoElement {
     let store = store();
-    let player = store.podcast;
+    let player = crate::state::podcast::PodcastState::get();
     let entrance = motion().entering(MotionPreset::FadeInUp);
     let dragging = signal(None::<f64>);
     let on_track = computed(move || track_position(player.position_ms(), player.duration_ms()));
     let second = computed(move || player.position_ms() / 1000 * 1000);
     on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, move |_| {
-        player.set_paused(!player.paused())
+        player.act(crate::state::podcast::PodcastAction::SetPaused(!player.paused()))
     });
     let track_slider = move || {
         slider(
@@ -1056,7 +1116,7 @@ fn mini_player() -> impl IntoElement {
             move || player.duration_ms() as f64,
             move |value| dragging.set(Some(value)),
             move |value| {
-                player.seek_to(value as i64);
+                player.act(crate::state::podcast::PodcastAction::SeekTo(value as i64));
                 dragging.set(None);
             },
         )
@@ -1066,8 +1126,8 @@ fn mini_player() -> impl IntoElement {
         if let Some(playing) = player.playing()
             && let Some(feed_url) = player.feed_url_of(&playing.episode.id)
         {
-            store.go(Place::Podcasts);
-            player.open_show.set(Some(feed_url));
+            store.act(crate::state::Action::Go(Place::Podcasts));
+            player.act(crate::state::podcast::PodcastAction::Show(&feed_url));
         }
     };
     view()
@@ -1102,12 +1162,26 @@ fn mini_player() -> impl IntoElement {
                             .flex_row()
                             .items_center()
                             .gap_1()
-                            .child(icon_button(Icon::SkipBack, tr("Back 15 seconds"), Size::Sm, move || {
-                                player.seek_to(player.position_ms() - 15_000)
-                            }))
-                            .child(icon_button(Icon::SkipForward, tr("Forward 30 seconds"), Size::Sm, move || {
-                                player.seek_to(player.position_ms() + 30_000)
-                            }))
+                            .child(IconButton {
+                                glyph: Icon::SkipBack,
+                                name: tr("Back 15 seconds"),
+                                size: Size::Sm,
+                                on_press: move || {
+                                    player.act(crate::state::podcast::PodcastAction::SeekTo(
+                                        player.position_ms() - 15_000,
+                                    ))
+                                },
+                            })
+                            .child(IconButton {
+                                glyph: Icon::SkipForward,
+                                name: tr("Forward 30 seconds"),
+                                size: Size::Sm,
+                                on_press: move || {
+                                    player.act(crate::state::podcast::PodcastAction::SeekTo(
+                                        player.position_ms() + 30_000,
+                                    ))
+                                },
+                            })
                     },
                 ))
                 .child(
@@ -1120,10 +1194,10 @@ fn mini_player() -> impl IntoElement {
                         .py_1()
                         .px_1p5()
                         .mx(px(-6.0))
-                        .rounded(tokens::radius)
+                        .rounded(|| tokens::corner(tokens::Corner::Medium))
                         .transition_colors()
                         .duration(motion::INSTANT)
-                        .hover(|s| s.bg(tokens::hover_wash))
+                        .hover(|s| s.bg(|| tokens::ink(tokens::Ink::HoverWash)))
                         .active(|s| s.bg(|| theme().accent))
                         .style_when(platform::compact, |s| s.flex_grow(1.0))
                         .child(
@@ -1159,26 +1233,31 @@ fn mini_player() -> impl IntoElement {
                     Variant::Ghost,
                     move || player.rate(),
                     move |rate| {
-                        player.set_rate(rate);
-                        store.save_rate("podcast_rate", rate);
+                        player.act(crate::state::podcast::PodcastAction::SetRate(rate));
+                        store.act(crate::state::Action::SaveRate("podcast_rate", rate));
                     },
                 ))
                 .child(sleep_menu(Variant::Ghost, "When the episode ends"))
-                .child(icon_button(Icon::Close, tr("Close player"), Size::Md, move || player.stop())),
+                .child(IconButton {
+                    glyph: Icon::Close,
+                    name: tr("Close player"),
+                    size: Size::Md,
+                    on_press: move || player.act(crate::state::podcast::PodcastAction::Stop),
+                }),
         )
 }
 
 fn artwork_toggle() -> impl IntoElement {
     const SIZE: f32 = 44.0;
-    let player = store().podcast;
+    let player = crate::state::podcast::PodcastState::get();
     let artwork = computed(move || player.playing().map(|p| p.artwork).unwrap_or_default());
     let scrim = move || if artwork.with(String::is_empty) { 0.0 } else { 0.35 };
     nsh_base::button()
         .accessibility_label(move || Some(if player.paused() { tr("Play") } else { tr("Pause playback") }))
-        .on_press(move || player.set_paused(!player.paused()))
+        .on_press(move || player.act(crate::state::podcast::PodcastAction::SetPaused(!player.paused())))
         .size(px(SIZE))
         .flex_shrink_0()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .overflow_hidden()
         .items_center()
         .justify_center()
@@ -1197,72 +1276,4 @@ fn artwork_toggle() -> impl IntoElement {
             move || if artwork.with(String::is_empty) { theme().foreground } else { theme().foreground.dark.into() },
         )
         .child(icon_of(move || if player.paused() { Icon::Play } else { Icon::Pause }, 20.0))
-}
-
-pub(crate) fn time_text(ms: impl Fn() -> i64 + 'static) -> Text {
-    text(move || clock(ms())).text_xs().tabular_nums().text_color(|| theme().muted_foreground)
-}
-
-pub(crate) fn rate_menu(
-    variant: Variant,
-    rate: impl Fn() -> f32 + Copy + 'static,
-    set: impl Fn(f32) + Copy + 'static,
-) -> impl IntoElement {
-    menu(ui::menu_button(variant, Size::Sm, tr("Playback speed"), move || rate_label(rate()))).children(
-        RATES.iter().map(move |option| {
-            let option = *option;
-            ui::menu_choice(rate_label(option), move || (rate() - option).abs() < 0.001, move || set(option))
-        }),
-    )
-}
-
-const SLEEP_AFTER: &[(i64, &str)] =
-    &[(5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (45, "45 minutes"), (60, "1 hour")];
-
-/// The sleep timer's button, showing the time left while it counts (in place
-/// of the moon on a narrow page), and its choices; `end` names stopping when
-/// what plays ends.
-pub(crate) fn sleep_menu(variant: Variant, end: &'static str) -> impl IntoElement {
-    let sleep = store().sleep;
-    let left = move || sleep.timer().countdown().map(SharedString::from);
-    let on = move || sleep.timer().is_on();
-    let trigger = ui::menu_glyph_label_button(variant, Size::Sm, tr("Sleep timer"), Icon::Sleep, left, on, page_narrow);
-    menu(trigger)
-        .child(ui::menu_choice(l("Off"), move || !sleep.timer().is_on(), move || sleep.set(Sleep::Off)))
-        .children(SLEEP_AFTER.iter().map(move |&(minutes, label)| {
-            ui::menu_choice(
-                l(label),
-                move || sleep.timer().minutes_chosen() == Some(minutes),
-                move || sleep.set(Sleep::minutes(minutes)),
-            )
-        }))
-        .child(ui::menu_choice(l(end), move || sleep.timer() == Sleep::AtEnd, move || sleep.set(Sleep::AtEnd)))
-}
-
-pub(crate) fn top_bar() -> View {
-    let store = store();
-    if system_header() {
-        return view().flex_shrink_0().flex_row().items_center().gap_2().px(px(ui::PAGE_INSET)).py_2();
-    }
-    let alone = move || (store.sidebar_hidden() || platform::compact()) && !store.immersive();
-    view()
-        .h(px(BAR))
-        .flex_shrink_0()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .style_with(move |s| {
-            let controls = title_bar();
-            let left = if alone() && controls.left.0 > 0.0 { controls.left.0 + CONTROLS_GAP } else { ui::PAGE_INSET };
-            let right = if controls.right.0 > 0.0 { controls.right.0 + CONTROLS_GAP } else { ui::PAGE_INSET };
-            s.pl(px(left)).pr(px(right))
-        })
-        .child(when(alone, move || {
-            view()
-                .window_drag(false)
-                .child(icon_button(Icon::Sidebar, tr("Show sidebar"), Size::Sm, move || store.toggle_sidebar()))
-        }))
-        .border_b_1()
-        .border_color(|| theme().border)
-        .window_drag(true)
 }

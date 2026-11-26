@@ -4,8 +4,11 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use listenook_core::subtitles;
+use listenook_core::media::subtitles;
+use nsh_core::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use crate::services::persist;
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -56,6 +59,167 @@ impl MonitorFile {
         }
         self.records.insert(path.to_owned(), record);
     }
+
+    /// One of the choices of how the app shows on the desktop that the file keeps beside the
+    /// folder: on or off, `default` until it is chosen.
+    fn flag(&self, key: &str, default: bool) -> bool {
+        self.config.extra.get(key).and_then(serde_json::Value::as_bool).unwrap_or(default)
+    }
+
+    fn set_flag(&mut self, key: &str, on: bool) {
+        self.config.extra.insert(key.into(), on.into());
+    }
+
+    fn watch(&mut self, folder: &str) {
+        self.config.folder_path = folder.to_owned();
+        self.config.paused = false;
+    }
+
+    fn pause(&mut self, paused: bool) {
+        self.config.paused = paused;
+    }
+
+    /// The folder to look in now, unless none is chosen or watching it is paused.
+    fn folder(&self) -> Option<PathBuf> {
+        (!self.config.folder_path.is_empty() && !self.config.paused).then(|| PathBuf::from(&self.config.folder_path))
+    }
+}
+
+/// The folder the app watches for new media, and how it shows on the desktop (the tray, the
+/// Dock, opening at login), which the same file keeps.
+#[derive(Clone, Copy)]
+pub(crate) struct MonitorState {
+    file: Signal<MonitorFile>,
+    last_scan: Stored<BTreeMap<String, Seen>>,
+    /// Whether a walk of the watched folder is running: a slow folder takes longer than the
+    /// time between scans, and walks must not pile up.
+    scanning: Stored<bool>,
+}
+
+/// What the person chooses of the watched folder and of how the app shows on the desktop.
+#[derive(Debug)]
+pub(crate) enum MonitorAction<'a> {
+    /// Shows the tray icon or not; it stays while the Dock icon is hidden, as one of them must show.
+    SetTrayEnabled(bool),
+    /// Shows the Dock icon or not; it stays while the tray icon is off, as one of them must show.
+    SetDockVisible(bool),
+    SetOpensAtLogin(bool),
+    /// Watches `folder` from now on; an empty one stops watching.
+    WatchFolder(&'a str),
+    SetPaused(bool),
+}
+
+impl MonitorState {
+    /// Does `action`.
+    pub(crate) fn act(&self, action: MonitorAction<'_>) {
+        match action {
+            MonitorAction::SetTrayEnabled(enabled) => self.set_tray_enabled(enabled),
+            MonitorAction::SetDockVisible(visible) => self.set_dock_visible(visible),
+            MonitorAction::SetOpensAtLogin(enabled) => self.set_opens_at_login(enabled),
+            MonitorAction::WatchFolder(folder) => self.watch_folder(folder),
+            MonitorAction::SetPaused(paused) => self.set_paused(paused),
+        }
+    }
+
+    pub(crate) fn install() {
+        let file = persist::data_root().as_deref().map(load).unwrap_or_default();
+        super::install(Self { file: signal(file), last_scan: stored(BTreeMap::new()), scanning: stored(false) });
+    }
+
+    pub(crate) fn get() -> Self {
+        super::installed()
+    }
+
+    pub(crate) fn config(&self) -> MonitorConfig {
+        self.file.with(|file| file.config.clone())
+    }
+
+    fn change(&self, change: impl FnOnce(&mut MonitorFile)) {
+        self.file.update(change);
+        if let Some(root) = persist::data_root()
+            && let Err(error) = save(&root, &self.file.get_untracked())
+        {
+            log::error!("saving the folder monitor: {error}");
+        }
+    }
+
+    pub(crate) fn tray_enabled(&self) -> bool {
+        self.file.with(|file| file.flag("show_tray_icon", cfg!(target_os = "macos")))
+    }
+
+    /// Shows the tray icon or not; it stays while the Dock icon is hidden, as one of them must show.
+    fn set_tray_enabled(&self, enabled: bool) {
+        if enabled || untracked(|| self.dock_visible()) {
+            self.change(|file| file.set_flag("show_tray_icon", enabled));
+        }
+    }
+
+    pub(crate) fn dock_visible(&self) -> bool {
+        !cfg!(target_os = "macos") || !self.tray_enabled() || self.file.with(|file| file.flag("show_dock_icon", true))
+    }
+
+    /// Shows the Dock icon or not; it stays while the tray icon is off, as one of them must show.
+    fn set_dock_visible(&self, visible: bool) {
+        if visible || untracked(|| self.tray_enabled()) {
+            self.change(|file| file.set_flag("show_dock_icon", visible));
+        }
+    }
+
+    pub(crate) fn opens_at_login(&self) -> bool {
+        self.file.with(|file| file.flag("launch_at_login", false))
+    }
+
+    fn set_opens_at_login(&self, enabled: bool) {
+        if crate::services::login::set(enabled) {
+            self.change(|file| file.set_flag("launch_at_login", enabled));
+        }
+    }
+
+    /// Watches `folder` from now on; an empty one stops watching.
+    fn watch_folder(&self, folder: &str) {
+        self.last_scan.replace(BTreeMap::new());
+        self.change(|file| file.watch(folder));
+    }
+
+    fn set_paused(&self, paused: bool) {
+        self.change(|file| file.pause(paused));
+    }
+
+    /// Walks the watched folder, unless none is watched or a walk is running: the media that
+    /// has stopped changing since the last walk and was not taken before, now taken.
+    pub(crate) async fn take_settled(&self) -> Vec<String> {
+        let Some(folder) = self.file.with_untracked(MonitorFile::folder) else {
+            return Vec::new();
+        };
+        if self.scanning.replace(true) {
+            return Vec::new();
+        }
+        let scanned = blocking(move || scan(&folder)).await;
+        self.scanning.replace(false);
+        let Ok(Some(now)) = scanned else {
+            return Vec::new();
+        };
+        let last = self.last_scan.replace(now.clone());
+        let taken = self.file.with_untracked(|file| settled(&last, &now, file));
+        if !taken.is_empty() {
+            self.change(|file| {
+                for path in &taken {
+                    if let Some(state) = now.get(path) {
+                        file.record(path, state, None);
+                    }
+                }
+            });
+        }
+        taken
+    }
+}
+
+fn load(root: &Path) -> MonitorFile {
+    persist::read_json(&root.join("inbox_monitor.json")).unwrap_or_default()
+}
+
+fn save(root: &Path, file: &MonitorFile) -> std::io::Result<()> {
+    persist::write_json(&root.join("inbox_monitor.json"), file)
 }
 
 pub(crate) fn scan(folder: &Path) -> Option<BTreeMap<String, Seen>> {
@@ -73,7 +237,7 @@ pub(crate) fn scan(folder: &Path) -> Option<BTreeMap<String, Seen>> {
             };
             if metadata.is_dir() {
                 pending.push(path);
-            } else if let Some(text) = path.to_str().filter(|text| subtitles::is_media(text)) {
+            } else if let Some(text) = path.to_str().filter(|text| subtitles::is(text, subtitles::Kind::Media)) {
                 let modified_ms = metadata
                     .modified()
                     .ok()

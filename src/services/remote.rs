@@ -11,7 +11,7 @@ use listenook_core::Job;
 use nsh_core::prelude::*;
 use serde_json::{Value, json};
 
-use crate::state::secrets::Secret;
+use crate::services::secrets::Secret;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Failure {
@@ -201,21 +201,22 @@ impl Provider {
     pub(crate) async fn create(self, file_id: &str, job: &Job, key: &str) -> Result<String, Failure> {
         match self {
             Provider::Soniox => {
+                let options = job.options();
                 let mut body = json!({
                     "model": SONIOX_MODEL,
                     "file_id": file_id,
                     "enable_language_identification": true,
                     "enable_speaker_diarization": true,
                 });
-                if !job.options.language_hints.is_empty() {
-                    body["language_hints"] = json!(job.options.language_hints);
+                if !options.language_hints.is_empty() {
+                    body["language_hints"] = json!(options.language_hints);
                 }
-                let translation = &job.options.soniox_translation;
+                let translation = &options.soniox_translation;
                 if translation.enabled && !translation.target_language.is_empty() {
                     body["translation"] = json!({"type": "one_way", "target_language": translation.target_language});
                 }
-                if !job.options.context_terms.is_empty() {
-                    body["context"] = json!({"terms": job.options.context_terms});
+                if !options.context_terms.is_empty() {
+                    body["context"] = json!({"terms": options.context_terms});
                 }
                 let answer = self.post("/transcriptions", &body, key).await?;
                 self.id_of(&answer, &["id"])

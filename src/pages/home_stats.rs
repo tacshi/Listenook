@@ -7,13 +7,14 @@ use listenook_core::{
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
+use crate::ui::{l, tr};
 use crate::{
-    shell::page_width,
-    state::{l, store, tr},
+    pages::chrome::page_width,
+    state::store,
     ui::{
-        self, Icon, Size, card,
+        self, Icon, MenuChoice, Segmented, Size, card,
         chart::{self, DayBar, HeatDay},
-        icon, menu_choice, segmented,
+        icon,
     },
 };
 
@@ -163,16 +164,18 @@ fn goal_s() -> u32 {
 
 /// Whether there is history worth a chart: time on two days or more.
 pub(crate) fn has_history() -> bool {
-    store().activity.with(|log| log.active_days() >= 2)
+    crate::state::activity::ActivityState::get().with(|log| log.active_days() >= 2)
 }
 
 /// Today against the daily goal. `wide` lays it out as a column beside
 /// Continue; otherwise as a row.
 pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoElement {
     let store = store();
-    let today = computed(move || store.activity.with(|log| log.on(activity::today())));
+    let today = computed(move || crate::state::activity::ActivityState::get().with(|log| log.on(activity::today())));
     let goal = move || store.daily_goal_minutes();
-    let streak = computed(move || store.activity.with(|log| log.streak(activity::today(), goal_s())));
+    let streak = computed(move || {
+        crate::state::activity::ActivityState::get().with(|log| log.streak(activity::today(), goal_s()))
+    });
     let shares = move || {
         let (day, goal_s) = (today.get(), (goal() * 60).max(1) as f32);
         (day.listen_s as f32 / goal_s, day.practice_s as f32 / goal_s)
@@ -183,12 +186,10 @@ pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoE
     };
     let open = signal(false);
     let goal_menu = ui::menu_with(open, ui::menu_trigger(Icon::Target, tr("Daily goal"), Size::Sm, open)).children(
-        GOALS.iter().map(move |&minutes| {
-            menu_choice(
-                move || SharedString::from(goal_choice(minutes)),
-                move || store.daily_goal_minutes() == minutes,
-                move || store.set_daily_goal_minutes(minutes),
-            )
+        GOALS.iter().map(move |&minutes| MenuChoice {
+            label: move || SharedString::from(goal_choice(minutes)),
+            checked: move || store.daily_goal_minutes() == minutes,
+            on_select: move || store.act(crate::state::Action::SetDailyGoalMinutes(minutes)),
         }),
     );
     let key = move |color: fn() -> AdaptiveColor, name: &'static str, secs: fn(Day) -> u32| {
@@ -196,7 +197,7 @@ pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoE
             .flex_row()
             .items_center()
             .gap_2()
-            .child(chart::swatch(color))
+            .child(chart::Swatch { color })
             .child(text(l(name)).flex_shrink_0().number_of_lines(1).text_sm().text_color(|| theme().muted_foreground))
             .child(
                 text(move || SharedString::from(minutes(secs(today.get()))))
@@ -237,7 +238,7 @@ pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoE
                         .flex_row()
                         .items_center()
                         .gap_1()
-                        .text_color(ui::tokens::warning)
+                        .text_color(|| ui::tokens::ink(ui::tokens::Ink::Warning))
                         .child(icon(Icon::Flame, 14.0))
                         .child(
                             text(move || SharedString::from(streak_words(streak.get())))
@@ -248,14 +249,9 @@ pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoE
                 },
             ))
             .child(when(move || streak.get() > 0, || text("·").text_xs().text_color(|| theme().muted_foreground)))
-            .child(
-                text(status)
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .text_xs()
-                    .number_of_lines(2)
-                    .text_color(move || if met() { ui::tokens::success() } else { theme().muted_foreground }),
-            )
+            .child(text(status).flex_1().min_w(px(0.0)).text_xs().number_of_lines(2).text_color(move || {
+                if met() { ui::tokens::ink(ui::tokens::Ink::Success) } else { theme().muted_foreground }
+            }))
     };
     let header = view()
         .flex_row()
@@ -299,7 +295,13 @@ pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoE
                             .flex_row()
                             .items_center()
                             .gap_3()
-                            .child(chart::goal_ring(shares, 96.0, 10.0, ring_label, center(true)))
+                            .child(chart::GoalRing {
+                                shares,
+                                size: 96.0,
+                                thickness: 10.0,
+                                label: ring_label,
+                                center: center(true),
+                            })
                             .child(view().flex_1().min_w(px(0.0)).child(keys())),
                     )
                     .child(status_line())
@@ -309,7 +311,13 @@ pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoE
                     .flex_row()
                     .items_center()
                     .gap_4()
-                    .child(chart::goal_ring(shares, 88.0, 9.0, ring_label, center(false)))
+                    .child(chart::GoalRing {
+                        shares,
+                        size: 88.0,
+                        thickness: 9.0,
+                        label: ring_label,
+                        center: center(false),
+                    })
                     .child(view().flex_1().min_w(px(0.0)).gap_3().child(keys()).child(status_line()))
                     .into_element()
             }
@@ -336,7 +344,7 @@ pub(crate) fn activity_card() -> impl IntoElement {
     let goal = computed(move || store.daily_goal_minutes());
     let days = computed(move || {
         let (today, n) = (today.get(), range.get().days());
-        store.activity.with(|log| log.days(today, n))
+        crate::state::activity::ActivityState::get().with(|log| log.days(today, n))
     });
     let total = move || days.with(|days| days.iter().map(|(_, day)| day.total_s()).sum::<u32>());
     let summary = move || -> SharedString {
@@ -407,8 +415,8 @@ pub(crate) fn activity_card() -> impl IntoElement {
             .items_center()
             .gap_x_4()
             .gap_y_1()
-            .child(legend_item(chart::swatch(chart::listen_color), l("Listening")))
-            .child(legend_item(chart::swatch(chart::practice_color), l("Practice")))
+            .child(legend_item(chart::Swatch { color: chart::listen_color }, l("Listening")))
+            .child(legend_item(chart::Swatch { color: chart::practice_color }, l("Practice")))
             .child(legend_item(view().w(px(12.0)).h(px(2.0)).rounded_full().bg(chart::goal_color), l("Daily goal")))
     };
     let bars_column = view()
@@ -447,7 +455,7 @@ pub(crate) fn activity_card() -> impl IntoElement {
     let heat_weeks = move || if side_by_side() { HEAT_WEEKS } else { weeks_fitting(content_width() - CARD_INSET) };
     let calendar = dynamic(move || {
         let (weeks, today, goal_s) = (heat_weeks(), today.get(), goal.get() * 60);
-        let log = store.activity.log();
+        let log = crate::state::activity::ActivityState::get().log();
         untracked(move || {
             let start = today - activity::Days::new(u64::from(weekday_index(today) + 7 * (weeks - 1)));
             let totals = log.days(today, (today - start).num_days() as u32 + 1);
@@ -482,7 +490,8 @@ pub(crate) fn activity_card() -> impl IntoElement {
     let period = computed(move || {
         let (weeks, today, goal_s) = (heat_weeks(), today.get(), goal.get() * 60);
         let start = today - activity::Days::new(u64::from(weekday_index(today) + 7 * (weeks - 1)));
-        let totals = store.activity.with(|log| log.days(today, (today - start).num_days() as u32 + 1));
+        let totals = crate::state::activity::ActivityState::get()
+            .with(|log| log.days(today, (today - start).num_days() as u32 + 1));
         let learned = totals.iter().filter(|(_, time)| time.total_s() > 0).count() as u32;
         let met: Vec<bool> = totals.iter().map(|(_, time)| time.total_s() >= goal_s).collect();
         let at_goal = met.iter().filter(|met| **met).count() as u32;
@@ -537,7 +546,7 @@ pub(crate) fn activity_card() -> impl IntoElement {
                             .text_color(|| theme().foreground)
                     },
                 )
-                .otherwise(|| chart::heat_key(l("Less"), l("More"))),
+                .otherwise(|| chart::HeatKey { less: l("Less"), more: l("More") }),
             ),
         );
     let calendar_column = view()
@@ -559,14 +568,14 @@ pub(crate) fn activity_card() -> impl IntoElement {
                 .text_color(|| theme().foreground)
                 .role(AccessibilityRole::Header),
         )
-        .child(segmented(
-            vec![(Range::Week, "Week"), (Range::Month, "Month")],
-            move || range.get(),
-            move |next| {
+        .child(Segmented {
+            options: vec![(Range::Week, "Week"), (Range::Month, "Month")],
+            value: move || range.get(),
+            on_change: move |next| {
                 hovered.set(None);
                 range.set(next);
             },
-        ));
+        });
     view().gap_3().child(header).child(
         card()
             .p_4()
@@ -577,7 +586,7 @@ pub(crate) fn activity_card() -> impl IntoElement {
     )
 }
 
-fn legend_item(mark: View, name: impl IntoReactive<SharedString>) -> View {
+fn legend_item(mark: impl IntoElement, name: impl IntoReactive<SharedString>) -> View {
     view()
         .flex_row()
         .items_center()

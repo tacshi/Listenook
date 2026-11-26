@@ -6,15 +6,17 @@
 use std::rc::Rc;
 
 use listenook_core::{
-    capture::{self, Span},
     format,
+    media::capture::{self, Span},
 };
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
+use crate::ui::{error_text, l, tr};
+use crate::work::capture::Phase;
 use crate::{
     services::capture::{self as service, Support},
-    state::{capture::Phase, error_text, l, store, tr},
+    state::store,
     ui::{self, Icon, Size, Variant, button, icon, icon_text_button},
 };
 
@@ -25,12 +27,12 @@ pub(crate) fn offered() -> bool {
 }
 
 fn clock(ms: u64) -> SharedString {
-    format::clock(ms as i64).into()
+    format::shown(format::Shown::Clock(ms as i64)).into()
 }
 
 /// What the sidebar says beside a recording that waits.
 pub(crate) fn status() -> SharedString {
-    let capture = store().capture;
+    let capture = crate::work::capture::CaptureState::get();
     match capture.phase() {
         // Paused, the light beside it turns grey.
         Phase::Recording | Phase::Stopping => clock(capture.elapsed_ms()),
@@ -45,9 +47,15 @@ pub(crate) fn status() -> SharedString {
 /// beside it, and show it.
 pub(crate) fn add_button() -> AnyElement {
     if !offered() {
-        return ui::icon_button(Icon::Plus, tr("Add media…"), Size::Sm, crate::util::pick_media).into_element();
+        return ui::IconButton {
+            glyph: Icon::Plus,
+            name: tr("Add media…"),
+            size: Size::Sm,
+            on_press: crate::work::import::pick_media,
+        }
+        .into_element();
     }
-    let capture = store().capture;
+    let capture = crate::work::capture::CaptureState::get();
     let open = signal(false);
     view()
         .flex_row()
@@ -61,54 +69,54 @@ pub(crate) fn add_button() -> AnyElement {
                     move || !capture.paused(),
                     move || clock(capture.elapsed_ms()),
                 )
-                .on_press(move || capture.open.set(true))
+                .on_press(move || capture.act(crate::work::capture::CaptureAction::Reopen))
             },
         ))
         .child(
             ui::menu_with(open, ui::menu_trigger(Icon::Plus, tr("Add to Library"), Size::Sm, open))
-                .child(ui::menu_source(
-                    Icon::File,
-                    l("Files…"),
-                    l("Audio or video on this computer"),
-                    "mod+o",
-                    crate::util::pick_media,
-                ))
-                .child(ui::menu_source(
-                    Icon::Record,
-                    move || tr(if capture.pending() { "Show the recording" } else { "Record what’s playing" }),
-                    move || {
+                .child(ui::MenuSource {
+                    glyph: Icon::File,
+                    label: l("Files…"),
+                    detail: l("Audio or video on this computer"),
+                    shortcut: "mod+o",
+                    on_select: crate::work::import::pick_media,
+                })
+                .child(ui::MenuSource {
+                    glyph: Icon::Record,
+                    label: move || tr(if capture.pending() { "Show the recording" } else { "Record what’s playing" }),
+                    detail: move || {
                         if capture.pending() {
                             format!("{} · {}", tr("Recording"), status()).into()
                         } else {
                             tr("Sound from a video or app as it plays")
                         }
                     },
-                    "mod+shift+r",
-                    move || capture.record(),
-                )),
+                    shortcut: "mod+shift+r",
+                    on_select: move || capture.act(crate::work::capture::CaptureAction::Record),
+                }),
         )
         .into_element()
 }
 
 pub(crate) fn capture_dialog() -> impl IntoElement {
     let store = store();
-    let capture = store.capture;
+    let capture = crate::work::capture::CaptureState::get();
     let phase = computed(move || capture.phase());
     // Back from System Settings with recording allowed: it starts.
     effect(move || {
         if store.focused() && phase.get() == Phase::Denied {
-            untracked(|| capture.retry());
+            untracked(|| capture.act(crate::work::capture::CaptureAction::Retry));
         }
     });
     let title = move || match phase.get() {
         Phase::Trimming | Phase::Saving => tr("Trim recording"),
         _ => tr("Record what’s playing"),
     };
-    ui::modal(
-        capture.open,
+    ui::Modal {
+        open: capture.dialog(),
         title,
-        600.0,
-        move || {
+        width: 600.0,
+        content: move || {
             dynamic(move || {
                 let shown = phase.get();
                 untracked(|| match shown {
@@ -124,18 +132,21 @@ pub(crate) fn capture_dialog() -> impl IntoElement {
             })
             .into_element()
         },
-        move || {
+        actions: move || {
             dynamic(move || {
                 let shown = phase.get();
                 untracked(|| match shown {
                     Phase::Idle if problem().is_some() => failed_actions(),
                     Phase::Idle | Phase::Starting => button(Variant::Outline, Size::Md, l("Cancel"))
-                        .on_press(move || capture.discard())
+                        .on_press(move || capture.act(crate::work::capture::CaptureAction::Discard))
                         .into_element(),
                     Phase::Denied => view()
                         .flex_row()
                         .gap_2()
-                        .child(button(Variant::Outline, Size::Md, l("Cancel")).on_press(move || capture.discard()))
+                        .child(
+                            button(Variant::Outline, Size::Md, l("Cancel"))
+                                .on_press(move || capture.act(crate::work::capture::CaptureAction::Discard)),
+                        )
                         .child(
                             button(Variant::Primary, Size::Md, l("Open System Settings"))
                                 .on_press(service::open_privacy_settings),
@@ -147,7 +158,7 @@ pub(crate) fn capture_dialog() -> impl IntoElement {
             })
             .into_element()
         },
-    )
+    }
 }
 
 /// What keeps recording from starting: a Mac too old, or the last try's
@@ -156,7 +167,7 @@ fn problem() -> Option<SharedString> {
     if service::support() == Support::NeedsNewerMac {
         return Some(tr("Recording what plays needs macOS 14.2 or later."));
     }
-    store().capture.error().map(error_text)
+    crate::work::capture::CaptureState::get().error().map(error_text)
 }
 
 fn failed() -> impl IntoElement {
@@ -169,8 +180,9 @@ fn failed() -> impl IntoElement {
 }
 
 fn failed_actions() -> AnyElement {
-    let capture = store().capture;
-    let close = button(Variant::Outline, Size::Md, l("Close")).on_press(move || capture.open.set(false));
+    let capture = crate::work::capture::CaptureState::get();
+    let close = button(Variant::Outline, Size::Md, l("Close"))
+        .on_press(move || capture.act(crate::work::capture::CaptureAction::Close));
     if service::support() == Support::NeedsNewerMac {
         return close.into_element();
     }
@@ -178,7 +190,10 @@ fn failed_actions() -> AnyElement {
         .flex_row()
         .gap_2()
         .child(close)
-        .child(button(Variant::Primary, Size::Md, l("Try again")).on_press(move || capture.record()))
+        .child(
+            button(Variant::Primary, Size::Md, l("Try again"))
+                .on_press(move || capture.act(crate::work::capture::CaptureAction::Record)),
+        )
         .into_element()
 }
 
@@ -190,7 +205,7 @@ fn starting() -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap_3()
-                .child(ui::spinner(16.0))
+                .child(ui::Spinner { size: 16.0 })
                 .child(text(l("Getting ready to record…")).text_sm().text_color(|| theme().foreground)),
         )
         .child(when(
@@ -218,10 +233,10 @@ fn denied() -> impl IntoElement {
 }
 
 fn recording() -> impl IntoElement {
-    let capture = store().capture;
+    let capture = crate::work::capture::CaptureState::get();
     on_key("space", move |_| {
         if capture.phase() == Phase::Recording {
-            capture.set_paused(!capture.paused());
+            capture.act(crate::work::capture::CaptureAction::SetPaused(!capture.paused()));
         }
     });
     view()
@@ -231,7 +246,7 @@ fn recording() -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(ui::recording_dot(move || !capture.paused(), 10.0))
+                .child(ui::RecordingDot { live: move || !capture.paused(), side: 10.0 })
                 .child(
                     text(move || tr(if capture.paused() { "Paused" } else { "Recording" }))
                         .text_sm()
@@ -248,7 +263,7 @@ fn recording() -> impl IntoElement {
                         .label(move || format!("{} {}", tr("Recorded"), clock(capture.elapsed_ms()))),
                 ),
         )
-        .child(ui::live_wave(capture.recent(), move || !capture.paused()))
+        .child(ui::LiveWave { levels: capture.recent(), live: move || !capture.paused() })
         .child(ui::hint(move || {
             tr(if capture.heard() {
                 "Recording goes on if you close this window."
@@ -259,7 +274,7 @@ fn recording() -> impl IntoElement {
 }
 
 fn recording_actions() -> AnyElement {
-    let capture = store().capture;
+    let capture = crate::work::capture::CaptureState::get();
     let stopping = move || capture.phase() == Phase::Stopping;
     view()
         .flex_1()
@@ -273,7 +288,7 @@ fn recording_actions() -> AnyElement {
                 let (glyph, label) = if paused { (Icon::Play, "Resume") } else { (Icon::Pause, "Pause") };
                 icon_text_button(Variant::Outline, Size::Md, glyph, l(label))
                     .disabled(stopping)
-                    .on_press(move || capture.set_paused(!paused))
+                    .on_press(move || capture.act(crate::work::capture::CaptureAction::SetPaused(!paused)))
                     .into_element()
             })
         }))
@@ -281,19 +296,19 @@ fn recording_actions() -> AnyElement {
             icon_text_button(Variant::Primary, Size::Md, Icon::Stop, l("Stop"))
                 .busy(stopping)
                 .disabled(stopping)
-                .on_press(move || capture.stop()),
+                .on_press(move || capture.act(crate::work::capture::CaptureAction::Stop)),
         )
         .into_element()
 }
 
 fn confirm_discard() {
-    let capture = store().capture;
+    let capture = crate::work::capture::CaptureState::get();
     ui::confirm_destructive(
         tr("Discard this recording?"),
         tr("It is deleted, and can’t be brought back."),
         tr("Cancel"),
         tr("Discard"),
-        move || capture.discard(),
+        move || capture.act(crate::work::capture::CaptureAction::Discard),
     );
 }
 
@@ -313,10 +328,10 @@ fn silent() -> impl IntoElement {
 }
 
 fn trimming(take: Rc<service::Take>) -> impl IntoElement {
-    let capture = store().capture;
+    let capture = crate::work::capture::CaptureState::get();
     let duration = take.duration_ms;
     let levels = Rc::new(take.levels.clone());
-    let source = crate::util::file_url(&take.path.to_string_lossy());
+    let source = crate::platform::file_url(&take.path.to_string_lossy());
 
     // The preview: plays what is kept, skipping what is cut.
     let player = element_ref();
@@ -371,7 +386,7 @@ fn trimming(take: Rc<service::Take>) -> impl IntoElement {
 
     let kept_ms = move || capture::total_ms(&capture.kept());
     let gap_summary = move || {
-        let trim = capture.trim.get();
+        let trim = capture.trim();
         let inside: Vec<Span> = capture.gaps().with(|gaps| {
             gaps.iter()
                 .filter(|gap| gap.end_ms > trim.start_ms && gap.start_ms < trim.end_ms)
@@ -399,7 +414,7 @@ fn trimming(take: Rc<service::Take>) -> impl IntoElement {
                 // Return saves it as named: stopping, then Return, keeps a recording.
                 input.test_id("recording-name").auto_focus(true).on_submit(move |_: &str| {
                     if capture.phase() == Phase::Trimming {
-                        capture.save(capture.transcribes());
+                        capture.act(crate::work::capture::CaptureAction::Save(capture.transcribes()));
                     }
                 })
             }),
@@ -416,11 +431,12 @@ fn trimming(take: Rc<service::Take>) -> impl IntoElement {
                             let on = playing.get();
                             untracked(|| {
                                 let (glyph, name) = if on { (Icon::Pause, "Pause") } else { (Icon::Play, "Play") };
-                                ui::icon_button(glyph, tr(name), Size::Sm, toggle).into_element()
+                                ui::IconButton { glyph, name: tr(name), size: Size::Sm, on_press: toggle }
+                                    .into_element()
                             })
                         }))
                         .child(
-                            text(move || clock(position.get().unwrap_or(capture.trim.get().start_ms)))
+                            text(move || clock(position.get().unwrap_or(capture.trim().start_ms)))
                                 .text_sm()
                                 .tabular_nums()
                                 .text_color(|| theme().foreground),
@@ -439,28 +455,34 @@ fn trimming(take: Rc<service::Take>) -> impl IntoElement {
                             .text_color(|| theme().muted_foreground),
                         ),
                 )
-                .child(ui::waveform(levels, move || duration, move || capture.kept(), move || position.get(), seek))
-                .child(ui::range_slider(
-                    tr("Trim"),
-                    move || {
-                        let trim = capture.trim.get();
+                .child(ui::Waveform {
+                    levels,
+                    duration_ms: move || duration,
+                    kept: move || capture.kept(),
+                    position_ms: move || position.get(),
+                    seek,
+                })
+                .child(ui::RangeSlider {
+                    name: tr("Trim"),
+                    value: move || {
+                        let trim = capture.trim();
                         (trim.start_ms as f64, trim.end_ms as f64)
                     },
-                    move || duration as f64,
-                    100.0,
-                    move |start, end| {
-                        capture.trim.update(|trim| {
-                            trim.start_ms = start.round() as u64;
-                            trim.end_ms = (end.round() as u64).min(duration);
-                        })
+                    max: move || duration as f64,
+                    step: 100.0,
+                    on_change: move |start: f64, end: f64| {
+                        capture.act(crate::work::capture::CaptureAction::TrimTo(
+                            start.round() as u64,
+                            (end.round() as u64).min(duration),
+                        ))
                     },
-                ))
+                })
                 .child(
                     view()
                         .flex_row()
                         .justify_between()
-                        .child(ui::hint(move || clock(capture.trim.get().start_ms)).tabular_nums())
-                        .child(ui::hint(move || clock(capture.trim.get().end_ms)).tabular_nums()),
+                        .child(ui::hint(move || clock(capture.trim().start_ms)).tabular_nums())
+                        .child(ui::hint(move || clock(capture.trim().end_ms)).tabular_nums()),
                 ),
         )
         .child(
@@ -468,8 +490,8 @@ fn trimming(take: Rc<service::Take>) -> impl IntoElement {
                 .gap_1()
                 .child(ui::switch(
                     l("Cut out silent gaps"),
-                    move || capture.trim.get().cut_gaps,
-                    move |on| capture.set_cut_gaps(on),
+                    move || capture.trim().cut_gaps,
+                    move |on| capture.act(crate::work::capture::CaptureAction::SetCutGaps(on)),
                 ))
                 .child(ui::hint(gap_summary)),
         )
@@ -477,7 +499,7 @@ fn trimming(take: Rc<service::Take>) -> impl IntoElement {
 }
 
 fn trimming_actions() -> AnyElement {
-    let capture = store().capture;
+    let capture = crate::work::capture::CaptureState::get();
     let saving = move || capture.phase() == Phase::Saving;
     let nothing = move || capture.take().is_none_or(|take| !capture::heard(&take.levels));
     let transcribe = signal(capture.transcribes());
@@ -485,10 +507,13 @@ fn trimming_actions() -> AnyElement {
         return view()
             .flex_row()
             .gap_2()
-            .child(button(Variant::Outline, Size::Md, l("Discard")).on_press(move || capture.discard()))
+            .child(
+                button(Variant::Outline, Size::Md, l("Discard"))
+                    .on_press(move || capture.act(crate::work::capture::CaptureAction::Discard)),
+            )
             .child(button(Variant::Primary, Size::Md, l("Record again")).on_press(move || {
-                capture.discard();
-                capture.record();
+                capture.act(crate::work::capture::CaptureAction::Discard);
+                capture.act(crate::work::capture::CaptureAction::Record);
             }))
             .into_element();
     }
@@ -504,7 +529,7 @@ fn trimming_actions() -> AnyElement {
             button(Variant::Primary, Size::Md, move || tr(if saving() { "Saving…" } else { "Save to Library" }))
                 .busy(saving)
                 .disabled(move || saving() || capture.kept().is_empty())
-                .on_press(move || capture.save(transcribe.get_untracked())),
+                .on_press(move || capture.act(crate::work::capture::CaptureAction::Save(transcribe.get_untracked()))),
         )
         .into_element()
 }

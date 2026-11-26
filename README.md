@@ -188,7 +188,7 @@ the newest transcript, Podcasts, or Settings.
 
 | Path | Holds |
 | --- | --- |
-| `src` | The app: pages, UI components ([DESIGN.md](DESIGN.md)), state, and services |
+| `src` | The app, in layers that use only those below them: platform, services, UI components ([DESIGN.md](DESIGN.md)), state, the work it does (`work`), pages, and the shell |
 | `crates/listenook-core` | Domain logic with no UI |
 | `tests` | Headless flows of what a user does |
 | `vendor/qwen-asr` | The patched speech engine |

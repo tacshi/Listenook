@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use listenook_core::activity::{self, Activity, Kind, NaiveDate};
 use nsh_core::prelude::*;
 
-use super::persist;
+use crate::services::persist;
 
 /// A longer gap between two reports is a pause, a suspension or idleness: it
 /// restarts the clock instead of counting.
@@ -35,8 +35,32 @@ fn slot(kind: Kind) -> usize {
     }
 }
 
+/// What the clock hears of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// Something played, as a playback progress report says.
+    Played(Kind),
+    /// The person did something in a practice mode.
+    Input,
+    /// A practice mode opened or closed.
+    Practicing(bool),
+}
+
 impl Tracker {
-    pub(crate) fn note(&mut self, now: Instant, kind: Kind) {
+    pub(crate) fn hear(&mut self, now: Instant, event: Event) {
+        match event {
+            Event::Played(kind) => self.note(now, kind),
+            Event::Input => self.last_input = Some(now),
+            Event::Practicing(on) => {
+                self.practicing = on;
+                if on {
+                    self.last_input = Some(now);
+                }
+            }
+        }
+    }
+
+    fn note(&mut self, now: Instant, kind: Kind) {
         let kind = if self.practicing { Kind::Practice } else { kind };
         if let Some(last) = self.last_note {
             let elapsed = now.saturating_duration_since(last);
@@ -46,17 +70,6 @@ impl Tracker {
         }
         self.last_note = Some(now);
         self.last_input = Some(now);
-    }
-
-    pub(crate) fn touch(&mut self, now: Instant) {
-        self.last_input = Some(now);
-    }
-
-    pub(crate) fn set_practicing(&mut self, now: Instant, on: bool) {
-        self.practicing = on;
-        if on {
-            self.last_input = Some(now);
-        }
     }
 
     /// The practice heartbeat: counts while a practice mode is open and was
@@ -105,8 +118,47 @@ pub(crate) struct ActivityState {
     book: Stored<Book>,
 }
 
+/// What counts toward the time spent learning, and when to write it.
+#[derive(Debug)]
+pub(crate) enum ActivityAction<'a> {
+    /// Something played: called on each playback progress report.
+    Note(Kind),
+    /// The user did something in a practice mode.
+    Touch,
+    SetPracticing(bool),
+    /// Writes the time counted so far now, and tells Sync: the app is going to the background,
+    /// where the system may end it, or quitting.
+    Flush,
+    /// Once a second, from the shell.
+    Tick,
+    /// Another device's log, from Sync.
+    Adopt(&'a Activity),
+}
+
 impl ActivityState {
-    pub(super) fn new(log: Activity) -> Self {
+    /// Does `action`.
+    pub(crate) fn act(&self, action: ActivityAction<'_>) {
+        match action {
+            ActivityAction::Note(kind) => self.note(kind),
+            ActivityAction::Touch => self.touch(),
+            ActivityAction::SetPracticing(on) => self.set_practicing(on),
+            ActivityAction::Flush => self.flush(),
+            ActivityAction::Tick => self.tick(),
+            ActivityAction::Adopt(theirs) => self.adopt(theirs),
+        }
+    }
+
+    /// Makes the activity state from the log the library keeps.
+    pub(crate) fn install() {
+        let log = persist::data_root().as_deref().map(persist::load_activity).unwrap_or_default();
+        super::install(Self::new(log));
+    }
+
+    pub(crate) fn get() -> Self {
+        super::installed()
+    }
+
+    fn new(log: Activity) -> Self {
         let now = Instant::now();
         Self {
             log: signal(log),
@@ -130,21 +182,21 @@ impl ActivityState {
     }
 
     /// Something played: called on each playback progress report.
-    pub(crate) fn note(&self, kind: Kind) {
+    fn note(&self, kind: Kind) {
         let now = Instant::now();
-        self.book.with(|book| book.tracker.note(now, kind));
+        self.book.with(|book| book.tracker.hear(now, Event::Played(kind)));
         self.settle(now, false);
     }
 
     /// The user did something in a practice mode.
-    pub(crate) fn touch(&self) {
+    fn touch(&self) {
         let now = Instant::now();
-        self.book.with(|book| book.tracker.touch(now));
+        self.book.with(|book| book.tracker.hear(now, Event::Input));
     }
 
-    pub(crate) fn set_practicing(&self, on: bool) {
+    fn set_practicing(&self, on: bool) {
         let now = Instant::now();
-        self.book.with(|book| book.tracker.set_practicing(now, on));
+        self.book.with(|book| book.tracker.hear(now, Event::Practicing(on)));
         if !on {
             self.settle(now, true);
         }
@@ -152,12 +204,12 @@ impl ActivityState {
 
     /// Writes the time counted so far now, and tells Sync: the app is going to the background,
     /// where the system may end it, or quitting.
-    pub(crate) fn flush(&self) {
+    fn flush(&self) {
         self.settle(Instant::now(), true);
     }
 
     /// Once a second, from the shell.
-    pub(crate) fn tick(&self) {
+    fn tick(&self) {
         let now = Instant::now();
         self.book.with(|book| book.tracker.heartbeat(now));
         let quiet = self.book.with(|book| book.tracker.quiet(now) && (book.unsaved || book.unshared));
@@ -224,7 +276,7 @@ impl ActivityState {
     }
 
     /// Another device's log, from Sync.
-    pub(crate) fn adopt(&self, theirs: &Activity) {
+    fn adopt(&self, theirs: &Activity) {
         let mut mine = self.log.get_untracked();
         if !mine.merge(theirs) {
             return;
@@ -253,8 +305,8 @@ mod tests {
         let mut tracker = Tracker::default();
         for tenth in 0..=100 {
             let at = start + Duration::from_millis(tenth * 100);
-            tracker.note(at, Kind::Listen);
-            tracker.note(at + Duration::from_millis(50), Kind::Listen);
+            tracker.hear(at, Event::Played(Kind::Listen));
+            tracker.hear(at + Duration::from_millis(50), Event::Played(Kind::Listen));
         }
         assert_eq!(secs(&mut tracker), (10, 0));
     }
@@ -263,10 +315,10 @@ mod tests {
     fn a_long_gap_is_not_counted() {
         let start = Instant::now();
         let mut tracker = Tracker::default();
-        tracker.note(start, Kind::Listen);
-        tracker.note(start + Duration::from_secs(2), Kind::Listen);
-        tracker.note(start + Duration::from_secs(600), Kind::Listen);
-        tracker.note(start + Duration::from_secs(601), Kind::Listen);
+        tracker.hear(start, Event::Played(Kind::Listen));
+        tracker.hear(start + Duration::from_secs(2), Event::Played(Kind::Listen));
+        tracker.hear(start + Duration::from_secs(600), Event::Played(Kind::Listen));
+        tracker.hear(start + Duration::from_secs(601), Event::Played(Kind::Listen));
         assert_eq!(secs(&mut tracker), (3, 0));
     }
 
@@ -274,13 +326,13 @@ mod tests {
     fn practice_counts_while_in_use_and_stops_when_idle() {
         let start = Instant::now();
         let mut tracker = Tracker::default();
-        tracker.set_practicing(start, true);
+        tracker.hear(start, Event::Practicing(true));
         for second in 1..=200 {
             tracker.heartbeat(start + Duration::from_secs(second));
         }
         // Counted until two minutes after the last input.
         assert_eq!(secs(&mut tracker), (0, 118));
-        tracker.touch(start + Duration::from_secs(300));
+        tracker.hear(start + Duration::from_secs(300), Event::Input);
         for second in 301..=310 {
             tracker.heartbeat(start + Duration::from_secs(second));
         }
@@ -291,10 +343,10 @@ mod tests {
     fn playing_while_practicing_counts_as_practice() {
         let start = Instant::now();
         let mut tracker = Tracker::default();
-        tracker.set_practicing(start, true);
+        tracker.hear(start, Event::Practicing(true));
         for second in 0..=10 {
             let at = start + Duration::from_secs(second);
-            tracker.note(at, Kind::Listen);
+            tracker.hear(at, Event::Played(Kind::Listen));
             tracker.heartbeat(at + Duration::from_millis(500));
         }
         assert_eq!(secs(&mut tracker), (0, 10));

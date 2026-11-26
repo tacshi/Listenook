@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use listenook_core::format::clock;
+use listenook_core::format;
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
@@ -309,7 +309,7 @@ pub(crate) fn layer(video: Video) -> impl IntoElement {
                 .absolute()
                 .inset_0()
                 .pointer_events(PointerEvents::None)
-                .bg(tokens::stage)
+                .bg(|| tokens::ink(tokens::Ink::Stage))
                 .opacity(move || dim.get()),
         )
         .child(feedback(shown))
@@ -326,8 +326,8 @@ fn card() -> View {
         .gap_2()
         .px_4()
         .py_2()
-        .rounded(tokens::radius_lg)
-        .bg(|| tokens::stage().opacity(0.65))
+        .rounded(|| tokens::corner(tokens::Corner::Large))
+        .bg(|| tokens::ink(tokens::Ink::Stage).opacity(0.65))
         .text_color(ink)
 }
 
@@ -377,7 +377,11 @@ fn feedback(shown: Signal<Option<Shown>>) -> impl IntoElement {
                         .child(
                             label(move || {
                                 let (to, _, of) = scrub().unwrap_or_default();
-                                format!("{} / {}", clock(to), clock(of))
+                                format!(
+                                    "{} / {}",
+                                    format::shown(format::Shown::Clock(to)),
+                                    format::shown(format::Shown::Clock(of))
+                                )
                             })
                             .text_xl(),
                         )

@@ -33,12 +33,12 @@ fn plot_motion() -> PlotMotion {
 
 /// The color of listening time, in charts and their keys.
 pub fn listen_color() -> AdaptiveColor {
-    tokens::listen()
+    tokens::ink(tokens::Ink::Listen)
 }
 
 /// The color of practice time.
 pub fn practice_color() -> AdaptiveColor {
-    tokens::practice()
+    tokens::ink(tokens::Ink::Practice)
 }
 
 /// The goal line and its key: quiet beside the two series.
@@ -50,21 +50,32 @@ pub fn goal_color() -> AdaptiveColor {
 fn heat_color(level: u8) -> AdaptiveColor {
     match level {
         0 => theme().muted,
-        1 => tokens::listen().opacity(0.3),
-        2 => tokens::listen().opacity(0.5),
-        3 => tokens::listen().opacity(0.75),
-        _ => tokens::listen(),
+        1 => tokens::ink(tokens::Ink::Listen).opacity(0.3),
+        2 => tokens::ink(tokens::Ink::Listen).opacity(0.5),
+        3 => tokens::ink(tokens::Ink::Listen).opacity(0.75),
+        _ => tokens::ink(tokens::Ink::Listen),
     }
 }
 
 /// A small square of a series' color, for a key beside its number.
-pub fn swatch(color: fn() -> AdaptiveColor) -> View {
+pub(super) fn swatch(color: fn() -> AdaptiveColor) -> View {
     view().size(px(8.0)).flex_shrink_0().rounded(px(2.0)).bg(color)
+}
+
+/// A small square of a series' color, for a key beside its number.
+pub struct Swatch {
+    pub color: fn() -> AdaptiveColor,
+}
+
+impl IntoElement for Swatch {
+    fn into_element(self) -> AnyElement {
+        swatch(self.color).into_element()
+    }
 }
 
 /// A ring filling toward a goal: listening then practice, as shares of the
 /// goal (together at most a whole turn), with `center` inside.
-pub fn goal_ring(
+pub(super) fn goal_ring(
     shares: impl Fn() -> (f32, f32) + Copy + 'static,
     size: f32,
     thickness: f32,
@@ -107,6 +118,24 @@ pub fn goal_ring(
                 .child(segment(|(listen, _)| listen, listen_color)),
         )
         .child(center)
+}
+
+/// A ring filling toward a goal: listening then practice, as shares of the
+/// goal (together at most a whole turn), with `center` inside.
+pub struct GoalRing<P0, P3, P4> {
+    pub shares: P0,
+    pub size: f32,
+    pub thickness: f32,
+    pub label: P3,
+    pub center: P4,
+}
+
+impl<P0: Fn() -> (f32, f32) + Copy + 'static, P3: IntoReactive<SharedString>, P4: IntoElement> IntoElement
+    for GoalRing<P0, P3, P4>
+{
+    fn into_element(self) -> AnyElement {
+        goal_ring(self.shares, self.size, self.thickness, self.label, self.center).into_element()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -215,7 +244,7 @@ pub fn heatmap(
         .on_mouse_leave(move |_: &MouseEvent| on_hover(None))
         .children(weeks.into_iter().map(move |week| {
             view().gap(px(GAP)).children(week.into_iter().map(move |day| {
-                let cell = view().size(px(CELL)).rounded(tokens::radius_sm_small);
+                let cell = view().size(px(CELL)).rounded(|| tokens::corner(tokens::Corner::Tiny));
                 match day {
                     None => cell,
                     Some(HeatDay { level, caption }) => cell
@@ -229,11 +258,11 @@ pub fn heatmap(
 }
 
 /// The key under a heatmap: from nothing to the goal met.
-pub fn heat_key(less: impl IntoReactive<SharedString>, more: impl IntoReactive<SharedString>) -> View {
+pub(super) fn heat_key(less: impl IntoReactive<SharedString>, more: impl IntoReactive<SharedString>) -> View {
     let step = |level: u8| {
         view()
             .size(px(10.0))
-            .rounded(tokens::radius_sm_small)
+            .rounded(|| tokens::corner(tokens::Corner::Tiny))
             .bg(move || heat_color(level))
             .border_1()
             .border_color(move || if level == 0 { theme().border } else { AdaptiveColor::TRANSPARENT })
@@ -245,4 +274,16 @@ pub fn heat_key(less: impl IntoReactive<SharedString>, more: impl IntoReactive<S
         .child(text(less).text_xs().text_color(|| theme().muted_foreground).mr_1())
         .children((0..=4).map(step))
         .child(text(more).text_xs().text_color(|| theme().muted_foreground).ml_1())
+}
+
+/// The key under a heatmap: from nothing to the goal met.
+pub struct HeatKey<P0, P1> {
+    pub less: P0,
+    pub more: P1,
+}
+
+impl<P0: IntoReactive<SharedString>, P1: IntoReactive<SharedString>> IntoElement for HeatKey<P0, P1> {
+    fn into_element(self) -> AnyElement {
+        heat_key(self.less, self.more).into_element()
+    }
 }
