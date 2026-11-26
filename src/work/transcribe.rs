@@ -322,7 +322,7 @@ async fn run(store: Store, id: &str) -> Result<(), Failure> {
         ai::start_translation(id, &translate.target_language, None);
     }
     if !empty {
-        add_word_timing(store, id, None).await;
+        super::timing::add_word_timing(store, id, None).await;
     }
     Ok(())
 }
@@ -363,51 +363,9 @@ async fn run_local(store: Store, id: &str, job: &Job) -> Result<(), Failure> {
         ai::start_translation(id, &translate.target_language, None);
     }
     if !empty && !timed {
-        add_word_timing(store, id, Some(samples)).await;
+        super::timing::add_word_timing(store, id, Some(samples)).await;
     }
     Ok(())
-}
-
-async fn add_word_timing(store: Store, id: &str, samples: Option<std::sync::Arc<Vec<i16>>>) {
-    let Some(job) = store.job_now(id) else {
-        return;
-    };
-    if !store.setting(|s| s.auto_align_transcripts) || !local::can_align(&job) {
-        return;
-    }
-    time_words(store, id, &job, samples).await;
-}
-
-async fn time_words(store: Store, id: &str, job: &Job, samples: Option<std::sync::Arc<Vec<i16>>>) {
-    store.update_job(id, |job| job.apply(listenook_core::Change::BeginAlignment));
-    let samples = match samples {
-        Some(samples) => Some(samples),
-        None => local::prepare_audio(job).await.ok(),
-    };
-    let record = match samples {
-        Some(samples) => {
-            let job_id = id.to_owned();
-            let progress =
-                move |fraction| store.act(crate::state::Action::SetProgress(&job_id, "aligning", Some(fraction)));
-            let (record, tokens) = local::align(job, samples, progress).await;
-            if !tokens.is_empty() {
-                store.update_document(id, |document| document.tokens = tokens);
-            }
-            record
-        }
-        None => serde_json::json!({"status": "failed", "warning_code": "alignment_source_missing"}),
-    };
-    store.update_job(id, |job| job.apply(listenook_core::Change::EndAlignment(record)));
-}
-
-pub(crate) fn align(id: &str) {
-    let store = store();
-    let id = id.to_owned();
-    store.run_for(&id.clone(), async move {
-        if let Some(job) = store.job_now(&id).filter(|job| local::can_align(job)) {
-            time_words(store, &id, &job, None).await;
-        }
-    });
 }
 
 async fn clean_up(store: Store, id: &str) {

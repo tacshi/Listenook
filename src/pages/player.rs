@@ -49,7 +49,7 @@ fn find_tracks(video: &str) -> Vec<(String, String, Vec<Cue>)> {
     beside.sort();
     for path in beside {
         let imported = std::fs::read(&path).ok().and_then(|bytes| {
-            subtitles::import_subtitles(&subtitles::decode(&bytes), &subtitles::extension(&path), None).ok()
+            subtitles::import_cues(&subtitles::decode(&bytes), &subtitles::extension(&path), None).ok()
         });
         if let Some(imported) = imported {
             let cues = imported

@@ -292,7 +292,7 @@ const ZH: &[(&str, &str)] = &[
         "Needed by Qwen3 for sentence times; highlights each word as it is spoken",
         "Qwen3 需要它来确定句子时间；播放时逐词高亮",
     ),
-    ("Time each word of MOSS transcripts", "为 MOSS 转写生成逐词时间轴"),
+    ("Time each word of MOSS transcripts and subtitles", "为 MOSS 转写和字幕生成逐词时间轴"),
     (
         "A subtitle file with the same name can become its transcript. Up to 5 hours each.",
         "同名字幕文件可以作为它的转写。每个文件最长 5 小时。",

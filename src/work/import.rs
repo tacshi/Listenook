@@ -107,6 +107,8 @@ pub(crate) fn import_subtitle_file(job_id: String, path: String) {
             ));
             job.apply(listenook_core::Change::Finish(false));
         });
+        let id = job_id.clone();
+        store.run_for(&job_id, async move { super::timing::add_word_timing(store, &id, None).await });
         toast(Tone::Success, tr("Subtitles imported."));
     };
     if job.has_transcript() {

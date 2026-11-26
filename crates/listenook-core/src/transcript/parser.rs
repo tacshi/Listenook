@@ -11,7 +11,7 @@ static ENDS_SENTENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"[.!?。�
 static PUNCTUATION_ONLY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^\s*[,.;:!?，。；：！？、…—\-"'“”‘’()\[\]{}]+\s*$"#).unwrap());
 
-fn ends_sentence(text: &str) -> bool {
+pub(crate) fn ends_sentence(text: &str) -> bool {
     ENDS_SENTENCE.is_match(text)
 }
 
@@ -72,7 +72,9 @@ fn carries_on(previous: &str, next: &str) -> bool {
     previous.trim_end().ends_with('.') && next.chars().next().is_some_and(|c| c.is_ascii_digit() || c.is_lowercase())
 }
 
-fn plain_segments(tokens: &[Token]) -> Vec<Segment> {
+/// Sentences of timed `tokens`, each with the space before it: cut where a sentence ends, the
+/// speaker changes or there is a pause, and cut again into clauses where too long to practise.
+pub(crate) fn plain_segments(tokens: &[Token]) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<&Token> = Vec::new();
     let mut ended = false;
@@ -314,6 +316,13 @@ pub(crate) fn is_spaced_letter(c: char) -> bool {
             | 0xF900..=0xFAFF // CJK compatibility ideographs
             | 0xFF00..=0xFFEF // fullwidth and halfwidth forms
             | 0x20000..=0x3FFFF) // CJK ideographs beyond the basic plane
+}
+
+/// Whether a space goes between `left` and `right` put together: between the words of a script
+/// that spaces them, and after the ASCII punctuation that ends one.
+pub(crate) fn spaced_apart(left: &str, right: &str) -> bool {
+    left.chars().last().is_some_and(|c| !c.is_whitespace() && (c.is_ascii() || is_spaced_letter(c)))
+        && right.chars().next().is_some_and(is_spaced_letter)
 }
 
 fn join_text(left: &str, right: &str) -> String {

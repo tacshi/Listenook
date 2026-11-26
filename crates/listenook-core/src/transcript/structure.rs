@@ -1,14 +1,12 @@
 use crate::{
     models::{Document, Segment},
     transcript::highlights,
-    transcript::parser::is_spaced_letter,
+    transcript::parser::spaced_apart,
 };
 
 fn join(left: &str, right: &str) -> String {
     let (left, right) = (left.trim_end(), right.trim_start());
-    let spaced = left.chars().last().is_some_and(|c| !c.is_whitespace() && (c.is_ascii() || is_spaced_letter(c)))
-        && right.chars().next().is_some_and(is_spaced_letter);
-    if spaced { format!("{left} {right}") } else { format!("{left}{right}") }
+    if spaced_apart(left, right) { format!("{left} {right}") } else { format!("{left}{right}") }
 }
 
 /// A change to a transcript's sentences.

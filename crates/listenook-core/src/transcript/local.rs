@@ -253,6 +253,21 @@ pub fn guess_language(text: &str) -> &'static str {
     }
 }
 
+/// Whether `text` can be what a recording said in one of `hints` says, going by the script it is
+/// written in, so that subtitles translating a recording (Chinese ones over English speech) are
+/// not timed against its sound. Scripts tell apart only Chinese, Japanese, Korean and the rest,
+/// and Chinese characters are written in Japanese too. With no hint known, it can.
+pub fn may_be_said_in(text: &str, hints: &[String]) -> bool {
+    let said: Vec<&str> = hints.iter().filter_map(|hint| language_name(hint)).collect();
+    let written = guess_language(text);
+    said.is_empty()
+        || said.iter().any(|said| match written {
+            "Chinese" => matches!(*said, "Chinese" | "Cantonese" | "Japanese"),
+            "Japanese" | "Korean" => *said == written,
+            _ => !matches!(*said, "Chinese" | "Cantonese" | "Japanese" | "Korean"),
+        })
+}
+
 pub fn language_for(hints: &[String], text: &str) -> &'static str {
     let hinted: Vec<&'static str> = hints.iter().filter_map(|hint| language_name(hint)).collect();
     let guess = guess_language(text);
@@ -374,6 +389,15 @@ pub fn word_tokens(segment: &Segment, words: &[Word]) -> Vec<Token> {
             ..Token::default()
         })
         .collect()
+}
+
+/// Puts `aligned` words in `document` for the sentences they time, and keeps the words each
+/// other sentence had (as subtitles' words, timed from their cues, where alignment failed).
+pub fn take_aligned(document: &mut Document, aligned: Vec<Token>) {
+    let timed: std::collections::HashSet<String> = aligned.iter().filter_map(|t| t.segment_id.clone()).collect();
+    document.tokens.retain(|token| token.segment_id.as_ref().is_none_or(|id| !timed.contains(id)));
+    document.tokens.extend(aligned);
+    document.tokens.sort_by_key(|token| token.start_ms);
 }
 
 pub fn timed_sentences(text: &str, words: &[Word], end_ms: i64, first_index: usize) -> (Vec<Segment>, Vec<Token>) {
@@ -895,5 +919,35 @@ mod tests {
         assert_eq!(spans[0].0, "Hello");
         assert_eq!(spans[1].0, ", there!");
         assert!(super::spans("Other text", &units).is_none());
+    }
+
+    #[test]
+    fn subtitles_in_another_script_than_the_recording_are_not_said_in_it() {
+        let hints = |codes: &[&str]| codes.iter().map(|code| code.to_string()).collect::<Vec<_>>();
+        assert!(!may_be_said_in("但这些人中有多少是乘小船来的？", &hints(&["en"])));
+        assert!(!may_be_said_in("But how many came by small boat?", &hints(&["zh"])));
+        assert!(may_be_said_in("But how many came?", &hints(&["es"])), "both are written in Latin letters");
+        assert!(may_be_said_in("東京に行きます", &hints(&["ja"])));
+        assert!(may_be_said_in("東京", &hints(&["ja"])), "kanji alone are Japanese too");
+        assert!(may_be_said_in("我们用了AI。", &hints(&["en", "zh"])));
+        assert!(may_be_said_in("anything", &[]), "with no hint, any can be");
+    }
+
+    #[test]
+    fn aligned_words_replace_only_the_sentences_they_time() {
+        let word = |text: &str, start_ms, owner: &str| Token {
+            text: text.into(),
+            start_ms,
+            end_ms: start_ms + 100,
+            segment_id: Some(owner.into()),
+            ..Token::default()
+        };
+        let mut document = Document {
+            tokens: vec![word("a", 0, "s1"), word("b", 500, "s2"), word("c", 900, "s2")],
+            ..Document::default()
+        };
+        take_aligned(&mut document, vec![word("A", 40, "s1")]);
+        let kept: Vec<(&str, i64)> = document.tokens.iter().map(|t| (t.text.as_str(), t.start_ms)).collect();
+        assert_eq!(kept, [("A", 40), ("b", 500), ("c", 900)]);
     }
 }

@@ -2,6 +2,7 @@
 //! sentences, highlights, captions, dictation checks, and exporting them.
 
 pub mod caption;
+pub mod cues;
 pub mod dictation;
 pub mod export;
 pub mod highlights;

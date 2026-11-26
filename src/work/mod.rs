@@ -1,7 +1,7 @@
-//! The work the app does on the library: transcribing, asking the AI, downloading podcasts,
-//! importing files, recording, syncing with other devices, and telling the person when
-//! something they waited for is done. It drives the state and the services; nothing below it
-//! knows it.
+//! The work the app does on the library: transcribing, timing words, asking the AI,
+//! downloading podcasts, importing files, recording, syncing with other devices, and telling
+//! the person when something they waited for is done. It drives the state and the services;
+//! nothing below it knows it.
 
 pub(crate) mod ai;
 pub(crate) mod capture;
@@ -9,6 +9,7 @@ pub(crate) mod import;
 pub(crate) mod notify;
 pub(crate) mod podcasts;
 pub(crate) mod sync;
+pub(crate) mod timing;
 pub(crate) mod transcribe;
 pub(crate) mod updater;
 

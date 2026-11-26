@@ -613,7 +613,7 @@ fn on_this_mac() -> impl IntoElement {
                 &[local::catalog::ALIGNER],
             ))
             .child(switch(
-                l("Time each word of MOSS transcripts"),
+                l("Time each word of MOSS transcripts and subtitles"),
                 move || store.setting(|s| s.auto_align_transcripts),
                 move |on| store.update_settings(|s| s.auto_align_transcripts = on),
             ))
