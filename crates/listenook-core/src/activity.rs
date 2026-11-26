@@ -1,4 +1,4 @@
-//! Time spent learning: seconds of listening and of practice per local day,
+//! Time spent learning: seconds of listening and of practice per learning day,
 //! kept per device so that devices syncing their logs add up without counting
 //! a second twice.
 
@@ -38,7 +38,7 @@ impl Day {
 #[serde(default)]
 pub struct Activity {
     pub version: u32,
-    /// Device id → local day (`YYYY-MM-DD`) → time spent that day.
+    /// Device id → learning day (`YYYY-MM-DD`) → time spent that day.
     pub devices: BTreeMap<String, BTreeMap<String, Day>>,
 }
 
@@ -56,8 +56,17 @@ pub fn parse_day(key: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(key, "%Y-%m-%d").ok()
 }
 
+/// A learning day runs from 2:00 to 2:00 local time, so a session that goes on
+/// past midnight still counts toward the evening it started in.
+const DAY_STARTS_AT: chrono::TimeDelta = chrono::TimeDelta::hours(2);
+
+/// The learning day a local time falls in.
+pub fn learning_day(at: chrono::NaiveDateTime) -> NaiveDate {
+    (at - DAY_STARTS_AT).date()
+}
+
 pub fn today() -> NaiveDate {
-    chrono::Local::now().date_naive()
+    learning_day(chrono::Local::now().naive_local())
 }
 
 /// Monday = 0 … Sunday = 6.
@@ -165,6 +174,14 @@ mod tests {
 
     fn d(s: &str) -> NaiveDate {
         parse_day(s).unwrap()
+    }
+
+    #[test]
+    fn a_learning_day_turns_over_at_two() {
+        let at = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap();
+        assert_eq!(learning_day(at("2026-11-25 23:30")), d("2026-11-25"));
+        assert_eq!(learning_day(at("2026-11-26 01:59")), d("2026-11-25"));
+        assert_eq!(learning_day(at("2026-11-26 02:00")), d("2026-11-26"));
     }
 
     #[test]
