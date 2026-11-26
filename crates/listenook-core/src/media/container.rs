@@ -2,27 +2,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 use matroska_demuxer::{Frame, MatroskaFile, TrackType};
 
-mod avi;
-mod h264;
-mod matroska;
-mod movie;
-
-pub use avi::avi_to_mov;
-pub use matroska::{Codec, Coding, Converted, Converter, Device, PICTURE_TIMESCALE, Pictures, Plan, mkv_to_mp4};
-
-/// What can be made of the video at `path` for a player that opens neither Matroska nor AVI
-/// files: for an AVI, [`Plan::Copy`] into a QuickTime movie or [`Plan::Decode`].
-pub fn plan(path: &std::path::Path, device: Device) -> Plan {
-    let Ok(file) = std::fs::File::open(path) else {
-        return Plan::Decode;
-    };
-    match crate::media::subtitles::extension(&path.to_string_lossy()).as_str() {
-        "mkv" | "webm" => matroska::plan(file, device),
-        "avi" if avi::avi_fits_mov(file) => Plan::Copy,
-        _ => Plan::Decode,
-    }
-}
-
 /// The subtitle tracks inside the video at `path`.
 pub fn subtitles_in(path: &std::path::Path) -> Vec<SubtitleTrack> {
     let Ok(file) = std::fs::File::open(path) else {

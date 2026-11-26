@@ -7,17 +7,18 @@ use listenook_core::{
 };
 use nsh_base::theme;
 use nsh_core::{
-    desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes, WindowMode},
-    element::desktop::{current_window, open_window, title_bar},
+    desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes, WindowFrame, WindowMode},
+    element::desktop::{current_window, displays, open_window, title_bar},
     prelude::*,
 };
 
 use super::gestures;
+use super::media::{MediaEvent, Playback, media_ref, media_view};
 use crate::services::persist;
 use crate::ui::{error_text, l, tr};
 use crate::{
     platform::file_url,
-    services::{media, playable},
+    services::media,
     state::{
         podcast::{RATES, rate_label},
         store,
@@ -127,7 +128,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     let remembered = store.data_root().and_then(|root| persist::video_position(&root, &path));
     let start_at = remembered.as_ref().map_or(0, |entry| entry.position_ms);
 
-    let media = element_ref();
+    let media = media_ref();
     let (paused, rate) = (signal(false), signal(store.saved_rate("playback_rate")));
     let (position_ms, duration_ms) = (signal(start_at), signal(0_i64));
     let sleeps = untracked(|| crate::state::sleep::SleepState::get().stops());
@@ -210,24 +211,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         });
     }
 
-    let cache_id = format!("player-{:016x}", {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        path.hash(&mut hasher);
-        hasher.finish()
-    });
-    let needs_help = playable::needs_help(&path);
-    let source = signal(if needs_help { String::new() } else { file_url(&path) });
-    let waiting_for_source = signal(needs_help);
-    if needs_help {
-        let (id, video) = (cache_id.clone(), path.clone());
-        toast(Tone::Info, playable::notice(&video));
-        spawn(async move {
-            if !playable::prepare(id, video, move |made| source.set(file_url(&made.to_string_lossy()))).await {
-                toast(Tone::Error, tr("This recording's format cannot be played here."));
-            }
-        });
-    }
+    let source = signal(file_url(&path));
 
     let set_fullscreen = move |on: bool| {
         if fullscreen.get_untracked() == on {
@@ -306,7 +290,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         let save = save.clone();
         cleanup(move || {
             save();
-            playable::forget(&cache_id);
             if last.borrow().3 {
                 store.act(crate::state::Action::SetImmersive(false));
                 if !own_window {
@@ -320,58 +303,79 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     }
 
     let save_on_pause = save.clone();
-    let video_view = video(move || source.get())
-        .element_ref(&media)
-        .paused(move || paused.get())
-        .rate(move || if boost.get() { gestures::BOOST } else { rate.get() })
-        .volume(move || volume.get())
-        .audio_session(|| nsh_core::AudioSession::Playback)
-        .progress_interval(100.0)
-        .on_load(move |info: &VideoInfo| {
-            duration_ms.set((info.duration * 1000.0) as i64);
-            if start_at > 0 {
-                media.seek(start_at as f64 / 1000.0);
-            }
-        })
-        .on_progress(move |progress: &VideoProgress| {
-            let position = (progress.current_time * 1000.0) as i64;
-            if !paused.get_untracked() {
-                crate::state::activity::ActivityState::get()
-                    .act(crate::state::activity::ActivityAction::Note(listenook_core::activity::Kind::Listen));
-                crate::state::sleep::SleepState::get().act(crate::state::sleep::SleepAction::Heard);
-            }
-            let again = repeating.get_untracked().then(|| {
-                cues.with_untracked(|cues| {
-                    let cues = cues.as_ref()?;
-                    let before = position_ms.get_untracked();
-                    let spans = cues.iter().map(|cue| (cue.start_ms, cue.end_ms));
-                    let kept = listenook_core::playback::repeated_cue(spans, held.get(), before);
-                    held.replace(kept);
-                    kept.filter(|&(_, end)| position >= end)
-                })
-            });
-            if !repeating.get_untracked() {
-                held.replace(None);
-            }
-            match again.flatten() {
-                Some((start, _)) => {
-                    position_ms.set(start);
-                    media.seek(start as f64 / 1000.0);
+    // Its own window takes the video's shape once both are known, and keeps it as it is resized.
+    let shape = signal(None::<(f32, f32)>);
+    let fitted = std::cell::Cell::new(false);
+    effect(move || {
+        let (Some(video), false) = (shape.get(), fitted.get()) else { return };
+        let Some(state) = frame.with(|frame| frame.state()) else { return };
+        fitted.set(true);
+        if state.mode != WindowMode::Normal {
+            return;
+        }
+        let visible = displays().into_iter().find(|d| Some(d.id) == state.display).map(|d| d.visible_bounds);
+        if let Some(bounds) = fitted_frame(state.bounds, state.content_bounds, visible, video) {
+            frame.with(|frame| frame.set_bounds(bounds));
+        }
+    });
+    let video_view = media_view(
+        &media,
+        move || source.get(),
+        move || Playback {
+            paused: paused.get(),
+            rate: if boost.get() { gestures::BOOST } else { rate.get() },
+            volume: volume.get(),
+            muted: false,
+            repeat: false,
+            progress_ms: 100.0,
+        },
+        move |event| match event {
+            MediaEvent::Loaded(info) => {
+                duration_ms.set((info.duration * 1000.0) as i64);
+                let video = (info.size.width.0 as f32, info.size.height.0 as f32);
+                if own_window && video.0 > 0.0 && video.1 > 0.0 {
+                    shape.set(Some(video));
                 }
-                None => position_ms.set(position),
+                if start_at > 0 {
+                    media.seek(start_at as f64 / 1000.0);
+                }
             }
-        })
-        .on_end(move || {
-            crate::state::sleep::SleepState::get().ended();
-            paused.set(true);
-        })
-        .on_error(move |_: &str| {
-            if waiting_for_source.get_untracked() {
-                waiting_for_source.set(false);
-            } else {
-                toast(Tone::Error, error_text("unsupported_format"));
+            MediaEvent::Progress(progress) => {
+                let position = (progress.current_time * 1000.0) as i64;
+                if !paused.get_untracked() {
+                    crate::state::activity::ActivityState::get()
+                        .act(crate::state::activity::ActivityAction::Note(listenook_core::activity::Kind::Listen));
+                    crate::state::sleep::SleepState::get().act(crate::state::sleep::SleepAction::Heard);
+                }
+                let again = repeating.get_untracked().then(|| {
+                    cues.with_untracked(|cues| {
+                        let cues = cues.as_ref()?;
+                        let before = position_ms.get_untracked();
+                        let spans = cues.iter().map(|cue| (cue.start_ms, cue.end_ms));
+                        let kept = listenook_core::playback::repeated_cue(spans, held.get(), before);
+                        held.replace(kept);
+                        kept.filter(|&(_, end)| position >= end)
+                    })
+                });
+                if !repeating.get_untracked() {
+                    held.replace(None);
+                }
+                match again.flatten() {
+                    Some((start, _)) => {
+                        position_ms.set(start);
+                        media.seek(start as f64 / 1000.0);
+                    }
+                    None => position_ms.set(position),
+                }
             }
-        });
+            MediaEvent::Ended => {
+                crate::state::sleep::SleepState::get().ended();
+                paused.set(true);
+            }
+            MediaEvent::Failed => toast(Tone::Error, error_text("unsupported_format")),
+        },
+    )
+    .window_shape(move || shape.get());
     effect(move || {
         if paused.get() {
             untracked(&save_on_pause);
@@ -567,8 +571,11 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             .absolute()
             .inset_0()
             .window_drag(own_window)
-            .label(tr("Play or pause"))
-            .on_press(move || paused.set(!paused.get_untracked()))
+            .label(tr("Show or hide controls"))
+            .on_press({
+                let wake = wake.clone();
+                move || if hud.get_untracked() { hud.set(false) } else { wake() }
+            })
             .into_element()
     };
     view()
@@ -576,7 +583,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .bg(|| tokens::ink(tokens::Ink::Stage))
         .on_mouse_move(move |_: &MouseEvent| wake())
         .style_with(move |s| if !hud.get() { s.cursor(Cursor::None) } else { s })
-        .child(view().flex_1().min_h(px(0.0)).child(video_view.flex_1()).child(surface).child(subtitle_line))
+        .child(view().flex_1().min_h(px(0.0)).child(video_view).child(surface).child(subtitle_line))
         .child(when(
             move || !fullscreen.get(),
             move || {
@@ -589,7 +596,11 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                     .flex_row()
                     .items_center()
                     .window_drag(true)
-                    .bg(|| tokens::ink(tokens::Ink::Stage).opacity(0.45))
+                    // See-through over the picture, darkened toward the top only so the title
+                    // and the window's buttons stay legible; hidden with the controls.
+                    .bg_linear_to_b()
+                    .gradient_from(|| tokens::ink(tokens::Ink::Stage).opacity(0.55))
+                    .gradient_to(|| tokens::ink(tokens::Ink::Stage).opacity(0.0))
                     .transition_opacity()
                     .duration(tokens::motion::BASE)
                     .style_with(shown)
@@ -706,4 +717,75 @@ fn window_button(name: &'static str, color: fn() -> AdaptiveColor, on_press: imp
             .hover(|s| s.opacity(0.8))
             .active(|s| s.opacity(0.6)),
     )
+}
+
+/// The outer frame of a window that shows a `video` (width × height) picture whole: about as
+/// large as its content is now (`outer` and `content` are its frame and content area), around
+/// the same center, and kept within `visible`, its display's usable area.
+fn fitted_frame(
+    outer: Bounds<Points>,
+    content: Bounds<Points>,
+    visible: Option<Bounds<Points>>,
+    video: (f32, f32),
+) -> Option<WindowFrame> {
+    let ratio = video.0 / video.1;
+    let (extra_w, extra_h) = (outer.size.width.0 - content.size.width.0, outer.size.height.0 - content.size.height.0);
+    let area = content.size.width.0 * content.size.height.0;
+    if !(ratio.is_finite() && ratio > 0.0 && area > 0.0) {
+        return None;
+    }
+    let (mut width, mut height) = ((area * ratio).sqrt(), (area / ratio).sqrt());
+    if let Some(visible) = visible {
+        let fits = ((visible.size.width.0 - extra_w) / width).min((visible.size.height.0 - extra_h) / height).min(1.0);
+        (width, height) = (width * fits, height * fits);
+    }
+    let (outer_w, outer_h) = (width + extra_w, height + extra_h);
+    let center = (outer.origin.x.0 + outer.size.width.0 / 2.0, outer.origin.y.0 + outer.size.height.0 / 2.0);
+    let (mut x, mut y) = (center.0 - outer_w / 2.0, center.1 - outer_h / 2.0);
+    if let Some(visible) = visible {
+        let right = visible.origin.x.0 + visible.size.width.0 - outer_w;
+        let bottom = visible.origin.y.0 + visible.size.height.0 - outer_h;
+        x = x.min(right).max(visible.origin.x.0);
+        y = y.min(bottom).max(visible.origin.y.0);
+    }
+    Some(WindowFrame {
+        x: Some(px(x.round())),
+        y: Some(px(y.round())),
+        width: Some(px(outer_w.round())),
+        height: Some(px(outer_h.round())),
+        animated: Some(true),
+    })
+}
+
+#[cfg(test)]
+mod fitted_tests {
+    use super::*;
+
+    fn at(x: f32, y: f32, width: f32, height: f32) -> Bounds<Points> {
+        Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+    }
+
+    #[test]
+    fn a_window_takes_the_videos_shape_keeping_its_area_and_center() {
+        let window = at(100.0, 100.0, 960.0, 600.0);
+        let frame = fitted_frame(window, window, None, (3840.0, 2160.0)).unwrap();
+        assert_eq!((frame.width, frame.height), (Some(px(1012.0)), Some(px(569.0))));
+        assert_eq!((frame.x, frame.y), (Some(px(74.0)), Some(px(115.0))));
+    }
+
+    #[test]
+    fn a_fitted_window_stays_on_its_display() {
+        let window = at(0.0, 30.0, 800.0, 800.0);
+        let screen = at(0.0, 30.0, 1440.0, 870.0);
+        let frame = fitted_frame(window, window, Some(screen), (1920.0, 1080.0)).unwrap();
+        assert_eq!((frame.x, frame.y), (Some(px(0.0)), Some(px(130.0))));
+        assert!(frame.width.unwrap().0 <= 1440.0 && frame.height.unwrap().0 <= 870.0);
+    }
+
+    #[test]
+    fn a_window_with_a_title_bar_keeps_it_outside_the_picture() {
+        let (outer, content) = (at(0.0, 0.0, 960.0, 628.0), at(0.0, 28.0, 960.0, 600.0));
+        let frame = fitted_frame(outer, content, None, (1.0, 1.0)).unwrap();
+        assert_eq!(frame.height.unwrap().0 - frame.width.unwrap().0, 28.0);
+    }
 }

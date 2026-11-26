@@ -1,0 +1,38 @@
+[package]
+name = "listenook-mpv"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Plays recordings and videos with libmpv, as an nsh native component on each platform."
+license = "LGPL-2.1-or-later"
+
+[dependencies]
+log = "0.4"
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nsh-platform-macos = { version = "0.7.1", default-features = false }
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSView", "NSResponder", "NSWindow", "NSGraphics"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "objc2-core-video", "objc2-open-gl", "CALayer", "CAOpenGLLayer", "CATransaction"] }
+objc2-open-gl = { version = "0.3.2", default-features = false, features = ["std", "CGLTypes"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+nsh-platform-ios = { version = "0.7.1", default-features = false }
+dispatch2 = "0.3.1"
+objc2 = "0.6.5"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSNotification", "NSString", "NSObjCRuntime"] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-quartz-core", "UIView", "UIResponder"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "CALayer", "CAMetalLayer", "CATransaction", "CATransform3D"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nsh-platform-linux = { version = "0.7.1", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+nsh-platform-windows = { version = "0.7.1", default-features = false }
+
+[target.'cfg(target_os = "android")'.dependencies]
+nsh-platform-android = { version = "0.7.1", default-features = false }

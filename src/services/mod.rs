@@ -9,7 +9,6 @@ pub(crate) mod local;
 pub(crate) mod login;
 pub(crate) mod media;
 pub(crate) mod persist;
-pub(crate) mod playable;
 pub(crate) mod remote;
 pub(crate) mod secrets;
 

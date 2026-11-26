@@ -9,11 +9,12 @@ name = "Listenook"
 path = "src/main.rs"
 
 [workspace]
-members = ["crates/listenook-core"]
+members = ["crates/listenook-core", "crates/listenook-mpv"]
 exclude = ["vendor"]
 
 [dependencies]
 listenook-core = { path = "crates/listenook-core" }
+listenook-mpv = { path = "crates/listenook-mpv" }
 nsh-core = { version = "0.7.1" }
 nsh-base = { version = "0.7.1" }
 log = "0.4"
@@ -56,21 +57,17 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gd
 png = "0.18"
 
 [dev-dependencies]
-mp4 = "0.14.0"
 nsh-engine = { version = "0.7.1", default-features = false }
 nsh-testing = { version = "0.7.1", default-features = false }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+nsh-platform-ios = { version = "0.7.1", default-features = false }
+
+[target.'cfg(target_os = "android")'.dependencies]
+nsh-platform-android = { version = "0.7.1", default-features = false }
+
 [target.'cfg(target_vendor = "apple")'.dependencies]
 qwen-asr = { path = "vendor/qwen-asr" }
-
-# Decodes AV1 pictures for Apple devices that can't, to convert them to HEVC. From git: the
-# crate published as 1.1.0 lacks a header its Arm assembly includes. The assembly is built for
-# Arm only (x86's needs nasm), and without SVE2, which Apple's chips lack and its clang refuses.
-[target.'cfg(all(target_vendor = "apple", target_arch = "aarch64"))'.dependencies]
-rav1d = { git = "https://github.com/memorysafety/rav1d", tag = "v1.1.0", default-features = false, features = ["asm", "asm_arm64_dotprod", "asm_arm64_i8mm", "bitdepth_8", "bitdepth_16"] }
-
-[target.'cfg(all(target_vendor = "apple", not(target_arch = "aarch64")))'.dependencies]
-rav1d = { git = "https://github.com/memorysafety/rav1d", tag = "v1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
 qwen-asr = { path = "vendor/qwen-asr", default-features = false, features = ["blas"] }
@@ -94,8 +91,6 @@ opt-level = 3
 [profile.dev.package.symphonia-opus]
 opt-level = 3
 
-[profile.dev.package.rav1d]
-opt-level = 3
 
 [profile.dev.package.listenook-core]
 opt-level = 2

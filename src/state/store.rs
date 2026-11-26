@@ -863,7 +863,6 @@ impl Store {
             let _ = persist::delete_job(&root, id);
             let _ = std::fs::remove_dir_all(root.join("podcasts").join(id));
         }
-        crate::services::playable::forget(id);
         crate::services::audio::forget_loudness(id);
     }
 
@@ -1110,9 +1109,6 @@ impl Store {
                 jobs.sort_by(|a, b| b.cmp_added(a));
             }
         });
-        if existing.is_some() {
-            crate::services::playable::forget(&id);
-        }
     }
 
     fn adopt_media(&self, id: &str, path: &std::path::Path) {
@@ -1132,7 +1128,6 @@ impl Store {
         });
         if let Some(job) = changed {
             self.save(&job);
-            crate::services::playable::forget(id);
         }
     }
 

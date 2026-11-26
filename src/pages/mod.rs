@@ -5,6 +5,7 @@ mod gestures;
 mod home;
 mod home_stats;
 mod library;
+mod media;
 mod player;
 mod podcast;
 mod settings;

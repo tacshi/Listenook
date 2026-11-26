@@ -149,7 +149,6 @@ pub(crate) fn relink(job_id: String) {
 fn relinked(job_id: &str, path: &str) {
     let store = store();
     store.update_job(job_id, |job| job.apply(listenook_core::Change::Relink(path.to_owned())));
-    crate::services::playable::forget(job_id);
     toast(Tone::Success, tr("Media relinked."));
 }
 

@@ -122,6 +122,11 @@ try {
   New-Item -ItemType Directory -Force -Path $NoticeDest | Out-Null
   Copy-Item (Join-Path $Root "packaging\notices\APACHE-2.0.txt") $NoticeDest -Force
 
+  # Recordings and videos play through libmpv, a DLL loaded from the app's folder.
+  & (Join-Path $Root "scripts\fetch-mpv.ps1")
+  $Mpv = Join-Path $Build "libmpv-2.dll"
+  Copy-Item (Join-Path $Root "vendor\mpv\windows\libmpv-2.dll") $Mpv -Force
+
   function Get-PeMachine([string]$Path) {
     $Stream = [System.IO.File]::OpenRead($Path)
     try {
@@ -138,7 +143,10 @@ try {
   if ($Machine -ne 0x8664) {
     throw "Architecture mismatch in $Name.exe: expected 8664, got $([Convert]::ToString($Machine, 16))."
   }
-  if ($Mode -eq "release") { Invoke-CodeSign $Executable }
+  if ($Mode -eq "release") {
+    Invoke-CodeSign $Executable
+    Invoke-CodeSign $Mpv
+  }
 
   $Out = Join-Path $Root "build"
   New-Item -ItemType Directory -Force -Path $Out | Out-Null
