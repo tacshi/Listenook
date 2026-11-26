@@ -1,6 +1,10 @@
 //! Keeps the window a video fills at the video's shape as it is resized (`windowShape`), as
 //! macOS does with a content aspect ratio: the window is subclassed and the rectangle of each
 //! resizing step is fitted (`WM_SIZING`).
+//!
+//! nsh does not say which window a component is in: it is the window on the UI thread whose
+//! content the view fills and, when several do, the one whose message the frame that placed the
+//! view was drawn for (seen with a `WH_GETMESSAGE` hook while the window is looked for).
 
 use std::cell::Cell;
 
@@ -14,9 +18,10 @@ use nsh_platform_windows::{
                 Input::KeyboardAndMouse::GetActiveWindow,
                 Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
                 WindowsAndMessaging::{
-                    EnumThreadWindows, GA_ROOT, GetAncestor, GetClientRect, GetWindowRect, IsWindowVisible,
-                    WM_NCDESTROY, WM_SIZING, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP,
-                    WMSZ_TOPLEFT, WMSZ_TOPRIGHT,
+                    CallNextHookEx, EnumThreadWindows, GA_ROOT, GetAncestor, GetClientRect, GetWindowRect, HHOOK,
+                    IsWindowVisible, MSG, SetWindowsHookExW, UnhookWindowsHookEx, WH_GETMESSAGE, WM_NCDESTROY,
+                    WM_SIZING, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT,
+                    WMSZ_TOPRIGHT,
                 },
             },
         },
@@ -24,8 +29,22 @@ use nsh_platform_windows::{
     },
 };
 
-/// The subclass that keeps a window's content at its shape.
-const SUBCLASS: usize = 0x6d70_7673;
+thread_local! {
+    /// The window of the message this thread took from its queue last (`WH_GETMESSAGE`): the one
+    /// a frame drawn while it is handled is drawn for.
+    static TAKEN: Cell<isize> = const { Cell::new(0) };
+}
+
+/// Notes the window of each message this thread takes from its queue.
+unsafe extern "system" fn note_taken(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        // SAFETY: a WH_GETMESSAGE hook's lparam is the message taken.
+        let message = unsafe { &*(lparam.0 as *const MSG) };
+        TAKEN.with(|taken| taken.set(message.hwnd.0 as isize));
+    }
+    // SAFETY: passes the message on to the other hooks, as a hook must.
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
 
 /// What the window's subclass reads, at one address while the window has it.
 #[derive(Default)]
@@ -41,13 +60,21 @@ struct Shared {
 pub(super) struct WindowShape {
     shared: Box<Shared>,
     window: Option<HWND>,
+    /// Notes the windows of the messages taken while the window is looked for.
+    hook: Option<HHOOK>,
 }
 
 impl WindowShape {
     /// The window keeps `size` (width, height) from now on; `None` lets it take any shape.
-    pub(super) fn set(&self, size: Option<(f64, f64)>) {
+    pub(super) fn set(&mut self, size: Option<(f64, f64)>) {
         let ratio = size.filter(|(width, height)| *width > 0.0 && *height > 0.0).map(|(width, height)| width / height);
         self.shared.ratio.set(ratio);
+        if ratio.is_some() && self.window.is_none() && self.hook.is_none() {
+            // SAFETY: a hook of this thread's messages, removed once the window is found or in `drop`.
+            self.hook = unsafe { SetWindowsHookExW(WH_GETMESSAGE, Some(note_taken), None, GetCurrentThreadId()) }
+                .inspect_err(|why| log::warn!("the video's window may be found wrongly: {why}"))
+                .ok();
+        }
     }
 
     /// The view was put at `at`: with a shape to keep, the window it fills keeps it.
@@ -58,18 +85,31 @@ impl WindowShape {
         let Some(window) = window_filled_by(at) else { return };
         let data = (&raw const *self.shared) as usize;
         // SAFETY: `shared` outlives the subclass: it is removed in `drop` or when the window goes.
-        if unsafe { SetWindowSubclass(window, Some(keep_shape), SUBCLASS, data) }.as_bool() {
+        // Its address tells it from another video's on the same window.
+        if unsafe { SetWindowSubclass(window, Some(keep_shape), data, data) }.as_bool() {
             self.window = Some(window);
+            self.unhook();
+        }
+    }
+
+    fn unhook(&mut self) {
+        if let Some(hook) = self.hook.take() {
+            // SAFETY: the hook set in `set`, on this thread.
+            unsafe {
+                let _ = UnhookWindowsHookEx(hook);
+            }
         }
     }
 }
 
 impl Drop for WindowShape {
     fn drop(&mut self) {
+        self.unhook();
         if let Some(window) = self.window.take().filter(|_| !self.shared.gone.get()) {
+            let id = (&raw const *self.shared) as usize;
             // SAFETY: removes the subclass set on this live window, on its thread.
             unsafe {
-                let _ = RemoveWindowSubclass(window, Some(keep_shape), SUBCLASS);
+                let _ = RemoveWindowSubclass(window, Some(keep_shape), id);
             }
         }
     }
@@ -81,7 +121,7 @@ unsafe extern "system" fn keep_shape(
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-    _id: usize,
+    id: usize,
     data: usize,
 ) -> LRESULT {
     // SAFETY: `data` is the `Shared` the subclass was set with, alive until it is removed.
@@ -103,7 +143,7 @@ unsafe extern "system" fn keep_shape(
             shared.gone.set(true);
             // SAFETY: removes the subclass set on this window.
             unsafe {
-                let _ = RemoveWindowSubclass(window, Some(keep_shape), SUBCLASS);
+                let _ = RemoveWindowSubclass(window, Some(keep_shape), id);
             }
         }
         _ => {}
@@ -154,8 +194,8 @@ fn fit(rect: &mut RECT, edge: u32, ratio: f64, frame: (i32, i32)) {
 }
 
 /// The window of this thread whose content the view at `at` fills: the one a video that keeps
-/// its window's shape plays in (nsh does not say which window a component is in). The active
-/// one when several do.
+/// its window's shape plays in. When several do, the one the frame that placed it was drawn
+/// for, else the active one.
 fn window_filled_by(at: &Placement) -> Option<HWND> {
     if at.matrix.M31.abs() > 1.0 || at.matrix.M32.abs() > 1.0 {
         return None;
@@ -179,8 +219,11 @@ fn window_filled_by(at: &Placement) -> Option<HWND> {
             && ((inner.bottom - inner.top) - at.size.1).abs() <= 1
     });
     // SAFETY: plain queries.
-    let active = unsafe { GetAncestor(GetActiveWindow(), GA_ROOT) };
-    windows.iter().find(|window| **window == active).or(windows.first()).copied()
+    let (drawn, active) = unsafe {
+        (GetAncestor(HWND(TAKEN.with(Cell::get) as *mut _), GA_ROOT), GetAncestor(GetActiveWindow(), GA_ROOT))
+    };
+    let found = |wanted: HWND| windows.iter().copied().find(|window| *window == wanted);
+    found(drawn).or_else(|| found(active)).or(windows.first().copied())
 }
 
 #[cfg(test)]
