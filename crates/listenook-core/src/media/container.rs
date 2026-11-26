@@ -1,79 +1,25 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use matroska_demuxer::{Frame, MatroskaFile, TrackEntry, TrackType};
-use mp4::{
-    AacConfig, AudioObjectType, AvcConfig, ChannelConfig, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer,
-    SampleFreqIndex, TrackConfig,
-};
+use matroska_demuxer::{Frame, MatroskaFile, TrackType};
 
 mod avi;
 mod h264;
+mod matroska;
+mod movie;
 
-use avi::avi_fits_mov;
 pub use avi::avi_to_mov;
+pub use matroska::{Codec, Coding, Converted, Converter, Device, PICTURE_TIMESCALE, Pictures, Plan, mkv_to_mp4};
 
-const VIDEO_TIMESCALE: u64 = 90_000;
-const AVC: &str = "V_MPEG4/ISO/AVC";
-const AAC: &str = "A_AAC";
-
-fn parameter_sets(record: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    if record.len() < 7 || record[0] != 1 || record[4] & 3 != 3 || record[5] & 0x1f == 0 {
-        return None;
-    }
-    let set = |at: usize| -> Option<(Vec<u8>, usize)> {
-        let length = usize::from(u16::from_be_bytes([*record.get(at)?, *record.get(at + 1)?]));
-        Some((record.get(at + 2..at + 2 + length)?.to_vec(), at + 2 + length))
+/// What can be made of the video at `path` for a player that opens neither Matroska nor AVI
+/// files: for an AVI, [`Plan::Copy`] into a QuickTime movie or [`Plan::Decode`].
+pub fn plan(path: &std::path::Path, device: Device) -> Plan {
+    let Ok(file) = std::fs::File::open(path) else {
+        return Plan::Decode;
     };
-    let (sps, mut at) = set(6)?;
-    for _ in 1..record[5] & 0x1f {
-        at = set(at)?.1;
-    }
-    if *record.get(at)? == 0 {
-        return None;
-    }
-    Some((sps, set(at + 1)?.0))
-}
-
-fn aac_config(private: &[u8]) -> Option<AacConfig> {
-    let (first, second) = (*private.first()?, *private.get(1)?);
-    let profile = AudioObjectType::try_from(first >> 3).ok()?;
-    if profile != AudioObjectType::AacLowComplexity {
-        return None;
-    }
-    Some(AacConfig {
-        bitrate: 0,
-        profile,
-        freq_index: SampleFreqIndex::try_from(((first & 7) << 1) | (second >> 7)).ok()?,
-        chan_conf: ChannelConfig::try_from((second >> 3) & 0xf).ok()?,
-    })
-}
-
-struct Plan<'a> {
-    video: &'a TrackEntry,
-    audio: Option<&'a TrackEntry>,
-}
-
-fn plan(tracks: &[TrackEntry]) -> Result<Plan<'_>, &'static str> {
-    let first = |kind: TrackType| tracks.iter().find(|track| track.track_type() == kind);
-    let video = first(TrackType::Video).ok_or("no video track")?;
-    let audio = first(TrackType::Audio);
-    if video.codec_id() != AVC || audio.is_some_and(|audio| audio.codec_id() != AAC) {
-        return Err("codecs an MP4 file written here cannot hold");
-    }
-    if video.content_encodings().is_some() || audio.is_some_and(|audio| audio.content_encodings().is_some()) {
-        return Err("compressed or encrypted tracks");
-    }
-    Ok(Plan { video, audio })
-}
-
-/// Whether the picture of the video at `path` can be kept as it is made playable here: in an
-/// MP4 for a Matroska video, in a QuickTime movie for an AVI.
-pub fn keeps_picture(path: &std::path::Path) -> bool {
-    let open = || std::fs::File::open(path);
     match crate::media::subtitles::extension(&path.to_string_lossy()).as_str() {
-        "mkv" => open().is_ok_and(mkv_fits_mp4),
-        "avi" => open().is_ok_and(avi_fits_mov),
-        _ => false,
+        "mkv" | "webm" => matroska::plan(file, device),
+        "avi" if avi::avi_fits_mov(file) => Plan::Copy,
+        _ => Plan::Decode,
     }
 }
 
@@ -90,129 +36,6 @@ pub fn subtitles_in(path: &std::path::Path) -> Vec<SubtitleTrack> {
         },
         _ => Vec::new(),
     }
-}
-
-fn mkv_fits_mp4<R: Read + Seek>(input: R) -> bool {
-    MatroskaFile::open(input).is_ok_and(|file| {
-        plan(file.tracks()).is_ok_and(|plan| {
-            plan.video.codec_private().and_then(parameter_sets).is_some()
-                && plan.audio.is_none_or(|audio| audio.codec_private().and_then(aac_config).is_some())
-        })
-    })
-}
-
-fn is_sync(data: &[u8]) -> bool {
-    let mut at = 0;
-    while at + 5 <= data.len() {
-        let length = u32::from_be_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]) as usize;
-        if data[at + 4] & 0x1f == 5 {
-            return true;
-        }
-        at += 4 + length;
-    }
-    false
-}
-
-pub fn mkv_to_mp4<R: Read + Seek, W: Write + Seek>(
-    mut open: impl FnMut() -> std::io::Result<R>,
-    output: W,
-) -> Result<(), String> {
-    let fail = |error: &dyn std::fmt::Display| error.to_string();
-    let mut file = MatroskaFile::open(open().map_err(|e| fail(&e))?).map_err(|e| fail(&e))?;
-    let scale = file.info().timestamp_scale().get();
-    let found = plan(file.tracks())?;
-    let (video_number, audio_number) =
-        (found.video.track_number().get(), found.audio.map(|audio| audio.track_number().get()));
-    let (sps, pps) = found.video.codec_private().and_then(parameter_sets).ok_or("an unusual H.264 record")?;
-    let picture = found.video.video().ok_or("no picture size")?;
-    let (width, height) = (picture.pixel_width().get() as u16, picture.pixel_height().get() as u16);
-    let audio = match found.audio {
-        Some(track) => {
-            let config = track.codec_private().and_then(aac_config).ok_or("AAC other than AAC-LC")?;
-            let rate = track.audio().map_or(48_000.0, |audio| audio.sampling_frequency()) as u64;
-            Some((config, rate.max(1)))
-        }
-        None => None,
-    };
-
-    let ticks = |timestamp: u64, per_second: u64| {
-        (u128::from(timestamp) * u128::from(scale) * u128::from(per_second) / 1_000_000_000) as u64
-    };
-    let (mut shown, mut heard) = (Vec::<u64>::new(), Vec::<u64>::new());
-    let mut frame = Frame::default();
-    while file.next_frame(&mut frame).map_err(|e| fail(&e))? {
-        if frame.track == video_number {
-            shown.push(ticks(frame.timestamp, VIDEO_TIMESCALE));
-        } else if Some(frame.track) == audio_number {
-            heard.push(ticks(frame.timestamp, audio.as_ref().map_or(1, |(_, rate)| *rate)));
-        }
-    }
-    if shown.is_empty() {
-        return Err("no pictures".into());
-    }
-    let mut decoded = shown.clone();
-    decoded.sort_unstable();
-    let wait = decoded.iter().zip(&shown).map(|(decode, show)| decode.saturating_sub(*show)).max().unwrap_or(0);
-    let length = |times: &[u64], index: usize, usual: u64| -> u32 {
-        times.get(index + 1).map_or(usual, |next| next.saturating_sub(times[index])).clamp(1, u64::from(u32::MAX))
-            as u32
-    };
-    let usual_picture = decoded.get(1).map_or(3000, |second| second - decoded[0]).max(1);
-
-    let brand = |name: &str| name.parse().expect("a four-character code");
-    let config = Mp4Config {
-        major_brand: brand("isom"),
-        minor_version: 512,
-        compatible_brands: vec![brand("isom"), brand("iso2"), brand("avc1"), brand("mp41")],
-        timescale: 1000,
-    };
-    let mut writer = Mp4Writer::write_start(output, &config).map_err(|e| fail(&e))?;
-    writer
-        .add_track(&TrackConfig {
-            track_type: mp4::TrackType::Video,
-            timescale: VIDEO_TIMESCALE as u32,
-            language: "und".into(),
-            media_conf: MediaConfig::AvcConfig(AvcConfig { width, height, seq_param_set: sps, pic_param_set: pps }),
-        })
-        .map_err(|e| fail(&e))?;
-    if let Some((config, rate)) = &audio {
-        writer
-            .add_track(&TrackConfig {
-                track_type: mp4::TrackType::Audio,
-                timescale: *rate as u32,
-                language: "und".into(),
-                media_conf: MediaConfig::AacConfig(config.clone()),
-            })
-            .map_err(|e| fail(&e))?;
-    }
-
-    let mut file = MatroskaFile::open(open().map_err(|e| fail(&e))?).map_err(|e| fail(&e))?;
-    let (mut picture, mut sound) = (0, 0);
-    while file.next_frame(&mut frame).map_err(|e| fail(&e))? {
-        let data = std::mem::take(&mut frame.data);
-        if frame.track == video_number && picture < shown.len() {
-            let sample = Mp4Sample {
-                start_time: decoded[picture],
-                duration: length(&decoded, picture, usual_picture),
-                rendering_offset: (shown[picture] + wait - decoded[picture]) as i32,
-                is_sync: frame.is_keyframe.unwrap_or_else(|| is_sync(&data)),
-                bytes: data.into(),
-            };
-            writer.write_sample(1, &sample).map_err(|e| fail(&e))?;
-            picture += 1;
-        } else if Some(frame.track) == audio_number && sound < heard.len() {
-            let sample = Mp4Sample {
-                start_time: heard[sound],
-                duration: length(&heard, sound, 1024),
-                rendering_offset: 0,
-                is_sync: true,
-                bytes: data.into(),
-            };
-            writer.write_sample(2, &sample).map_err(|e| fail(&e))?;
-            sound += 1;
-        }
-    }
-    writer.write_end().map_err(|e| fail(&e))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,17 +215,6 @@ mod tests {
     fn other_avi_sound_is_refused() {
         assert!(avi_sound(Cursor::new(avi(0x2000)), Cursor::new(Vec::new())).is_err());
         assert!(avi_sound(Cursor::new(b"not an avi file".to_vec()), Cursor::new(Vec::new())).is_err());
-    }
-
-    #[test]
-    fn h264_and_aac_records_are_read() {
-        let record = [1, 100, 0, 31, 0xff, 0xe1, 0, 2, 0x67, 0x64, 1, 0, 3, 0x68, 0xee, 0x3c];
-        assert_eq!(parameter_sets(&record), Some((vec![0x67, 0x64], vec![0x68, 0xee, 0x3c])));
-        assert!(parameter_sets(&[1, 100, 0, 31, 0xfd, 0xe1, 0, 0]).is_none(), "two-byte lengths are refused");
-        let config = aac_config(&[0x12, 0x10]).unwrap();
-        assert_eq!((config.freq_index, config.chan_conf), (SampleFreqIndex::Freq44100, ChannelConfig::Stereo));
-        assert!(aac_config(&[0x2b, 0x92]).is_none(), "HE-AAC is refused");
-        assert!(is_sync(&[0, 0, 0, 1, 0x65]) && !is_sync(&[0, 0, 0, 1, 0x41]));
     }
 }
 
