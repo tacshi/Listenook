@@ -105,7 +105,6 @@ impl Tracker {
 
 struct Book {
     tracker: Tracker,
-    day: NaiveDate,
     last_fold: Instant,
     last_save: Instant,
     unsaved: bool,
@@ -115,6 +114,9 @@ struct Book {
 #[derive(Clone, Copy)]
 pub(crate) struct ActivityState {
     log: Signal<Activity>,
+    /// The local day counted time goes to. It turns over at midnight, from the
+    /// once-a-second tick, so the charts move on while the app stays open.
+    day: Signal<NaiveDate>,
     book: Stored<Book>,
 }
 
@@ -162,9 +164,9 @@ impl ActivityState {
         let now = Instant::now();
         Self {
             log: signal(log),
+            day: signal(activity::today()),
             book: stored(Book {
                 tracker: Tracker::default(),
-                day: activity::today(),
                 last_fold: now,
                 last_save: now,
                 unsaved: false,
@@ -179,6 +181,11 @@ impl ActivityState {
 
     pub(crate) fn with<T>(&self, read: impl FnOnce(&Activity) -> T) -> T {
         self.log.with(read)
+    }
+
+    /// Today, as a local day: what reads it runs again when the day turns over.
+    pub(crate) fn today(&self) -> NaiveDate {
+        self.day.get()
     }
 
     /// Something played: called on each playback progress report.
@@ -219,20 +226,18 @@ impl ActivityState {
     /// Folds counted time into the log when it is due, and writes it.
     /// `flush` folds and writes now, and tells Sync.
     fn settle(&self, now: Instant, flush: bool) {
-        let today = activity::today();
-        let (rolled, due) = self.book.with(|book| {
-            let rolled = book.day != today;
+        let (day, today) = (self.day.get_untracked(), activity::today());
+        let rolled = day != today;
+        let due = self.book.with(|book| {
             let due = flush || rolled || now.duration_since(book.last_fold) >= FOLD;
-            (rolled, due && (book.tracker.has_pending() || rolled || flush))
+            due && (book.tracker.has_pending() || rolled || flush)
         });
         if !due {
             return;
         }
-        let (day, counted) = self.book.with(|book| {
+        let counted = self.book.with(|book| {
             book.last_fold = now;
-            let day = book.day;
-            book.day = today;
-            (day, book.tracker.take())
+            book.tracker.take()
         });
         if counted.iter().any(|(_, secs)| *secs > 0) {
             let device = super::store().device_id();
@@ -245,6 +250,9 @@ impl ActivityState {
                 book.unsaved = true;
                 book.unshared = true;
             });
+        }
+        if rolled {
+            self.day.set(today);
         }
         let share = flush || rolled;
         let save = self.book.with(|book| (book.unsaved && now.duration_since(book.last_save) >= SAVE) || share);

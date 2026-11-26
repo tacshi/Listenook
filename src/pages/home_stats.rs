@@ -10,7 +10,7 @@ use nsh_core::prelude::*;
 use crate::ui::{l, tr};
 use crate::{
     pages::chrome::page_width,
-    state::store,
+    state::{activity::ActivityState, store},
     ui::{
         self, Icon, MenuChoice, Segmented, Size, card,
         chart::{self, DayBar, HeatDay},
@@ -91,8 +91,7 @@ fn to_go_words(secs: u32) -> String {
 }
 
 fn day_words(day: NaiveDate) -> String {
-    let today = activity::today();
-    if day == today {
+    if day == ActivityState::get().today() {
         return tr("Today").to_string();
     }
     match store().lang() {
@@ -105,7 +104,7 @@ fn day_words(day: NaiveDate) -> String {
 }
 
 fn weekday_tick(day: NaiveDate) -> SharedString {
-    if day == activity::today() {
+    if day == ActivityState::get().today() {
         return tr("Today");
     }
     match store().lang() {
@@ -164,17 +163,23 @@ fn goal_s() -> u32 {
 
 /// Whether there is history worth a chart: time on two days or more.
 pub(crate) fn has_history() -> bool {
-    crate::state::activity::ActivityState::get().with(|log| log.active_days() >= 2)
+    ActivityState::get().with(|log| log.active_days() >= 2)
 }
 
 /// Today against the daily goal. `wide` lays it out as a column beside
 /// Continue; otherwise as a row.
 pub(crate) fn today_card(wide: impl Fn() -> bool + Copy + 'static) -> impl IntoElement {
     let store = store();
-    let today = computed(move || crate::state::activity::ActivityState::get().with(|log| log.on(activity::today())));
+    let today = computed(move || {
+        let activity = ActivityState::get();
+        let day = activity.today();
+        activity.with(|log| log.on(day))
+    });
     let goal = move || store.daily_goal_minutes();
     let streak = computed(move || {
-        crate::state::activity::ActivityState::get().with(|log| log.streak(activity::today(), goal_s()))
+        let activity = ActivityState::get();
+        let day = activity.today();
+        activity.with(|log| log.streak(day, goal_s()))
     });
     let shares = move || {
         let (day, goal_s) = (today.get(), (goal() * 60).max(1) as f32);
@@ -340,11 +345,11 @@ pub(crate) fn activity_card() -> impl IntoElement {
     let range = signal(Range::Week);
     let hovered = signal(None::<usize>);
     let heat_hovered = signal(None::<SharedString>);
-    let today = computed(activity::today);
+    let today = computed(|| ActivityState::get().today());
     let goal = computed(move || store.daily_goal_minutes());
     let days = computed(move || {
         let (today, n) = (today.get(), range.get().days());
-        crate::state::activity::ActivityState::get().with(|log| log.days(today, n))
+        ActivityState::get().with(|log| log.days(today, n))
     });
     let total = move || days.with(|days| days.iter().map(|(_, day)| day.total_s()).sum::<u32>());
     let summary = move || -> SharedString {
@@ -455,7 +460,7 @@ pub(crate) fn activity_card() -> impl IntoElement {
     let heat_weeks = move || if side_by_side() { HEAT_WEEKS } else { weeks_fitting(content_width() - CARD_INSET) };
     let calendar = dynamic(move || {
         let (weeks, today, goal_s) = (heat_weeks(), today.get(), goal.get() * 60);
-        let log = crate::state::activity::ActivityState::get().log();
+        let log = ActivityState::get().log();
         untracked(move || {
             let start = today - activity::Days::new(u64::from(weekday_index(today) + 7 * (weeks - 1)));
             let totals = log.days(today, (today - start).num_days() as u32 + 1);
@@ -490,8 +495,7 @@ pub(crate) fn activity_card() -> impl IntoElement {
     let period = computed(move || {
         let (weeks, today, goal_s) = (heat_weeks(), today.get(), goal.get() * 60);
         let start = today - activity::Days::new(u64::from(weekday_index(today) + 7 * (weeks - 1)));
-        let totals = crate::state::activity::ActivityState::get()
-            .with(|log| log.days(today, (today - start).num_days() as u32 + 1));
+        let totals = ActivityState::get().with(|log| log.days(today, (today - start).num_days() as u32 + 1));
         let learned = totals.iter().filter(|(_, time)| time.total_s() > 0).count() as u32;
         let met: Vec<bool> = totals.iter().map(|(_, time)| time.total_s() >= goal_s).collect();
         let at_goal = met.iter().filter(|met| **met).count() as u32;
