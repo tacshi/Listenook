@@ -4,12 +4,14 @@
 //! as mpv has them, and at once into the swap chain resized with the view.
 //!
 //! mpv compiles the shaders it draws a video with on its first frames, which takes a tenth of
-//! a second or more for each: the window waits for a frame being drawn only briefly
-//! ([`LOCK_WAIT`]) before leaving a resize to the drawing thread.
+//! a second or more for each: they are kept on disk ([`shader_cache`]), and the window waits
+//! for a frame being drawn only briefly ([`LOCK_WAIT`]) before leaving a resize to the drawing
+//! thread.
 
 mod shape;
 
 use std::{
+    path::PathBuf,
     sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError},
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -132,6 +134,18 @@ fn lock_within<T>(mutex: &Mutex<T>, wait: Duration) -> Option<MutexGuard<'_, T>>
             Err(TryLockError::WouldBlock) => return None,
         }
     }
+}
+
+/// Where mpv keeps the shaders it compiles, so that a video's first frames are not slowed by
+/// compiling them again: the app's local (not roaming) data, as they belong to this GPU.
+/// `None` when the app keeps nothing (`LISTENOOK_EPHEMERAL`).
+fn shader_cache() -> Option<String> {
+    if std::env::var_os("LISTENOOK_EPHEMERAL").is_some() {
+        return None;
+    }
+    let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Capyvibe").join("Listenook").join("mpv-shaders");
+    std::fs::create_dir_all(&dir).inspect_err(|why| log::warn!("no folder for mpv's shaders: {why}")).ok()?;
+    dir.into_os_string().into_string().ok()
 }
 
 pub(crate) struct Video {
@@ -289,8 +303,9 @@ fn draw(target: &Mutex<Target>, wake: &Wake) {
 impl Video {
     pub(crate) fn make(cx: ComponentContext) -> Box<dyn NativeComponent> {
         let emit: Emit = Arc::new(move |name, data| cx.emit(name, data));
-        let screen =
-            Screen { options: vec![("vo", "libmpv".into())], wid: None, keep: Box::new(()), before_playing: None };
+        let mut options = vec![("vo", "libmpv".into())];
+        options.extend(shader_cache().map(|dir| ("gpu-shader-cache-dir", dir)));
+        let screen = Screen { options, wid: None, keep: Box::new(()), before_playing: None };
         let player = Player::new(screen, emit);
         let target = Arc::new(Mutex::new(Target { render: None, swap_chain: None }));
         let wake = Arc::new(Wake::default());
