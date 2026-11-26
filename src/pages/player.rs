@@ -217,7 +217,12 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         });
     }
 
-    let source = signal(file_url(&path));
+    // It starts where it was left, rather than seeking there once loaded, past a first frame.
+    let source = signal(if start_at > 0 {
+        format!("{}#t={}", file_url(&path), start_at as f64 / 1000.0)
+    } else {
+        file_url(&path)
+    });
 
     let set_fullscreen = move |on: bool| {
         if fullscreen.get_untracked() == on {
@@ -341,9 +346,6 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                 let video = (info.size.width.0 as f32, info.size.height.0 as f32);
                 if own_window && video.0 > 0.0 && video.1 > 0.0 {
                     shape.set(Some(video));
-                }
-                if start_at > 0 {
-                    media.seek(start_at as f64 / 1000.0);
                 }
             }
             MediaEvent::Progress(progress) => {

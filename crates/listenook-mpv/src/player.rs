@@ -1,7 +1,7 @@
 //! A player on every platform: the props the app sets become mpv's properties, and what mpv
 //! reports becomes the events the app listens to (`load`, `progress`, `end`, `error`,
-//! `buffer`), as nsh's own video element sends them. Only how the picture is shown differs by
-//! platform ([`Screen`]).
+//! `buffer`), as nsh's own video element sends them. A source ending in `#t=<seconds>` (a media
+//! fragment) plays from there. Only how the picture is shown differs by platform ([`Screen`]).
 
 use std::{
     sync::{
@@ -153,6 +153,9 @@ impl Player {
                     Some(source) => {
                         log::debug!("mpv loads {source}");
                         (self.emit)("loadStart", JsonValue::Null);
+                        // Started there, its first frame is the one shown, not one before a seek.
+                        let (source, start) = started_at(source);
+                        mpv.set_text("start", &start.map_or_else(|| "none".to_owned(), |at| at.to_string()));
                         mpv.command(&["loadfile", &location(source), "replace"]);
                     }
                     None => mpv.command(&["stop"]),
@@ -297,6 +300,16 @@ fn video_size(mpv: &Mpv) -> Option<(f64, f64)> {
     let turned = mpv.integer(&field("demux-rotation")).is_some_and(|degrees| degrees % 180 == 90);
     let size = if turned { (height, width) } else { (width, height) };
     (size.0 > 0.0 && size.1 > 0.0).then_some(size)
+}
+
+/// `source` without a `#t=<seconds>` fragment at its end, and those seconds. (A `#` of a file's
+/// name is escaped in its URL.)
+fn started_at(source: &str) -> (&str, Option<f64>) {
+    let Some((rest, at)) = source.rsplit_once("#t=") else { return (source, None) };
+    match at.parse::<f64>() {
+        Ok(at) if at.is_finite() && at >= 0.0 => (rest, Some(at)),
+        _ => (source, None),
+    }
 }
 
 /// What mpv loads for a source: a path for a `file://` URL, the source itself otherwise.
@@ -543,5 +556,12 @@ mod tests {
         assert_eq!(location("file:///Users/me/My%20Videos/a%E2%80%9Cb.mkv"), "/Users/me/My Videos/a\u{201c}b.mkv");
         assert_eq!(location("https://example.com/a%20b.mp3"), "https://example.com/a%20b.mp3");
         assert_eq!(location("file:///C:/Users/me/My%20Videos/a.mkv"), "C:/Users/me/My Videos/a.mkv");
+    }
+
+    #[test]
+    fn a_time_fragment_is_where_a_source_starts() {
+        assert_eq!(started_at("file:///a%23b.mkv#t=33.5"), ("file:///a%23b.mkv", Some(33.5)));
+        assert_eq!(started_at("file:///a%23b.mkv"), ("file:///a%23b.mkv", None));
+        assert_eq!(started_at("https://example.com/a#t=later"), ("https://example.com/a#t=later", None));
     }
 }
