@@ -133,7 +133,7 @@ named_enum!(
 );
 named_enum!(
     LlmProvider {
-        Custom = "custom", OpenAi = "openAi", OpenRouter = "openRouter", DeepSeek = "deepSeek",
+        Custom = "custom", ChatGpt = "chatGpt", OpenAi = "openAi", OpenRouter = "openRouter", DeepSeek = "deepSeek",
         Groq = "groq", NvidiaNim = "nvidiaNim", TogetherAi = "togetherAi", MistralAi = "mistralAi",
         LmStudio = "lmStudio", Ollama = "ollama", FireworksAi = "fireworksAi",
         Perplexity = "perplexity", VolcengineArk = "volcengineArk",
@@ -144,7 +144,7 @@ impl LlmProvider {
     pub fn base_url(self) -> &'static str {
         match self {
             LlmProvider::Custom => "",
-            LlmProvider::OpenAi => "https://api.openai.com/v1",
+            LlmProvider::ChatGpt | LlmProvider::OpenAi => "https://api.openai.com/v1",
             LlmProvider::OpenRouter => "https://openrouter.ai/api/v1",
             LlmProvider::DeepSeek => "https://api.deepseek.com/v1",
             LlmProvider::Groq => "https://api.groq.com/openai/v1",
@@ -162,6 +162,7 @@ impl LlmProvider {
     pub fn label(self) -> &'static str {
         match self {
             LlmProvider::Custom => "Custom",
+            LlmProvider::ChatGpt => "ChatGPT Plus or Pro",
             LlmProvider::OpenAi => "OpenAI",
             LlmProvider::OpenRouter => "OpenRouter",
             LlmProvider::DeepSeek => "DeepSeek",
@@ -1025,8 +1026,18 @@ pub struct LlmProviderSettings {
 }
 
 impl LlmProviderSettings {
+    /// Where requests go: the base URL, or OpenAI's own for a ChatGPT plan, whose sign-in is
+    /// never sent anywhere else.
     pub fn endpoint(&self) -> String {
+        if self.signs_in() {
+            return self.provider.base_url().to_owned();
+        }
         self.base_url.trim().trim_end_matches('/').to_owned()
+    }
+
+    /// Whether the provider takes a ChatGPT sign-in rather than an API key.
+    pub fn signs_in(&self) -> bool {
+        self.provider == LlmProvider::ChatGpt
     }
 
     pub fn is_loopback(&self) -> bool {
@@ -1410,6 +1421,18 @@ mod tests {
         settings.model = "m".into();
         assert_eq!(settings.validate(), None);
         assert!(settings.is_loopback());
+    }
+
+    #[test]
+    fn a_chatgpt_plan_always_goes_to_openai() {
+        let settings = LlmProviderSettings {
+            provider: LlmProvider::ChatGpt,
+            base_url: "http://example.com/v1".into(),
+            model: "gpt-5".into(),
+        };
+        assert_eq!(settings.endpoint(), "https://api.openai.com/v1");
+        assert_eq!(settings.validate(), None);
+        assert!(!settings.is_loopback());
     }
 
     #[test]

@@ -62,6 +62,8 @@ pub(crate) enum AiSetup {
     Provider,
     /// Only an API key.
     Key,
+    /// Only a ChatGPT sign-in.
+    SignIn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -534,10 +536,14 @@ impl Store {
 
     /// What the AI provider still needs before it can translate or write a brief, if anything.
     pub(crate) fn ai_setup(&self) -> Option<AiSetup> {
-        let (invalid, local) =
-            self.setting(|s| (s.llm_provider_settings.validate().is_some(), s.llm_provider_settings.is_loopback()));
+        let (invalid, local, signs_in) = self.setting(|s| {
+            let provider = &s.llm_provider_settings;
+            (provider.validate().is_some(), provider.is_loopback(), provider.signs_in())
+        });
         if invalid {
             Some(AiSetup::Provider)
+        } else if signs_in {
+            (!self.has_key(Secret::ChatGpt)).then_some(AiSetup::SignIn)
         } else if !local && !self.has_key(Secret::Llm) {
             Some(AiSetup::Key)
         } else {
@@ -994,11 +1000,21 @@ impl Store {
     /// This device's id, made on first need: Sync announces it, and the
     /// learning time this device counts is filed under it.
     pub(crate) fn device_id(&self) -> String {
-        let known =
-            self.settings.with_untracked(|s| s.extra.get("sync_device_id").and_then(|v| v.as_str()).map(str::to_owned));
+        self.made_id("sync_device_id")
+    }
+
+    /// The name this device signs in to ChatGPT under, the same at each sign-in, and apart from
+    /// the id Sync announces.
+    pub(crate) fn chatgpt_host(&self) -> String {
+        format!("urn:uuid:{}", self.made_id("chatgpt_host_id"))
+    }
+
+    /// The id the settings keep under `name`, made and kept on first need.
+    fn made_id(&self, name: &str) -> String {
+        let known = self.settings.with_untracked(|s| s.extra.get(name).and_then(|v| v.as_str()).map(str::to_owned));
         known.unwrap_or_else(|| {
             let id = uuid::Uuid::new_v4().to_string();
-            self.update_settings(|s| drop(s.extra.insert("sync_device_id".into(), id.clone().into())));
+            self.update_settings(|s| drop(s.extra.insert(name.into(), id.clone().into())));
             id
         })
     }

@@ -3,7 +3,10 @@ use listenook_core::{LlmProvider, LocaleMode, ThemeMode, transcript::local::Mode
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
-use crate::services::secrets::{self, Secret};
+use crate::services::{
+    chatgpt::{self, Account},
+    secrets::{self, Secret},
+};
 use crate::state::monitor::MonitorState;
 use crate::ui::{error_text, l, tr};
 use crate::work::{ai, updater};
@@ -639,15 +642,16 @@ fn ai() -> impl IntoElement {
             let settings = store.settings().llm_provider_settings;
             match ai::list_models(&settings, Some(key.clone())).await {
                 Ok(found) => {
-                    if !status.try_set(format!("{} {}", found.len(), tr("models available.")).into()) {
+                    // No model is chosen for the person: an endpoint's list mixes models that
+                    // can translate with ones that can't (embeddings, speech, images).
+                    let mut said = format!("{} {}", found.len(), tr("models available."));
+                    if settings.model.is_empty() && !found.is_empty() {
+                        said = format!("{said} {}", tr("Choose one below."));
+                    }
+                    if !status.try_set(said.into()) {
                         return;
                     }
                     verified.try_set(Some(key));
-                    if settings.model.is_empty()
-                        && let Some(first) = found.first().cloned()
-                    {
-                        store.update_settings(|s| s.llm_provider_settings.model = first);
-                    }
                     models.try_set(found);
                 }
                 Err(failure) => drop(status.try_set(error_text(&failure.code))),
@@ -662,7 +666,11 @@ fn ai() -> impl IntoElement {
                 l("Provider"),
                 select(
                     "Provider",
-                    LlmProvider::ALL.iter().map(|p| (p.as_str().into(), p.label().into())).collect(),
+                    LlmProvider::ALL
+                        .iter()
+                        .filter(|p| CHATGPT_SIGN_IN || **p != LlmProvider::ChatGpt)
+                        .map(|p| (p.as_str().into(), p.label().into()))
+                        .collect(),
                     move || SharedString::from(llm_settings().provider.as_str()),
                     move |value| {
                         let provider = LlmProvider::parse(&value);
@@ -678,18 +686,26 @@ fn ai() -> impl IntoElement {
                 )
                 .w(px(240.0)),
             ))
-            .child(field(
-                l("Base URL"),
-                settings_input(
-                    move || llm_settings().base_url,
-                    move |value| store.update_settings(|s| s.llm_provider_settings.base_url = value),
-                    "https://api.openai.com/v1",
-                ),
+            .child(when(move || llm_settings().signs_in(), move || field(l("Account"), chatgpt_account(models))).otherwise(
+                move || {
+                    view()
+                        .gap_4()
+                        .child(field(
+                            l("Base URL"),
+                            settings_input(
+                                move || llm_settings().base_url,
+                                move |value| store.update_settings(|s| s.llm_provider_settings.base_url = value),
+                                "https://api.openai.com/v1",
+                            ),
+                        ))
+                        .child(
+                            field(l("API key"), key_field(Secret::Llm, move || llm_settings().is_loopback(), test))
+                                .child(when(move || llm_settings().is_loopback(), || {
+                                    hint(l("No API key is required for a provider on this computer."))
+                                })),
+                        )
+                },
             ))
-            .child(
-                field(l("API key"), key_field(Secret::Llm, move || llm_settings().is_loopback(), test))
-                    .child(when(move || llm_settings().is_loopback(), || hint(l("No API key is required for a provider on this computer.")))),
-            )
             .child(
                 field(
                     l("Model"),
@@ -705,13 +721,139 @@ fn ai() -> impl IntoElement {
                         settings_input(
                             move || llm_settings().model,
                             move |value| store.update_settings(|s| s.llm_provider_settings.model = value),
-                            "gpt-4.1-mini",
+                            "Model ID",
                         )
                     }),
                 )
-                .child(hint(l("Press Test to list the models your endpoint offers."))),
+                .child(hint(move || {
+                    tr(if llm_settings().signs_in() {
+                        "The models your plan offers are listed once you sign in."
+                    } else {
+                        "Press Test to list the models your endpoint offers."
+                    })
+                })),
             ),
     ))
+}
+
+/// Whether a ChatGPT plan can be signed in to here: the sign-in comes back to a page this
+/// computer serves, which phones and tablets do not yet.
+const CHATGPT_SIGN_IN: bool = cfg!(any(target_os = "macos", target_os = "windows", target_os = "linux"));
+
+const CHATGPT_SIGN_IN_WORK: &str = "chatgpt:sign-in";
+
+/// Lists the models of the ChatGPT plan signed in, choosing the first when none is chosen.
+fn load_chatgpt_models(models: Signal<Vec<String>>, status: Signal<SharedString>) {
+    let store = store();
+    store.run(async move {
+        match chatgpt::models().await {
+            Ok(found) => {
+                if store.settings().llm_provider_settings.model.is_empty()
+                    && let Some(first) = found.first().cloned()
+                {
+                    store.update_settings(|s| s.llm_provider_settings.model = first);
+                }
+                models.try_set(found);
+            }
+            Err(failure) => drop(status.try_set(error_text(&failure.code))),
+        }
+    });
+}
+
+/// The ChatGPT account the AI provider uses: signing in, again, and out.
+fn chatgpt_account(models: Signal<Vec<String>>) -> impl IntoElement {
+    let store = store();
+    let status = signal(SharedString::default());
+    let waiting = signal(false);
+    let account = move || store.has_key(Secret::ChatGpt).then(Account::saved).flatten();
+    if account().is_some() && models.with_untracked(Vec::is_empty) {
+        load_chatgpt_models(models, status);
+    }
+    let sign_in = move || {
+        batch(|| {
+            waiting.set(true);
+            status.set(tr("Finish signing in in your browser…"));
+        });
+        store.run_for(CHATGPT_SIGN_IN_WORK, async move {
+            let signed = chatgpt::sign_in(store.chatgpt_host(), Account::saved(), store.lang()).await;
+            waiting.try_set(false);
+            let saved = signed.map_err(|failure| failure.code).and_then(|account| {
+                store.write_key(Secret::ChatGpt, &account.secret()).map_err(|error| {
+                    log::error!("keeping the ChatGPT sign-in: {error}");
+                    "chatgpt_keychain".to_owned()
+                })
+            });
+            match saved {
+                Ok(()) => {
+                    status.try_set(SharedString::default());
+                    load_chatgpt_models(models, status);
+                }
+                Err(code) => drop(status.try_set(error_text(&code))),
+            }
+        });
+    };
+    let cancel = move || {
+        store.cancel_work(CHATGPT_SIGN_IN_WORK);
+        batch(|| {
+            waiting.set(false);
+            status.set(SharedString::default());
+        });
+    };
+    let sign_out = move || {
+        confirm_destructive(
+            tr("Sign out of ChatGPT?"),
+            tr("Translation and AI Briefs stop working until you sign in again."),
+            tr("Cancel"),
+            tr("Sign Out"),
+            move || {
+                let Some(account) = Account::saved() else {
+                    return;
+                };
+                if store.write_key(Secret::ChatGpt, "").is_ok() {
+                    models.set(Vec::new());
+                    status.set(SharedString::default());
+                    store.run(chatgpt::sign_out(account));
+                }
+            },
+        );
+    };
+    view()
+        .gap_2()
+        .child(view().flex_row().flex_wrap().items_center().gap_2().child(
+            when(waiting, move || button(Variant::Outline, Size::Md, l("Cancel")).on_press(cancel)).otherwise(
+                move || {
+                    when(
+                        move || account().is_some(),
+                        move || {
+                            view()
+                                .flex_row()
+                                .gap_2()
+                                .child(button(Variant::Outline, Size::Md, l("Sign In Again")).on_press(sign_in))
+                                .child(button(Variant::Danger, Size::Md, l("Sign Out")).on_press(sign_out))
+                        },
+                    )
+                    .otherwise(move || button(Variant::Default, Size::Md, l("Sign in with ChatGPT")).on_press(sign_in))
+                },
+            ),
+        ))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    when(move || account().is_some(), || Badge { label: l("Signed in"), status: || Status::Success })
+                        .otherwise(|| Badge { label: l("Setup required"), status: || Status::Warning }),
+                )
+                .child(hint(move || {
+                    let said = status.get();
+                    match account() {
+                        Some(account) if said.is_empty() => SharedString::from(account.email().to_owned()),
+                        _ => said,
+                    }
+                })),
+        )
+        .child(hint(l("Uses your ChatGPT Plus or Pro plan instead of an API key. Your browser opens to sign in.")))
 }
 
 fn settings_input(
@@ -722,7 +864,7 @@ fn settings_input(
     BoundFieldWith {
         value,
         set,
-        placeholder: move || SharedString::from(placeholder),
+        placeholder: move || tr(placeholder),
         more: |input: Input| input.auto_capitalize(AutoCapitalize::None).auto_correct(false),
     }
 }

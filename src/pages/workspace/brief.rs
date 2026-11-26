@@ -94,6 +94,7 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
                                     Some(AiSetup::Key) => {
                                         "Add an API key for the AI provider in Settings to create a brief."
                                     }
+                                    Some(AiSetup::SignIn) => "Sign in with ChatGPT in Settings to create a brief.",
                                     _ => "Configure the AI provider in Settings before creating a brief.",
                                 })
                             }

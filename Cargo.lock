@@ -2267,6 +2267,7 @@ dependencies = [
 name = "nsh-app-listenook"
 version = "2.3.2"
 dependencies = [
+ "base64 0.22.1",
  "env_logger",
  "if-addrs",
  "keyring",
@@ -2295,6 +2296,7 @@ dependencies = [
  "symphonia-opus",
  "tokio",
  "ureq 2.12.1",
+ "url",
  "uuid",
  "windows",
  "zip 2.6.1",

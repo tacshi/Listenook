@@ -4,6 +4,7 @@ pub(crate) mod artwork;
 pub(crate) mod audio;
 pub(crate) mod blas;
 pub(crate) mod capture;
+pub(crate) mod chatgpt;
 pub(crate) mod local;
 pub(crate) mod login;
 pub(crate) mod media;
