@@ -140,14 +140,15 @@ separated by hairlines; shadows only on what floats (menus, dialogs, toasts).
 | `accent` | Selected rows and open triggers |
 | `control-border` | The edge of fields, selects and checkboxes (3:1 against the page) |
 | `destructive` | Destructive actions and errors |
-| `success`, `warning` | A finished job, a job that needs attention; `warning` at 28% (`tokens::found`) washes a search match in the transcript |
+| `success`, `warning` | A finished job, a job that needs attention; `warning` at 28% (`tokens::ink(Ink::Found)`) washes a search match in the transcript |
 | `listen`, `practice` | Learning time in charts: emerald for listening, hot orange for practice. The one place Home goes bright; never used for actions |
 | `recording` | The recording light and the live meter while recording: the red of a tape machine's light; never used for actions |
 | `highlight`, `highlight-foreground` | The sentence being played |
 | `scrim` | The layer behind a dialog |
 
 Colors live in `theme.json` and are read through `nsh_base::theme()` and
-`src/ui/tokens.rs`. No color literal appears in page or component code.
+`src/ui/tokens.rs`: `ink(Ink::…)` for a color by its role, `corner(Corner::…)` for a
+radius, `surface(Surface::…)` for what floats. No color literal appears in page or component code.
 
 - **Radius:** `radius` 8 for controls and popups, `radius-sm` 6 for small
   parts (badges, checkboxes, inset rows), `radius-lg` 12 for cards and
@@ -171,26 +172,29 @@ Colors live in `theme.json` and are read through `nsh_base::theme()` and
 
 ## The `ui` layer
 
-`src/ui/` is the only place `nsh_base` controls are styled. Pages compose:
+`src/ui/` is the only place `nsh_base` controls are styled. Pages compose.
+The parts whose element a page goes on styling (`button`, `card`, `field`,
+`hint`, `select`, …) are functions; the rest are props structs placed as they
+are, such as `ui::MenuAction { glyph, label, on_select }`:
 
 | Component | Variants and states |
 | --- | --- |
-| `button`, `icon_text_button`, `icon_button`, `icon_button_as`, `toggle_icon_button` | Primary, Default, Outline, Ghost, Picture (over a video) × Sm, Md; hover, pressed (scale 0.97 / 0.94), disabled |
-| `shortcut_button` | A small ghost button with its glyph and its shortcut's `key_cap` (Replay ⌘R) |
+| `button`, `icon_text_button`, `IconButton`, `IconButtonAs`, `toggle_icon_button` | Primary, Default, Outline, Ghost, Picture (over a video) × Sm, Md; hover, pressed (scale 0.97 / 0.94), disabled |
+| `ShortcutButton` | A small ghost button with its glyph and its shortcut's `KeyCap` (Replay ⌘R) |
 | `floating_button` | Over content (Jump to playing): the popup surface and its shadow, rising in |
-| `toggle_button` | An icon button that is on or off (a side panel, repeat): tinted and announced as selected while on |
+| `ToggleButton` | An icon button that is on or off (a side panel, repeat): tinted and announced as selected while on |
 | `menu_trigger` | The square button a menu or popover opens from; pressed while it is open |
-| `text_field`, `bound_field`, `text_area`, `search_field`, `field`, `hint`, `error_hint` | One look: `control-border` edge on `card`, focus edge, placeholder; a search field shows a clear button while it has text; `error_hint` in `destructive` |
-| `switch`, `checkbox`, `checkbox_row`, `select`, `segmented`, `slider`, `progress_bar` | Checked, disabled, indeterminate; `checkbox_row` is a card's whole row, washing under the pointer |
-| `menu`, `menu_with`, `context_menu`, `menu_action`, `menu_choice`, `menu_danger`, `menu_toggle`, `menu_divider` | One popup surface (`tokens::popup_surface`) |
-| `menu_source` | A menu row for where to add from: glyph, name, a muted line under it, the shortcut at its end |
-| `modal`, `modal_actions`, `confirm_destructive` | Centered dialog; the system's alert for confirmations |
-| `toast`, `toast_host` | Info, Success, Error |
-| `page_header`, `card`, `section`, `separator`, `list_row`, `badge`, `empty_state`, `spinner`, `key_cap` | |
+| `TextField`, `BoundField`, `text_area`, `search_field_ref`, `focused_search_field`, `field`, `hint`, `ErrorHint` | One look: `control-border` edge on `card`, focus edge, placeholder; a search field shows a clear button while it has text; `ErrorHint` in `destructive` |
+| `switch`, `checkbox`, `checkbox_row`, `select`, `Segmented`, `slider`, `progress_bar` | Checked, disabled, indeterminate; `checkbox_row` is a card's whole row, washing under the pointer |
+| `menu`, `menu_with`, `context_menu`, `MenuAction`, `MenuChoice`, `MenuDanger`, `MenuToggle`, `MenuDivider` | One popup surface (`tokens::surface(Surface::Popup, …)`) |
+| `MenuSource` | A menu row for where to add from: glyph, name, a muted line under it, the shortcut at its end |
+| `Modal`, `ModalActions`, `confirm_destructive` | Centered dialog; the system's alert for confirmations |
+| `toast`, `ToastHost` | Info, Success, Error |
+| `card`, `section`, `Separator`, `list_row`, `Badge`, `EmptyState`, `Spinner`, `KeyCap` | |
 | `pressable_card`, `moment_chip` | A card pressed as a whole (Home); a moment's play glyph and time (the Brief's evidence) |
-| `recording_dot`, `recording_button` | The recording light (breathing while live, grey while paused); a small outline button with the light and the time |
-| `live_wave`, `waveform`, `range_slider` | The last seconds recorded as bars from the middle; a whole recording with what is cut faint on a washed band and the preview's line; a track with a handle at each end |
-| `chart::goal_ring`, `chart::day_bars`, `chart::heatmap`, `chart::heat_key`, `chart::swatch` | `nsh_base::plot` marks in `listen` (listening, calendar shades) and `practice`; the goal line in `foreground` at 45% |
+| `RecordingDot`, `recording_button` | The recording light (breathing while live, grey while paused); a small outline button with the light and the time |
+| `LiveWave`, `Waveform`, `RangeSlider` | The last seconds recorded as bars from the middle; a whole recording with what is cut faint on a washed band and the preview's line; a track with a handle at each end |
+| `chart::GoalRing`, `chart::day_bars`, `chart::heatmap`, `chart::HeatKey`, `chart::Swatch` | `nsh_base::plot` marks in `listen` (listening, calendar shades) and `practice`; the goal line in `foreground` at 45% |
 
 A look a page needs becomes a variant here first.
 

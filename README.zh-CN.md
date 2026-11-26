@@ -91,7 +91,7 @@ cargo run
 
 | 路径 | 内容 |
 | --- | --- |
-| `src` | 应用本身：页面、UI 组件（[DESIGN.md](DESIGN.md)）、状态和服务 |
+| `src` | 应用本身，分层组织，每层只用它下面的层：平台、服务、UI 组件（[DESIGN.md](DESIGN.md)）、状态、后台工作（`work`）、页面和外壳 |
 | `crates/listenook-core` | 不含 UI 的领域逻辑 |
 | `tests` | 无界面运行的用户操作流程 |
 | `vendor/qwen-asr` | 打过补丁的语音引擎 |
