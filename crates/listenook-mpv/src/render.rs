@@ -57,7 +57,6 @@ const PARAM_OPENGL_FBO: c_int = 3;
 #[cfg_attr(windows, allow(dead_code))]
 const PARAM_FLIP_Y: c_int = 4;
 const PARAM_NEXT_FRAME_INFO: c_int = 11;
-const PARAM_BLOCK_FOR_TARGET_TIME: c_int = 12;
 const UPDATE_FRAME: u64 = 1;
 /// `MPV_RENDER_FRAME_INFO_PRESENT`: there is a frame of the video to draw.
 const FRAME_INFO_PRESENT: u64 = 1;
@@ -153,11 +152,9 @@ impl Render {
             }
         };
         let api = c(kind);
-        let mut block: c_int = 0;
         let mut params = [
             RenderParam { kind: PARAM_API_TYPE, data: api.as_ptr().cast_mut().cast() },
             init,
-            RenderParam { kind: PARAM_BLOCK_FOR_TARGET_TIME, data: (&raw mut block).cast() },
             RenderParam { kind: 0, data: ptr::null_mut() },
         ];
         let mut context = ptr::null_mut();
