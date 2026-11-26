@@ -1,18 +1,18 @@
 //! On Windows, mpv draws with Direct3D 11 into a composition swap chain, the content of a
 //! DirectComposition visual that nsh stacks with what it draws: the picture is placed, clipped,
 //! rounded and covered like the rest of the window. Frames are drawn on a thread of their own
-//! as mpv has them, and at once into the swap chain resized with the view.
+//! as mpv has them, and at once at each new size of the view, which the window waits for.
 //!
-//! mpv compiles the shaders it draws a video with on its first frames, which takes a tenth of
-//! a second or more for each: they are kept on disk ([`shader_cache`]), and the window waits
-//! for a frame being drawn only briefly ([`LOCK_WAIT`]) before leaving a resize to the drawing
-//! thread.
+//! Only the drawing thread draws: mpv compiles the shaders it draws a video with on its first
+//! frames, a tenth of a second or more each, and the window waits for a frame at a new size at
+//! most [`FRAME_WAIT`], so a slow frame holds up the picture but not the window. The shaders
+//! are kept on disk ([`shader_cache`]) and compiled once.
 
 mod shape;
 
 use std::{
     path::PathBuf,
-    sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError},
+    sync::{Arc, Condvar, Mutex, MutexGuard},
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -63,19 +63,26 @@ struct Target {
 // the device was made with Direct3D's multithread protection, which mpv turns on.
 unsafe impl Send for Target {}
 
-/// Wakes the drawing thread: something to draw, a size to take, or time to stop.
+/// Between the window and the drawing thread: something to draw, a size to take, time to
+/// stop, and which sizes are drawn.
 #[derive(Default)]
 struct Wake {
     state: Mutex<Waking>,
+    /// Wakes the drawing thread.
     signal: Condvar,
+    /// Tells the window a size is drawn.
+    drawn: Condvar,
 }
 
 #[derive(Default)]
 struct Waking {
     draw: bool,
     stop: bool,
-    /// The size the swap chain is to take, left to the drawing thread while it was busy.
+    /// The size the swap chain is to take, not taken yet.
     size: Option<(u32, u32)>,
+    /// How many sizes were asked for, and how many of those are drawn (or given up).
+    asked: u64,
+    done: u64,
 }
 
 impl Wake {
@@ -88,23 +95,49 @@ impl Wake {
         self.signal.notify_one();
     }
 
-    /// The swap chain is to take `size`, and the frame be drawn again, once the drawing thread
-    /// is done with the frame it is drawing.
-    fn resize(&self, size: (u32, u32)) {
+    /// The swap chain is to take `size` and the frame be drawn at it: the number of this size,
+    /// to wait for with [`Self::wait_drawn`].
+    fn resize(&self, size: (u32, u32)) -> u64 {
         let mut state = self.state();
         state.size = Some(size);
+        state.asked += 1;
         state.draw = true;
         self.signal.notify_one();
+        state.asked
     }
 
-    /// The size left to the drawing thread, if any, which the caller takes on.
-    fn take_size(&self) -> Option<(u32, u32)> {
-        self.state().size.take()
+    /// The size asked for last, if not taken yet, and its number, for [`Self::drawn`].
+    fn take_size(&self) -> Option<((u32, u32), u64)> {
+        let mut state = self.state();
+        let asked = state.asked;
+        state.size.take().map(|size| (size, asked))
+    }
+
+    /// The sizes up to number `asked` are drawn, or given up.
+    fn drawn(&self, asked: u64) {
+        let mut state = self.state();
+        state.done = state.done.max(asked);
+        self.drawn.notify_all();
+    }
+
+    /// Waits at most `wait` for size number `asked` to be drawn: whether it was.
+    fn wait_drawn(&self, asked: u64, wait: Duration) -> bool {
+        let deadline = Instant::now() + wait;
+        let mut state = self.state();
+        while state.done < asked && !state.stop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            state = self.drawn.wait_timeout(state, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
+        state.done >= asked
     }
 
     fn stop(&self) {
         self.state().stop = true;
         self.signal.notify_one();
+        self.drawn.notify_all();
     }
 
     /// Waits for something to draw: false once it is time to stop.
@@ -118,23 +151,10 @@ impl Wake {
     }
 }
 
-/// How long the window waits for a frame being drawn before leaving a resize to the drawing
-/// thread: long enough for a frame of a playing video, not for the first frames of one, whose
-/// shaders mpv compiles.
-const LOCK_WAIT: Duration = Duration::from_millis(25);
-
-/// `mutex`, if it is free within `wait`.
-fn lock_within<T>(mutex: &Mutex<T>, wait: Duration) -> Option<MutexGuard<'_, T>> {
-    let deadline = Instant::now() + wait;
-    loop {
-        match mutex.try_lock() {
-            Ok(guard) => return Some(guard),
-            Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
-            Err(TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(1)),
-            Err(TryLockError::WouldBlock) => return None,
-        }
-    }
-}
+/// How long the window waits for the frame at a new size of the view before it shows the
+/// window anyway: long enough for a frame of a playing video, and for one being drawn before
+/// it, not for the first frames of one, whose shaders mpv compiles.
+const FRAME_WAIT: Duration = Duration::from_millis(30);
 
 /// Where mpv keeps the shaders it compiles, so that a video's first frames are not slowed by
 /// compiling them again: the app's local (not roaming) data, as they belong to this GPU.
@@ -280,22 +300,30 @@ fn present(render: &Render, swap_chain: &IDXGISwapChain1, vsyncs: u32) {
 
 /// Gives `swap_chain` buffers of `size`: whether it has them.
 fn resize_buffers(swap_chain: &IDXGISwapChain1, (width, height): (u32, u32)) -> bool {
-    // SAFETY: nothing holds the swap chain's buffers: frames take and let go of them under the
-    // lock, and mpv keeps none.
+    // SAFETY: nothing holds the swap chain's buffers: frames take and let go of them on this
+    // thread, and mpv keeps none.
     unsafe { swap_chain.ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0)) }
         .inspect_err(|why| log::warn!("mpv's picture cannot take its new size: {why}"))
         .is_ok()
 }
 
-/// Draws whenever woken, until told to stop, taking a size left to it first.
+/// Draws whenever woken, until told to stop: at a size asked for first, at once, then telling
+/// the window it is drawn.
 fn draw(target: &Mutex<Target>, wake: &Wake) {
     while wake.wait() {
-        let target = target.lock().unwrap_or_else(|e| e.into_inner());
-        let (Some(render), Some(swap_chain)) = (&target.render, &target.swap_chain) else { continue };
-        let resized = wake.take_size().is_some_and(|size| resize_buffers(swap_chain, size));
-        let new = render.has_frame();
-        if resized || new {
-            present(render, swap_chain, if resized { 0 } else { 1 });
+        let asked = wake.take_size();
+        {
+            let target = target.lock().unwrap_or_else(|e| e.into_inner());
+            if let (Some(render), Some(swap_chain)) = (&target.render, &target.swap_chain) {
+                let resized = asked.is_some_and(|(size, _)| resize_buffers(swap_chain, size));
+                let new = render.has_frame();
+                if resized || new {
+                    present(render, swap_chain, if resized { 0 } else { 1 });
+                }
+            }
+        }
+        if let Some((_, number)) = asked {
+            wake.drawn(number);
         }
     }
 }
@@ -343,12 +371,11 @@ impl Video {
     }
 
     /// The swap chain takes `size`: made the first time and shown in the visual, its buffers
-    /// resized after. The current frame is drawn at the new size at once, in the frame that
-    /// resized the view, so the picture keeps up with the window; until it is shown the
-    /// compositor keeps showing the frame before. (A new swap chain at each size showed
-    /// nothing until it was drawn into, which flashed, and was slow to make.) When the drawing
-    /// thread is busy with a frame for longer than [`LOCK_WAIT`], the resize is left to it, so
-    /// the window is not held up.
+    /// resized after, by the drawing thread, which draws the current frame at the new size at
+    /// once; the window waits for it at most [`FRAME_WAIT`], so the picture keeps up with the
+    /// window, and until it is shown the compositor keeps showing the frame before. (A new swap
+    /// chain at each size showed nothing until it was drawn into, which flashed, and was slow
+    /// to make; a frame drawn by the window held it up while mpv compiled shaders.)
     fn resize(&mut self, size: (i32, i32)) {
         self.size = size;
         let size = (size.0.max(1) as u32, size.1.max(1) as u32);
@@ -356,19 +383,11 @@ impl Video {
             self.made = self.make_swap_chain(size);
             return;
         }
-        let Some(mut target) = lock_within(&self.target, LOCK_WAIT) else { return self.wake.resize(size) };
-        // A size left to the drawing thread before is replaced by this one.
-        self.wake.take_size();
-        let Target { render, swap_chain } = &mut *target;
-        if let Some(swap_chain) = swap_chain
-            && resize_buffers(swap_chain, size)
-            && let Some(render) = render
-        {
-            present(render, swap_chain, 0);
-        }
+        let asked = self.wake.resize(size);
+        self.wake.wait_drawn(asked, FRAME_WAIT);
     }
 
-    /// Makes the swap chain, of `size`, draws the current frame into it and shows it in the
+    /// Makes the swap chain, of `size`, has the current frame drawn into it and shows it in the
     /// visual: whether it did.
     fn make_swap_chain(&self, (width, height): (u32, u32)) -> bool {
         let (Some(gpu), Some(visuals)) = (&self.gpu, &self.composition) else { return false };
@@ -379,17 +398,14 @@ impl Video {
                 return false;
             }
         };
-        // The drawing thread has nothing to draw into yet, so it does not hold this for long.
-        let mut target = self.target.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(render) = &target.render {
-            present(render, &swap_chain, 0);
-        }
+        // The drawing thread has had nothing to draw into, so it does not hold this for long.
+        self.target.lock().unwrap_or_else(|e| e.into_inner()).swap_chain = Some(swap_chain.clone());
+        let asked = self.wake.resize((width, height));
+        self.wake.wait_drawn(asked, FRAME_WAIT);
         // SAFETY: DirectComposition's documented API; the window commits after `placed`.
         if let Err(why) = unsafe { visuals.inner.SetContent(&swap_chain) } {
             log::warn!("mpv's picture cannot be shown: {why}");
-            return false;
         }
-        target.swap_chain = Some(swap_chain);
         true
     }
 }
