@@ -48,31 +48,31 @@ pub mod testing {
 
 /// The player recordings and videos play in (`ui::media_view`).
 #[native_components(macos)]
-fn components(components: &nsh_platform_macos::Components) {
+pub fn components(components: &nsh_platform_macos::Components) {
     listenook_mpv::register(components);
 }
 
 /// The player recordings and videos play in (`ui::media_view`).
 #[native_components(ios)]
-fn components(components: &nsh_platform_ios::Components) {
+pub fn components(components: &nsh_platform_ios::Components) {
     listenook_mpv::register(components);
 }
 
 /// The player recordings and videos play in (`ui::media_view`).
 #[native_components(android)]
-fn components(components: &nsh::Components) {
+pub fn components(components: &nsh::Components) {
     listenook_mpv::register(components);
 }
 
 /// The player recordings and videos play in (`ui::media_view`).
 #[native_components(linux)]
-fn components(components: &nsh_platform_linux::Components) {
+pub fn components(components: &nsh_platform_linux::Components) {
     listenook_mpv::register(components);
 }
 
 /// The player recordings and videos play in (`ui::media_view`).
 #[native_components(windows)]
-fn components(components: &nsh_platform_windows::Components) {
+pub fn components(components: &nsh_platform_windows::Components) {
     listenook_mpv::register(components);
 }
 
