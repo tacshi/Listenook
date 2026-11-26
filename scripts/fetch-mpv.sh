@@ -33,6 +33,8 @@ while read -r sum url; do
   [[ "$(sha256 "$file")" == "$sum" ]] || { echo "$(basename "$url") does not match its checksum." >&2; exit 1; }
   case "$file" in
     *.zip) unzip -qo "$file" -d "$staging" ;;
+    # An Android library: kept whole for the package (nsh.json), its .so files unpacked to link.
+    *.aar) cp "$file" "$staging/libmpv.aar" && unzip -qo "$file" 'jni/*' -d "$staging" ;;
     *.7z) (cd "$staging" && 7z x -y "$file" >/dev/null) ;;
     *) cp "$file" "$staging/" ;;
   esac

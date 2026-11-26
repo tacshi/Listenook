@@ -64,7 +64,7 @@ nsh-testing = { version = "0.7.1", default-features = false }
 nsh-platform-ios = { version = "0.7.1", default-features = false }
 
 [target.'cfg(target_os = "android")'.dependencies]
-nsh-platform-android = { version = "0.7.1", default-features = false }
+nsh = { package = "nsh-platform-android", version = "0.7.1", default-features = false }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 qwen-asr = { path = "vendor/qwen-asr" }

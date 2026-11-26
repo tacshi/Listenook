@@ -35,6 +35,11 @@
       "NSAudioCaptureUsageDescription": "Listenook records what other apps play when you ask it to, so you can keep it and transcribe it."
     }
   },
+  "android": {
+    "libraries": [
+      "vendor/mpv/android/libmpv.aar"
+    ]
+  },
   "singleInstance": true,
   "fileTypes": [
     {

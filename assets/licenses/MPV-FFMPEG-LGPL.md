@@ -23,4 +23,6 @@ their checksums, in `scripts/mpv-libraries.txt` there.
   build of 2026-11-25 (mpv d32c910be6, FFmpeg c81e35cf2), loaded from the app's folder.
 - **Linux:** the system's libmpv, from the distribution.
 - **Android:** libmpv-android's LGPL build (mpv 0.42.0 with `-Dgpl=false`, FFmpeg 9.0.2 with
-  `--enable-version3`), as shared libraries in the app.
+  `--enable-version3`), as shared libraries in the app, with the Android NDK's libc++. Its build
+  scripts and sources are on Listenook's `mpv-libraries` release
+  (`libmpv-android-lgpl-source-20261115.tar.gz`).

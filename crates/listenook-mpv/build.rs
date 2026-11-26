@@ -46,16 +46,14 @@ fn fetch(root: &Path, platform: &str) -> PathBuf {
 /// libraries for the target's ABI, which the app's package carries (nsh.json's
 /// `android.libraries`).
 fn android(root: &Path) {
+    let dir = fetch(root, "android").join("jni");
     let abi = match env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default().as_str() {
         "aarch64" => "arm64-v8a",
         "arm" => "armeabi-v7a",
         "x86_64" => "x86_64",
         _ => "x86",
     };
-    let dir = root.join("vendor/mpv/android/jni").join(abi);
-    if !dir.join("libmpv.so").exists() {
-        println!("cargo:warning=no libmpv for Android in {}: see scripts/mpv-libraries.txt", dir.display());
-    }
+    let dir = dir.join(abi);
     println!("cargo:rustc-link-search=native={}", dir.display());
     println!("cargo:rustc-link-lib=dylib=mpv");
     println!("cargo:rustc-link-lib=dylib=avcodec");

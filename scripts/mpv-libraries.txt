@@ -33,3 +33,6 @@ apple c381ceb4c1504efac12da95293e56585bbeb691634aa64e3a729f517169933ba https://g
 # Windows: libmpv-2.dll from an LGPL mpv-winbuild build (mpv d32c910be6, FFmpeg c81e35cf2;
 # zhongfly/mpv-winbuild 2026-11-25), kept on Listenook's own release since the builds there expire.
 windows 3e89404351986d77d9cde0949d23f523d16b1740edf2f35078f24bf03f72b650 https://github.com/tacshi/Listenook/releases/download/mpv-libraries/libmpv-2-x86_64-20261125-d32c910be6.zip
+# Android: libmpv 0.42.0 and FFmpeg 9.0.2, LGPL (libmpv-android at 45515aeb with -Dgpl=false and
+# no --enable-gpl; sources on the same release), arm64-v8a, as an AAR the package carries.
+android 5f36ce991e0d9440148354a9f233ffd1713876e7b8cf6a36359e7d245f9df88a https://github.com/tacshi/Listenook/releases/download/mpv-libraries/libmpv-android-arm64-0.42.0-lgpl.aar
