@@ -93,8 +93,8 @@ unsafe extern "system" fn keep_shape(
             if let Some(ratio) = shared.ratio.get() {
                 // SAFETY: WM_SIZING's lparam is the window rectangle being dragged to.
                 let rect = unsafe { &mut *(lparam.0 as *mut RECT) };
-                if let Some((frame, content)) = measure(window) {
-                    fit(rect, wparam.0 as u32, ratio, frame, content);
+                if let Some(frame) = frame(window) {
+                    fit(rect, wparam.0 as u32, ratio, frame);
                     return LRESULT(TRUE.0 as isize);
                 }
             }
@@ -111,41 +111,45 @@ unsafe extern "system" fn keep_shape(
     result
 }
 
-/// How much wider and taller `window` is than its content, and its content's size.
-fn measure(window: HWND) -> Option<((i32, i32), (i32, i32))> {
+/// How much wider and taller `window` is than its content.
+fn frame(window: HWND) -> Option<(i32, i32)> {
     let (mut outer, mut inner) = (RECT::default(), RECT::default());
     // SAFETY: queries with local out values.
     unsafe { GetWindowRect(window, &mut outer).ok()? };
     // SAFETY: as above.
     unsafe { GetClientRect(window, &mut inner).ok()? };
-    let content = (inner.right - inner.left, inner.bottom - inner.top);
-    Some((((outer.right - outer.left) - content.0, (outer.bottom - outer.top) - content.1), content))
+    Some((
+        (outer.right - outer.left) - (inner.right - inner.left),
+        (outer.bottom - outer.top) - (inner.bottom - inner.top),
+    ))
 }
 
-/// Changes `rect`, a window rectangle a drag at `edge` (`WMSZ_*`) takes a window to, so its
-/// content (the rectangle less `frame`) is `ratio` wide for each pixel high: a side follows
-/// the edge dragged, a corner the side that changed more from the content's size `was`; the
-/// edges across from them stay.
-fn fit(rect: &mut RECT, edge: u32, ratio: f64, frame: (i32, i32), was: (i32, i32)) {
+/// Changes `rect`, the window rectangle a drag at `edge` (`WMSZ_*`) proposes, so its content
+/// (the rectangle less `frame`) is `ratio` wide for each pixel high: a side keeps where it was
+/// dragged and sets the other; a corner goes to the size of that shape nearest the one dragged
+/// to. The edges across from those dragged stay.
+///
+/// Only the proposed rectangle counts: Windows proposes one that follows the pointer, so a rule
+/// that also looked at the window's size, already fitted, swung between the two at each step.
+fn fit(rect: &mut RECT, edge: u32, ratio: f64, frame: (i32, i32)) {
     let width = ((rect.right - rect.left) - frame.0).max(1) as f64;
     let height = ((rect.bottom - rect.top) - frame.1).max(1) as f64;
-    let by_width = match edge {
-        WMSZ_LEFT | WMSZ_RIGHT => true,
-        WMSZ_TOP | WMSZ_BOTTOM => false,
-        _ => (width / was.0.max(1) as f64 - 1.0).abs() >= (height / was.1.max(1) as f64 - 1.0).abs(),
+    let (width, height) = match edge {
+        WMSZ_LEFT | WMSZ_RIGHT => (width, width / ratio),
+        WMSZ_TOP | WMSZ_BOTTOM => (height * ratio, height),
+        _ => {
+            let height = (width * ratio + height) / (ratio * ratio + 1.0);
+            (height * ratio, height)
+        }
     };
-    if by_width {
-        let height = (width / ratio).round() as i32 + frame.1;
-        match edge {
-            WMSZ_TOPLEFT | WMSZ_TOPRIGHT => rect.top = rect.bottom - height,
-            _ => rect.bottom = rect.top + height,
-        }
-    } else {
-        let width = (height * ratio).round() as i32 + frame.0;
-        match edge {
-            WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT => rect.left = rect.right - width,
-            _ => rect.right = rect.left + width,
-        }
+    let (width, height) = (width.round() as i32 + frame.0, height.round() as i32 + frame.1);
+    match edge {
+        WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT => rect.left = rect.right - width,
+        _ => rect.right = rect.left + width,
+    }
+    match edge {
+        WMSZ_TOP | WMSZ_TOPLEFT | WMSZ_TOPRIGHT => rect.top = rect.bottom - height,
+        _ => rect.bottom = rect.top + height,
     }
 }
 
@@ -181,6 +185,8 @@ fn window_filled_by(at: &Placement) -> Option<HWND> {
 
 #[cfg(test)]
 mod tests {
+    use nsh_platform_windows::windows::Win32::UI::WindowsAndMessaging::WMSZ_BOTTOMRIGHT;
+
     use super::*;
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
@@ -190,22 +196,36 @@ mod tests {
     #[test]
     fn a_side_dragged_sets_the_other_side() {
         let mut r = rect(100, 100, 100 + 1600 + 16, 100 + 500 + 8);
-        fit(&mut r, WMSZ_RIGHT, 16.0 / 9.0, (16, 8), (1280, 720));
+        fit(&mut r, WMSZ_RIGHT, 16.0 / 9.0, (16, 8));
         assert_eq!(r, rect(100, 100, 1716, 100 + 900 + 8));
 
         let mut r = rect(100, 100, 600, 460);
-        fit(&mut r, WMSZ_TOP, 2.0, (0, 0), (600, 300));
+        fit(&mut r, WMSZ_TOP, 2.0, (0, 0));
         assert_eq!(r, rect(100, 100, 100 + 720, 460));
     }
 
     #[test]
-    fn a_corner_follows_the_side_that_changed_more_keeping_the_edges_across() {
-        let mut r = rect(0, 0, 1200, 500);
-        fit(&mut r, WMSZ_TOPLEFT, 2.0, (0, 0), (1000, 500));
-        assert_eq!(r, rect(0, -100, 1200, 500));
+    fn a_corner_goes_to_the_nearest_size_keeping_the_edges_across() {
+        let mut r = rect(0, 0, 1000, 1000);
+        fit(&mut r, WMSZ_BOTTOMRIGHT, 2.0, (0, 0));
+        assert_eq!(r, rect(0, 0, 1200, 600));
 
-        let mut r = rect(0, 0, 400, 1000);
-        fit(&mut r, WMSZ_BOTTOMLEFT, 2.0, (0, 0), (1000, 500));
-        assert_eq!(r, rect(-1600, 0, 400, 1000));
+        let mut r = rect(0, 0, 1000, 1000);
+        fit(&mut r, WMSZ_TOPLEFT, 2.0, (0, 0));
+        assert_eq!(r, rect(-200, 400, 1000, 1000));
+    }
+
+    #[test]
+    fn a_corner_dragged_along_one_side_resizes_steadily() {
+        // Windows keeps proposing the height the drag started at while the pointer moves left.
+        let mut last = i32::MAX;
+        for width in (1000..=1518).rev().step_by(16) {
+            let mut r = rect(0, 0, width, 854);
+            fit(&mut r, WMSZ_BOTTOMRIGHT, 16.0 / 9.0, (0, 0));
+            let fitted = r.right - r.left;
+            assert!(fitted < last, "{fitted} after {last}");
+            assert!((f64::from(fitted) / f64::from(r.bottom - r.top) - 16.0 / 9.0).abs() < 0.01);
+            last = fitted;
+        }
     }
 }
