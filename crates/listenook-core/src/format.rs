@@ -1,4 +1,4 @@
-pub fn clock(ms: i64) -> String {
+pub(crate) fn clock(ms: i64) -> String {
     let total = ms.max(0) / 1000;
     let (hours, minutes, seconds) = (total / 3600, total / 60 % 60, total % 60);
     if hours > 0 { format!("{hours:02}:{minutes:02}:{seconds:02}") } else { format!("{minutes:02}:{seconds:02}") }
@@ -14,7 +14,7 @@ pub fn cue_time(ms: i64, separator: char) -> String {
     format!("{:02}:{:02}:{:02}{separator}{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
 }
 
-pub fn duration_words(ms: i64) -> String {
+fn duration_words(ms: i64) -> String {
     let total = ms.max(0) / 1000;
     let (hours, minutes) = (total / 3600, total / 60 % 60);
     if hours > 0 {
@@ -26,7 +26,7 @@ pub fn duration_words(ms: i64) -> String {
     }
 }
 
-pub fn bytes(size: i64) -> String {
+fn bytes(size: i64) -> String {
     let size = size.max(0) as f64;
     if size >= 1e9 {
         format!("{:.1} GB", size / 1e9)
@@ -44,7 +44,7 @@ pub fn minutes_since(iso: &str) -> Option<i64> {
     Some((chrono::Utc::now() - then.with_timezone(&chrono::Utc)).num_minutes().max(0))
 }
 
-pub fn date(iso: &str) -> String {
+fn date(iso: &str) -> String {
     iso.split('T').next().unwrap_or(iso).to_owned()
 }
 
@@ -92,5 +92,28 @@ mod tests {
     fn file_names() {
         assert_eq!(safe_file_name("a/b: c?. ", "transcript"), "a_b_ c_");
         assert_eq!(safe_file_name(" .. ", "transcript"), "transcript");
+    }
+}
+
+/// A value to show in words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shown<'a> {
+    /// A time in a recording, as `m:ss`, or `h:mm:ss` past an hour.
+    Clock(i64),
+    /// How long something lasts, in words.
+    Duration(i64),
+    /// A file's size, in bytes, kilobytes or megabytes.
+    Size(i64),
+    /// When an ISO time was, as a date.
+    Date(&'a str),
+}
+
+/// `value` in words.
+pub fn shown(value: Shown) -> String {
+    match value {
+        Shown::Clock(ms) => clock(ms),
+        Shown::Duration(ms) => duration_words(ms),
+        Shown::Size(size) => bytes(size),
+        Shown::Date(iso) => date(iso),
     }
 }

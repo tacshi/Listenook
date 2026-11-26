@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use listenook_core::capture::wav_info;
+use listenook_core::media::capture::wav_info;
 use windows::{
     Win32::{
         Media::{

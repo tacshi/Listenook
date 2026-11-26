@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use listenook_core::{
-    audio::Resampler,
+    media::audio::Resampler,
     playback::{Loudness, LoudnessMeter},
 };
 use symphonia::core::{
@@ -126,7 +126,7 @@ fn edit_list_skip(path: &Path) -> Option<f64> {
     }
     let file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
-    listenook_core::container::mp4_audio_skip(std::io::BufReader::new(file), size)
+    listenook_core::media::container::mp4_audio_skip(std::io::BufReader::new(file), size)
 }
 
 /// Decodes `path` to mono at `rate`, handing the samples to `each` as they
@@ -269,7 +269,7 @@ pub(crate) fn forget_loudness(job_id: &str) {
 }
 
 fn loudness_cache(job_id: &str) -> Option<std::path::PathBuf> {
-    Some(crate::state::persist::data_root()?.join("temporary").join(format!("{job_id}-loudness.bin")))
+    Some(crate::services::persist::data_root()?.join("temporary").join(format!("{job_id}-loudness.bin")))
 }
 
 pub(crate) fn decode(path: &Path, rate: u32) -> Option<Vec<i16>> {
@@ -281,10 +281,32 @@ fn decode_avi(path: &Path, rate: u32) -> Option<Vec<i16>> {
         return None;
     }
     let stem = std::env::temp_dir().join(format!("listenook-{}", uuid::Uuid::new_v4().simple()));
-    let sound = super::playable::avi_sound_file(path, &stem)?;
+    let sound = avi_sound_file(path, &stem)?;
     let samples = decode_with_symphonia(&sound, rate);
     let _ = std::fs::remove_file(&sound);
     samples
+}
+
+/// Writes the sound of the AVI file `source` beside `stem`, in the format it comes in: the
+/// file it wrote.
+pub(crate) fn avi_sound_file(source: &Path, stem: &Path) -> Option<std::path::PathBuf> {
+    let part = stem.with_extension("part");
+    let kind = listenook_core::media::container::avi_sound(
+        std::fs::File::open(source).ok()?,
+        std::fs::File::create(&part).ok()?,
+    );
+    match kind {
+        Ok(kind) => {
+            let path = stem.with_extension(kind.extension());
+            std::fs::rename(&part, &path).ok()?;
+            Some(path)
+        }
+        Err(reason) => {
+            log::warn!("{}: {reason}", source.display());
+            let _ = std::fs::remove_file(&part);
+            None
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

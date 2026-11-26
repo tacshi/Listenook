@@ -1,22 +1,23 @@
 use std::{collections::HashSet, time::Duration};
 
 use listenook_core::{
-    format::{date, duration_words},
+    format,
     podcast::{COLLECTIONS, Episode, Feed, ShowSummary, strip_html},
 };
 use nsh_base::theme;
 use nsh_core::{element::Position, prelude::*};
 
+use crate::ui::{error_text, l, tr};
+use crate::work::podcasts;
 use crate::{
-    services::podcasts,
-    shell::top_bar,
-    state::{error_text, l, store, tr},
+    pages::chrome::top_bar,
+    platform::file_url,
+    state::store,
     ui::{
-        self, Icon, Size, Status, Variant, badge, button, chip, field, hint, icon, icon_button, list_row, modal,
-        modal_actions, search_field_ref, section, spinner, text_field_with, toggle_button, toggle_icon_button,
+        self, Badge, Chip, Icon, IconButton, Modal, ModalActions, Size, Spinner, Status, ToggleButton, Variant, button,
+        field, hint, icon, list_row, search_field_ref, section, text_field_with, toggle_icon_button,
         tokens::{self, motion},
     },
-    util::file_url,
 };
 
 #[derive(Clone, Copy)]
@@ -44,7 +45,12 @@ impl Page {
     }
 
     fn idle() -> Self {
-        Self { open: store().podcast.open_show, feed: signal(None), loading: signal(false), error: signal(None) }
+        Self {
+            open: crate::state::podcast::PodcastState::get().open_show(),
+            feed: signal(None),
+            loading: signal(false),
+            error: signal(None),
+        }
     }
 }
 
@@ -53,7 +59,7 @@ pub(crate) fn show_screen() -> impl IntoElement {
 }
 
 pub(crate) fn podcasts_page() -> impl IntoElement {
-    if crate::shell::system_header() {
+    if crate::pages::chrome::system_header() {
         let page = Page::idle();
         return view().flex_1().child(discover(page)).child(add_dialog(page));
     }
@@ -66,7 +72,6 @@ pub(crate) fn podcasts_page() -> impl IntoElement {
 
 impl Page {
     fn load(self) {
-        let store = store();
         let page = self;
         effect(move || {
             let Some(url) = page.open.get() else {
@@ -74,7 +79,7 @@ impl Page {
             };
             untracked(|| {
                 batch(|| {
-                    page.feed.set(store.podcast.feed(&url));
+                    page.feed.set(crate::state::podcast::PodcastState::get().feed(&url));
                     page.loading.set(true);
                 });
             });
@@ -90,7 +95,7 @@ impl Page {
 }
 
 fn add_dialog(page: Page) -> impl IntoElement {
-    let open = store().podcast.adding;
+    let open = crate::state::podcast::PodcastState::get().adding();
     let url = signal(String::new());
     effect(move || {
         if open.get() {
@@ -104,11 +109,11 @@ fn add_dialog(page: Page) -> impl IntoElement {
             open.set(false);
         }
     };
-    modal(
+    Modal {
         open,
-        l("Add by URL"),
-        420.0,
-        move || {
+        title: l("Add by URL"),
+        width: 420.0,
+        content: move || {
             field(
                 l("RSS URL"),
                 text_field_with(url, l("Paste a public RSS URL"), move |input| {
@@ -117,15 +122,24 @@ fn add_dialog(page: Page) -> impl IntoElement {
             )
             .into_element()
         },
-        move || modal_actions(open, l("Cancel"), l("Open"), move || !url.with(|u| u.trim().is_empty()), add),
-    )
+        actions: move || {
+            ModalActions {
+                open,
+                cancel: l("Cancel"),
+                commit: l("Open"),
+                enabled: move || !url.with(|u| u.trim().is_empty()),
+                on_commit: add,
+            }
+            .into_element()
+        },
+    }
 }
 
 fn artwork(url: impl Fn() -> String + 'static, size: f32) -> impl IntoElement {
     view()
         .size(px(size))
         .flex_shrink_0()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .overflow_hidden()
         .bg(|| theme().muted)
         .items_center()
@@ -136,7 +150,7 @@ fn artwork(url: impl Fn() -> String + 'static, size: f32) -> impl IntoElement {
 }
 
 fn discover(page: Page) -> impl IntoElement {
-    let query = store().podcast.query;
+    let query = crate::state::podcast::PodcastState::get().query;
     let results = signal(Vec::<ShowSummary>::new());
     let featured = signal(Vec::<ShowSummary>::new());
     let busy = signal(false);
@@ -186,7 +200,6 @@ fn discover(page: Page) -> impl IntoElement {
             busy.set(false);
         });
     });
-    let store = store();
     let search_input = element_ref();
     on_key("mod+f", move |_| search_input.focus());
     view()
@@ -200,14 +213,17 @@ fn discover(page: Page) -> impl IntoElement {
                         .window_drag(false),
                 )
                 .child(when(
-                    || !crate::shell::system_header(),
+                    || !crate::pages::chrome::system_header(),
                     move || {
-                        view().flex_1().flex_row().justify_end().child(view().window_drag(false).child(icon_button(
-                            Icon::Plus,
-                            tr("Add by URL"),
-                            Size::Sm,
-                            move || store.podcast.adding.set(true),
-                        )))
+                        view().flex_1().flex_row().justify_end().child(view().window_drag(false).child(IconButton {
+                            glyph: Icon::Plus,
+                            name: tr("Add by URL"),
+                            size: Size::Sm,
+                            on_press: move || {
+                                crate::state::podcast::PodcastState::get()
+                                    .act(crate::state::podcast::PodcastAction::AddShow)
+                            },
+                        }))
                     },
                 )),
         )
@@ -217,12 +233,12 @@ fn discover(page: Page) -> impl IntoElement {
                     .p(px(ui::PAGE_INSET))
                     .gap_6()
                     .child(when(
-                        move || !searching() && !store.podcast.followed().is_empty(),
+                        move || !searching() && !crate::state::podcast::PodcastState::get().followed().is_empty(),
                         move || {
                             section(
                                 l("Following"),
                                 card_grid().child(each(
-                                    move || store.podcast.followed(),
+                                    move || crate::state::podcast::PodcastState::get().followed(),
                                     |followed| followed.feed_url.clone(),
                                     move |followed, _| {
                                         let summary = computed(move || {
@@ -251,7 +267,10 @@ fn discover(page: Page) -> impl IntoElement {
                         when(searching, move || {
                             view()
                                 .gap_1()
-                                .child(when(move || busy.get() && results.with(Vec::is_empty), || spinner(18.0)))
+                                .child(when(
+                                    move || busy.get() && results.with(Vec::is_empty),
+                                    || Spinner { size: 18.0 },
+                                ))
                                 .child(when(
                                     move || !busy.get() && results.with(Vec::is_empty),
                                     || hint(l("No podcasts matched that search.")),
@@ -267,8 +286,10 @@ fn discover(page: Page) -> impl IntoElement {
                                 let mut shelves: Vec<&'static str> = vec!["Worth studying", "Popular"];
                                 shelves.extend(COLLECTIONS.iter().map(|(name, _)| *name));
                                 view().flex_row().gap_2().children(shelves.into_iter().enumerate().map(
-                                    move |(index, name)| {
-                                        chip(l(name), move || shelf.get() == index, move || shelf.set(index))
+                                    move |(index, name)| Chip {
+                                        label: l(name),
+                                        selected: move || shelf.get() == index,
+                                        on_press: move || shelf.set(index),
                                     },
                                 ))
                             };
@@ -286,7 +307,10 @@ fn discover(page: Page) -> impl IntoElement {
                                 )
                                 .otherwise(move || chips().flex_wrap()),
                             )
-                            .child(when(move || shelving.get() && featured.with(Vec::is_empty), || spinner(18.0)))
+                            .child(when(
+                                move || shelving.get() && featured.with(Vec::is_empty),
+                                || Spinner { size: 18.0 },
+                            ))
                             .child(
                                 card_grid()
                                     .opacity(move || if shelving.get() { 0.5_f32 } else { 1.0 })
@@ -342,7 +366,7 @@ fn show_card(page: Page, show: impl Fn() -> ShowSummary + Copy + 'static) -> imp
         .child(
             view()
                 .aspect_square()
-                .rounded(tokens::radius)
+                .rounded(|| tokens::corner(tokens::Corner::Medium))
                 .overflow_hidden()
                 .bg(|| theme().muted)
                 .items_center()
@@ -361,11 +385,11 @@ fn show_card(page: Page, show: impl Fn() -> ShowSummary + Copy + 'static) -> imp
 }
 
 fn show_page(page: Page) -> impl IntoElement {
-    let store = store();
     let feed = page.feed;
     let followed = move || {
         page.open.get().is_some_and(|url| {
-            store.podcast.is_followed(&feed.with(|f| f.as_ref().map_or(url, |f| f.feed_url.clone())))
+            crate::state::podcast::PodcastState::get()
+                .is_followed(&feed.with(|f| f.as_ref().map_or(url, |f| f.feed_url.clone())))
         })
     };
     let episodes = computed(move || feed.with(|f| f.as_ref().map(|f| f.episodes.clone()).unwrap_or_default()));
@@ -391,7 +415,7 @@ fn show_page(page: Page) -> impl IntoElement {
     });
     let notes_open = signal(HashSet::<String>::new());
     let filter_input = element_ref();
-    let pushed = crate::shell::system_header();
+    let pushed = crate::pages::chrome::system_header();
     if !pushed {
         on_key("mod+f", move |_| filter_input.focus());
     }
@@ -399,7 +423,8 @@ fn show_page(page: Page) -> impl IntoElement {
         button(Variant::Default, Size::Md, move || if followed() { tr("Unfollow") } else { tr("Follow") }).on_press(
             move || {
                 if let Some(feed) = feed.get_untracked() {
-                    store.podcast.set_followed(&feed, !untracked(followed));
+                    crate::state::podcast::PodcastState::get()
+                        .act(crate::state::podcast::PodcastAction::SetFollowed(&feed, !untracked(followed)));
                 }
             },
         )
@@ -410,17 +435,17 @@ fn show_page(page: Page) -> impl IntoElement {
             move || !pushed,
             move || {
                 top_bar()
-                    .child(view().window_drag(false).child(icon_button(
-                        Icon::ChevronLeft,
-                        tr("Back"),
-                        Size::Sm,
-                        move || {
+                    .child(view().window_drag(false).child(IconButton {
+                        glyph: Icon::ChevronLeft,
+                        name: tr("Back"),
+                        size: Size::Sm,
+                        on_press: move || {
                             batch(|| {
                                 page.open.set(None);
                                 page.feed.set(None);
                             })
                         },
-                    )))
+                    }))
                     .child(
                         text(move || {
                             feed.with(|f| {
@@ -444,7 +469,7 @@ fn show_page(page: Page) -> impl IntoElement {
                 move || feed.with(Option::is_none),
                 move || {
                     view().flex_1().items_center().justify_center().gap_3().child(
-                        when(move || page.loading.get(), || spinner(20.0)).otherwise(move || {
+                        when(move || page.loading.get(), || Spinner { size: 20.0 }).otherwise(move || {
                             text(move || page.error.get().map(error_text).unwrap_or_default())
                                 .text_sm()
                                 .text_color(|| theme().destructive)
@@ -538,14 +563,14 @@ fn episode_row(
     at: Position,
 ) -> impl IntoElement {
     let store = store();
-    let player = store.podcast;
+    let player = crate::state::podcast::PodcastState::get();
     let episode = computed(move || episodes.with(|e| e.get(at.index()).cloned()));
     let id = move || episode.with(|e| e.as_ref().map(|e| e.id.clone()).unwrap_or_default());
     let current = move || player.is_current(&id());
     let playing = move || current() && !player.paused();
     let job = move || {
         let id = id();
-        store.jobs().into_iter().find(|job| job.podcast_provenance.as_ref().is_some_and(|p| p.episode_id == id))
+        store.jobs().into_iter().find(|job| job.is_episode(&id))
     };
     let notes = computed(move || {
         episode.with(|e| e.as_ref().and_then(|e| e.description.as_deref()).map(strip_html).unwrap_or_default())
@@ -556,10 +581,10 @@ fn episode_row(
         let mut parts = episode.with(|e| {
             let mut parts = Vec::new();
             if let Some(published) = e.as_ref().and_then(|e| e.published_at.as_deref()) {
-                parts.push(date(published));
+                parts.push(format::shown(format::Shown::Date(published)));
             }
             if let Some(duration) = e.as_ref().and_then(|e| e.duration_ms) {
-                parts.push(duration_words(duration));
+                parts.push(format::shown(format::Shown::Duration(duration)));
             }
             parts
         });
@@ -576,14 +601,14 @@ fn episode_row(
             return;
         };
         if player.is_current(&episode.id) {
-            player.set_paused(!player.paused());
+            player.act(crate::state::podcast::PodcastAction::SetPaused(!player.paused()));
             return;
         }
         let local = untracked(job).filter(|job| std::path::Path::new(&job.source_path).exists());
         let source = local.map_or_else(|| episode.enclosure_url.clone(), |job| file_url(&job.source_path));
         let show =
             page.feed.with_untracked(|f| f.as_ref().map(|f| SharedString::from(f.title.clone())).unwrap_or_default());
-        player.play(episode, show, source);
+        player.act(crate::state::podcast::PodcastAction::Play(episode, show, source));
     };
     let toggle_notes = move || {
         let id = untracked(id);
@@ -597,11 +622,17 @@ fn episode_row(
         .gap_2()
         .px_3()
         .py_2()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .transition_colors()
         .duration(motion::INSTANT)
-        .bg(move || if current() { tokens::highlight() } else { theme().background })
-        .hover(move |s| s.bg(move || if current() { tokens::highlight() } else { tokens::hover_wash() }))
+        .bg(move || if current() { tokens::ink(tokens::Ink::Highlight) } else { theme().background })
+        .hover(move |s| {
+            s.bg(
+                move || {
+                    if current() { tokens::ink(tokens::Ink::Highlight) } else { tokens::ink(tokens::Ink::HoverWash) }
+                },
+            )
+        })
         .child(
             view()
                 .flex_row()
@@ -622,7 +653,7 @@ fn episode_row(
                         .flex_1()
                         .min_w(px(0.0))
                         .gap_0p5()
-                        .rounded(tokens::radius_sm)
+                        .rounded(|| tokens::corner(tokens::Corner::Small))
                         .child(
                             text(move || {
                                 episode.with(|e| {
@@ -638,7 +669,7 @@ fn episode_row(
                 )
                 .child(when(
                     move || !narrow && episode.with(|e| e.as_ref().is_some_and(|e| !e.transcripts.is_empty())),
-                    || badge(l("Has captions"), || Status::Neutral),
+                    || Badge { label: l("Has captions"), status: || Status::Neutral },
                 ))
                 .child(
                     button(Variant::Outline, Size::Sm, move || match job() {
@@ -654,8 +685,13 @@ fn episode_row(
                 )
                 .child(when(
                     move || notes.with(|n| !n.is_empty()),
-                    move || {
-                        toggle_button(Variant::Ghost, Icon::ChevronDown, tr("Show notes"), Size::Sm, open, toggle_notes)
+                    move || ToggleButton {
+                        variant: Variant::Ghost,
+                        glyph: Icon::ChevronDown,
+                        name: tr("Show notes"),
+                        size: Size::Sm,
+                        on: open,
+                        on_press: toggle_notes,
                     },
                 )),
         )

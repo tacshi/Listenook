@@ -4,18 +4,15 @@ pub(crate) mod artwork;
 pub(crate) mod audio;
 pub(crate) mod blas;
 pub(crate) mod capture;
-pub(crate) mod llm;
 pub(crate) mod local;
 pub(crate) mod login;
 pub(crate) mod media;
-pub(crate) mod notify;
+pub(crate) mod persist;
 pub(crate) mod playable;
-pub(crate) mod podcasts;
 pub(crate) mod remote;
-pub(crate) mod secure;
+pub(crate) mod secrets;
+
 pub(crate) mod sync;
-pub(crate) mod transcribe;
-pub(crate) mod updater;
 
 use nsh_core::prelude::Spawned;
 

@@ -12,8 +12,9 @@ use std::{
 };
 
 use listenook_core::{
-    Document, Job, TranscriptionProvider, audio,
-    local::{self, Model, Word},
+    Document, Job, TranscriptionProvider,
+    media::audio,
+    transcript::local::{self, Model, Word},
 };
 use nsh_core::prelude::*;
 use qwen_asr::{
@@ -24,10 +25,10 @@ use qwen_asr::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-pub(crate) use listenook_core::local as catalog;
+pub(crate) use listenook_core::transcript::local as catalog;
 
 use super::remote::Failure;
-use crate::state::{Store, persist, store};
+use crate::services::persist;
 
 const MAX_DURATION_MS: i64 = 300 * 60 * 1000;
 
@@ -277,8 +278,9 @@ pub(crate) fn offered(provider: TranscriptionProvider) -> bool {
     }
 }
 
-fn qwen3_model() -> &'static Model {
-    let large = store().setting(|s| s.extra.get("qwen3_local_model").and_then(Value::as_str) == Some("1.7b"));
+/// The Qwen3 model to transcribe with: the `large` one when it is chosen, or whichever is
+/// installed.
+fn qwen3_model(large: bool) -> &'static Model {
     match (installed(&local::QWEN3), installed(&local::QWEN3_LARGE)) {
         (true, true) if large => &local::QWEN3_LARGE,
         (false, true) => &local::QWEN3_LARGE,
@@ -286,12 +288,13 @@ fn qwen3_model() -> &'static Model {
     }
 }
 
-pub(crate) fn provider_ready(provider: TranscriptionProvider) -> bool {
+/// Whether `provider` can transcribe here now, with the `large` Qwen3 model when it is chosen.
+pub(crate) fn provider_ready(provider: TranscriptionProvider, large: bool) -> bool {
     global::<Models>().with(|_| ());
     offered(provider)
         && match provider {
             TranscriptionProvider::MossLocal => installed(&local::MOSS),
-            _ => installed(qwen3_model()) && installed(&local::ALIGNER),
+            _ => installed(qwen3_model(large)) && installed(&local::ALIGNER),
         }
 }
 
@@ -392,13 +395,13 @@ fn fetch_model(model: &Model, root: &Path, received: &AtomicU64, stop: &AtomicBo
     std::fs::write(target.join(".verified.json"), serde_json::to_vec_pretty(&verified).unwrap_or_default()).map_err(io)
 }
 
-pub(crate) fn download_model(store: Store, model: &'static Model) {
-    let Some(root) = models_root() else {
-        return;
-    };
+/// Starts downloading `model`: the work to run for as long as the app does, unless it is
+/// already downloading or there is nowhere to keep it.
+pub(crate) fn download_model(model: &'static Model) -> Option<impl Future<Output = ()> + 'static> {
+    let root = models_root()?;
     let state = global::<Models>();
     if state.with_untracked(|models| models.downloading.contains_key(model.id)) {
-        return;
+        return None;
     }
     let stop = Arc::new(AtomicBool::new(false));
     STOPS.with(|stops| stops.borrow_mut().insert(model.id, stop.clone()));
@@ -406,7 +409,7 @@ pub(crate) fn download_model(store: Store, model: &'static Model) {
         models.failed.remove(model.id);
         models.downloading.insert(model.id, 0.0);
     });
-    store.run(async move {
+    Some(async move {
         let received = Arc::new(AtomicU64::new(0));
         let seen = received.clone();
         let total = model.size().max(1) as f64;
@@ -437,7 +440,7 @@ pub(crate) fn download_model(store: Store, model: &'static Model) {
                 models.failed.insert(model.id, error.split(':').next().unwrap_or("model_download_failed").to_owned());
             }
         });
-    });
+    })
 }
 
 pub(crate) fn cancel_download(model: &'static Model) {
@@ -726,23 +729,29 @@ fn run_alignment(
     Ok(in_parallel(&aligner, plan.windows.len(), stop, &done, &|_| (), &time)?.into_iter().flatten().collect())
 }
 
-pub(crate) async fn transcribe(store: Store, job: &Job, samples: Arc<Vec<i16>>) -> Result<Document, Failure> {
+/// Transcribes `job` from its `samples` on this device, with the `large` Qwen3 model when it is
+/// chosen, telling `progress` how far it is (`None` until it knows).
+pub(crate) async fn transcribe(
+    job: &Job,
+    samples: Arc<Vec<i16>>,
+    large: bool,
+    progress: impl Fn(Option<f64>) + 'static,
+) -> Result<Document, Failure> {
     let duration_ms = duration_ms(&samples);
     let provider = job.transcription_provider;
     if !offered(provider) {
         return Err(Failure::new("local_stt_unsupported", "Local transcription is not available here."));
     }
-    if !provider_ready(provider) {
+    if !provider_ready(provider, large) {
         return Err(Failure::new("local_stt_model_missing", "The model is not downloaded."));
     }
     if duration_ms > MAX_DURATION_MS {
         return Err(Failure::new("duration_limit", "The recording is too long."));
     }
-    let id = job.id.clone();
-    store.set_progress(&id, "local_transcribing", None);
-    let heard = move |fraction: f64| store.set_progress(&id, "local_transcribing", Some(fraction));
+    progress(None);
+    let heard = move |fraction: f64| progress(Some(fraction));
     if provider == TranscriptionProvider::Qwen3Local {
-        let model = qwen3_model();
+        let model = qwen3_model(large);
         let (hints, terms) = (job.options.language_hints.clone(), job.options.context_terms.clone());
         return engine(heard, move |stop, fraction| run_qwen3(&samples, model, &hints, &terms, stop, fraction)).await;
     }
@@ -770,16 +779,19 @@ pub(crate) fn can_align(job: &Job) -> bool {
             job.transcription_provider,
             TranscriptionProvider::MossPro | TranscriptionProvider::MossLocal | TranscriptionProvider::Qwen3Local
         )
-        && job.document.as_ref().is_some_and(|document| !document.segments.is_empty())
+        && job.has_transcript()
         && installed(&local::ALIGNER)
 }
 
-pub(crate) async fn align(store: Store, id: &str, samples: Arc<Vec<i16>>) -> Value {
-    let unavailable = |code: &str| json!({"status": "unavailable", "warning_code": code});
-    let Some(job) = store.job_now(id) else {
-        return unavailable("alignment_source_missing");
-    };
-    let Some(document) = job.document.clone() else {
+/// Times each word of `job`'s transcript in its `samples`, telling `progress` how far it is:
+/// a record of how it went, and the timed words to keep (none when nothing was aligned).
+pub(crate) async fn align(
+    job: &Job,
+    samples: Arc<Vec<i16>>,
+    progress: impl Fn(f64) + 'static,
+) -> (Value, Vec<listenook_core::Token>) {
+    let unavailable = |code: &str| (json!({"status": "unavailable", "warning_code": code}), Vec::new());
+    let Some(document) = job.document() else {
         return unavailable("alignment_source_missing");
     };
     if !installed(&local::ALIGNER) {
@@ -794,10 +806,11 @@ pub(crate) async fn align(store: Store, id: &str, samples: Arc<Vec<i16>>) -> Val
             "alignment_no_eligible_segments"
         });
     }
-    let (job_id, hints) = (id.to_owned(), job.options.language_hints.clone());
-    let heard = move |fraction: f64| store.set_progress(&job_id, "aligning", Some(fraction));
+    let id = job.id.clone();
+    let hints = job.options.language_hints.clone();
     let automatic = hints.len() != 1;
-    let result = engine(heard, move |stop, fraction| run_alignment(&samples, &document, &hints, stop, fraction)).await;
+    let result =
+        engine(progress, move |stop, fraction| run_alignment(&samples, &document, &hints, stop, fraction)).await;
     let (tokens, failure) = match result {
         Ok(tokens) => (tokens, None),
         Err(error) => {
@@ -814,9 +827,6 @@ pub(crate) async fn align(store: Store, id: &str, samples: Arc<Vec<i16>>) -> Val
         (_, _) if plan.too_long > 0 => ("partial", Some("alignment_segment_too_long".to_owned())),
         _ => ("partial", Some("alignment_partial".to_owned())),
     };
-    if aligned > 0 {
-        store.update_document(id, |document| document.tokens = tokens);
-    }
     let mut record = json!({
         "status": status,
         "model_id": local::ALIGNER.id,
@@ -828,5 +838,5 @@ pub(crate) async fn align(store: Store, id: &str, samples: Arc<Vec<i16>>) -> Val
     if let Some(warning) = warning {
         record["warning_code"] = json!(warning);
     }
-    record
+    (record, if aligned > 0 { tokens } else { Vec::new() })
 }

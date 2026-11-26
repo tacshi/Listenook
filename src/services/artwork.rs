@@ -13,7 +13,7 @@ use symphonia::core::{
     probe::Hint,
 };
 
-use crate::state::persist;
+use crate::services::persist;
 
 const NONE: &str = "cover.none";
 
@@ -39,11 +39,11 @@ pub(crate) struct File {
 
 impl File {
     pub(crate) fn of(job: &Job) -> File {
-        let extension = listenook_core::subtitles::extension(&job.source_path);
+        let extension = listenook_core::media::subtitles::extension(&job.source_path);
         File {
             id: job.id.clone(),
             source: PathBuf::from(&job.source_path),
-            video: job.has_video() || crate::pages::VIDEO_EXTENSIONS.contains(&extension.as_str()),
+            video: job.has_video() || listenook_core::media::subtitles::VIDEO_EXTENSIONS.contains(&extension.as_str()),
             duration_ms: job.duration_ms(),
         }
     }

@@ -1,20 +1,16 @@
 use std::path::{Path, PathBuf};
 
-use listenook_core::{container, subtitles};
+use listenook_core::{media::container, media::subtitles};
 use nsh_core::prelude::*;
 
-use crate::state::persist;
+use crate::services::persist;
 
 pub(crate) fn needs_help(path: &str) -> bool {
     cfg!(target_vendor = "apple") && matches!(subtitles::extension(path).as_str(), "mkv" | "avi")
 }
 
 pub(crate) fn keeps_picture(path: &str) -> bool {
-    match subtitles::extension(path).as_str() {
-        "mkv" => std::fs::File::open(path).is_ok_and(container::mkv_fits_mp4),
-        "avi" => std::fs::File::open(path).is_ok_and(container::avi_fits_mov),
-        _ => false,
-    }
+    container::keeps_picture(Path::new(path))
 }
 
 fn cache(id: &str, extension: &str) -> Option<PathBuf> {
@@ -59,23 +55,6 @@ pub(crate) fn made(id: &str, source: &str) -> Option<PathBuf> {
     (!sound_only || !keeps_picture(source)).then_some(path)
 }
 
-pub(crate) fn avi_sound_file(source: &Path, stem: &Path) -> Option<PathBuf> {
-    let part = stem.with_extension("part");
-    let kind = container::avi_sound(std::fs::File::open(source).ok()?, std::fs::File::create(&part).ok()?);
-    match kind {
-        Ok(kind) => {
-            let path = stem.with_extension(kind.extension());
-            std::fs::rename(&part, &path).ok()?;
-            Some(path)
-        }
-        Err(reason) => {
-            log::warn!("{}: {reason}", source.display());
-            let _ = std::fs::remove_file(&part);
-            None
-        }
-    }
-}
-
 fn make(id: &str, source: &Path) -> Option<PathBuf> {
     forget(id);
     let stem = cache(id, "x")?.with_extension("");
@@ -95,7 +74,7 @@ fn make(id: &str, source: &Path) -> Option<PathBuf> {
             Err(reason) => {
                 log::info!("{}: {reason}; playing its sound", source.display());
                 let _ = std::fs::remove_file(&part);
-                avi_sound_file(source, &stem)
+                super::audio::avi_sound_file(source, &stem)
             }
         };
     }
@@ -113,7 +92,7 @@ fn make(id: &str, source: &Path) -> Option<PathBuf> {
             let _ = std::fs::remove_file(&part);
             let samples = super::audio::decode(source, 22_050)?;
             let path = stem.with_extension("wav");
-            std::fs::write(&part, listenook_core::audio::wav(&samples, 22_050)).ok()?;
+            std::fs::write(&part, listenook_core::media::audio::wav(&samples, 22_050)).ok()?;
             std::fs::rename(&part, &path).ok()?;
             Some(path)
         }

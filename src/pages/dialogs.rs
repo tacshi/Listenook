@@ -1,12 +1,16 @@
-use listenook_core::{ContentMode, ExportFormat, export};
+use listenook_core::{
+    ContentMode, ExportFormat,
+    transcript::export::{self, Export, File},
+};
 use nsh_core::prelude::*;
 
 use nsh_base::theme;
 
+use crate::ui::{l, tr};
 use crate::{
-    state::{l, store, tr},
+    state::store,
     ui::{
-        Icon, Tone, card, checkbox, checkbox_row, field, hint, icon, modal, modal_actions, select, switch, text_field,
+        Icon, Modal, ModalActions, TextField, Tone, card, checkbox, checkbox_row, field, hint, icon, select, switch,
         text_field_with, toast, tokens,
     },
 };
@@ -36,7 +40,7 @@ impl JobDialog {
 
 pub(crate) fn save_text(file_name: String, contents: String) {
     store().run(async move {
-        let Some(path) = crate::util::save_target(file_name).await else {
+        let Some(path) = crate::work::import::save_target(file_name).await else {
             return;
         };
         saved(blocking(move || std::fs::write(path, contents)).await);
@@ -45,14 +49,14 @@ pub(crate) fn save_text(file_name: String, contents: String) {
 
 fn saved<E>(written: Result<std::io::Result<()>, E>) {
     match written {
-        Ok(Ok(())) => toast(Tone::Success, crate::util::saved_text()),
+        Ok(Ok(())) => toast(Tone::Success, crate::work::import::saved_text()),
         _ => toast(Tone::Error, tr("Couldn’t save the file. Choose another folder and try again.")),
     }
 }
 
-fn save_files(bundle: String, mut files: Vec<(String, String)>) {
+fn save_files(bundle: String, mut files: Vec<File>) {
     if files.len() <= 1 {
-        if let Some((name, contents)) = files.pop() {
+        if let Some(File { name, contents }) = files.pop() {
             save_text(name, contents);
         }
         return;
@@ -64,7 +68,7 @@ fn save_files(bundle: String, mut files: Vec<(String, String)>) {
     store().run(async move {
         saved(
             blocking(move || {
-                files.into_iter().try_for_each(|(name, contents)| {
+                files.into_iter().try_for_each(|File { name, contents }| {
                     let path =
                         crate::platform::export_path(&name).ok_or_else(|| std::io::Error::other("no export folder"))?;
                     std::fs::write(path, contents)
@@ -75,16 +79,16 @@ fn save_files(bundle: String, mut files: Vec<(String, String)>) {
     });
 }
 
-fn save_zip(name: String, files: Vec<(String, String)>) {
+fn save_zip(name: String, files: Vec<File>) {
     store().run(async move {
-        let Some(path) = crate::util::save_target(name).await else {
+        let Some(path) = crate::work::import::save_target(name).await else {
             return;
         };
         saved(
             blocking(move || -> std::io::Result<()> {
                 use std::io::Write;
                 let mut archive = zip::ZipWriter::new(std::fs::File::create(path)?);
-                for (name, contents) in files {
+                for File { name, contents } in files {
                     archive
                         .start_file(name, zip::write::SimpleFileOptions::default())
                         .map_err(std::io::Error::other)?;
@@ -129,7 +133,7 @@ fn transcript_options(dialog: JobDialog) -> View {
         options().content_mode != ContentMode::Original
             && store
                 .job(&dialog.job.get())
-                .and_then(|job| job.document.as_ref().map(|d| d.segments.iter().any(|s| !s.has_translation())))
+                .and_then(|job| job.document().map(|d| d.segments.iter().any(|s| !s.has_translation())))
                 .unwrap_or(false)
     };
     view()
@@ -192,7 +196,7 @@ fn part_card(
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
-                    .rounded(tokens::radius)
+                    .rounded(|| tokens::corner(tokens::Corner::Medium))
                     .bg(|| theme().muted)
                     .text_color(|| theme().primary)
                     .child(icon(glyph, 16.0)),
@@ -225,11 +229,11 @@ pub(crate) fn export_dialog(export: ExportDialog) -> impl IntoElement {
         let chosen = chosen();
         [chosen.transcript, chosen.brief, chosen.flashcards].into_iter().filter(|on| *on).count()
     };
-    modal(
-        dialog.open,
-        move || if briefed() { tr("Export") } else { tr("Export transcript") },
-        460.0,
-        move || {
+    Modal {
+        open: dialog.open,
+        title: move || if briefed() { tr("Export") } else { tr("Export transcript") },
+        width: 460.0,
+        content: move || {
             dynamic(move || {
                 if !briefed() {
                     return untracked(|| transcript_options(dialog).into_element());
@@ -292,13 +296,13 @@ pub(crate) fn export_dialog(export: ExportDialog) -> impl IntoElement {
             })
             .into_element()
         },
-        move || {
-            modal_actions(
-                dialog.open,
-                l("Cancel"),
-                l("Export"),
-                move || count() > 0,
-                move || {
+        actions: move || {
+            ModalActions {
+                open: dialog.open,
+                cancel: l("Cancel"),
+                commit: l("Export"),
+                enabled: move || count() > 0,
+                on_commit: move || {
                     let Some(job) = store.job_now(&dialog.id()) else {
                         return;
                     };
@@ -307,25 +311,23 @@ pub(crate) fn export_dialog(export: ExportDialog) -> impl IntoElement {
                     if chosen.transcript {
                         let mut options = store.settings().export_options;
                         options.locale_code = store.lang().code().to_owned();
-                        files.push((
-                            export::export_file_name(&job, options.format),
-                            export::export_transcript(&job, &options),
-                        ));
+                        files.push(export::export(&job, Export::Transcript(&options)));
                     }
-                    if let Some(brief) = &job.ai_brief {
+                    if let Some(brief) = job.brief() {
                         if chosen.brief {
-                            files.push((export::brief_file_name(&job), export::export_brief(&job, brief)));
+                            files.push(export::export(&job, Export::Brief(&brief)));
                         }
                         if chosen.flashcards {
-                            files.push((export::flashcards_file_name(&job), export::export_flashcards(&job, brief)));
+                            files.push(export::export(&job, Export::Flashcards(&brief)));
                         }
                     }
                     dialog.open.set(false);
                     save_files(export::bundle_file_name(&job), files);
                 },
-            )
+            }
+            .into_element()
         },
-    )
+    }
 }
 
 pub(crate) fn rename_dialog(dialog: JobDialog) -> impl IntoElement {
@@ -340,15 +342,15 @@ pub(crate) fn rename_dialog(dialog: JobDialog) -> impl IntoElement {
     let rename = move || {
         let next = title.get_untracked().trim().to_owned();
         if !next.is_empty() {
-            store.update_job(&dialog.id(), |job| job.display_title = Some(next));
+            store.update_job(&dialog.id(), |job| job.apply(listenook_core::Change::Rename(&next)));
             dialog.open.set(false);
         }
     };
-    modal(
-        dialog.open,
-        l("Rename"),
-        420.0,
-        move || {
+    Modal {
+        open: dialog.open,
+        title: l("Rename"),
+        width: 420.0,
+        content: move || {
             field(
                 l("Title"),
                 text_field_with(title, SharedString::default, move |input| {
@@ -357,10 +359,17 @@ pub(crate) fn rename_dialog(dialog: JobDialog) -> impl IntoElement {
             )
             .into_element()
         },
-        move || {
-            modal_actions(dialog.open, l("Cancel"), l("Rename"), move || !title.with(|t| t.trim().is_empty()), rename)
+        actions: move || {
+            ModalActions {
+                open: dialog.open,
+                cancel: l("Cancel"),
+                commit: l("Rename"),
+                enabled: move || !title.with(|t| t.trim().is_empty()),
+                on_commit: rename,
+            }
+            .into_element()
         },
-    )
+    }
 }
 
 pub(crate) fn group_dialog(dialog: JobDialog) -> impl IntoElement {
@@ -376,37 +385,38 @@ pub(crate) fn group_dialog(dialog: JobDialog) -> impl IntoElement {
             });
         }
     });
-    modal(
-        dialog.open,
-        l("Group"),
-        420.0,
-        move || {
+    Modal {
+        open: dialog.open,
+        title: l("Group"),
+        width: 420.0,
+        content: move || {
             let mut options: Vec<(SharedString, SharedString)> = vec![(SharedString::default(), tr("No group"))];
-            options.extend(store.catalog().groups.into_iter().map(|group| (group.id.into(), group.name.into())));
+            options.extend(store.groups().into_iter().map(|group| (group.id.into(), group.name.into())));
             view()
                 .gap_4()
                 .child(field(
                     l("Group"),
                     select("Group", options, move || chosen.get(), move |value| chosen.set(value)),
                 ))
-                .child(field(l("Or a new group"), text_field(new_name, l("Name"))))
+                .child(field(l("Or a new group"), TextField { value: new_name, placeholder: l("Name") }))
                 .into_element()
         },
-        move || {
-            modal_actions(
-                dialog.open,
-                l("Cancel"),
-                l("Save"),
-                || true,
-                move || {
+        actions: move || {
+            ModalActions {
+                open: dialog.open,
+                cancel: l("Cancel"),
+                commit: l("Save"),
+                enabled: || true,
+                on_commit: move || {
                     let named = store.add_group(&new_name.get_untracked());
                     let group = named.or_else(|| Some(chosen.get_untracked().to_string()).filter(|id| !id.is_empty()));
-                    store.set_group(&dialog.id(), group);
+                    store.act(crate::state::Action::SetGroup(&dialog.id(), group));
                     dialog.open.set(false);
                 },
-            )
+            }
+            .into_element()
         },
-    )
+    }
 }
 
 pub(crate) fn tags_dialog(dialog: JobDialog) -> impl IntoElement {
@@ -416,20 +426,19 @@ pub(crate) fn tags_dialog(dialog: JobDialog) -> impl IntoElement {
         let name = new_name.get_untracked();
         let name = name.trim();
         if !name.is_empty() {
-            let carried = store.job_now(&dialog.id()).is_some_and(|job| job.tag_ids.iter().any(|tag| tag == name));
+            let carried = store.job_now(&dialog.id()).is_some_and(|job| job.has_tag(name));
             if !carried {
-                store.toggle_tag(&dialog.id(), name);
+                store.act(crate::state::Action::ToggleTag(&dialog.id(), name));
             }
             new_name.set(String::new());
         }
     };
-    let carries =
-        move |tag: &str| store.job(&dialog.job.get()).is_some_and(|job| job.tag_ids.iter().any(|other| other == tag));
-    modal(
-        dialog.open,
-        l("Tags"),
-        420.0,
-        move || {
+    let carries = move |tag: &str| store.job(&dialog.job.get()).is_some_and(|job| job.has_tag(tag));
+    Modal {
+        open: dialog.open,
+        title: l("Tags"),
+        width: 420.0,
+        content: move || {
             view()
                 .gap_4()
                 .child(
@@ -447,25 +456,25 @@ pub(crate) fn tags_dialog(dialog: JobDialog) -> impl IntoElement {
                         ),
                 )
                 .child(view().gap_2().child(each(
-                    move || store.catalog().tags,
+                    move || store.tags(),
                     |tag| tag.id.clone(),
                     move |tag, _| {
                         let name = tag.get_untracked().name;
                         checkbox(
                             SharedString::from(name.clone()),
                             move || carries(&tag.with(|t| t.id.clone())),
-                            move |_| store.toggle_tag(&dialog.id(), &name),
+                            move |_| store.act(crate::state::Action::ToggleTag(&dialog.id(), &name)),
                         )
                     },
                 )))
                 .into_element()
         },
-        move || {
+        actions: move || {
             crate::ui::button(crate::ui::Variant::Primary, crate::ui::Size::Md, l("Done"))
                 .on_press(move || dialog.open.set(false))
                 .into_element()
         },
-    )
+    }
 }
 
 pub(crate) fn export_zip(jobs: Vec<std::rc::Rc<listenook_core::Job>>) {
@@ -473,11 +482,12 @@ pub(crate) fn export_zip(jobs: Vec<std::rc::Rc<listenook_core::Job>>) {
     let mut options = store.settings().export_options;
     options.locale_code = store.lang().code().to_owned();
     let mut used: Vec<String> = Vec::new();
-    let files: Vec<(String, String)> = jobs
+    let files: Vec<File> = jobs
         .iter()
         .filter(|job| job.has_transcript())
         .map(|job| {
-            let name = export::export_file_name(job, options.format);
+            let file = export::export(job, Export::Transcript(&options));
+            let name = file.name;
             let (stem, extension) = name.rsplit_once('.').unwrap_or((&name, "txt"));
             let mut unique = name.clone();
             let mut count = 1;
@@ -486,7 +496,7 @@ pub(crate) fn export_zip(jobs: Vec<std::rc::Rc<listenook_core::Job>>) {
                 unique = format!("{stem}-{count}.{extension}");
             }
             used.push(unique.clone());
-            (unique, export::export_transcript(job, &options))
+            File { name: unique, contents: file.contents }
         })
         .collect();
     if files.is_empty() {
@@ -520,14 +530,14 @@ pub(crate) fn subtitle_choice_dialog() -> impl IntoElement {
     });
     effect(move || {
         if !open.get() && untracked(|| store.subtitle_choice().is_some()) {
-            store.subtitle_chosen();
+            store.act(crate::state::Action::SubtitleChosen);
         }
     });
-    modal(
+    Modal {
         open,
-        l("Use the subtitle file?"),
-        460.0,
-        move || {
+        title: l("Use the subtitle file?"),
+        width: 460.0,
+        content: move || {
             let (job, files) = store.subtitle_choice().unwrap_or_default();
             let title = store.job_now(&job).map(|job| job.title()).unwrap_or_default();
             let name = |path: &String| -> SharedString {
@@ -558,17 +568,17 @@ pub(crate) fn subtitle_choice_dialog() -> impl IntoElement {
                 )
                 .into_element()
         },
-        move || {
+        actions: move || {
             crate::ui::button(crate::ui::Variant::Primary, crate::ui::Size::Md, l("Done"))
                 .on_press(move || {
                     if use_it.get_untracked()
                         && let Some((job, _)) = store.subtitle_choice()
                     {
-                        crate::util::import_subtitle_file(job, chosen.get_untracked().to_string());
+                        crate::work::import::import_subtitle_file(job, chosen.get_untracked().to_string());
                     }
                     open.set(false);
                 })
                 .into_element()
         },
-    )
+    }
 }

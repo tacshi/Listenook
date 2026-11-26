@@ -55,7 +55,7 @@ macro_rules! dress {
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .rounded(tokens::radius)
+            .rounded(|| tokens::corner(tokens::Corner::Medium))
             .transition_all()
             .duration(motion::INSTANT)
             .ease_out()
@@ -72,8 +72,8 @@ macro_rules! dress {
             Variant::Primary => element
                 .bg(|| theme().primary)
                 .text_color(|| theme().primary_foreground)
-                .hover(|s| s.bg(tokens::primary_hover))
-                .active(move |s| s.bg(tokens::primary_active).scale(scale)),
+                .hover(|s| s.bg(|| tokens::ink(tokens::Ink::PrimaryHover)))
+                .active(move |s| s.bg(|| tokens::ink(tokens::Ink::PrimaryActive)).scale(scale)),
             Variant::Default => element
                 .bg(|| theme().secondary)
                 .text_color(|| theme().secondary_foreground)
@@ -158,7 +158,7 @@ pub fn menu_icon_text_button(
 
 /// The recording light: a dot in `recording` that breathes while `live`
 /// (it rests while paused, and with reduced motion).
-pub fn recording_dot(live: impl Fn() -> bool + 'static, side: f32) -> View {
+pub(super) fn recording_dot(live: impl Fn() -> bool + 'static, side: f32) -> View {
     let live = std::rc::Rc::new(live);
     let calm = live.clone();
     view().size(px(side)).items_center().justify_center().child(
@@ -167,7 +167,7 @@ pub fn recording_dot(live: impl Fn() -> bool + 'static, side: f32) -> View {
             move || {
                 let breath = motion();
                 let _ = breath.play(MotionPreset::Breathe);
-                view().bind_motion(&breath).size(px(side)).rounded_full().bg(tokens::recording)
+                view().bind_motion(&breath).size(px(side)).rounded_full().bg(|| tokens::ink(tokens::Ink::Recording))
             },
         )
         .otherwise(move || {
@@ -175,9 +175,22 @@ pub fn recording_dot(live: impl Fn() -> bool + 'static, side: f32) -> View {
             view()
                 .size(px(side))
                 .rounded_full()
-                .bg(move || if calm() { tokens::recording() } else { theme().muted_foreground })
+                .bg(move || if calm() { tokens::ink(tokens::Ink::Recording) } else { theme().muted_foreground })
         }),
     )
+}
+
+/// The recording light: a dot in `recording` that breathes while `live`
+/// (it rests while paused, and with reduced motion).
+pub struct RecordingDot<P0> {
+    pub live: P0,
+    pub side: f32,
+}
+
+impl<P0: Fn() -> bool + 'static> IntoElement for RecordingDot<P0> {
+    fn into_element(self) -> AnyElement {
+        recording_dot(self.live, self.side).into_element()
+    }
 }
 
 /// A small outline button standing for a recording under way: its light
@@ -194,11 +207,29 @@ pub fn recording_button(
         .child(label_text(elapsed, Size::Sm).tabular_nums())
 }
 
-pub fn icon_button(glyph: Icon, name: impl Into<SharedString>, size: Size, on_press: impl Fn() + 'static) -> View {
+pub(super) fn icon_button(
+    glyph: Icon,
+    name: impl Into<SharedString>,
+    size: Size,
+    on_press: impl Fn() + 'static,
+) -> View {
     icon_button_as(Variant::Ghost, glyph, name, size, on_press)
 }
 
-pub fn icon_button_as(
+pub struct IconButton<P1, P3> {
+    pub glyph: Icon,
+    pub name: P1,
+    pub size: Size,
+    pub on_press: P3,
+}
+
+impl<P1: Into<SharedString>, P3: Fn() + 'static> IntoElement for IconButton<P1, P3> {
+    fn into_element(self) -> AnyElement {
+        icon_button(self.glyph, self.name, self.size, self.on_press).into_element()
+    }
+}
+
+pub(super) fn icon_button_as(
     variant: Variant,
     glyph: Icon,
     name: impl Into<SharedString>,
@@ -214,6 +245,20 @@ pub fn icon_button_as(
     )
 }
 
+pub struct IconButtonAs<P2, P4> {
+    pub variant: Variant,
+    pub glyph: Icon,
+    pub name: P2,
+    pub size: Size,
+    pub on_press: P4,
+}
+
+impl<P2: Into<SharedString>, P4: Fn() + 'static> IntoElement for IconButtonAs<P2, P4> {
+    fn into_element(self) -> AnyElement {
+        icon_button_as(self.variant, self.glyph, self.name, self.size, self.on_press).into_element()
+    }
+}
+
 /// A button floating over what it acts on (Jump to playing): on the popup
 /// surface, with the shadow of what floats.
 pub fn floating_button(glyph: impl Fn() -> Icon + 'static, label: impl IntoReactive<SharedString>) -> ButtonElement {
@@ -225,7 +270,7 @@ pub fn floating_button(glyph: impl Fn() -> Icon + 'static, label: impl IntoReact
         .items_center()
         .gap_1p5()
         .px_3()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .border_1()
         .border_color(|| theme().border)
         .bg(|| theme().popover)
@@ -243,7 +288,7 @@ pub fn floating_button(glyph: impl Fn() -> Icon + 'static, label: impl IntoReact
 
 /// A small icon button that also shows its shortcut's key cap (Replay ⌘R):
 /// the glyph says it can be pressed, the key how to without the pointer.
-pub fn shortcut_button(
+pub(super) fn shortcut_button(
     glyph: Icon,
     name: impl Into<SharedString>,
     keystroke: &'static str,
@@ -260,14 +305,45 @@ pub fn shortcut_button(
     )
 }
 
-pub fn header_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn() + 'static) -> ButtonElement {
+/// A small icon button that also shows its shortcut's key cap (Replay ⌘R):
+/// the glyph says it can be pressed, the key how to without the pointer.
+pub struct ShortcutButton<P1, P3> {
+    pub glyph: Icon,
+    pub name: P1,
+    pub keystroke: &'static str,
+    pub on_press: P3,
+}
+
+impl<P1: Into<SharedString>, P3: Fn() + 'static> IntoElement for ShortcutButton<P1, P3> {
+    fn into_element(self) -> AnyElement {
+        shortcut_button(self.glyph, self.name, self.keystroke, self.on_press).into_element()
+    }
+}
+
+pub(super) fn header_button(
+    glyph: Icon,
+    name: impl Into<SharedString>,
+    on_press: impl Fn() + 'static,
+) -> ButtonElement {
     dressed(nsh_base::button(), Variant::Ghost, Size::Md, true)
         .accessibility_label(name.into())
         .on_press(on_press)
         .child(icon(glyph, Size::Md.icon()))
 }
 
-pub fn bar_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn() + 'static) -> ButtonElement {
+pub struct HeaderButton<P1, P2> {
+    pub glyph: Icon,
+    pub name: P1,
+    pub on_press: P2,
+}
+
+impl<P1: Into<SharedString>, P2: Fn() + 'static> IntoElement for HeaderButton<P1, P2> {
+    fn into_element(self) -> AnyElement {
+        header_button(self.glyph, self.name, self.on_press).into_element()
+    }
+}
+
+pub(super) fn bar_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn() + 'static) -> ButtonElement {
     nsh_base::button()
         .accessibility_label(name.into())
         .on_press(on_press)
@@ -276,7 +352,7 @@ pub fn bar_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn(
         .items_center()
         .justify_center()
         .rounded_full()
-        .style_with(tokens::bar_glass)
+        .style_with(|s| tokens::surface(tokens::Surface::BarGlass, s))
         .text_color(|| theme().foreground)
         .transition_all()
         .duration(motion::INSTANT)
@@ -284,7 +360,19 @@ pub fn bar_button(glyph: Icon, name: impl Into<SharedString>, on_press: impl Fn(
         .child(icon(glyph, 24.0))
 }
 
-pub fn toggle_button(
+pub struct BarButton<P1, P2> {
+    pub glyph: Icon,
+    pub name: P1,
+    pub on_press: P2,
+}
+
+impl<P1: Into<SharedString>, P2: Fn() + 'static> IntoElement for BarButton<P1, P2> {
+    fn into_element(self) -> AnyElement {
+        bar_button(self.glyph, self.name, self.on_press).into_element()
+    }
+}
+
+pub(super) fn toggle_button(
     variant: Variant,
     glyph: Icon,
     name: impl Into<SharedString>,
@@ -302,6 +390,23 @@ pub fn toggle_button(
             .on_press(on_press)
             .child(icon(glyph, size.icon())),
     )
+}
+
+pub struct ToggleButton<P2, P4, P5> {
+    pub variant: Variant,
+    pub glyph: Icon,
+    pub name: P2,
+    pub size: Size,
+    pub on: P4,
+    pub on_press: P5,
+}
+
+impl<P2: Into<SharedString>, P4: Fn() -> bool + Copy + 'static, P5: Fn() + 'static> IntoElement
+    for ToggleButton<P2, P4, P5>
+{
+    fn into_element(self) -> AnyElement {
+        toggle_button(self.variant, self.glyph, self.name, self.size, self.on, self.on_press).into_element()
+    }
 }
 
 /// A button opening a menu, showing `glyph`, with `label` beside it while
@@ -341,7 +446,7 @@ pub fn menu_trigger(glyph: Icon, name: impl Into<SharedString>, size: Size, open
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .label(name.clone())
         .tooltip(tip(name))
         .text_color(|| theme().foreground)
@@ -395,7 +500,7 @@ pub fn tip(label: SharedString) -> nsh_base::TooltipElement {
             view()
                 .px_2()
                 .py_1()
-                .rounded(tokens::radius_sm)
+                .rounded(|| tokens::corner(tokens::Corner::Small))
                 .bg(|| theme().foreground)
                 .child(text(label).text_xs().text_color(|| theme().background)),
         )

@@ -1,9 +1,9 @@
 use std::{path::Path, rc::Rc};
 
 use listenook_core::{
-    container,
-    format::{clock, track_position},
-    subtitles::{self, Cue},
+    format::{self, track_position},
+    media::container,
+    media::subtitles::{self, Cue},
 };
 use nsh_base::theme;
 use nsh_core::{
@@ -13,18 +13,19 @@ use nsh_core::{
 };
 
 use super::gestures;
+use crate::services::persist;
+use crate::ui::{error_text, l, tr};
 use crate::{
+    platform::file_url,
     services::{media, playable},
     state::{
-        error_text, l, persist,
         podcast::{RATES, rate_label},
-        store, tr,
+        store,
     },
     ui::{
-        self, Icon, Tone, menu, menu_toggle, toast,
+        self, Icon, MenuToggle, Tone, menu, toast,
         tokens::{self},
     },
-    util::file_url,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,7 +44,7 @@ fn find_tracks(video: &str) -> Vec<(String, String, Vec<Cue>)> {
         .flatten()
         .flatten()
         .filter_map(|entry| entry.path().to_str().map(str::to_owned))
-        .filter(|path| subtitles::is_subtitle(path) && subtitles::pairs_with(path, video))
+        .filter(|path| subtitles::is(path, subtitles::Kind::Subtitles) && subtitles::pairs_with(path, video))
         .collect();
     beside.sort();
     for path in beside {
@@ -61,24 +62,33 @@ fn find_tracks(video: &str) -> Vec<(String, String, Vec<Cue>)> {
             found.push((format!("file:{path}"), name, cues));
         }
     }
-    let built_in = match subtitles::extension(video).as_str() {
-        "mkv" | "webm" => std::fs::File::open(video).map(container::mkv_subtitles).unwrap_or_default(),
-        "mp4" | "m4v" | "mov" => std::fs::File::open(video)
-            .and_then(|file| Ok((file.metadata()?.len(), file)))
-            .map(|(size, file)| container::mp4_subtitles(file, size))
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    };
+    let built_in = container::subtitles_in(Path::new(video));
     for (index, track) in built_in.into_iter().enumerate() {
         found.push((format!("embedded:{index}"), track.label, track.cues));
     }
     found
 }
 
-pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "mkv", "webm", "avi"];
+/// Plays the video at `path`: in a window of its own on a computer, in the app's on a phone or
+/// where a window cannot open.
+pub(crate) fn open_video(path: &str) {
+    if crate::platform::is_phone() || !open_player(path) {
+        store().act(crate::state::Action::ShowVideo(path));
+    }
+}
 
-pub(crate) fn is_video(path: &str) -> bool {
-    VIDEO_EXTENSIONS.contains(&subtitles::extension(path).as_str())
+pub(crate) fn pick_video() {
+    let answer = pick_paths(nsh_core::file_dialog::OpenDialog::files().filter(nsh_core::file_dialog::FileFilter::new(
+        "Videos",
+        listenook_core::media::subtitles::VIDEO_EXTENSIONS.to_vec(),
+    )));
+    store().run(async move {
+        if let Ok(Some(paths)) = answer.await
+            && let Some(path) = paths.first().and_then(|path| path.to_str())
+        {
+            open_video(path);
+        }
+    });
 }
 
 pub(crate) fn open_player(path: &str) -> bool {
@@ -110,7 +120,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     let frame = stored(current_window());
     let own_window = frame.with(|frame| !frame.is_main());
     if own_window {
-        store.player_opened();
+        store.act(crate::state::Action::PlayerOpened);
     }
     let title: SharedString =
         Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or(&path).to_owned().into();
@@ -120,9 +130,9 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     let media = element_ref();
     let (paused, rate) = (signal(false), signal(store.saved_rate("playback_rate")));
     let (position_ms, duration_ms) = (signal(start_at), signal(0_i64));
-    let sleeps = untracked(|| store.sleep.stops());
+    let sleeps = untracked(|| crate::state::sleep::SleepState::get().stops());
     effect(move || {
-        if store.sleep.stops() != sleeps {
+        if crate::state::sleep::SleepState::get().stops() != sleeps {
             paused.set(true);
         }
     });
@@ -228,7 +238,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         if crate::platform::is_phone() {
             batch(|| {
                 fullscreen.set(on);
-                store.set_immersive(on);
+                store.act(crate::state::Action::SetImmersive(on));
             });
             return;
         }
@@ -236,7 +246,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             batch(|| {
                 fullscreen.set(true);
                 if !own_window {
-                    store.set_immersive(true);
+                    store.act(crate::state::Action::SetImmersive(true));
                 }
             });
         }
@@ -248,7 +258,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                 batch(|| {
                     fullscreen.set(false);
                     if !own_window {
-                        store.set_immersive(false);
+                        store.act(crate::state::Action::SetImmersive(false));
                     }
                 });
             }
@@ -290,7 +300,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         } else if own_window {
             frame.with(|frame| frame.close());
         } else {
-            store.close_video();
+            store.act(crate::state::Action::CloseVideo);
         }
     });
     {
@@ -299,7 +309,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             save();
             playable::forget(&cache_id);
             if last.borrow().3 {
-                store.set_immersive(false);
+                store.act(crate::state::Action::SetImmersive(false));
                 if !own_window {
                     frame.with(|frame| frame.set_mode(WindowMode::Normal));
                 }
@@ -327,8 +337,9 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .on_progress(move |progress: &VideoProgress| {
             let position = (progress.current_time * 1000.0) as i64;
             if !paused.get_untracked() {
-                store.activity.note(listenook_core::activity::Kind::Listen);
-                store.sleep.heard();
+                crate::state::activity::ActivityState::get()
+                    .act(crate::state::activity::ActivityAction::Note(listenook_core::activity::Kind::Listen));
+                crate::state::sleep::SleepState::get().act(crate::state::sleep::SleepAction::Heard);
             }
             let again = repeating.get_untracked().then(|| {
                 cues.with_untracked(|cues| {
@@ -352,7 +363,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             }
         })
         .on_end(move || {
-            store.sleep.ended();
+            crate::state::sleep::SleepState::get().ended();
             paused.set(true);
         })
         .on_error(move |_: &str| {
@@ -383,22 +394,28 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .child(when(
             move || current.get().is_some(),
             move || {
-                view().max_w(px(960.0)).px_4().py_2().rounded(tokens::radius).bg(|| tokens::stage().opacity(0.7)).child(
-                    text(move || {
-                        let index = current.get();
-                        cues.with(|cues| {
-                            index
-                                .and_then(|index| {
-                                    cues.as_ref()?.get(index).map(|cue| SharedString::from(cue.text.clone()))
-                                })
-                                .unwrap_or_default()
+                view()
+                    .max_w(px(960.0))
+                    .px_4()
+                    .py_2()
+                    .rounded(|| tokens::corner(tokens::Corner::Medium))
+                    .bg(|| tokens::ink(tokens::Ink::Stage).opacity(0.7))
+                    .child(
+                        text(move || {
+                            let index = current.get();
+                            cues.with(|cues| {
+                                index
+                                    .and_then(|index| {
+                                        cues.as_ref()?.get(index).map(|cue| SharedString::from(cue.text.clone()))
+                                    })
+                                    .unwrap_or_default()
+                            })
                         })
-                    })
-                    .text_2xl()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_center()
-                    .text_color(ink),
-                )
+                        .text_2xl()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_center()
+                        .text_color(ink),
+                    )
             },
         ));
 
@@ -407,7 +424,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             .size(px(32.0))
             .items_center()
             .justify_center()
-            .rounded(tokens::radius)
+            .rounded(|| tokens::corner(tokens::Corner::Medium))
             .label(tr("Subtitles"))
             .tooltip(ui::tip(tr("Subtitles")))
             .text_color(move || if chosen.get().is_some() { lit() } else { ink() })
@@ -415,17 +432,21 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             .active(|s| s.bg(|| ink().opacity(0.24)))
             .child(ui::icon(Icon::Captions, 18.0)),
     )
-    .child(menu_toggle(l("Subtitles off"), move || chosen.get().is_none(), move || chosen.set(None)))
+    .child(MenuToggle {
+        label: l("Subtitles off"),
+        checked: move || chosen.get().is_none(),
+        on_select: move || chosen.set(None),
+    })
     .child(each(
         tracks,
         |track: &Track| track.id.clone(),
         move |track, _| {
             let label = track.with_untracked(|track| track.label.clone());
-            menu_toggle(
+            MenuToggle {
                 label,
-                move || track.with(|track| chosen.get().as_ref() == Some(&track.id)),
-                move || chosen.set(Some(track.with_untracked(|track| track.id.clone()))),
-            )
+                checked: move || track.with(|track| chosen.get().as_ref() == Some(&track.id)),
+                on_select: move || chosen.set(Some(track.with_untracked(|track| track.id.clone()))),
+            }
         },
     ));
 
@@ -444,8 +465,12 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         )
         .flex_1()
     };
-    let time =
-        |ms: Box<dyn Fn() -> i64>| text(move || clock(ms())).text_xs().tabular_nums().text_color(|| ink().opacity(0.8));
+    let time = |ms: Box<dyn Fn() -> i64>| {
+        text(move || format::shown(format::Shown::Clock(ms())))
+            .text_xs()
+            .tabular_nums()
+            .text_color(|| ink().opacity(0.8))
+    };
     let controls = view()
         .h(px(44.0))
         .flex_row()
@@ -476,7 +501,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                     .px_2()
                     .items_center()
                     .justify_center()
-                    .rounded(tokens::radius)
+                    .rounded(|| tokens::corner(tokens::Corner::Medium))
                     .label(tr("Playback speed"))
                     .hover(|s| s.bg(|| ink().opacity(0.14)))
                     .child(
@@ -489,14 +514,14 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             )
             .children(RATES.iter().map(move |option| {
                 let option = *option;
-                ui::menu_choice(
-                    rate_label(option),
-                    move || (rate.get() - option).abs() < 0.001,
-                    move || {
+                ui::MenuChoice {
+                    label: rate_label(option),
+                    checked: move || (rate.get() - option).abs() < 0.001,
+                    on_select: move || {
                         rate.set(option);
-                        store.save_rate("playback_rate", option);
+                        store.act(crate::state::Action::SaveRate("playback_rate", option));
                     },
-                )
+                }
             })),
         )
         .child(
@@ -549,7 +574,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     };
     view()
         .flex_1()
-        .bg(tokens::stage)
+        .bg(|| tokens::ink(tokens::Ink::Stage))
         .on_mouse_move(move |_: &MouseEvent| wake())
         .style_with(move |s| if !hud.get() { s.cursor(Cursor::None) } else { s })
         .child(view().flex_1().min_h(px(0.0)).child(video_view.flex_1()).child(surface).child(subtitle_line))
@@ -565,7 +590,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                     .flex_row()
                     .items_center()
                     .window_drag(true)
-                    .bg(|| tokens::stage().opacity(0.45))
+                    .bg(|| tokens::ink(tokens::Ink::Stage).opacity(0.45))
                     .transition_opacity()
                     .duration(tokens::motion::BASE)
                     .style_with(shown)
@@ -578,7 +603,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                                         || Icon::ChevronLeft,
                                         "Back",
                                         || false,
-                                        move || store.close_video(),
+                                        move || store.act(crate::state::Action::CloseVideo),
                                     ))
                                 },
                             )
@@ -590,15 +615,21 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                                             .flex_row()
                                             .gap_2()
                                             .window_drag(false)
-                                            .child(window_button("Close", tokens::window_close, move || {
-                                                frame.with(|frame| frame.close())
-                                            }))
-                                            .child(window_button("Minimize", tokens::window_minimize, move || {
-                                                frame.with(|frame| frame.minimize())
-                                            }))
-                                            .child(window_button("Full screen", tokens::window_zoom, move || {
-                                                set_fullscreen(true)
-                                            }))
+                                            .child(window_button(
+                                                "Close",
+                                                || tokens::ink(tokens::Ink::WindowClose),
+                                                move || frame.with(|frame| frame.close()),
+                                            ))
+                                            .child(window_button(
+                                                "Minimize",
+                                                || tokens::ink(tokens::Ink::WindowMinimize),
+                                                move || frame.with(|frame| frame.minimize()),
+                                            ))
+                                            .child(window_button(
+                                                "Full screen",
+                                                || tokens::ink(tokens::Ink::WindowZoom),
+                                                move || set_fullscreen(true),
+                                            ))
                                     },
                                 )
                             }),
@@ -623,8 +654,8 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                 .right(move || px(12.0 + edge(|edges| edges.right.0)))
                 .bottom(move || px(12.0 + edge(|edges| edges.bottom.0)))
                 .px_3()
-                .rounded(tokens::radius_lg)
-                .style_with(tokens::glass)
+                .rounded(|| tokens::corner(tokens::Corner::Large))
+                .style_with(|s| tokens::surface(tokens::Surface::Glass, s))
                 .window_drag(false)
                 .transition_opacity()
                 .duration(tokens::motion::BASE)
@@ -657,7 +688,7 @@ fn stage_button(
             .size(px(32.0))
             .items_center()
             .justify_center()
-            .rounded(tokens::radius)
+            .rounded(|| tokens::corner(tokens::Corner::Medium))
             .text_color(move || if on() { lit() } else { ink() })
             .hover(|s| s.bg(|| ink().opacity(0.14)))
             .active(|s| s.bg(|| ink().opacity(0.24)))

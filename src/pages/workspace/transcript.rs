@@ -1,4 +1,4 @@
-use listenook_core::{ContentMode, Segment, format::clock, highlights};
+use listenook_core::{ContentMode, Segment, format, transcript::highlights};
 use nsh_base::theme;
 use nsh_core::{
     TouchPhase,
@@ -7,11 +7,12 @@ use nsh_core::{
 };
 
 use super::{copy, review::Review, search_bar};
+use crate::ui::{error_text, l, tr};
+use crate::work::ai;
 use crate::{
-    services::llm,
-    state::{SettingsTab, error_text, l, tr},
+    state::SettingsTab,
     ui::{
-        self, Icon, Size, Tone, Variant, button, field, icon_button, modal, modal_actions, text_area, text_field_with,
+        self, Icon, IconButton, Modal, ModalActions, Size, Tone, Variant, button, field, text_area, text_field_with,
         toast, toast_with_action,
         tokens::{self, motion},
     },
@@ -21,24 +22,24 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
     let speaker = signal(None::<String>);
     let viewable = signal(None::<(usize, usize)>);
     let reveal = move |segment: usize, animated: bool| {
-        if review.editing.get_untracked().is_some() || untracked(|| review.dragging()) {
+        if untracked(|| review.is_editing()) || untracked(|| review.dragging()) {
             return;
         }
-        if let Some(row) = review.shown.with_untracked(|shown| shown.iter().position(|index| *index == segment)) {
+        if let Some(row) = untracked(|| review.row_of(segment)) {
             // Moved by the app: a hold left over (a gesture the platform
             // ended without saying) does not make this a scroll by hand.
             review.held(None);
-            review.list.scroll_to_index(row as u32, percentage(0.35), px(0.0), animated && !reduce_motion());
+            review.scroll_to_row(row, animated && !reduce_motion());
         }
     };
     let bring = move |animated: bool| {
-        if let Some(current) = review.current.get_untracked() {
+        if let Some(current) = untracked(|| review.current()) {
             reveal(current, animated);
         }
     };
     effect(move || {
         review.current.get();
-        if review.following.get() && !review.paused.get() && review.scrub.get_untracked().is_none() {
+        if review.is_following() && !review.is_paused() && !untracked(|| review.is_scrubbing()) {
             bring(true);
         }
     });
@@ -54,15 +55,13 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
             if !first.replace(false) {
                 spawn(async move {
                     timer(std::time::Duration::from_millis(250)).await;
-                    let following = review.following.get_untracked();
-                    let Some(segment) = review
-                        .scrubbed
-                        .get_untracked()
-                        .or_else(|| following.then(|| review.current.get_untracked()).flatten())
+                    let following = untracked(|| review.is_following());
+                    let Some(segment) = untracked(|| review.scrubbed())
+                        .or_else(|| following.then(|| untracked(|| review.current())).flatten())
                     else {
                         return;
                     };
-                    let row = review.shown.with_untracked(|shown| shown.iter().position(|index| *index == segment));
+                    let row = untracked(|| review.row_of(segment));
                     if !row
                         .zip(viewable.get_untracked())
                         .is_some_and(|(row, (first, last))| (first..=last).contains(&row))
@@ -89,13 +88,9 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
         .min_h(px(0.0))
         .child(search_bar(review))
         .child(
-            virtual_list(move || review.shown.with(Vec::len), move |at| row(review, at, speaker))
+            virtual_list(move || review.shown_count(), move |at| row(review, at, speaker))
                 .smooth_wheel(true)
-                .keys(move || {
-                    review.shown.with(|shown| {
-                        shown.iter().filter_map(|index| review.segment(*index).map(|s| s.id)).collect::<Vec<_>>()
-                    })
-                })
+                .keys(move || review.shown_ids())
                 .estimated_item_size(px(64.0))
                 .content_padding(px(ui::PAGE_INSET - 12.0))
                 .empty(
@@ -104,7 +99,7 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
                         .p(px(ui::PAGE_INSET))
                         .text_color(|| theme().muted_foreground),
                 )
-                .element_ref(&review.list)
+                .element_ref(&review.list())
                 .viewability(Viewability { item_visible_threshold: Some(percentage(1.0)), ..Default::default() })
                 .on_viewable_items_change(move |items: &ViewableItems| viewable.set(items.viewable))
                 .on_scroll(move |event: &ScrollEvent| review.scrolled(event))
@@ -130,11 +125,11 @@ pub(super) fn transcript(review: Review) -> impl IntoElement {
 /// to it, pointing the way, after which the list follows playback again.
 fn jump_to_playing(review: Review, viewable: Signal<Option<(usize, usize)>>) -> impl IntoElement {
     let away = computed(move || {
-        if review.following.get() || review.paused.get() {
+        if review.is_following() || review.is_paused() {
             return None;
         }
         let current = review.current.get()?;
-        let row = review.shown.with(|shown| shown.iter().position(|index| *index == current))?;
+        let row = review.row_of(current)?;
         let (first, last) = viewable.get()?;
         if row < first {
             Some(Icon::ArrowUp)
@@ -163,7 +158,7 @@ fn jump_to_playing(review: Review, viewable: Signal<Option<(usize, usize)>>) -> 
 
 fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> impl IntoElement {
     let run = computed(move || {
-        let index = review.shown.with(|shown| shown.get(at.index()).copied())?;
+        let index = review.shown_at(at.index())?;
         review.skipped_run(index)
     });
     when(move || run.with(Option::is_some), move || skipped_bar(review, run))
@@ -174,7 +169,7 @@ fn row(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> 
 fn skipped_bar(review: Review, run: Memo<Option<(usize, usize)>>) -> impl IntoElement {
     let length = move || {
         let (first, last) = run.get()?;
-        review.job.with(|job| Some(job.as_ref()?.document.as_ref()?.span_ms(first, last)))
+        review.job_with(|job| Some(job.as_ref()?.document()?.span_ms(first, last)))
     };
     let bring_back = move || {
         if let Some((first, last)) = run.get_untracked() {
@@ -190,13 +185,14 @@ fn skipped_bar(review: Review, run: Memo<Option<(usize, usize)>>) -> impl IntoEl
             .gap_2()
             .px_3()
             .py_1()
-            .rounded(tokens::radius)
+            .rounded(|| tokens::corner(tokens::Corner::Medium))
             .bg(|| theme().muted)
             .test_id("skipped-run")
             .child(ui::icon(Icon::Scissors, 14.0).text_color(|| theme().muted_foreground))
             .child(
                 text(move || -> SharedString {
-                    format!("{} · {}", tr("Skipped"), clock(length().unwrap_or_default())).into()
+                    format!("{} · {}", tr("Skipped"), format::shown(format::Shown::Clock(length().unwrap_or_default())))
+                        .into()
                 })
                 .text_sm()
                 .tabular_nums()
@@ -209,8 +205,8 @@ fn skipped_bar(review: Review, run: Memo<Option<(usize, usize)>>) -> impl IntoEl
 }
 
 fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>) -> impl IntoElement {
-    let store = review.store;
-    let index = computed(move || review.shown.with(|shown| shown.get(at.index()).copied()));
+    let store = crate::state::store();
+    let index = computed(move || review.shown_at(at.index()));
     let segment = computed(move || index.get().and_then(|index| review.segment(index)));
     let id = move || segment.with(|s| s.as_ref().map(|s| s.id.clone()));
     let is_current = move || index.get().is_some() && index.get() == review.scrubbed.get().or_else(|| review.spoken());
@@ -221,7 +217,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
     let row_ref = element_ref();
     review.track_row(index, row_ref);
     let picked = move || review.picked_in(id().as_deref());
-    let editing = move || review.editing.with(|e| e.as_ref().is_some_and(|e| Some(&e.segment_id) == id().as_ref()));
+    let editing = move || review.editing_with(|e| e.is_some_and(|e| Some(&e.segment_id) == id().as_ref()));
     let words = computed(move || if is_current() { index.get().and_then(|index| review.words(index)) } else { None });
     let said = computed(move || {
         if words.with(Option::is_none) {
@@ -238,15 +234,12 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
     let translated = move || segment.with(|s| s.as_ref().is_some_and(Segment::has_translation));
     let shows_original = move || mode() != ContentMode::Translated || !translated();
     let shows_translation = move || mode() != ContentMode::Original && translated();
-    let retranslating = move || id().is_some_and(|id| review.retranslating.with(|waiting| waiting.contains(&id)));
-    let needle =
-        move || if review.searching.get() { review.query.with(|q| q.trim().to_owned()) } else { String::new() };
+    let retranslating = move || id().is_some_and(|id| review.is_retranslating(&id));
+    let needle = move || review.search_text();
     let speaker_name = move || {
         segment.with(|s| {
             let speaker = s.as_ref()?.speaker.as_deref()?;
-            review
-                .job
-                .with(|job| Some(SharedString::from(job.as_ref()?.document.as_ref()?.speaker_name(Some(speaker)))))
+            review.job_with(|job| Some(SharedString::from(job.as_ref()?.document()?.speaker_name(Some(speaker)))))
         })
     };
     let press = move || {
@@ -300,14 +293,14 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
         .element_ref(&row_ref)
         .w_full()
         .max_w(px(760.0))
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .transition_colors()
         .duration(motion::BASE)
         .bg(move || {
             if starts_skip() {
                 theme().primary.opacity(0.16)
             } else if is_current() {
-                tokens::highlight()
+                tokens::ink(tokens::Ink::Highlight)
             } else if found_ad() {
                 theme().muted
             } else {
@@ -332,7 +325,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                 .gap_2()
                 .px_3()
                 .py_2()
-                .rounded(tokens::radius)
+                .rounded(|| tokens::corner(tokens::Corner::Medium))
                 .transition_colors()
                 .duration(motion::INSTANT)
                 .hover(|s| s.bg(|| theme().foreground.opacity(0.05)))
@@ -355,7 +348,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                     .child(when(
                                         move || store.setting(|s| s.show_timestamps),
                                         move || {
-                                            text(move || segment.with(|s| clock(s.as_ref().map_or(0, |s| s.start_ms))))
+                                            text(move || segment.with(|s| format::shown(format::Shown::Clock(s.as_ref().map_or(0, |s| s.start_ms)))))
                                                 .text_xs()
                                                 .tabular_nums()
                                                 .text_color(|| theme().muted_foreground)
@@ -373,7 +366,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                         }),
                                                     )
                                                 })
-                                                .rounded(tokens::radius_sm)
+                                                .rounded(|| tokens::corner(tokens::Corner::Small))
                                                 .hover(|s| s.opacity(0.7))
                                                 .child(
                                                     text(move || speaker_name().unwrap_or_default())
@@ -386,9 +379,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                             },
                         ))
                         .child(when(editing, move || editor(review)).otherwise(move || {
-                            nsh_base::button().on_press(tap).rounded(tokens::radius_sm).child(ui::veil(
-                                hidden,
-                                move || {
+                            nsh_base::button().on_press(tap).rounded(|| tokens::corner(tokens::Corner::Small)).child(ui::veil(hidden, move || {
                                     view()
                                         .items_start()
                                         .gap_1()
@@ -403,7 +394,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                                 .iter()
                                                                 .flatten()
                                                                 .map(|(word, ..)| {
-                                                                    listenook_core::local::lead_and_word(word).1
+                                                                    listenook_core::transcript::local::lead_and_word(word).1
                                                                 })
                                                                 .collect();
                                                             segment.with(|s| {
@@ -423,11 +414,11 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                             text("")
                                                                 .text_lg()
                                                                 .line_height(nsh_core::LineHeight::Multiple(1.5))
-                                                                .text_color(tokens::highlight_foreground)
+                                                                .text_color(|| tokens::ink(tokens::Ink::HighlightForeground))
                                                                 .children(spans.into_iter().enumerate().flat_map(
                                                                     |(at, (word, ..))| {
                                                                         let (lead, word) =
-                                                                            listenook_core::local::lead_and_word(&word);
+                                                                            listenook_core::transcript::local::lead_and_word(&word);
                                                                         let word =
                                                                             text(SharedString::from(word.to_owned()));
                                                                         let word = if marks
@@ -449,7 +440,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                                                 .to_owned(),
                                                                             )),
                                                                             if Some(at) == said {
-                                                                                word.rounded(tokens::radius_sm)
+                                                                                word.rounded(|| tokens::corner(tokens::Corner::Small))
                                                                                     .bg(|| theme().primary.opacity(0.3))
                                                                             } else {
                                                                                 word
@@ -478,7 +469,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                             .line_height(nsh_core::LineHeight::Multiple(1.5))
                                                             .text_color(move || {
                                                                 if is_current() {
-                                                                    tokens::highlight_foreground()
+                                                                    tokens::ink(tokens::Ink::HighlightForeground)
                                                                 } else {
                                                                     theme().foreground
                                                                 }
@@ -491,7 +482,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                                     run
                                                                 };
                                                                 if found {
-                                                                    run.rounded(tokens::radius_sm).bg(tokens::found)
+                                                                    run.rounded(|| tokens::corner(tokens::Corner::Small)).bg(|| tokens::ink(tokens::Ink::Found))
                                                                 } else {
                                                                     run
                                                                 }
@@ -550,7 +541,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                                 .children(runs.into_iter().map(|(run, _, found)| {
                                                                     let run = text(SharedString::from(run));
                                                                     if found {
-                                                                        run.rounded(tokens::radius_sm).bg(tokens::found)
+                                                                        run.rounded(|| tokens::corner(tokens::Corner::Small)).bg(|| tokens::ink(tokens::Ink::Found))
                                                                     } else {
                                                                         run
                                                                     }
@@ -560,11 +551,10 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                                     },
                                                 )))
                                                 .child(when(retranslating, || {
-                                                    view().label(tr("Translating")).child(ui::spinner(12.0))
+                                                    view().label(tr("Translating")).child(ui::Spinner { size: 12.0 })
                                                 }))
                                         }))
-                                },
-                            ))
+                                }))
                         })),
                 )
                 .child(
@@ -582,19 +572,11 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
                                 .child(when(
                                     move || picked() && !crate::platform::is_phone(),
                                     move || {
-                                        ui::toggle_button(
-                                            Variant::Ghost,
-                                            Icon::Bold,
-                                            tr("Highlight"),
-                                            Size::Sm,
-                                            move || review.picked_marked(),
-                                            move || review.toggle_highlight(),
-                                        )
-                                        .self_start()
+                                        view().self_start().child(ui::ToggleButton { variant: Variant::Ghost, glyph: Icon::Bold, name: tr("Highlight"), size: Size::Sm, on: move || review.picked_marked(), on_press: move || review.toggle_highlight() })
                                     },
                                 ))
                                 .child(repeat_grip(review, index, is_repeating, toggle_repeat))
-                                .child(icon_button(Icon::Pencil, tr("Edit"), Size::Sm, edit).self_start()),
+                                .child(view().self_start().child(IconButton { glyph: Icon::Pencil, name: tr("Edit"), size: Size::Sm, on_press: edit })),
                         ),
                 ),
         );
@@ -612,7 +594,7 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
             };
             match event.phase {
                 TouchPhase::Start => {
-                    let elsewhere = review.selection.with_untracked(Option::is_some) && !picked();
+                    let elsewhere = review.has_selection_now() && !picked();
                     clears.set(elsewhere.then_some(point.page));
                 }
                 TouchPhase::End => {
@@ -641,40 +623,54 @@ fn sentence(review: Review, at: Position, speaker_dialog: Signal<Option<String>>
         .child(
             area().child(
                 ui::context_menu(line)
-                    .child(when(picked, move || {
-                        ui::menu_action(
-                            Icon::Bold,
-                            move || if review.picked_marked() { tr("Remove highlight") } else { tr("Highlight") },
-                            move || review.toggle_highlight(),
-                        )
+                    .child(when(picked, move || ui::MenuAction {
+                        glyph: Icon::Bold,
+                        label: move || if review.picked_marked() { tr("Remove highlight") } else { tr("Highlight") },
+                        on_select: move || review.toggle_highlight(),
                     }))
-                    .child(when(picked, move || {
-                        ui::menu_action(Icon::Copy, l("Copy selection"), move || review.copy_selection())
+                    .child(when(picked, move || ui::MenuAction {
+                        glyph: Icon::Copy,
+                        label: l("Copy selection"),
+                        on_select: move || review.copy_selection(),
                     }))
-                    .child(when(picked, ui::menu_divider))
-                    .child(ui::menu_action(Icon::Play, l("Play from here"), press))
-                    .child(ui::menu_action(Icon::Repeat, l("Repeat sentence"), toggle_repeat))
+                    .child(when(picked, || ui::MenuDivider))
+                    .child(ui::MenuAction { glyph: Icon::Play, label: l("Play from here"), on_select: press })
+                    .child(ui::MenuAction {
+                        glyph: Icon::Repeat,
+                        label: l("Repeat sentence"),
+                        on_select: toggle_repeat,
+                    })
                     .child(when(
-                        move || review.repeating.with(Option::is_some) && !is_repeating(),
-                        move || ui::menu_action(Icon::Repeat, l("Repeat through here"), repeat_through),
+                        move || review.is_repeating_any() && !is_repeating(),
+                        move || ui::MenuAction {
+                            glyph: Icon::Repeat,
+                            label: l("Repeat through here"),
+                            on_select: repeat_through,
+                        },
                     ))
-                    .child(ui::menu_divider())
-                    .child(ui::menu_action(Icon::Scissors, l("Skip this sentence"), skip))
-                    .child(ui::menu_action(Icon::Scissors, l("Skip from here…"), skip_from))
-                    .child(ui::menu_divider())
-                    .child(ui::menu_action(Icon::Pencil, l("Edit"), edit))
-                    .child(ui::menu_action(Icon::Copy, l("Copy sentence"), move || {
-                        let shown = segment.with_untracked(|s| {
-                            s.as_ref().map(|s| match (mode(), s.translated_text.clone()) {
-                                (ContentMode::Translated, Some(t)) => t,
-                                (ContentMode::Bilingual, Some(t)) => format!("{}\n{t}", s.text),
-                                _ => s.text.clone(),
-                            })
-                        });
-                        if let Some(shown) = shown {
-                            copy(shown, None);
-                        }
-                    })),
+                    .child(ui::MenuDivider)
+                    .child(ui::MenuAction { glyph: Icon::Scissors, label: l("Skip this sentence"), on_select: skip })
+                    .child(ui::MenuAction {
+                        glyph: Icon::Scissors, label: l("Skip from here…"), on_select: skip_from
+                    })
+                    .child(ui::MenuDivider)
+                    .child(ui::MenuAction { glyph: Icon::Pencil, label: l("Edit"), on_select: edit })
+                    .child(ui::MenuAction {
+                        glyph: Icon::Copy,
+                        label: l("Copy sentence"),
+                        on_select: move || {
+                            let shown = segment.with_untracked(|s| {
+                                s.as_ref().map(|s| match (mode(), s.translated_text.clone()) {
+                                    (ContentMode::Translated, Some(t)) => t,
+                                    (ContentMode::Bilingual, Some(t)) => format!("{}\n{t}", s.text),
+                                    _ => s.text.clone(),
+                                })
+                            });
+                            if let Some(shown) = shown {
+                                copy(shown, None);
+                            }
+                        },
+                    }),
             ),
         )
         .into_element()
@@ -690,7 +686,7 @@ fn repeat_grip(
 ) -> impl IntoElement {
     view()
         .self_start()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .test_id("repeat-grip")
         .claim_touches(TouchClaim::on_pan(PanActivation::vertical(px(4.0), px(12.0))))
         .keep_touches(true)
@@ -702,47 +698,46 @@ fn repeat_grip(
         .on_responder_move(move |event: &ResponderEvent| review.drag_to(event.gesture.position.y.0))
         .on_responder_release(move |_: &ResponderEvent| review.finish_repeat_drag())
         .on_responder_terminate(move |_: &ResponderEvent| review.finish_repeat_drag())
-        .child(ui::toggle_button(
-            Variant::Ghost,
-            Icon::Repeat,
-            tr("Repeat sentence"),
-            Size::Sm,
-            is_repeating,
-            toggle_repeat,
-        ))
+        .child(ui::ToggleButton {
+            variant: Variant::Ghost,
+            glyph: Icon::Repeat,
+            name: tr("Repeat sentence"),
+            size: Size::Sm,
+            on: is_repeating,
+            on_press: toggle_repeat,
+        })
 }
 
 fn editor(review: Review) -> impl IntoElement {
     on_key_with("escape", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
-        review.editing.set(None)
+        review.close_editor()
     });
     on_key_with("mod+enter", KeyOptions { when: nsh_core::keymap::When::Always, ..KeyOptions::default() }, move |_| {
         review.save_edit()
     });
-    let original = move || review.editing.with(|e| e.as_ref().is_some_and(|e| e.original));
-    let translation = move || review.editing.with(|e| e.as_ref().is_some_and(|e| e.translation));
+    let original = move || review.editing_with(|e| e.is_some_and(|e| e.original));
+    let translation = move || review.editing_with(|e| e.is_some_and(|e| e.translation));
     let translating = signal(false);
     // Fills the translation box from the sentence as it reads in the editor
     // now, and leaves saving to Save.
     let translate = move || {
-        let source = review.draft.get_untracked().trim().to_owned();
+        let source = untracked(|| review.draft_text());
         if translating.get_untracked() || source.is_empty() {
             return;
         }
-        let (target, before) = (review.translation_target(), review.translation_draft.get_untracked());
+        let (target, before) = (review.translation_target(), untracked(|| review.translation_draft_text()));
         translating.set(true);
         // Owned by the store: the button that starts it gives way to a spinner.
-        review.store.run(async move {
-            let result = llm::translate_line(&source, &target).await;
+        crate::state::store().run(async move {
+            let result = ai::translate_line(&source, &target).await;
             if !translating.try_set(false) {
                 return;
             }
             match result {
-                Ok(line) if review.translation_draft.get_untracked() == before => review.translation_draft.set(line),
-                Ok(_) => {}
-                Err(code) if llm::needs_setup(&code) => {
+                Ok(line) => review.offer_translation(line, &before),
+                Err(code) if ai::needs_setup(&code) => {
                     toast_with_action(Tone::Error, error_text(&code), tr("Settings"), move || {
-                        review.store.open_settings(SettingsTab::Ai)
+                        crate::state::store().act(crate::state::Action::OpenSettings(SettingsTab::Ai))
                     })
                 }
                 Err(code) => toast(Tone::Error, error_text(&code)),
@@ -752,26 +747,29 @@ fn editor(review: Review) -> impl IntoElement {
     view()
         .gap_2()
         .child(when(original, move || {
-            text_area(review.draft, SharedString::default)
+            text_area(review.draft(), SharedString::default)
                 .auto_focus(true)
-                .on_selection_change(move |selection: &Selection| review.caret.set(selection.start))
+                .on_selection_change(move |selection: &Selection| review.set_caret(selection.start))
                 .test_id("segment-editor")
         }))
-        .child(when(translation, move || {
-            ui::text_area_beside(
-                review.translation_draft,
-                SharedString::default,
-                |input| input.auto_focus(!untracked(original)).test_id("translation-editor"),
-                when(
-                    move || translating.get() || review.can_translate(),
-                    move || {
-                        when(translating, || {
-                            view().size(px(32.0)).items_center().justify_center().child(ui::spinner(14.0))
-                        })
-                        .otherwise(move || icon_button(Icon::Languages, tr("Translate again"), Size::Sm, translate))
-                    },
-                ),
-            )
+        .child(when(translation, move || ui::TextAreaBeside {
+            value: review.translation_draft(),
+            placeholder: SharedString::default,
+            more: move |input: Input| input.auto_focus(!untracked(original)).test_id("translation-editor"),
+            control: when(
+                move || translating.get() || review.can_translate(),
+                move || {
+                    when(translating, || {
+                        view().size(px(32.0)).items_center().justify_center().child(ui::Spinner { size: 14.0 })
+                    })
+                    .otherwise(move || IconButton {
+                        glyph: Icon::Languages,
+                        name: tr("Translate again"),
+                        size: Size::Sm,
+                        on_press: translate,
+                    })
+                },
+            ),
         }))
         .child(
             view()
@@ -796,12 +794,22 @@ fn editor(review: Review) -> impl IntoElement {
                 .child(when(original, move || {
                     let open = signal(false);
                     ui::menu_with(open, ui::menu_trigger(Icon::More, tr("More sentence actions"), Size::Sm, open))
-                        .child(ui::menu_action(Icon::Scissors, l("Skip this sentence"), move || review.skip_editing()))
-                        .child(ui::menu_action(Icon::Scissors, l("Skip from here…"), move || {
-                            review.skip_editing_onward()
-                        }))
-                        .child(ui::menu_divider())
-                        .child(ui::menu_danger(Icon::Trash, l("Delete sentence"), move || review.delete_editing()))
+                        .child(ui::MenuAction {
+                            glyph: Icon::Scissors,
+                            label: l("Skip this sentence"),
+                            on_select: move || review.skip_editing(),
+                        })
+                        .child(ui::MenuAction {
+                            glyph: Icon::Scissors,
+                            label: l("Skip from here…"),
+                            on_select: move || review.skip_editing_onward(),
+                        })
+                        .child(ui::MenuDivider)
+                        .child(ui::MenuDanger {
+                            glyph: Icon::Trash,
+                            label: l("Delete sentence"),
+                            on_select: move || review.delete_editing(),
+                        })
                 }))
                 // Grows from its own width, so on a narrow screen Cancel and Save wrap
                 // together to the right of a line of their own rather than squeezing.
@@ -812,9 +820,7 @@ fn editor(review: Review) -> impl IntoElement {
                         .flex_row()
                         .justify_end()
                         .gap_2()
-                        .child(
-                            button(Variant::Outline, Size::Sm, l("Cancel")).on_press(move || review.editing.set(None)),
-                        )
+                        .child(button(Variant::Outline, Size::Sm, l("Cancel")).on_press(move || review.close_editor()))
                         .child(button(Variant::Primary, Size::Sm, l("Save")).on_press(move || review.save_edit())),
                 ),
         )
@@ -825,11 +831,8 @@ fn speaker_dialog(review: Review, speaker: Signal<Option<String>>) -> impl IntoE
     let name = signal(String::new());
     effect(move || {
         if let Some(id) = speaker.get() {
-            let current = review.job.with_untracked(|job| {
-                job.as_ref()
-                    .and_then(|job| job.document.as_ref())
-                    .map(|d| d.speaker_name(Some(&id)))
-                    .unwrap_or_default()
+            let current = review.job_now_with(|job| {
+                job.as_ref().and_then(|job| job.document()).map(|d| d.speaker_name(Some(&id))).unwrap_or_default()
             });
             batch(|| {
                 name.set(current);
@@ -848,11 +851,11 @@ fn speaker_dialog(review: Review, speaker: Signal<Option<String>>) -> impl IntoE
         }
         open.set(false);
     };
-    modal(
+    Modal {
         open,
-        l("Rename speaker"),
-        380.0,
-        move || {
+        title: l("Rename speaker"),
+        width: 380.0,
+        content: move || {
             field(
                 l("Name"),
                 text_field_with(name, SharedString::default, move |input| {
@@ -861,6 +864,15 @@ fn speaker_dialog(review: Review, speaker: Signal<Option<String>>) -> impl IntoE
             )
             .into_element()
         },
-        move || modal_actions(open, l("Cancel"), l("Rename"), move || !name.with(|n| n.trim().is_empty()), rename),
-    )
+        actions: move || {
+            ModalActions {
+                open,
+                cancel: l("Cancel"),
+                commit: l("Rename"),
+                enabled: move || !name.with(|n| n.trim().is_empty()),
+                on_commit: rename,
+            }
+            .into_element()
+        },
+    }
 }

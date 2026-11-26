@@ -2,7 +2,7 @@
 //! and the whole of a recording being trimmed, the parts kept in `primary`
 //! and the parts cut out faint on a band washed with the ink.
 
-use listenook_core::capture::{self, Span};
+use listenook_core::media::capture::{self, Span};
 use nsh_base::theme;
 use nsh_core::{
     geometry::{Bounds, point, size},
@@ -10,6 +10,9 @@ use nsh_core::{
 };
 
 use super::tokens;
+
+/// How many 10 ms levels the live meter shows: the last 12 seconds.
+pub(crate) const RECENT_LEVELS: usize = 1_200;
 
 /// The width of a bar and the gap after it.
 const BAR: f32 = 2.0;
@@ -23,7 +26,7 @@ fn bar(painter: Painter, x: f32, height: f32, value: f32, width: f32) -> Painter
 
 /// The last 12 seconds of `levels` (10 ms each, oldest first) as bars that
 /// grow from the middle, red while `live`, grey while paused.
-pub fn live_wave(levels: Signal<Vec<f32>>, live: impl Fn() -> bool + 'static) -> View {
+pub(super) fn live_wave(levels: Signal<Vec<f32>>, live: impl Fn() -> bool + 'static) -> View {
     let area = signal(None::<(f32, f32)>);
     view()
         .w_full()
@@ -37,11 +40,15 @@ pub fn live_wave(levels: Signal<Vec<f32>>, live: impl Fn() -> bool + 'static) ->
                 };
                 let count = ((width + GAP) / (BAR + GAP)).floor().max(1.0) as usize;
                 let shown = levels.with(|levels| {
-                    let mut padded = vec![0.0; crate::state::capture::RECENT_LEVELS.saturating_sub(levels.len())];
+                    let mut padded = vec![0.0; RECENT_LEVELS.saturating_sub(levels.len())];
                     padded.extend_from_slice(levels);
                     capture::bars(&padded, 0, capture::levels_ms(&padded), count)
                 });
-                let ink = color(if live() { tokens::recording() } else { theme().muted_foreground.opacity(0.6) });
+                let ink = color(if live() {
+                    tokens::ink(tokens::Ink::Recording)
+                } else {
+                    theme().muted_foreground.opacity(0.6)
+                });
                 let mut painter = Painter::new().begin_path().fill_color(ink);
                 for (index, value) in shown.iter().enumerate() {
                     painter = bar(painter, index as f32 * (BAR + GAP), height, *value, BAR);
@@ -54,11 +61,24 @@ pub fn live_wave(levels: Signal<Vec<f32>>, live: impl Fn() -> bool + 'static) ->
         )
 }
 
+/// The last 12 seconds of `levels` (10 ms each, oldest first) as bars that
+/// grow from the middle, red while `live`, grey while paused.
+pub struct LiveWave<P1> {
+    pub levels: Signal<Vec<f32>>,
+    pub live: P1,
+}
+
+impl<P1: Fn() -> bool + 'static> IntoElement for LiveWave<P1> {
+    fn into_element(self) -> AnyElement {
+        live_wave(self.levels, self.live).into_element()
+    }
+}
+
 /// A whole recording to trim: `levels` (10 ms each) over `duration_ms`,
 /// what `kept` keeps in `primary` and the rest faint on a washed band, and
 /// a line where the preview is. A press or a drag along it calls `seek`
 /// with the time under the pointer.
-pub fn waveform(
+pub(super) fn waveform(
     levels: std::rc::Rc<Vec<f32>>,
     duration_ms: impl Fn() -> u64 + Copy + 'static,
     kept: impl Fn() -> Vec<Span> + 'static,
@@ -73,7 +93,7 @@ pub fn waveform(
     view()
         .w_full()
         .h(px(96.0))
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .overflow_hidden()
         .border_1()
         .border_color(|| theme().border)
@@ -132,4 +152,28 @@ pub fn waveform(
             .inset_0()
             .pointer_events(PointerEvents::None),
         )
+}
+
+/// A whole recording to trim: `levels` (10 ms each) over `duration_ms`,
+/// what `kept` keeps in `primary` and the rest faint on a washed band, and
+/// a line where the preview is. A press or a drag along it calls `seek`
+/// with the time under the pointer.
+pub struct Waveform<P1, P2, P3, P4> {
+    pub levels: std::rc::Rc<Vec<f32>>,
+    pub duration_ms: P1,
+    pub kept: P2,
+    pub position_ms: P3,
+    pub seek: P4,
+}
+
+impl<
+    P1: Fn() -> u64 + Copy + 'static,
+    P2: Fn() -> Vec<Span> + 'static,
+    P3: Fn() -> Option<u64> + 'static,
+    P4: Fn(u64) + Copy + 'static,
+> IntoElement for Waveform<P1, P2, P3, P4>
+{
+    fn into_element(self) -> AnyElement {
+        waveform(self.levels, self.duration_ms, self.kept, self.position_ms, self.seek).into_element()
+    }
 }

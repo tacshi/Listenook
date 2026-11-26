@@ -1,50 +1,48 @@
 use listenook_core::{
-    dictation::{self, DictationWord},
-    format::clock,
+    format,
+    transcript::dictation::{self, DictationWord},
 };
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
 use super::review::{Practice, Review, Side};
-use crate::{
-    state::{l, store, tr},
-    ui::{
-        self, Icon, Size, Status, Tone, Variant, badge, chip, composer_dock, hint, icon, icon_text_button, segmented,
-        select, text_area, toast, tokens,
-    },
+use crate::ui::{
+    self, Badge, Chip, Icon, Segmented, Size, Status, Tone, Variant, composer_dock, hint, icon, icon_text_button,
+    select, text_area, toast, tokens,
 };
+use crate::ui::{l, tr};
 
 /// Where Practice's mode is remembered, for the next time it opens.
 const LAST_MODE: &str = "reader_practice_mode";
 
 /// The mode Practice opens in: the one used last, else Type answer.
-pub(super) fn last_mode(review: Review) -> Practice {
-    let saved = review.store.setting(|s| s.extra.get(LAST_MODE).and_then(|v| v.as_str().map(str::to_owned)));
+pub(super) fn last_mode() -> Practice {
+    let saved = crate::state::store().setting(|s| s.extra.get(LAST_MODE).and_then(|v| v.as_str().map(str::to_owned)));
     if saved.as_deref() == Some("mimic") { Practice::Mimic } else { Practice::Dictation }
 }
 
 pub(super) fn start(review: Review, practice: Practice) {
     let mode = if practice == Practice::Mimic { "mimic" } else { "dictation" };
-    if untracked(|| last_mode(review)) != practice {
-        review.store.update_settings(|s| {
+    if untracked(last_mode) != practice {
+        crate::state::store().update_settings(|s| {
             s.extra.insert(LAST_MODE.into(), mode.into());
         });
     }
     let target = untracked(|| review.target()).or(Some(0));
     batch(|| {
-        review.practice.set(practice);
-        review.side.set(Side::Practice);
+        review.set_practice(practice);
+        review.set_side(Side::Practice);
     });
     match (practice, target) {
         (Practice::Mimic, Some(index)) => {
-            if review.repeating.get_untracked().is_none() {
+            if untracked(|| review.repeating()).is_none() {
                 review.repeat_from_start(index);
             } else {
                 review.repeat_one(index);
             }
         }
         (Practice::Dictation, Some(index)) => {
-            review.repeating.set(None);
+            review.stop_repeating();
             review.replay_once(index);
         }
         _ => {}
@@ -53,22 +51,25 @@ pub(super) fn start(review: Review, practice: Practice) {
 
 pub(super) fn stop(review: Review) {
     batch(|| {
-        review.practice.set(Practice::None);
-        review.repeating.set(None);
-        review.paused.set(true);
+        review.set_practice(Practice::None);
+        review.stop_repeating();
+        review.set_paused(true);
     });
 }
 
 pub(super) fn practice_panel(review: Review) -> impl IntoElement {
-    let activity = store().activity;
+    let activity = crate::state::activity::ActivityState::get();
     effect(move || {
         let on = review.practice.get() != Practice::None;
-        untracked(|| activity.set_practicing(on));
+        untracked(|| activity.act(crate::state::activity::ActivityAction::SetPracticing(on)));
     });
-    cleanup(move || activity.set_practicing(false));
+    cleanup(move || activity.act(crate::state::activity::ActivityAction::SetPracticing(false)));
     let heading = move || -> SharedString {
         match review.target().and_then(|index| review.segment(index).map(|segment| (index, segment))) {
-            Some((index, segment)) => format!("{} {} · {}", tr("Sentence"), index + 1, clock(segment.start_ms)).into(),
+            Some((index, segment)) => {
+                format!("{} {} · {}", tr("Sentence"), index + 1, format::shown(format::Shown::Clock(segment.start_ms)))
+                    .into()
+            }
             None => tr("Select a sentence to practice."),
         }
     };
@@ -94,15 +95,17 @@ fn practice_bar(review: Review, heading: impl Fn() -> SharedString + 'static, co
         .flex_wrap()
         .items_center()
         .gap_2()
-        .child(segmented(
-            vec![(Practice::Dictation, "Type answer"), (Practice::Mimic, "Mimic")],
-            move || if review.practice.get() == Practice::Dictation { Practice::Dictation } else { Practice::Mimic },
-            move |practice| {
+        .child(Segmented {
+            options: vec![(Practice::Dictation, "Type answer"), (Practice::Mimic, "Mimic")],
+            value: move || {
+                if review.practice.get() == Practice::Dictation { Practice::Dictation } else { Practice::Mimic }
+            },
+            on_change: move |practice| {
                 if untracked(|| review.practice.get()) != practice {
                     start(review, practice);
                 }
             },
-        ))
+        })
         .child(
             text(heading)
                 .flex_1()
@@ -163,7 +166,7 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
     let result = signal(None::<Vec<DictationWord>>);
     effect(move || {
         answer.with(|_| ());
-        untracked(|| store().activity.touch());
+        untracked(|| crate::state::activity::ActivityState::get().act(crate::state::activity::ActivityAction::Touch));
     });
     let pinned = signal(untracked(|| review.target()));
     let target = move || pinned.get().and_then(|index| review.segment(index));
@@ -193,9 +196,9 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
     cleanup(move || {
         let (tally, slowed) = kept.take();
         if let Some((before, slower)) = slowed
-            && review.rate.try_get() == Some(slower)
+            && review.try_rate() == Some(slower)
         {
-            review.rate.try_set(before);
+            review.try_set_rate(before);
         }
         if tally.checked > 0 {
             toast(Tone::Info, tally.summary());
@@ -205,8 +208,8 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
         if let Some((before, slower)) = slowed.get_untracked() {
             slowed.set(None);
             // Unless the speed was changed by hand meanwhile.
-            if review.rate.get_untracked() == slower {
-                review.rate.set(before);
+            if untracked(|| review.rate()) == slower {
+                review.set_rate(before);
             }
         }
     };
@@ -216,7 +219,7 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             pinned.set(Some(index));
             answer.set(String::new());
             result.set(None);
-            review.revealed.set(None);
+            review.hide_revealed();
             misses.set(0);
             hinted.set(0);
             tried.set(false);
@@ -301,7 +304,7 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             timer(REPLAY_AFTER).await;
             again_at.replace(None);
             if let Some(at) = at
-                && review.paused.get_untracked()
+                && untracked(|| review.is_paused())
                 && pinned.get_untracked() == Some(at)
                 && !untracked(solved)
             {
@@ -347,7 +350,7 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
         if typed.trim().is_empty() {
             return;
         }
-        store().activity.touch();
+        crate::state::activity::ActivityState::get().act(crate::state::activity::ActivityAction::Touch);
         let words = dictation::compare(&segment.text, &typed);
         let correct = dictation::is_correct(&words);
         // A sentence's first check is remembered: wrong, it is to review;
@@ -376,11 +379,11 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             misses.update(|misses| *misses += 1);
         }
         hinted.set(0);
-        let before = review.rate.get_untracked();
+        let before = untracked(|| review.rate());
         let slower = ((before * SLOWER * 20.0).round() / 20.0).max(SLOWEST);
         if again && misses.get_untracked() >= MISSES_TO_HELP && slowed.get_untracked().is_none() && slower < before {
             slowed.set(Some((before, slower)));
-            review.rate.set(slower);
+            review.set_rate(slower);
         }
         if let Some(task) = again_at.replace(None) {
             task.cancel();
@@ -405,12 +408,10 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
             refocus.with(|once| *once = true);
             batch(|| {
                 if !again {
-                    review.paused.set(true);
+                    review.set_paused(true);
                 }
                 if correct {
-                    review.answered.update(|answered| {
-                        answered.insert(id);
-                    });
+                    review.answered(id);
                 }
                 result.set(Some(words));
             });
@@ -519,14 +520,12 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
                         .gap_2()
                         .child(when(
                             move || review.left_to_review() > 0,
-                            move || {
-                                chip(
-                                    move || -> SharedString {
-                                        format!("{} {}", tr("Missed"), review.left_to_review()).into()
-                                    },
-                                    move || only_missed.get(),
-                                    toggle_missed,
-                                )
+                            move || Chip {
+                                label: move || -> SharedString {
+                                    format!("{} {}", tr("Missed"), review.left_to_review()).into()
+                                },
+                                selected: move || only_missed.get(),
+                                on_press: toggle_missed,
                             },
                         ))
                         .child(
@@ -534,9 +533,19 @@ fn dictation_panel(review: Review, heading: impl Fn() -> SharedString + 'static)
                             // how to press it without leaving the answer.
                             when(
                                 || !crate::platform::is_phone(),
-                                move || ui::shortcut_button(Icon::Refresh, tr("Replay"), "mod+r", replay),
+                                move || ui::ShortcutButton {
+                                    glyph: Icon::Refresh,
+                                    name: tr("Replay"),
+                                    keystroke: "mod+r",
+                                    on_press: replay,
+                                },
                             )
-                            .otherwise(move || ui::icon_button(Icon::Refresh, tr("Replay"), Size::Sm, replay)),
+                            .otherwise(move || ui::IconButton {
+                                glyph: Icon::Refresh,
+                                name: tr("Replay"),
+                                size: Size::Sm,
+                                on_press: replay,
+                            }),
                         )
                         .child(
                             icon_text_button(Variant::Primary, Size::Sm, Icon::Check, l("Check"))
@@ -634,7 +643,7 @@ fn the_end(review: Review, tally: Signal<Tally>, missed_only: bool, restart: imp
         .p_4()
         .gap_3()
         .justify_center()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .border_1()
         .border_color(|| theme().border)
         .bg(|| theme().card)
@@ -725,7 +734,7 @@ fn verdict(words: &[DictationWord]) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .text_color(move || if correct { tokens::success() } else { theme().destructive })
+                .text_color(move || if correct { tokens::ink(tokens::Ink::Success) } else { theme().destructive })
                 .child(icon(if correct { Icon::Check } else { Icon::Close }, 16.0))
                 .child(
                     text(if correct { tr("Matches transcript") } else { tr("Listen again and retry.") })
@@ -753,7 +762,7 @@ fn verdict(words: &[DictationWord]) -> impl IntoElement {
 fn marked_answer(words: &[DictationWord]) -> impl IntoElement {
     let correct = dictation::is_correct(words);
     let entrance = motion().entering(if correct { MotionPreset::FadeInUp } else { MotionPreset::Shake });
-    let tone = move || if correct { tokens::success() } else { theme().destructive };
+    let tone = move || if correct { tokens::ink(tokens::Ink::Success) } else { theme().destructive };
     // The first mistake: a word typed wrong shows selected (as the input
     // has it), a missing one the caret before it.
     let first = words.iter().position(|word| !matches!(word, DictationWord::Matching(_)));
@@ -770,7 +779,7 @@ fn marked_answer(words: &[DictationWord]) -> impl IntoElement {
         .flex_1()
         .px_3()
         .py_2()
-        .rounded(tokens::radius)
+        .rounded(|| tokens::corner(tokens::Corner::Medium))
         .border_1()
         .border_color(tone)
         .bg(|| theme().card)
@@ -827,8 +836,8 @@ const MARK_REACH: f32 = 2.5;
 
 fn mark(label: String, kind: Mark, selected: bool) -> AnyElement {
     let tone = move || match kind {
-        Mark::Right => tokens::success(),
-        Mark::Near => tokens::warning(),
+        Mark::Right => tokens::ink(tokens::Ink::Success),
+        Mark::Near => tokens::ink(tokens::Ink::Warning),
         _ => theme().destructive,
     };
     let word = text(label)
@@ -842,7 +851,7 @@ fn mark(label: String, kind: Mark, selected: bool) -> AnyElement {
         .px(px(MARK_REACH))
         .mx(px(-MARK_REACH))
         .my(px((ANSWER_LINE - MARK_LINE) / 2.0))
-        .rounded(tokens::radius_sm)
+        .rounded(|| tokens::corner(tokens::Corner::Small))
         .border_1()
         .border_color(tone)
         .bg(move || if selected { theme().primary.opacity(0.35) } else { tone().opacity(0.08) })
@@ -851,7 +860,7 @@ fn mark(label: String, kind: Mark, selected: bool) -> AnyElement {
 }
 
 fn mimic_panel(review: Review, heading: impl Fn() -> SharedString + 'static) -> impl IntoElement {
-    let store = review.store;
+    let store = crate::state::store();
     let target = move || review.target().and_then(|index| review.segment(index));
     let goal = move || store.setting(|s| s.mimic_rep_goal);
     let hidden = move || review.blind() && target().is_none_or(|segment| !review.unveiled(&segment.id));
@@ -862,7 +871,7 @@ fn mimic_panel(review: Review, heading: impl Fn() -> SharedString + 'static) -> 
         move |value| {
             let goal = value.parse().unwrap_or(3);
             store.update_settings(|s| s.mimic_rep_goal = goal);
-            review.reps.update(|reps| *reps = (*reps).min(goal));
+            review.cap_reps(goal);
         },
     );
     let pause = select(
@@ -920,12 +929,9 @@ fn mimic_panel(review: Review, heading: impl Fn() -> SharedString + 'static) -> 
                             .items_center()
                             .gap_2()
                             .child(mimic_controls(review))
-                            .child(badge(
-                                move || -> SharedString {
+                            .child(Badge { label: move || -> SharedString {
                                     format!("{} {}/{}", tr("Reps"), review.reps.get(), goal()).into()
-                                },
-                                move || if review.waiting.get() { Status::Active } else { Status::Neutral },
-                            ))
+                                }, status: move || if review.waiting.get() { Status::Active } else { Status::Neutral } })
                             .child(when(move || review.waiting.get(), || hint(l("Your turn…"))))
                             .child(when(
                                 move || !review.waiting.get(),
@@ -939,12 +945,17 @@ fn mimic_panel(review: Review, heading: impl Fn() -> SharedString + 'static) -> 
 /// The previous sentence, play or pause, and the next, in the card itself:
 /// no trip to the transport under it or to the transcript.
 fn mimic_controls(review: Review) -> View {
-    let active = move || !review.paused.get() || review.waiting.get();
+    let active = move || !review.is_paused() || review.waiting.get();
     view()
         .flex_row()
         .items_center()
         .gap_1()
-        .child(ui::icon_button(Icon::SkipBack, tr("Previous sentence"), Size::Sm, move || review.step(-1)))
+        .child(ui::IconButton {
+            glyph: Icon::SkipBack,
+            name: tr("Previous sentence"),
+            size: Size::Sm,
+            on_press: move || review.step(-1),
+        })
         .child(
             ui::toggle_icon_button(
                 move || if active() { Icon::Pause } else { Icon::Play },
@@ -954,7 +965,12 @@ fn mimic_controls(review: Review) -> View {
             )
             .on_press(move || review.toggle_play()),
         )
-        .child(ui::icon_button(Icon::SkipForward, tr("Next sentence"), Size::Sm, move || review.step(1)))
+        .child(ui::IconButton {
+            glyph: Icon::SkipForward,
+            name: tr("Next sentence"),
+            size: Size::Sm,
+            on_press: move || review.step(1),
+        })
 }
 
 /// A Reps or Pause choice in the card's top row: wide enough for "30×".

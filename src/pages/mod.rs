@@ -1,4 +1,5 @@
 mod capture;
+pub(crate) mod chrome;
 mod dialogs;
 mod gestures;
 mod home;
@@ -14,7 +15,7 @@ pub(crate) use capture::{capture_dialog, offered as capture_offered, status as c
 pub(crate) use dialogs::subtitle_choice_dialog;
 pub(crate) use home::home;
 pub(crate) use library::library;
-pub(crate) use player::{VIDEO_EXTENSIONS, is_video, open_player, player};
+pub(crate) use player::{open_video, pick_video, player};
 pub(crate) use podcast::{podcasts_page as podcasts, show_screen as podcast_show};
 pub(crate) use settings::settings_dialog;
 pub(crate) use sync::{mate_row, sync_code_dialog, sync_dialog};

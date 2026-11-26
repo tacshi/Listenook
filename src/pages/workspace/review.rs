@@ -4,12 +4,16 @@ use std::{
 };
 
 use listenook_core::activity::Kind;
-use listenook_core::{ContentMode, Document, Job, Segment, dictation, highlights, playback, playback::Loudness};
+use listenook_core::transcript::structure::{self, Edit};
+use listenook_core::{
+    ContentMode, Document, Job, Segment, playback, playback::Loudness, transcript::dictation, transcript::highlights,
+};
 use nsh_core::prelude::*;
 
+use crate::ui::{error_text, tr};
+use crate::work::ai;
 use crate::{
-    services::llm,
-    state::{SettingsTab, Store, error_text, store, tr},
+    state::{SettingsTab, Store, store},
     ui::{Tone, toast_with_action},
 };
 
@@ -231,6 +235,314 @@ pub(super) const VIDEO_HEIGHT: f32 = 320.0;
 pub(super) const VIDEO_MIN: f32 = 160.0;
 pub(super) const VIDEO_MAX: f32 = 720.0;
 
+/// What the reader's views do with it: they read what it shows and ask it to change, and it
+/// keeps how it holds each part to itself.
+impl Review {
+    /// Reads the recording under review, followed reactively.
+    pub(super) fn job_with<T>(&self, read: impl FnOnce(&Option<Rc<Job>>) -> T) -> T {
+        self.job.with(read)
+    }
+
+    /// Reads the recording under review as it is now.
+    pub(super) fn job_now_with<T>(&self, read: impl FnOnce(&Option<Rc<Job>>) -> T) -> T {
+        self.job.with_untracked(read)
+    }
+
+    /// How many sentences the list shows.
+    pub(super) fn shown_count(&self) -> usize {
+        self.shown.with(Vec::len)
+    }
+
+    /// The sentence the list shows in row `row`.
+    pub(super) fn shown_at(&self, row: usize) -> Option<usize> {
+        self.shown.with(|shown| shown.get(row).copied())
+    }
+
+    /// The row the list shows the sentence `index` in, if it shows it.
+    pub(super) fn row_of(&self, index: usize) -> Option<usize> {
+        self.shown.with(|shown| shown.iter().position(|shown| *shown == index))
+    }
+
+    /// The IDs of the sentences the list shows, in order.
+    pub(super) fn shown_ids(&self) -> Vec<String> {
+        self.shown.with(|shown| shown.iter().filter_map(|index| self.segment(*index).map(|s| s.id)).collect())
+    }
+
+    /// The list of sentences, for its view to bind.
+    pub(super) fn list(&self) -> ElementRef {
+        self.list
+    }
+
+    /// The player, for its view to bind.
+    pub(super) fn player(&self) -> ElementRef {
+        self.player
+    }
+
+    /// Brings the row `row` of the list into view, a third of the way down.
+    pub(super) fn scroll_to_row(&self, row: usize, animated: bool) {
+        self.list.scroll_to_index(row as u32, percentage(0.35), px(0.0), animated);
+    }
+
+    /// The player's media is loaded and lasts `duration_ms`: it starts where it was left,
+    /// playing on when `plays` says so.
+    pub(super) fn loaded(&self, duration_ms: i64, plays: bool) {
+        self.duration_ms.set(duration_ms);
+        let start_at = self.position_ms.get_untracked();
+        if start_at > 0 {
+            self.player.seek(start_at as f64 / 1000.0);
+        }
+        if plays {
+            self.paused.set(false);
+        }
+    }
+
+    pub(super) fn is_fullscreen(&self) -> bool {
+        self.fullscreen.get()
+    }
+
+    pub(super) fn is_paused(&self) -> bool {
+        self.paused.get()
+    }
+
+    pub(super) fn is_searching(&self) -> bool {
+        self.searching.get()
+    }
+
+    /// The search's words, trimmed; none while the search is closed.
+    pub(super) fn search_text(&self) -> String {
+        if self.searching.get() { self.query.with(|q| q.trim().to_owned()) } else { String::new() }
+    }
+
+    pub(super) fn is_editing(&self) -> bool {
+        self.editing.with(Option::is_some)
+    }
+
+    pub(super) fn is_looping(&self) -> bool {
+        self.looping.get()
+    }
+
+    pub(super) fn toggle_looping(&self) {
+        self.looping.update(|looping| *looping = !*looping);
+    }
+
+    pub(super) fn is_following(&self) -> bool {
+        self.following.get()
+    }
+
+    pub(super) fn side(&self) -> Side {
+        self.side.get()
+    }
+
+    pub(super) fn practice(&self) -> Practice {
+        self.practice.get()
+    }
+
+    pub(super) fn mode(&self) -> ContentMode {
+        self.mode.get()
+    }
+
+    pub(super) fn rate(&self) -> f32 {
+        self.rate.get()
+    }
+
+    pub(super) fn position_ms(&self) -> i64 {
+        self.position_ms.get()
+    }
+
+    pub(super) fn duration_ms(&self) -> i64 {
+        self.duration_ms.get()
+    }
+
+    /// The stretch of sentences repeating, if any.
+    pub(super) fn repeating(&self) -> Option<Span> {
+        self.repeating.get()
+    }
+
+    /// The sentence playing, by index.
+    pub(super) fn current(&self) -> Option<usize> {
+        self.current.get()
+    }
+
+    /// The sentence the playhead is dragged to, while it is.
+    pub(super) fn scrubbed(&self) -> Option<usize> {
+        self.scrubbed.get()
+    }
+
+    pub(super) fn is_scrubbing(&self) -> bool {
+        self.scrub.with(Option::is_some)
+    }
+
+    /// The editor's text, trimmed.
+    pub(super) fn draft_text(&self) -> String {
+        self.draft.with(|draft| draft.trim().to_owned())
+    }
+
+    /// The editor's translation as it is.
+    pub(super) fn translation_draft_text(&self) -> String {
+        self.translation_draft.get()
+    }
+
+    /// Puts `line` in the editor's translation, unless it was changed from `before` meanwhile.
+    pub(super) fn offer_translation(&self, line: String, before: &str) {
+        if self.translation_draft.with_untracked(|draft| draft == before) {
+            self.translation_draft.set(line);
+        }
+    }
+
+    /// The part of the brief being edited.
+    pub(super) fn brief_part(&self) -> Option<BriefPart> {
+        self.brief_editing.get()
+    }
+
+    pub(super) fn set_paused(&self, paused: bool) {
+        self.paused.set(paused);
+    }
+
+    pub(super) fn set_rate(&self, rate: f32) {
+        self.rate.set(rate);
+    }
+
+    /// The speed it plays at, unless the reader is gone.
+    pub(super) fn try_rate(&self) -> Option<f32> {
+        self.rate.try_get()
+    }
+
+    /// Plays at `rate`, unless the reader is gone.
+    pub(super) fn try_set_rate(&self, rate: f32) {
+        self.rate.try_set(rate);
+    }
+
+    pub(super) fn set_side(&self, side: Side) {
+        self.side.set(side);
+    }
+
+    pub(super) fn set_mode(&self, mode: ContentMode) {
+        self.mode.set(mode);
+    }
+
+    pub(super) fn set_practice(&self, practice: Practice) {
+        self.practice.set(practice);
+    }
+
+    pub(super) fn set_searching(&self, searching: bool) {
+        self.searching.set(searching);
+    }
+
+    /// The search field's text, for the field to bind.
+    pub(super) fn query(&self) -> Signal<String> {
+        self.query
+    }
+
+    pub(super) fn stop_repeating(&self) {
+        self.repeating.set(None);
+    }
+
+    pub(super) fn is_repeating_any(&self) -> bool {
+        self.repeating.with(Option::is_some)
+    }
+
+    /// Whether the first sentence of a stretch to skip is picked.
+    pub(super) fn is_picking_skip(&self) -> bool {
+        self.skip_from.with(Option::is_some)
+    }
+
+    pub(super) fn stop_picking_skip(&self) {
+        self.skip_from.set(None);
+    }
+
+    /// Shows the sentence `current` hidden in blind listening, or hides the one shown.
+    pub(super) fn toggle_revealed(&self, current: Option<String>) {
+        self.revealed.update(|revealed| *revealed = if revealed.is_some() { None } else { current });
+    }
+
+    pub(super) fn hide_revealed(&self) {
+        self.revealed.set(None);
+    }
+
+    /// Whether words of a sentence are selected.
+    pub(super) fn has_selection(&self) -> bool {
+        self.selection.with(Option::is_some)
+    }
+
+    pub(super) fn has_selection_now(&self) -> bool {
+        self.selection.with_untracked(Option::is_some)
+    }
+
+    /// Reads what the editor edits, if it is open.
+    pub(super) fn editing_with<T>(&self, read: impl FnOnce(Option<&Editing>) -> T) -> T {
+        self.editing.with(|editing| read(editing.as_ref()))
+    }
+
+    pub(super) fn close_editor(&self) {
+        self.editing.set(None);
+    }
+
+    /// The editor's text, for the field to bind.
+    pub(super) fn draft(&self) -> Signal<String> {
+        self.draft
+    }
+
+    /// The editor's translation, for the field to bind.
+    pub(super) fn translation_draft(&self) -> Signal<String> {
+        self.translation_draft
+    }
+
+    /// Where the caret is in the editor's text.
+    pub(super) fn set_caret(&self, at: u32) {
+        self.caret.set(at);
+    }
+
+    /// Whether the sentence `id` waits for its translation.
+    pub(super) fn is_retranslating(&self, id: &str) -> bool {
+        self.retranslating.with(|waiting| waiting.iter().any(|waiting| waiting == id))
+    }
+
+    /// Where the person drags the playhead to, while they drag it.
+    pub(super) fn scrub_to(&self, at: Option<i64>) {
+        self.scrub.set(at);
+    }
+
+    /// Shows the reader full screen, or not.
+    pub(super) fn set_fullscreen(&self, on: bool) {
+        self.fullscreen.set(on);
+        self.store.act(crate::state::Action::SetImmersive(on));
+    }
+
+    pub(super) fn set_video_on_top(&self, on_top: bool) {
+        self.video_on_top.set(on_top);
+    }
+
+    /// Counts the sentence `id` as typed right in Type answer.
+    pub(super) fn answered(&self, id: String) {
+        self.answered.update(|answered| {
+            answered.insert(id);
+        });
+    }
+
+    /// Keeps the repetitions counted at most `goal`.
+    pub(super) fn cap_reps(&self, goal: u32) {
+        self.reps.update(|reps| *reps = (*reps).min(goal));
+    }
+
+    /// Edits `part` of the brief, or closes its editor.
+    pub(super) fn edit_brief_part(&self, part: Option<BriefPart>) {
+        self.brief_editing.set(part);
+    }
+
+    /// The items of the brief that show, by key, with their views.
+    pub(super) fn brief_items(&self) -> Vec<(String, ElementRef)> {
+        self.brief_items.with(|items| items.clone())
+    }
+
+    pub(super) fn add_brief_item(&self, key: String, view: ElementRef) {
+        self.brief_items.with(|items| items.push((key, view)));
+    }
+
+    pub(super) fn clear_brief_items(&self) {
+        self.brief_items.with(Vec::clear);
+    }
+}
+
 impl Review {
     pub(super) fn new(id: &str) -> Review {
         let store = store();
@@ -238,9 +550,7 @@ impl Review {
         let job = computed(move || store.job(&owned));
         let position_ms = signal(store.playback_position(id).unwrap_or(0));
         let has_translation = job.with_untracked(|job| {
-            job.as_ref()
-                .and_then(|job| job.document.as_ref())
-                .is_some_and(|d| d.segments.iter().any(Segment::has_translation))
+            job.as_ref().and_then(|job| job.document()).is_some_and(|d| d.segments.iter().any(Segment::has_translation))
         });
         let has_video = job.with_untracked(|job| {
             job.as_ref().is_some_and(|job| {
@@ -249,7 +559,7 @@ impl Review {
                 } else {
                     job.has_video()
                         || matches!(
-                            listenook_core::subtitles::extension(&job.source_path).as_str(),
+                            listenook_core::media::subtitles::extension(&job.source_path).as_str(),
                             "mp4" | "mkv" | "avi"
                         )
                 }
@@ -272,15 +582,14 @@ impl Review {
         let searching = signal(false);
         let loudness = signal(None::<Rc<Loudness>>);
         let segment_at = move |position: i64| {
-            loudness.with(|loudness| {
-                job.with(|job| job.as_ref()?.document.as_ref()?.segment_at(position, loudness.as_deref()))
-            })
+            loudness
+                .with(|loudness| job.with(|job| job.as_ref()?.document()?.segment_at(position, loudness.as_deref())))
         };
         let current = computed(move || segment_at(position_ms.get()));
         let heard = computed(move || {
             let position = position_ms.get();
             loudness.with(|loudness| {
-                job.with(|job| job.as_ref()?.document.as_ref()?.segment_heard_at(position, loudness.as_deref()))
+                job.with(|job| job.as_ref()?.document()?.segment_heard_at(position, loudness.as_deref()))
             })
         });
         let scrub = signal(None::<i64>);
@@ -302,7 +611,7 @@ impl Review {
         let shown = computed(move || {
             let needle = if searching.get() { query.with(|q| q.trim().to_lowercase()) } else { String::new() };
             job.with(|job| {
-                let Some(document) = job.as_ref().and_then(|job| job.document.as_ref()) else {
+                let Some(document) = job.as_ref().and_then(|job| job.document()) else {
                     return Vec::new();
                 };
                 document
@@ -420,40 +729,40 @@ impl Review {
     }
 
     pub(super) fn segment(&self, index: usize) -> Option<Segment> {
-        self.job.with(|job| job.as_ref()?.document.as_ref()?.segments.get(index).cloned())
+        self.job.with(|job| job.as_ref()?.document()?.segments.get(index).cloned())
     }
 
     fn segment_now(&self, index: usize) -> Option<Segment> {
-        self.job.with_untracked(|job| job.as_ref()?.document.as_ref()?.segments.get(index).cloned())
+        self.job.with_untracked(|job| job.as_ref()?.document()?.segments.get(index).cloned())
     }
 
     fn play_start(&self, index: usize) -> i64 {
         self.job.with_untracked(|job| {
             let loudness = self.loudness.with_untracked(Option::clone);
-            job.as_ref()
-                .and_then(|job| job.document.as_ref()?.play_start(index, loudness.as_deref()))
-                .unwrap_or_default()
+            job.as_ref().and_then(|job| job.document()?.play_start(index, loudness.as_deref())).unwrap_or_default()
         })
     }
 
     fn play_end(&self, index: usize) -> Option<i64> {
         let loudness = self.loudness.with_untracked(Option::clone);
-        self.job.with_untracked(|job| job.as_ref()?.document.as_ref()?.play_end(index, loudness.as_deref()))
+        self.job.with_untracked(|job| job.as_ref()?.document()?.play_end(index, loudness.as_deref()))
     }
 
     fn index_of(&self, segment_id: &str) -> Option<usize> {
         self.job.with_untracked(|job| {
-            job.as_ref()?.document.as_ref()?.segments.iter().position(|segment| segment.id == segment_id)
+            job.as_ref()?.document()?.segments.iter().position(|segment| segment.id == segment_id)
         })
     }
 
     fn count(&self) -> usize {
-        self.job
-            .with_untracked(|job| job.as_ref().and_then(|job| job.document.as_ref()).map_or(0, |d| d.segments.len()))
+        self.job.with_untracked(|job| job.as_ref().and_then(|job| job.document()).map_or(0, |d| d.segments.len()))
     }
 
     fn document_now<T>(&self, f: impl FnOnce(&Document) -> Option<T>) -> Option<T> {
-        self.job.with_untracked(|job| f(job.as_ref()?.document.as_ref()?))
+        self.job.with_untracked(|job| {
+            let document = job.as_ref()?.document()?;
+            f(&document)
+        })
     }
 
     /// The next sentence to review after `after` (from the start with none),
@@ -465,7 +774,7 @@ impl Review {
 
     /// How many sentences are left to review in Type answer.
     pub(super) fn left_to_review(&self) -> usize {
-        self.job.with(|job| job.as_ref().and_then(|job| job.document.as_ref()).map_or(0, Document::left_to_review))
+        self.job.with(|job| job.as_ref().and_then(|job| job.document()).map_or(0, |d| d.left_to_review()))
     }
 
     /// Marks sentence `id` to review, or done with, saving only a change.
@@ -504,14 +813,14 @@ impl Review {
 
     /// The skipped run sentence `index` is in, first and last.
     pub(super) fn skipped_run(&self, index: usize) -> Option<(usize, usize)> {
-        self.job.with(|job| job.as_ref()?.document.as_ref()?.skipped_run(index))
+        self.job.with(|job| job.as_ref()?.document()?.skipped_run(index))
     }
 
     /// Marks sentences `first` through `last` skipped, or brings them back.
     pub(super) fn set_skipped(&self, first: usize, last: usize, skipped: bool) {
         let done = if skipped { "Skipped" } else { "Brought back" };
         let changed =
-            self.change(done, |document| listenook_core::ads::set_skipped(document, &[(first, last)], skipped));
+            self.change(done, |document| listenook_core::ai::ads::set_skipped(document, &[(first, last)], skipped));
         if changed && skipped {
             batch(|| {
                 if untracked(|| self.repeat_range()).is_some_and(|(a, b)| first <= a && b <= last) {
@@ -538,7 +847,7 @@ impl Review {
     /// Where the stretch being picked starts.
     pub(super) fn skip_start(&self) -> Option<usize> {
         let id = self.skip_from.get()?;
-        self.job.with(|job| job.as_ref()?.document.as_ref()?.segments.iter().position(|segment| segment.id == id))
+        self.job.with(|job| job.as_ref()?.document()?.segments.iter().position(|segment| segment.id == id))
     }
 
     /// Skips from where the stretch started through sentence `index`,
@@ -564,17 +873,17 @@ impl Review {
         let Some(found) = found.filter(|found| !found.is_empty()) else {
             return;
         };
-        self.change("Ads skipped", |document| listenook_core::ads::skip_found(document, &found));
+        self.change("Ads skipped", |document| listenook_core::ai::ads::skip_found(document, &found));
         self.forget_found();
     }
 
     pub(super) fn forget_found(&self) {
-        self.store.update_job(&self.id(), |job| job.ad_scan = Default::default());
+        self.store.update_job(&self.id(), |job| job.apply(listenook_core::Change::ForgetAds));
     }
 
     pub(super) fn words(&self, index: usize) -> Option<Vec<(SharedString, i64, i64)>> {
         self.job.with(|job| {
-            let document = job.as_ref()?.document.as_ref()?;
+            let document = job.as_ref()?.document()?;
             let segment = document.segments.get(index)?;
             let words: Vec<_> = document
                 .tokens
@@ -594,8 +903,8 @@ impl Review {
                 spans.into_iter().map(|(text, start, end)| (text.into(), start, end)).collect()
             };
             if timed.len() > 1 {
-                return listenook_core::local::spans(&segment.text, &timed)
-                    .or_else(|| listenook_core::local::retimed(&segment.text, &timed))
+                return listenook_core::transcript::local::spans(&segment.text, &timed)
+                    .or_else(|| listenook_core::transcript::local::retimed(&segment.text, &timed))
                     .map(shared);
             }
             if words.len() < 2 {
@@ -605,9 +914,9 @@ impl Review {
             let pieces: Vec<(String, i64, i64)> =
                 words.iter().map(|token| (token.text.clone(), token.start_ms, token.end_ms)).collect();
             if joined.trim() == segment.text.trim() {
-                Some(shared(listenook_core::local::whole_words(&pieces)))
+                Some(shared(listenook_core::transcript::local::whole_words(&pieces)))
             } else {
-                listenook_core::local::retimed(&segment.text, &pieces).map(shared)
+                listenook_core::transcript::local::retimed(&segment.text, &pieces).map(shared)
             }
         })
     }
@@ -636,7 +945,7 @@ impl Review {
     pub(super) fn repeat_range(&self) -> Option<(usize, usize)> {
         let span = self.repeating.get()?;
         self.job.with(|job| {
-            let segments = &job.as_ref()?.document.as_ref()?.segments;
+            let segments = &job.as_ref()?.document()?.segments;
             let first = segments.iter().position(|segment| segment.id == span.first)?;
             let last = segments.iter().position(|segment| segment.id == span.last)?;
             Some((first.min(last), first.max(last)))
@@ -655,7 +964,7 @@ impl Review {
             None => self.current.get(),
         }?;
         self.job.with(|job| {
-            let document = job.as_ref()?.document.as_ref()?;
+            let document = job.as_ref()?.document()?;
             document.next_kept(target).or_else(|| document.prev_kept(target))
         })
     }
@@ -1110,8 +1419,8 @@ impl Review {
         }
         self.position_ms.set(position_ms);
         self.last_tick.with(|last| *last = Some((Instant::now(), position_ms)));
-        self.store.activity.note(Kind::Listen);
-        self.store.sleep.heard();
+        crate::state::activity::ActivityState::get().act(crate::state::activity::ActivityAction::Note(Kind::Listen));
+        crate::state::sleep::SleepState::get().act(crate::state::sleep::SleepAction::Heard);
         self.disarm();
         if self.out_of_skipped(position_ms) {
             return;
@@ -1270,7 +1579,7 @@ impl Review {
         let Some(segment) = self.segment_now(index) else {
             return;
         };
-        self.store.activity.touch();
+        crate::state::activity::ActivityState::get().act(crate::state::activity::ActivityAction::Touch);
         let goal = self.store.settings().mimic_rep_goal;
         let reps = (self.reps.get_untracked() + 1).min(goal);
         let pause_ms = dictation::mimic_pause_ms(
@@ -1316,7 +1625,8 @@ impl Review {
             return;
         }
         let found = self.job.with_untracked(|job| {
-            let segment = job.as_ref()?.document.as_ref()?.segments.iter().find(|s| s.id == segment_id)?;
+            let document = job.as_ref()?.document()?;
+            let segment = document.segments.iter().find(|s| s.id == segment_id)?;
             let range = highlights::locate(&segment.text, &event.text, event.start)?;
             Some(Picked { segment_id: segment_id.to_owned(), range, text: event.text.clone() })
         });
@@ -1332,10 +1642,12 @@ impl Review {
             return false;
         };
         self.job.with(|job| {
-            job.as_ref()
-                .and_then(|job| job.document.as_ref())
-                .and_then(|d| d.segments.iter().find(|s| s.id == picked.segment_id))
-                .is_some_and(|s| highlights::overlapping(&s.highlights, picked.range.clone()))
+            job.as_ref().and_then(|job| job.document()).is_some_and(|d| {
+                d.segments
+                    .iter()
+                    .find(|s| s.id == picked.segment_id)
+                    .is_some_and(|s| highlights::overlapping(&s.highlights, picked.range.clone()))
+            })
         })
     }
 
@@ -1388,20 +1700,20 @@ impl Review {
 
     fn change(&self, done: &'static str, edit: impl FnOnce(&mut Document) -> bool) -> bool {
         let id = self.id();
-        let before = self.job.with_untracked(|job| job.as_ref().and_then(|job| job.document.clone()));
+        let before = self.job.with_untracked(|job| job.as_ref().and_then(|job| job.document()));
         let mut changed = false;
         self.store.update_document(&id, |document| changed = edit(document));
         if let (true, Some(before)) = (changed, before) {
-            let generation = keep_for_undo(id, before);
+            let generation = super::undo::keep(id, before);
             toast_with_action(Tone::Success, tr(done), tr("Undo"), move || {
-                undo_change(Some(generation));
+                super::undo::undo(Some(generation));
             });
         }
         changed
     }
 
     pub(super) fn undo(&self) -> bool {
-        let undone = undo_change(None);
+        let undone = super::undo::undo(None);
         if undone {
             self.editing.set(None);
         }
@@ -1463,7 +1775,7 @@ impl Review {
         self.retranslating.set(waiting);
         let (review, id, target) = (*self, self.id(), self.translation_target());
         self.store.run(async move {
-            let result = llm::translate_line(&source, &target).await;
+            let result = ai::translate_line(&source, &target).await;
             if let Some(mut waiting) = review.retranslating.try_get() {
                 if let Some(at) = waiting.iter().position(|waits| *waits == segment_id) {
                     waiting.remove(at);
@@ -1472,9 +1784,9 @@ impl Review {
             }
             let line = match result {
                 Ok(line) => line,
-                Err(code) if llm::needs_setup(&code) => {
+                Err(code) if ai::needs_setup(&code) => {
                     toast_with_action(Tone::Error, error_text(&code), tr("Settings"), move || {
-                        review.store.open_settings(SettingsTab::Ai)
+                        review.store.act(crate::state::Action::OpenSettings(SettingsTab::Ai))
                     });
                     return;
                 }
@@ -1522,9 +1834,9 @@ impl Review {
         self.job
             .with(|job| {
                 let job = job.as_ref()?;
-                let document = job.document.as_ref()?;
-                Some(job.ad_scan.found.iter().any(|finding| {
-                    listenook_core::ads::locate(finding, document)
+                let document = job.document()?;
+                Some(job.ads().found.iter().any(|finding| {
+                    listenook_core::ai::ads::locate(finding, &document)
                         .is_some_and(|(first, last)| (first..=last).contains(&index))
                 }))
             })
@@ -1541,7 +1853,7 @@ impl Review {
         let Some(index) = self.index_of(segment_id) else {
             return;
         };
-        self.change("Sentence deleted", |document| listenook_core::structure::remove(document, index));
+        self.change("Sentence deleted", |document| structure::apply(document, Edit::Remove(index)));
         batch(|| {
             self.editing.set(None);
             if self.repeating.get_untracked().is_some_and(|span| span.first == segment_id || span.last == segment_id) {
@@ -1572,7 +1884,7 @@ impl Review {
                 trial.segments[index].translated_text = (!translation.is_empty()).then(|| translation.clone());
             }
             let translated = trial.segments[index].has_translation();
-            let split = listenook_core::structure::split_at(&mut trial, index, caret);
+            let split = structure::apply(&mut trial, Edit::SplitAt(index, caret));
             if split {
                 if translated {
                     halves = trial.segments[index..=index + 1].iter().map(|s| (s.id.clone(), s.text.clone())).collect();
@@ -1610,7 +1922,7 @@ impl Review {
             if let Some(translation) = &translation {
                 segment.translated_text = (!translation.is_empty()).then(|| translation.clone());
             }
-            let merged = listenook_core::structure::merge_with_next(&mut trial, index);
+            let merged = structure::apply(&mut trial, Edit::MergeWithNext(index));
             if merged {
                 *document = trial;
             }
@@ -1642,40 +1954,6 @@ impl Review {
             true
         });
     }
-}
-
-struct Undoable {
-    generation: u64,
-    job_id: String,
-    before: Document,
-}
-
-thread_local! {
-    static LAST_CHANGE: std::cell::RefCell<(u64, Option<Undoable>)> = const { std::cell::RefCell::new((0, None)) };
-}
-
-fn keep_for_undo(job_id: String, before: Document) -> u64 {
-    LAST_CHANGE.with_borrow_mut(|(count, last)| {
-        *count += 1;
-        *last = Some(Undoable { generation: *count, job_id, before });
-        *count
-    })
-}
-
-fn undo_change(generation: Option<u64>) -> bool {
-    let taken = LAST_CHANGE.with_borrow_mut(|(_, last)| {
-        let matches = last.as_ref().is_some_and(|last| generation.is_none_or(|wanted| wanted == last.generation));
-        if matches { last.take() } else { None }
-    });
-    let Some(Undoable { job_id, before, .. }) = taken else {
-        return false;
-    };
-    store().update_document(&job_id, |document| {
-        document.segments = before.segments;
-        document.tokens = before.tokens;
-        document.speakers = before.speakers;
-    });
-    true
 }
 
 #[cfg(test)]

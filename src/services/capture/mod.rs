@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use listenook_core::capture::{self, Meter, Span, WavWriter};
+use listenook_core::media::capture::{self, Meter, Span, WavWriter};
 
 /// The longest recording: past it, recording stops by itself.
 pub(crate) const LONGEST_MS: u64 = 5 * 60 * 60 * 1000;

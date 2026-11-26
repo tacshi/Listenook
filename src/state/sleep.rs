@@ -12,16 +12,40 @@ pub(crate) struct SleepState {
     last_heard: Stored<Option<Instant>>,
 }
 
+/// What the players and the person tell the sleep timer.
+#[derive(Debug)]
+pub(crate) enum SleepAction {
+    Set(Sleep),
+    /// Pauses every player, as the timer does when it runs out: recording
+    /// what the computer plays starts.
+    PausePlayers,
+    /// A player reported progress while playing.
+    Heard,
+}
+
 impl SleepState {
-    pub(super) fn new() -> Self {
-        Self { timer: signal(Sleep::Off), stops: signal(0), last_heard: stored(None) }
+    /// Does `action`.
+    pub(crate) fn act(&self, action: SleepAction) {
+        match action {
+            SleepAction::Set(timer) => self.set(timer),
+            SleepAction::PausePlayers => self.pause_players(),
+            SleepAction::Heard => self.heard(),
+        }
+    }
+
+    pub(crate) fn install() {
+        super::install(Self { timer: signal(Sleep::Off), stops: signal(0), last_heard: stored(None) });
+    }
+
+    pub(crate) fn get() -> Self {
+        super::installed()
     }
 
     pub(crate) fn timer(&self) -> Sleep {
         self.timer.get()
     }
 
-    pub(crate) fn set(&self, timer: Sleep) {
+    fn set(&self, timer: Sleep) {
         self.last_heard.with(|last| *last = None);
         self.timer.set(timer);
     }
@@ -33,12 +57,12 @@ impl SleepState {
 
     /// Pauses every player, as the timer does when it runs out: recording
     /// what the computer plays starts.
-    pub(crate) fn pause_players(&self) {
+    fn pause_players(&self) {
         self.stops.update(|count| *count += 1);
     }
 
     /// A player reported progress while playing.
-    pub(crate) fn heard(&self) {
+    fn heard(&self) {
         let now = Instant::now();
         let since = self.last_heard.with(|last| last.replace(now)).map(|then| now.duration_since(then));
         if !self.timer.with_untracked(|timer| matches!(timer, Sleep::After { .. })) {

@@ -1,17 +1,15 @@
-use listenook_core::format::{bytes, date, minutes_since};
+use listenook_core::format::{self, minutes_since};
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
+use crate::ui::{error_text, l, tr};
+use crate::work::sync::{Phase, SyncState, counts};
 use crate::{
     services::sync::{Mate, Peer, is_tailscale},
-    state::{
-        error_text, l, store,
-        sync::{Phase, counts},
-        tr,
-    },
+    state::store,
     ui::{
-        Icon, Size, Variant, bound_field, button, confirm_destructive, error_hint, field, hint, icon, icon_button,
-        modal, progress_bar, separator, spinner, switch, text_field_with, tokens,
+        BoundField, ErrorHint, Icon, IconButton, Modal, Separator, Size, Spinner, Variant, button, confirm_destructive,
+        field, hint, icon, progress_bar, switch, text_field_with, tokens,
     },
 };
 
@@ -55,28 +53,27 @@ fn synced_words(at: Option<&str>) -> String {
         Some(0) => tr("Synced just now").to_string(),
         Some(minutes) if minutes < 60 => format!("{} {minutes} {}", tr("Last synced"), tr("min ago")),
         Some(minutes) if minutes < 24 * 60 => format!("{} {} {}", tr("Last synced"), minutes / 60, tr("h ago")),
-        _ => format!("{} {}", tr("Last synced"), date(at)),
+        _ => format!("{} {}", tr("Last synced"), format::shown(format::Shown::Date(at))),
     }
 }
 
 pub(crate) fn sync_dialog() -> impl IntoElement {
-    let store = store();
-    let sync = store.sync;
+    let sync = crate::work::sync::SyncState::get();
     let step = computed(move || step_of(&sync.phase()));
     let address = signal(String::new());
     let code = signal(String::new());
-    let enter = move || sync.enter(code.get_untracked());
+    let enter = move || sync.act(crate::work::sync::SyncAction::Enter(code.get_untracked()));
     effect(move || {
         let (pairing, wrong) = (step.get() == Step::Pairing, sync.wrong());
         if pairing || wrong {
             untracked(|| code.set(String::new()));
         }
     });
-    modal(
-        sync.open,
-        l("Sync with your devices"),
-        460.0,
-        move || {
+    Modal {
+        open: sync.dialog(),
+        title: l("Sync with your devices"),
+        width: 460.0,
+        content: move || {
             dynamic(move || {
                 let step = step.get();
                 untracked(|| match step {
@@ -88,17 +85,20 @@ pub(crate) fn sync_dialog() -> impl IntoElement {
             })
             .into_element()
         },
-        move || {
+        actions: move || {
             dynamic(move || {
                 let step = step.get();
                 untracked(|| match step {
                     Step::Choosing => button(Variant::Default, Size::Md, l("Close"))
-                        .on_press(move || sync.open.set(false))
+                        .on_press(move || sync.act(crate::work::sync::SyncAction::Hide))
                         .into_element(),
                     Step::Pairing => view()
                         .flex_row()
                         .gap_2()
-                        .child(button(Variant::Outline, Size::Md, l("Cancel")).on_press(move || sync.cancel()))
+                        .child(
+                            button(Variant::Outline, Size::Md, l("Cancel"))
+                                .on_press(move || sync.act(crate::work::sync::SyncAction::Cancel)),
+                        )
                         .child(
                             button(Variant::Primary, Size::Md, l("Pair"))
                                 .busy(move || sync.checking())
@@ -109,9 +109,9 @@ pub(crate) fn sync_dialog() -> impl IntoElement {
                                 .on_press(enter),
                         )
                         .into_element(),
-                    Step::Asking | Step::Running => {
-                        button(Variant::Outline, Size::Md, l("Cancel")).on_press(move || sync.cancel()).into_element()
-                    }
+                    Step::Asking | Step::Running => button(Variant::Outline, Size::Md, l("Cancel"))
+                        .on_press(move || sync.act(crate::work::sync::SyncAction::Cancel))
+                        .into_element(),
                     Step::Done => view()
                         .flex_row()
                         .gap_2()
@@ -119,22 +119,31 @@ pub(crate) fn sync_dialog() -> impl IntoElement {
                             move || matches!(sync.phase(), Phase::Done(_, summary) if summary.left > 0),
                             move || {
                                 button(Variant::Outline, Size::Md, l("Copy them now"))
-                                    .on_press(move || sync.copy_left())
+                                    .on_press(move || sync.act(crate::work::sync::SyncAction::CopyLeft))
                             },
                         ))
-                        .child(button(Variant::Primary, Size::Md, l("Done")).on_press(move || sync.open.set(false)))
+                        .child(
+                            button(Variant::Primary, Size::Md, l("Done"))
+                                .on_press(move || sync.act(crate::work::sync::SyncAction::Hide)),
+                        )
                         .into_element(),
                     Step::Failed => view()
                         .flex_row()
                         .gap_2()
-                        .child(button(Variant::Outline, Size::Md, l("Close")).on_press(move || sync.open.set(false)))
-                        .child(button(Variant::Primary, Size::Md, l("Try again")).on_press(move || sync.again()))
+                        .child(
+                            button(Variant::Outline, Size::Md, l("Close"))
+                                .on_press(move || sync.act(crate::work::sync::SyncAction::Hide)),
+                        )
+                        .child(
+                            button(Variant::Primary, Size::Md, l("Try again"))
+                                .on_press(move || sync.act(crate::work::sync::SyncAction::Again)),
+                        )
                         .into_element(),
                 })
             })
             .into_element()
         },
-    )
+    }
 }
 
 fn heading(label: &'static str) -> impl IntoElement {
@@ -147,8 +156,8 @@ fn heading(label: &'static str) -> impl IntoElement {
 
 fn choosing(address: Signal<String>) -> impl IntoElement {
     let store = store();
-    let sync = store.sync;
-    let connect = move || sync.connect(address.get_untracked());
+    let sync = crate::work::sync::SyncState::get();
+    let connect = move || sync.act(crate::work::sync::SyncAction::Connect(address.get_untracked()));
     let paired = move || !sync.mates().is_empty();
     view()
         .gap_4()
@@ -158,21 +167,13 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
         .child(
             view()
                 .gap_3()
-                .child(switch(
-                    l("Visible to devices on this network and on Tailscale"),
-                    move || store.sync_visible(),
-                    move |on| store.set_sync_visible(on),
-                ))
+                .child(switch(l("Visible to devices on this network and on Tailscale"), move || store.sync_visible(), move |on| SyncState::get().act(crate::work::sync::SyncAction::SetVisible(on))))
                 .child(when(
                     move || store.sync_visible(),
                     move || {
                         field(
                             l("This device’s name"),
-                            bound_field(
-                                move || store.device_name(),
-                                move |name| store.set_device_name(&name),
-                                SharedString::default,
-                            ),
+                            BoundField { value: move || store.device_name(), set: move |name: String| SyncState::get().act(crate::work::sync::SyncAction::SetDeviceName(&name)), placeholder: SharedString::default },
                         )
                     },
                 )),
@@ -180,7 +181,7 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
         .child(when(paired, move || {
             view()
                 .gap_2()
-                .child(separator())
+                .child(Separator)
                 .child(
                     view()
                         .flex_row()
@@ -191,12 +192,12 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
                             button(Variant::Default, Size::Sm, l("Sync now"))
                                 .busy(move || sync.rounding())
                                 .disabled(move || sync.rounding() || !store.sync_visible())
-                                .on_press(move || sync.sync_now()),
+                                .on_press(move || sync.act(crate::work::sync::SyncAction::SyncNow)),
                         ),
                 )
                 .child(view().gap_1().child(each(move || sync.mates(), |mate| mate.id.clone(), move |mate, _| mate_row(mate))))
         }))
-        .child(separator())
+        .child(Separator)
         .child(
             view()
                 .gap_2()
@@ -210,7 +211,7 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
                                 if paired() { heading("Add a device") } else { heading("Nearby devices") }.into_element()
                             }),
                         )
-                        .child(icon_button(Icon::Refresh, tr("Look again"), Size::Sm, move || sync.search())),
+                        .child(IconButton { glyph: Icon::Refresh, name: tr("Look again"), size: Size::Sm, on_press: move || sync.act(crate::work::sync::SyncAction::Search) }),
                 )
                 .child(
                     when(
@@ -221,7 +222,7 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
                                 .items_center()
                                 .gap_3()
                                 .py_2()
-                                .child(spinner(14.0))
+                                .child(Spinner { size: 14.0 })
                                 .child(hint(l("Looking… Open Sync in Listenook on the other device too.")).flex_1())
                         },
                     )
@@ -255,7 +256,7 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
 }
 
 pub(crate) fn mate_row(mate: ReadSignal<Mate>) -> impl IntoElement {
-    let sync = store().sync;
+    let sync = crate::work::sync::SyncState::get();
     let entrance = motion().entering(MotionPreset::FadeInUp);
     let remove = move || {
         let (id, name) = mate.with_untracked(|mate| (mate.id.clone(), mate.name.clone()));
@@ -264,7 +265,7 @@ pub(crate) fn mate_row(mate: ReadSignal<Mate>) -> impl IntoElement {
             tr("It stops syncing with your devices. Pair it again to bring it back."),
             tr("Cancel"),
             tr("Unpair"),
-            move || sync.remove(&id),
+            move || sync.act(crate::work::sync::SyncAction::Remove(&id)),
         );
     };
     view()
@@ -306,7 +307,7 @@ pub(crate) fn mate_row(mate: ReadSignal<Mate>) -> impl IntoElement {
 }
 
 fn device_row(peer: ReadSignal<Peer>) -> impl IntoElement {
-    let sync = store().sync;
+    let sync = crate::work::sync::SyncState::get();
     let entrance = motion().entering(MotionPreset::FadeInUp);
     view()
         .bind_motion(&entrance)
@@ -338,11 +339,14 @@ fn device_row(peer: ReadSignal<Peer>) -> impl IntoElement {
                     .number_of_lines(1),
                 ),
         )
-        .child(button(Variant::Primary, Size::Sm, l("Pair")).on_press(move || sync.start(peer.get_untracked())))
+        .child(
+            button(Variant::Primary, Size::Sm, l("Pair"))
+                .on_press(move || sync.act(crate::work::sync::SyncAction::Start(peer.get_untracked()))),
+        )
 }
 
 fn pairing(code: Signal<String>, enter: impl Fn() + Copy + 'static) -> impl IntoElement {
-    let sync = store().sync;
+    let sync = crate::work::sync::SyncState::get();
     let name = move || match sync.phase() {
         Phase::Pairing(peer) => peer.device.name,
         _ => String::new(),
@@ -365,7 +369,7 @@ fn pairing(code: Signal<String>, enter: impl Fn() + Copy + 'static) -> impl Into
         .child(
             when(
                 move || sync.wrong(),
-                || error_hint(l("That code is not right. Check it on the other device and try again.")),
+                || ErrorHint { label: l("That code is not right. Check it on the other device and try again.") },
             )
             .otherwise(|| {
                 hint(l(
@@ -376,7 +380,7 @@ fn pairing(code: Signal<String>, enter: impl Fn() + Copy + 'static) -> impl Into
 }
 
 fn running() -> impl IntoElement {
-    let sync = store().sync;
+    let sync = crate::work::sync::SyncState::get();
     let name = move || match sync.phase() {
         Phase::Asking(peer) | Phase::Running(peer) => peer.device.name,
         Phase::Serving(name) => name,
@@ -417,18 +421,22 @@ fn running() -> impl IntoElement {
                 return tr("Connection lost. Reconnecting…");
             }
             if copied.items_total == 0 && copied.bytes_total == 0 {
-                return SharedString::from(bytes(copied.bytes as i64));
+                return SharedString::from(format::shown(format::Shown::Size(copied.bytes as i64)));
             }
             let mut line = format!("{} / {} {}", copied.items, copied.items_total, tr("recordings"));
             if copied.bytes_total > 0 {
-                line.push_str(&format!(" · {} / {}", bytes(copied.bytes as i64), bytes(copied.bytes_total as i64)));
+                line.push_str(&format!(
+                    " · {} / {}",
+                    format::shown(format::Shown::Size(copied.bytes as i64)),
+                    format::shown(format::Shown::Size(copied.bytes_total as i64))
+                ));
             }
             line.into()
         }))
 }
 
 fn ended() -> impl IntoElement {
-    let sync = store().sync;
+    let sync = crate::work::sync::SyncState::get();
     let failed = move || matches!(sync.phase(), Phase::Failed(_));
     let entrance = motion().entering(MotionPreset::FadeInUp);
     view()
@@ -439,7 +447,7 @@ fn ended() -> impl IntoElement {
         .child(
             view()
                 .pt(px(2.0))
-                .text_color(move || if failed() { theme().destructive } else { tokens::success() })
+                .text_color(move || if failed() { theme().destructive } else { tokens::ink(tokens::Ink::Success) })
                 .child(when(failed, || icon(Icon::Alert, 16.0)).otherwise(|| icon(Icon::Check, 16.0))),
         )
         .child(
@@ -477,7 +485,7 @@ fn sentence(text: &str) -> String {
 }
 
 pub(crate) fn sync_code_dialog() -> impl IntoElement {
-    let sync = store().sync;
+    let sync = crate::work::sync::SyncState::get();
     let open = signal(false);
     effect(move || {
         let shown = sync.code().is_some();
@@ -485,14 +493,14 @@ pub(crate) fn sync_code_dialog() -> impl IntoElement {
     });
     effect(move || {
         if !open.get() && untracked(|| sync.code().is_some()) {
-            sync.dismiss_code();
+            sync.act(crate::work::sync::SyncAction::DismissCode);
         }
     });
-    modal(
+    Modal {
         open,
-        l("Pair a device"),
-        420.0,
-        move || {
+        title: l("Pair a device"),
+        width: 420.0,
+        content: move || {
             let (name, code) = sync.code().map(|code| (code.device.name, code.code)).unwrap_or_default();
             let shown = format!("{} {}", code.get(..3).unwrap_or(""), code.get(3..).unwrap_or(""));
             view()
@@ -519,6 +527,10 @@ pub(crate) fn sync_code_dialog() -> impl IntoElement {
                 )))
                 .into_element()
         },
-        move || button(Variant::Outline, Size::Md, l("Cancel")).on_press(move || sync.dismiss_code()).into_element(),
-    )
+        actions: move || {
+            button(Variant::Outline, Size::Md, l("Cancel"))
+                .on_press(move || sync.act(crate::work::sync::SyncAction::DismissCode))
+                .into_element()
+        },
+    }
 }

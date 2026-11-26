@@ -526,7 +526,7 @@ mod tests {
     #[ignore]
     fn records_what_plays() {
         let tone = std::env::temp_dir().join(format!("listenook-tone-{}.wav", std::process::id()));
-        let mut wav = listenook_core::capture::WavWriter::create(&tone, 44_100, 2).unwrap();
+        let mut wav = listenook_core::media::capture::WavWriter::create(&tone, 44_100, 2).unwrap();
         let samples: Vec<i16> = (0..44_100 * 2)
             .flat_map(|frame| {
                 let sample = ((frame as f32 * 1000.0 / 44_100.0 * std::f32::consts::TAU).sin() * 6000.0) as i16;

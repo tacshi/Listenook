@@ -1,25 +1,36 @@
+//! What the app holds while it runs: the library and its settings in the [`Store`], and the
+//! states of the features beside it, each made once as the app starts ([`install`]) and
+//! reached from anywhere after ([`installed`]).
+
 pub(crate) mod activity;
-pub(crate) mod capture;
 pub(crate) mod monitor;
-pub(crate) mod persist;
 pub(crate) mod podcast;
-pub(crate) mod secrets;
 pub(crate) mod sleep;
 mod store;
-pub(crate) mod sync;
 
-use listenook_core::l10n;
 use nsh_core::prelude::*;
-pub(crate) use store::{AiSetup, Filter, Place, SettingsTab, Shelf, Store, store};
+pub(crate) use store::{Action, AiSetup, Filter, Place, SettingsTab, Shelf, Store, store};
 
-pub(crate) fn l(text: &'static str) -> impl Fn() -> SharedString + Copy + 'static {
-    move || SharedString::from(l10n::tr(store().lang(), text))
+struct Installed<T>(Option<T>);
+
+impl<T> Default for Installed<T> {
+    fn default() -> Self {
+        Self(None)
+    }
 }
 
-pub(crate) fn tr(text: &'static str) -> SharedString {
-    SharedString::from(l10n::tr(store().lang(), text))
+impl<T: Copy> Clone for Installed<T> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
 }
 
-pub(crate) fn error_text(code: &str) -> SharedString {
-    l10n::error_message(store().lang(), code).into()
+/// Keeps `state` for the rest of the app's run.
+pub(crate) fn install<T: Copy + 'static>(state: T) {
+    global::<Installed<T>>().set(Installed(Some(state)));
+}
+
+/// The state of this kind made as the app started.
+pub(crate) fn installed<T: Copy + 'static>() -> T {
+    global::<Installed<T>>().get_untracked().0.expect("the root component installs the app's state")
 }

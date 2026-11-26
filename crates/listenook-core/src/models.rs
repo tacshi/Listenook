@@ -746,7 +746,7 @@ pub struct Job {
     pub metadata: Option<MediaMetadata>,
     pub options: TranscriptionOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub document: Option<Document>,
+    pub document: Option<std::sync::Arc<Document>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -856,12 +856,29 @@ impl Job {
             || self.ad_scan.status == AiGenerationStatus::Generating
     }
 
-    pub fn has_transcript(&self) -> bool {
-        self.document.as_ref().is_some_and(|d| !d.segments.is_empty())
+    /// Moves a recording from another device onto this device's groups and tags (`map` says
+    /// what each of theirs is called here), and out of any that were deleted.
+    pub fn refile(&mut self, map: &std::collections::HashMap<String, String>, catalog: &LibraryCatalog) {
+        if let Some(group) = &mut self.group_id
+            && let Some(here) = map.get(group)
+        {
+            *group = here.clone();
+        }
+        if self.group_id.as_ref().is_some_and(|group| catalog.is_removed(group)) {
+            self.group_id = None;
+        }
+        for tag in &mut self.tag_ids {
+            if let Some(here) = map.get(tag) {
+                *tag = here.clone();
+            }
+        }
+        self.tag_ids.retain(|tag| !catalog.is_removed(tag));
+        self.tag_ids.sort();
+        self.tag_ids.dedup();
     }
 
-    pub fn touch(&mut self) {
-        self.updated_at = now_iso();
+    pub fn has_transcript(&self) -> bool {
+        self.document.as_ref().is_some_and(|d| !d.segments.is_empty())
     }
 }
 
@@ -890,12 +907,90 @@ impl Default for LibraryCatalog {
     }
 }
 
+/// The two kinds of label a library files recordings by: one group each, and any number of tags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Label {
+    Group,
+    Tag,
+}
+
 impl LibraryCatalog {
+    fn list_mut(&mut self, label: Label) -> &mut Vec<Named> {
+        match label {
+            Label::Group => &mut self.groups,
+            Label::Tag => &mut self.tags,
+        }
+    }
+
+    /// The groups or the tags, in the order they were made.
+    pub fn named(&self, label: Label) -> Vec<Named> {
+        match label {
+            Label::Group => self.groups.clone(),
+            Label::Tag => self.tags.clone(),
+        }
+    }
+
+    /// The id of the group or tag called `name`.
+    pub fn find(&self, label: Label, name: &str) -> Option<String> {
+        let list = if label == Label::Group { &self.groups } else { &self.tags };
+        list.iter().find(|named| named.name == name).map(|named| named.id.clone())
+    }
+
+    pub fn add(&mut self, label: Label, id: String, name: &str) {
+        self.list_mut(label).push(Named { id, name: name.to_owned() });
+    }
+
+    /// Renames the group or tag `id`.
+    pub fn rename(&mut self, id: &str, name: &str) {
+        for named in self.groups.iter_mut().chain(self.tags.iter_mut()).filter(|named| named.id == id) {
+            named.name = name.to_owned();
+        }
+    }
+
     /// Deletes a group or tag here and remembers it so sync deletes it on the other devices.
     pub fn remove(&mut self, id: &str) {
         self.groups.retain(|group| group.id != id);
         self.tags.retain(|tag| tag.id != id);
         self.removed.entry(id.to_owned()).or_insert_with(now_iso);
+    }
+
+    /// Whether the group or tag `id` was deleted, here or on a paired device.
+    pub fn is_removed(&self, id: &str) -> bool {
+        self.removed.contains_key(id)
+    }
+
+    /// Takes in another device's groups and tags: those deleted on either side go, and one
+    /// that has a name here already is that one. What each of theirs is called here, by id,
+    /// where the ids differ.
+    pub fn merge(&mut self, remote: &LibraryCatalog) -> std::collections::HashMap<String, String> {
+        fn merge(
+            local: &mut Vec<Named>,
+            remote: &[Named],
+            removed: &BTreeMap<String, String>,
+            map: &mut std::collections::HashMap<String, String>,
+        ) {
+            local.retain(|named| !removed.contains_key(&named.id));
+            for other in remote {
+                if other.id.is_empty()
+                    || removed.contains_key(&other.id)
+                    || local.iter().any(|named| named.id == other.id)
+                {
+                    continue;
+                }
+                match local.iter().find(|named| named.name == other.name) {
+                    Some(same) => drop(map.insert(other.id.clone(), same.id.clone())),
+                    None => local.push(other.clone()),
+                }
+            }
+        }
+        for (id, at) in &remote.removed {
+            self.removed.entry(id.clone()).or_insert_with(|| at.clone());
+        }
+        let removed = self.removed.clone();
+        let mut map = std::collections::HashMap::new();
+        merge(&mut self.groups, &remote.groups, &removed, &mut map);
+        merge(&mut self.tags, &remote.tags, &removed, &mut map);
+        map
     }
 }
 
@@ -980,16 +1075,29 @@ pub struct BriefAnchor {
 
 pub const DAILY_GOAL_MINUTES: u32 = 20;
 
+/// Whether a recording is hidden from a Home shelf, and when that was chosen: sync keeps the later choice.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Mark {
+    pub hidden: bool,
+    pub at: String,
+}
+
+/// The person's choices, as `settings.json` keeps them: values out of range are read as the
+/// defaults, so what is read can be used as it is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(deserialize_with = "this_version")]
     pub manifest_version: u32,
     pub theme_mode: ThemeMode,
     pub locale_mode: LocaleMode,
     pub show_speakers: bool,
     pub show_timestamps: bool,
     pub blind_listening_enabled: bool,
+    #[serde(deserialize_with = "rep_goal")]
     pub mimic_rep_goal: u32,
+    #[serde(deserialize_with = "pause_seconds")]
     pub mimic_pause_seconds: u32,
     pub export_options: ExportOptions,
     pub llm_provider_settings: LlmProviderSettings,
@@ -1005,11 +1113,12 @@ pub struct Settings {
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub recent_hidden: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub shelf_marks: BTreeMap<String, crate::sync::Mark>,
+    pub shelf_marks: BTreeMap<String, Mark>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub brief_anchors: BTreeMap<String, BriefAnchor>,
     #[serde(default = "truthy")]
     pub auto_align_transcripts: bool,
+    #[serde(deserialize_with = "goal_minutes")]
     pub daily_goal_minutes: u32,
     /// When the goal was last chosen here or on another device; empty for
     /// one never chosen since this was kept. Sync keeps the later choice.
@@ -1049,20 +1158,27 @@ impl Default for Settings {
     }
 }
 
-impl Settings {
-    pub fn sanitized(mut self) -> Self {
-        if self.mimic_rep_goal == 0 {
-            self.mimic_rep_goal = 3;
-        }
-        if self.mimic_pause_seconds > 10 {
-            self.mimic_pause_seconds = 0;
-        }
-        if !(1..=240).contains(&self.daily_goal_minutes) {
-            self.daily_goal_minutes = DAILY_GOAL_MINUTES;
-        }
-        self.manifest_version = MANIFEST_VERSION;
-        self
-    }
+/// The version this app writes, whatever the file says: it is saved as this version next.
+fn this_version<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(MANIFEST_VERSION)
+}
+
+/// How many times to repeat after a sentence: at least once, three times when none is set.
+fn rep_goal<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    Ok(Some(u32::deserialize(deserializer)?).filter(|goal| *goal > 0).unwrap_or(3))
+}
+
+/// The pause after a sentence to repeat it in: ten seconds at most, none past that.
+fn pause_seconds<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    Ok(Some(u32::deserialize(deserializer)?).filter(|seconds| *seconds <= 10).unwrap_or(0))
+}
+
+/// The daily goal: one minute to four hours, the default goal past that.
+fn goal_minutes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    Ok(Some(u32::deserialize(deserializer)?)
+        .filter(|minutes| (1..=240).contains(minutes))
+        .unwrap_or(DAILY_GOAL_MINUTES))
 }
 
 pub const TRANSLATION_LANGUAGES: &[(&str, &str)] = &[
@@ -1294,5 +1410,21 @@ mod tests {
         settings.model = "m".into();
         assert_eq!(settings.validate(), None);
         assert!(settings.is_loopback());
+    }
+
+    #[test]
+    fn settings_out_of_range_are_read_as_the_defaults() {
+        let read: Settings = serde_json::from_str(
+            r#"{"manifest_version": 2, "mimic_rep_goal": 0, "mimic_pause_seconds": 30, "daily_goal_minutes": 999}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (read.manifest_version, read.mimic_rep_goal, read.mimic_pause_seconds, read.daily_goal_minutes),
+            (MANIFEST_VERSION, 3, 0, DAILY_GOAL_MINUTES)
+        );
+        let kept: Settings =
+            serde_json::from_str(r#"{"mimic_rep_goal": 5, "mimic_pause_seconds": 4, "daily_goal_minutes": 45}"#)
+                .unwrap();
+        assert_eq!((kept.mimic_rep_goal, kept.mimic_pause_seconds, kept.daily_goal_minutes), (5, 4, 45));
     }
 }

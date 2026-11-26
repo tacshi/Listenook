@@ -4,7 +4,7 @@ mod services;
 mod shell;
 mod state;
 mod ui;
-mod util;
+mod work;
 
 use nsh_base::theme;
 use nsh_core::{
@@ -25,7 +25,7 @@ pub mod testing {
         time::Duration,
     };
 
-    use crate::services::secure::Identity;
+    use crate::services::sync::secure::Identity;
 
     /// The fingerprint of the certificate of the device whose key is kept in `library`; the
     /// key is made there the first time.
@@ -54,6 +54,7 @@ fn native(registry: &mut Registry) {
 #[component]
 pub fn App() -> impl IntoElement {
     let store = state::Store::install();
+    work::install(store);
     effect(move || set_color_scheme(if store.immersive() { Appearance::Dark } else { store.appearance() }));
     // The app's own window: nsh's launch window is an invisible host that never shows. Closing
     // it quits, as closing the launch window did; with the tray icon on, Close hides it instead
@@ -69,7 +70,7 @@ fn content(store: state::Store) -> impl IntoElement {
         .style_when(move || !shell::stack_reaches_top() && !store.immersive(), |s| s.pt_safe_area())
         .style_when(move || !store.immersive(), |s| s.px_safe_area())
         .style_when(move || !shell::tab_bar_shown() && !store.immersive(), |s| s.pb_safe_area())
-        .bg(move || if store.immersive() { ui::tokens::stage() } else { theme().background })
+        .bg(move || if store.immersive() { ui::tokens::ink(ui::tokens::Ink::Stage) } else { theme().background })
         .text_color(move || theme().foreground)
         .child(shell::shell())
         .child(
@@ -80,6 +81,6 @@ fn content(store: state::Store) -> impl IntoElement {
                 .bottom(px(64.0))
                 .items_center()
                 .pointer_events(nsh_core::PointerEvents::BoxNone)
-                .child(ui::toast_host()),
+                .child(ui::ToastHost),
         )
 }

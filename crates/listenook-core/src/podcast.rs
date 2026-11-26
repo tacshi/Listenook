@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    media::subtitles,
     models::{Document, PodcastTranscriptReference, Segment, now_iso},
-    subtitles,
 };
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -117,6 +117,119 @@ impl Feed {
 }
 
 impl Catalog {
+    pub fn is_followed(&self, feed_url: &str) -> bool {
+        self.followed.iter().any(|followed| followed.feed_url == feed_url)
+    }
+
+    /// The feed at `feed_url`, as it was loaded last.
+    pub fn feed(&self, feed_url: &str) -> Option<Feed> {
+        self.feeds.iter().find(|feed| feed.feed_url == feed_url).cloned()
+    }
+
+    /// The feed the episode `episode_id` is in.
+    pub fn feed_of(&self, episode_id: &str) -> Option<&Feed> {
+        self.feeds.iter().find(|feed| feed.episodes.iter().any(|episode| episode.id == episode_id))
+    }
+
+    /// The feeds followed that were never loaded here, as when another device followed them.
+    pub fn never_loaded(&self) -> Vec<String> {
+        self.followed
+            .iter()
+            .filter(|followed| {
+                !self.feeds.iter().any(|feed| feed.feed_url == followed.feed_url && feed.fetched_at.is_some())
+            })
+            .map(|followed| followed.feed_url.clone())
+            .collect()
+    }
+
+    /// Follows `feed` at `now`, or stops following it.
+    pub fn set_followed(&mut self, feed: &Feed, followed: bool, now: &str) {
+        self.followed.retain(|known| known.feed_url != feed.feed_url);
+        if !followed {
+            self.unfollowed.insert(feed.feed_url.clone(), now.to_owned());
+            return;
+        }
+        self.unfollowed.remove(&feed.feed_url);
+        self.followed.insert(
+            0,
+            Followed {
+                extra: Default::default(),
+                feed_url: feed.feed_url.clone(),
+                title: feed.title.clone(),
+                followed_at: now.to_owned(),
+                author: feed.author.clone(),
+                artwork_url: feed.artwork_url.clone(),
+                last_seen_episode_ids: feed.episodes.iter().map(|episode| episode.id.clone()).collect(),
+                unseen_episode_count: 0,
+            },
+        );
+        self.drop_duplicate_follows(now);
+    }
+
+    /// Each feed with only the episodes `heard`, for another device to show them.
+    pub fn played(&self, heard: &[ListenProgress]) -> Vec<Feed> {
+        self.feeds
+            .iter()
+            .filter_map(|feed| {
+                let episodes: Vec<_> = feed
+                    .episodes
+                    .iter()
+                    .filter(|episode| heard.iter().any(|entry| entry.episode_id == episode.id))
+                    .cloned()
+                    .collect();
+                (!episodes.is_empty()).then(|| Feed { episodes, ..feed.clone() })
+            })
+            .collect()
+    }
+
+    /// Takes in what another device follows and stopped following: the later choice of each
+    /// show stands, `later` telling which of two times is the later.
+    pub fn merge_follows(
+        &mut self,
+        followed: &[Followed],
+        unfollowed: &std::collections::BTreeMap<String, String>,
+        later: impl Fn(&str, &str) -> bool,
+    ) {
+        for (url, at) in unfollowed {
+            if self.unfollowed.get(url).is_none_or(|mine| later(at, mine)) {
+                self.unfollowed.insert(url.clone(), at.clone());
+            }
+        }
+        for other in followed {
+            match self.followed.iter_mut().find(|mine| mine.feed_url == other.feed_url) {
+                Some(mine) if later(&other.followed_at, &mine.followed_at) => *mine = other.clone(),
+                Some(_) => {}
+                None => self.followed.push(other.clone()),
+            }
+        }
+        let unfollowed = self.unfollowed.clone();
+        self.followed
+            .retain(|followed| unfollowed.get(&followed.feed_url).is_none_or(|at| later(&followed.followed_at, at)));
+        self.drop_duplicate_follows(&crate::models::now_iso());
+    }
+
+    /// Orders what is followed by when, the latest first, `millis` reading each time.
+    pub fn sort_follows(&mut self, millis: impl Fn(&str) -> i64) {
+        self.followed.sort_by_key(|followed| std::cmp::Reverse(millis(&followed.followed_at)));
+    }
+
+    /// Takes in the episodes another device played, adding the feeds it played them from.
+    pub fn take_played(&mut self, played: &[Feed]) {
+        for feed in played {
+            match self.feeds.iter_mut().find(|mine| mine.feed_url == feed.feed_url) {
+                Some(mine) => {
+                    for episode in &feed.episodes {
+                        if !mine.episodes.iter().any(|known| known.id == episode.id) {
+                            mine.episodes.push(episode.clone());
+                        }
+                    }
+                    mine.episodes.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+                }
+                None => self.feeds.push(Feed { fetched_at: None, ..feed.clone() }),
+            }
+        }
+    }
+
     pub fn trimmed(&self, heard: &[ListenProgress]) -> Catalog {
         let mut trimmed = self.clone();
         for feed in &mut trimmed.feeds {
