@@ -1,6 +1,9 @@
 //! On macOS, mpv draws with OpenGL into a `CAOpenGLLayer`, as IINA does: each frame is drawn at
 //! the layer's size of the moment, so the picture follows the view as it resizes, and is
 //! clipped, rounded and covered like anything else nsh shows.
+//!
+//! A video's own window (`holdWindow`) opens see-through and shows once the layer has drawn the
+//! video at its shape ([`Hold`]).
 
 // Apple deprecated OpenGL but still ships it; mpv's render API has no Metal backend.
 #![allow(deprecated)]
@@ -14,11 +17,14 @@ use std::{
     },
 };
 
+use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 use nsh_platform_macos::{ComponentContext, NativeComponent};
 use objc2::{
-    AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::Bool,
+    AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
+    rc::{Retained, Weak},
+    runtime::Bool,
 };
-use objc2_app_kit::{NSResponder, NSView};
+use objc2_app_kit::{NSResponder, NSView, NSWindow};
 use objc2_core_video::CVTimeStamp;
 use objc2_foundation::{NSObject, NSPoint, NSSize};
 use objc2_open_gl::{CGLContextObj, CGLPixelFormatObj};
@@ -26,6 +32,7 @@ use objc2_quartz_core::{CALayer, CAOpenGLLayer, CATransaction};
 use serde_json::Value as JsonValue;
 
 use crate::{
+    hold::{HOLD_MAX, Hold},
     player::{Emit, Player, Screen},
     render::{Api, Render},
 };
@@ -121,11 +128,26 @@ impl Drop for Gl {
     }
 }
 
+/// A held window, which [`show`] shows again from any thread.
+type Held = MainThreadBound<Weak<NSWindow>>;
+
+/// Shows held `window` again, from any thread.
+fn show(window: Held) {
+    DispatchQueue::main().exec_async(move || {
+        let mtm = MainThreadMarker::new().expect("the main queue runs on the main thread");
+        if let Some(window) = window.into_inner(mtm).load() {
+            window.setAlphaValue(1.0);
+        }
+    });
+}
+
 struct LayerState {
     gl: Gl,
     render: Mutex<Option<Render>>,
     /// mpv has a new frame, or the layer changed size: draw at the next display.
     dirty: Arc<AtomicBool>,
+    /// The window held until this layer draws the video at its shape.
+    hold: Arc<Hold<Held>>,
 }
 
 impl LayerState {
@@ -171,8 +193,8 @@ define_class!(
         #[unsafe(method(drawInCGLContext:pixelFormat:forLayerTime:displayTime:))]
         fn draw(&self, context: CGLContextObj, format: CGLPixelFormatObj, time: f64, display: *const CVTimeStamp) {
             let state = self.ivars();
+            let (mut viewport, mut fbo) = ([0_i32; 4], 0_i32);
             if let Some(render) = state.render().as_ref() {
-                let (mut viewport, mut fbo) = ([0_i32; 4], 0_i32);
                 // SAFETY: CoreAnimation made `context` current, with the viewport at the size of
                 // the drawable; each call writes what it is given.
                 unsafe {
@@ -187,6 +209,10 @@ define_class!(
             };
             if let Some(render) = state.render().as_ref() {
                 render.shown();
+                let size = (f64::from(viewport[2]), f64::from(viewport[3]));
+                if let Some(window) = state.hold.drawn(size, render.pictured()) {
+                    show(window);
+                }
             }
         }
     }
@@ -194,7 +220,8 @@ define_class!(
 
 impl MpvLayer {
     fn new(gl: Gl) -> Retained<Self> {
-        let state = LayerState { gl, render: Mutex::new(None), dirty: Arc::new(AtomicBool::new(true)) };
+        let state =
+            LayerState { gl, render: Mutex::new(None), dirty: Arc::new(AtomicBool::new(true)), hold: Arc::default() };
         let this = Self::alloc().set_ivars(state);
         // SAFETY: CALayer's designated initializer.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -255,6 +282,7 @@ define_class!(
             // SAFETY: NSView's own implementation.
             let _: () = unsafe { msg_send![super(self), viewDidMoveToWindow] };
             self.fit();
+            self.catch_window();
         }
 
         #[unsafe(method(viewDidChangeBackingProperties))]
@@ -291,9 +319,47 @@ impl MpvView {
         layer.ivars().dirty.store(true, Ordering::Release);
     }
 
+    /// Keeps its window out of sight while it opens, until the video shows in it at its shape.
+    fn hold_window(&self) {
+        let Some(layer) = self.ivars() else { return };
+        let hold = &layer.ivars().hold;
+        hold.want();
+        self.catch_window();
+        let hold = hold.clone();
+        let later = DispatchTime::try_from(HOLD_MAX).unwrap_or(DispatchTime::NOW);
+        let _ = DispatchQueue::main().after(later, move || {
+            if let Some(window) = hold.release() {
+                show(window);
+            }
+        });
+    }
+
+    /// Makes the window it is in see-through while it is held (and shows again one it left):
+    /// shown when the layer has drawn the video at its shape, or after a moment.
+    fn catch_window(&self) {
+        let (Some(layer), Some(window)) = (self.ivars(), self.window()) else { return };
+        let id = Retained::as_ptr(&window) as usize;
+        let caught = layer.ivars().hold.catch(id, || MainThreadBound::new(Weak::from_retained(&window), self.mtm()));
+        let Some(left) = caught else { return };
+        window.setAlphaValue(0.0);
+        if let Some(left) = left {
+            show(left);
+        }
+    }
+
+    /// Shows its window if it is held still.
+    fn release_window(&self) {
+        if let Some(window) = self.ivars().as_ref().and_then(|layer| layer.ivars().hold.release()) {
+            show(window);
+        }
+    }
+
     /// Keeps its window's content at the shape of `size` (width, height) as it is resized;
     /// `None` lets it take any shape again.
     fn keep_window_shape(&self, size: Option<(f64, f64)>) {
+        if let Some(layer) = self.ivars() {
+            layer.ivars().hold.shape(size);
+        }
         let Some(window) = self.window() else { return };
         match size {
             Some((width, height)) if width > 0.0 && height > 0.0 => {
@@ -346,6 +412,12 @@ impl NativeComponent for Video {
             self.view.keep_window_shape(size);
             return;
         }
+        if name == "holdWindow" {
+            if value.and_then(JsonValue::as_bool) == Some(true) {
+                self.view.hold_window();
+            }
+            return;
+        }
         self.player.set_prop(name, value);
     }
 
@@ -357,6 +429,7 @@ impl NativeComponent for Video {
 impl Drop for Video {
     /// mpv stops drawing before the player stops it.
     fn drop(&mut self) {
+        self.view.release_window();
         if let Some(layer) = self.view.ivars() {
             layer.detach();
         }

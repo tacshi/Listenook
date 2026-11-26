@@ -9,6 +9,26 @@ use std::{
 
 use crate::mpv::{Mpv, c, checked};
 
+/// Whether a frame of the file playing was shown yet: the player starts over with each file,
+/// and its [`Render`] notes the first frame of the video it shows.
+#[derive(Default)]
+pub(crate) struct Picture(std::sync::atomic::AtomicBool);
+
+impl Picture {
+    fn shown(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    fn show(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// A new file plays: none of its frames was shown.
+    pub(crate) fn start_over(&self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
 #[repr(C)]
 struct RenderParam {
     kind: c_int,
@@ -74,7 +94,7 @@ pub(crate) struct Render {
     context: NonNull<c_void>,
     _mpv: std::sync::Arc<Mpv>,
     _on_frame: Box<OnFrame>,
-    picture: std::sync::Arc<crate::player::Picture>,
+    picture: std::sync::Arc<Picture>,
     /// What is being drawn is a frame of the video, not the black of no video yet.
     drawing_video: std::sync::atomic::AtomicBool,
 }
@@ -119,7 +139,7 @@ impl Render {
         mpv: &std::sync::Arc<Mpv>,
         api: Api,
         on_frame: OnFrame,
-        picture: std::sync::Arc<crate::player::Picture>,
+        picture: std::sync::Arc<Picture>,
     ) -> Result<Self, String> {
         let (mut gl, mut d3d);
         let (kind, init) = match api {
@@ -220,7 +240,7 @@ impl Render {
     }
 
     /// A frame of the file playing was shown: what is drawn is its picture.
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) fn pictured(&self) -> bool {
         self.picture.shown()
     }

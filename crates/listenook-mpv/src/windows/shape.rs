@@ -13,7 +13,7 @@
 //! content the view fills and, when several do, the one whose message the frame that placed the
 //! view was drawn for (seen with a `WH_GETMESSAGE` hook while the window is looked for).
 
-use std::{cell::Cell, sync::OnceLock, time::Duration};
+use std::{cell::Cell, sync::OnceLock};
 
 use nsh_platform_windows::{
     Placement,
@@ -37,6 +37,8 @@ use nsh_platform_windows::{
         core::{BOOL, w},
     },
 };
+
+use crate::hold::HOLD_MAX;
 
 thread_local! {
     /// The window of the message this thread took from its queue last (`WH_GETMESSAGE`): the one
@@ -258,9 +260,6 @@ pub(super) fn reveal(window: isize) {
     // SAFETY: posting by handle; a window gone meanwhile ignores it.
     let _ = unsafe { PostMessageW(Some(HWND(window as *mut _)), revealing(), WPARAM(0), LPARAM(0)) };
 }
-
-/// The longest a held window stays out of sight: shown then whatever it shows.
-pub(super) const HOLD_MAX: Duration = Duration::from_millis(1500);
 
 /// Keeps `window` out of sight (cloaked: drawn and composed, not shown), or shows it again, from
 /// any thread of the app.

@@ -2,6 +2,8 @@
 //! registers with nsh on each platform ([`register`]). Its props and events follow nsh's own
 //! video element (see `player`), so pages use it the same way, and any format FFmpeg reads plays.
 
+#[cfg(any(target_os = "macos", windows))]
+mod hold;
 mod mpv;
 mod player;
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]

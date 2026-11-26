@@ -54,8 +54,9 @@ use nsh_platform_windows::{
 };
 use serde_json::Value as JsonValue;
 
-use self::shape::{HOLD_MAX, WindowShape, reveal};
+use self::shape::{WindowShape, reveal};
 use crate::{
+    hold::HOLD_MAX,
     player::{Emit, Player, Screen},
     render::{Api, Render},
 };
