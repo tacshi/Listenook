@@ -108,6 +108,13 @@ impl MediaView {
         let shape = move || shape().map_or(JsonValue::Null, |(width, height)| json!([width, height]));
         MediaView { view: self.view.prop("windowShape", shape) }
     }
+
+    /// Keeps the window it is in out of sight while it opens, until the video's picture shows at
+    /// its shape ([`Self::window_shape`]), or a moment passes (Windows, where the window would
+    /// otherwise show empty while mpv compiles its shaders, then change shape).
+    pub(crate) fn hold_window(self, hold: bool) -> Self {
+        MediaView { view: self.view.prop("holdWindow", move || JsonValue::from(hold)) }
+    }
 }
 
 impl IntoElement for MediaView {

@@ -4,6 +4,7 @@
 use std::{
     ffi::{c_char, c_int, c_void},
     ptr::{self, NonNull},
+    sync::atomic::Ordering,
 };
 
 use crate::mpv::{Mpv, c, checked};
@@ -35,8 +36,18 @@ const PARAM_OPENGL_INIT_PARAMS: c_int = 2;
 const PARAM_OPENGL_FBO: c_int = 3;
 #[cfg_attr(windows, allow(dead_code))]
 const PARAM_FLIP_Y: c_int = 4;
+const PARAM_NEXT_FRAME_INFO: c_int = 11;
 const PARAM_BLOCK_FOR_TARGET_TIME: c_int = 12;
 const UPDATE_FRAME: u64 = 1;
+/// `MPV_RENDER_FRAME_INFO_PRESENT`: there is a frame of the video to draw.
+const FRAME_INFO_PRESENT: u64 = 1;
+
+#[repr(C)]
+#[derive(Default)]
+struct FrameInfo {
+    flags: u64,
+    target_time: i64,
+}
 
 #[cfg_attr(windows, link(name = "libmpv-2", kind = "raw-dylib"))]
 unsafe extern "C" {
@@ -48,6 +59,7 @@ unsafe extern "C" {
     );
     fn mpv_render_context_update(ctx: *mut c_void) -> u64;
     fn mpv_render_context_render(ctx: *mut c_void, params: *mut RenderParam) -> c_int;
+    fn mpv_render_context_get_info(ctx: *mut c_void, param: RenderParam) -> c_int;
     fn mpv_render_context_report_swap(ctx: *mut c_void);
     fn mpv_render_context_free(ctx: *mut c_void);
 }
@@ -62,6 +74,9 @@ pub(crate) struct Render {
     context: NonNull<c_void>,
     _mpv: std::sync::Arc<Mpv>,
     _on_frame: Box<OnFrame>,
+    picture: std::sync::Arc<crate::player::Picture>,
+    /// What is being drawn is a frame of the video, not the black of no video yet.
+    drawing_video: std::sync::atomic::AtomicBool,
 }
 
 // SAFETY: the render API may be used from any thread, one call at a time, which the owner
@@ -98,8 +113,14 @@ const PARAM_D3D11_INIT_PARAMS: c_int = 21;
 const PARAM_D3D11_FBO: c_int = 22;
 
 impl Render {
-    /// Draws for `mpv` with `api`; `on_frame` is called whenever there is something new to draw.
-    pub(crate) fn new(mpv: &std::sync::Arc<Mpv>, api: Api, on_frame: OnFrame) -> Result<Self, String> {
+    /// Draws for `mpv` with `api`; `on_frame` is called whenever there is something new to draw,
+    /// and `picture` notes when a frame of the file playing was first shown.
+    pub(crate) fn new(
+        mpv: &std::sync::Arc<Mpv>,
+        api: Api,
+        on_frame: OnFrame,
+        picture: std::sync::Arc<crate::player::Picture>,
+    ) -> Result<Self, String> {
         let (mut gl, mut d3d);
         let (kind, init) = match api {
             Api::OpenGl(get_proc_address) => {
@@ -128,7 +149,13 @@ impl Render {
         unsafe {
             mpv_render_context_set_update_callback(context.as_ptr(), Some(frame_ready), (&raw mut *on_frame).cast());
         }
-        Ok(Render { context, _mpv: mpv.clone(), _on_frame: on_frame })
+        Ok(Render {
+            context,
+            _mpv: mpv.clone(),
+            _on_frame: on_frame,
+            picture,
+            drawing_video: std::sync::atomic::AtomicBool::new(false),
+        })
     }
 
     /// Whether a new frame waits to be drawn (after `on_frame` was called).
@@ -137,10 +164,24 @@ impl Render {
         unsafe { mpv_render_context_update(self.context.as_ptr()) & UPDATE_FRAME != 0 }
     }
 
+    /// Notes, before drawing, whether this is the first frame of the file shown.
+    fn before_drawing(&self) {
+        if self.picture.shown() {
+            return;
+        }
+        let mut info = FrameInfo::default();
+        let param = RenderParam { kind: PARAM_NEXT_FRAME_INFO, data: (&raw mut info).cast() };
+        // SAFETY: a live render context; `info` is the type this parameter takes and outlives
+        // the call.
+        let known = unsafe { mpv_render_context_get_info(self.context.as_ptr(), param) } >= 0;
+        self.drawing_video.store(known && info.flags & FRAME_INFO_PRESENT != 0, Ordering::Relaxed);
+    }
+
     /// Draws the current frame into framebuffer `fbo`, `width` × `height` pixels, upside down
     /// for OpenGL's own framebuffers (`flip`).
     #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn draw(&self, fbo: i32, width: i32, height: i32, flip: bool) {
+        self.before_drawing();
         let mut target = OpenGlFbo { fbo, w: width, h: height, internal_format: 0 };
         let mut flip = c_int::from(flip);
         let mut params = [
@@ -157,6 +198,7 @@ impl Render {
     /// Draws the current frame into `texture`, an `ID3D11Texture2D` it may render to.
     #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn draw_texture(&self, texture: *mut c_void) {
+        self.before_drawing();
         let mut target = D3d11Target { texture };
         let mut params = [
             RenderParam { kind: PARAM_D3D11_FBO, data: (&raw mut target).cast() },
@@ -172,6 +214,15 @@ impl Render {
     pub(crate) fn shown(&self) {
         // SAFETY: a live render context.
         unsafe { mpv_render_context_report_swap(self.context.as_ptr()) }
+        if self.drawing_video.swap(false, Ordering::Relaxed) {
+            self.picture.show();
+        }
+    }
+
+    /// A frame of the file playing was shown: what is drawn is its picture.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn pictured(&self) -> bool {
+        self.picture.shown()
     }
 }
 

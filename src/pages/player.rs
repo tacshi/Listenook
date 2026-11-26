@@ -381,7 +381,8 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
             MediaEvent::Failed => toast(Tone::Error, error_text("unsupported_format")),
         },
     )
-    .window_shape(move || shape.get());
+    .window_shape(move || shape.get())
+    .hold_window(own_window);
     effect(move || {
         if paused.get() {
             untracked(&save_on_pause);

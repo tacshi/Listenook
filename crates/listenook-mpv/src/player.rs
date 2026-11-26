@@ -70,9 +70,26 @@ struct Applied {
     paused: Option<bool>,
 }
 
+/// Whether a frame of the file playing was shown yet, as the platforms that draw it find
+/// ([`crate::render::Render`]).
+#[derive(Default)]
+pub(crate) struct Picture(AtomicBool);
+
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux", windows)), allow(dead_code))]
+impl Picture {
+    pub(crate) fn shown(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn show(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 pub(crate) struct Player {
     mpv: Option<Arc<Mpv>>,
     shared: Arc<Shared>,
+    picture: Arc<Picture>,
     applied: Applied,
     emit: Emit,
 }
@@ -80,6 +97,7 @@ pub(crate) struct Player {
 impl Player {
     pub(crate) fn new(screen: Screen, emit: Emit) -> Self {
         let shared = Arc::new(Shared { every_ms: AtomicU32::new(250), ..Shared::default() });
+        let picture = Arc::default();
         let mut options: Vec<(&str, &str)> = OPTIONS.to_vec();
         options.extend(screen.options.iter().map(|(name, value)| (*name, value.as_str())));
         let mpv = match Mpv::start(&options, screen.wid, screen.keep) {
@@ -87,7 +105,7 @@ impl Player {
             Err(why) => {
                 log::error!("mpv could not start: {why}");
                 emit("error", json!({ "message": why }));
-                return Player { mpv: None, shared, applied: Applied::default(), emit };
+                return Player { mpv: None, shared, picture, applied: Applied::default(), emit };
             }
         };
         let before_playing = screen.before_playing;
@@ -101,12 +119,12 @@ impl Player {
         if let Err(why) = spawned {
             log::error!("mpv's event thread could not start: {why}");
         }
-        Player { mpv: Some(mpv), shared, applied: Applied::default(), emit }
+        Player { mpv: Some(mpv), shared, picture, applied: Applied::default(), emit }
     }
 
     /// What the view does with mpv's picture, from any thread.
     pub(crate) fn output(&self) -> Output {
-        Output(self.mpv.as_ref().map_or_else(Weak::new, Arc::downgrade))
+        Output(self.mpv.as_ref().map_or_else(Weak::new, Arc::downgrade), self.picture.clone())
     }
 
     /// The app set prop `name` to `value` (`None`: removed): `source`, or `playback` (an object of
@@ -130,6 +148,7 @@ impl Player {
                     return;
                 }
                 self.shared.ended.store(false, Ordering::Relaxed);
+                self.picture.0.store(false, Ordering::Relaxed);
                 match &source {
                     Some(source) => {
                         log::debug!("mpv loads {source}");
@@ -199,7 +218,10 @@ impl Drop for Player {
 
 /// What a platform's view does with mpv's picture (from any thread), while the player lives.
 #[derive(Clone)]
-pub(crate) struct Output(Weak<Mpv>);
+pub(crate) struct Output(
+    Weak<Mpv>,
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux", windows)), allow(dead_code))] Arc<Picture>,
+);
 
 impl Output {
     fn mpv(&self) -> Option<Arc<Mpv>> {
@@ -215,7 +237,7 @@ impl Output {
         on_frame: crate::render::OnFrame,
     ) -> Result<crate::render::Render, String> {
         let mpv = self.mpv().ok_or("mpv did not start")?;
-        let render = crate::render::Render::new(&mpv, api, on_frame)?;
+        let render = crate::render::Render::new(&mpv, api, on_frame, self.1.clone())?;
         // A file loaded before there was anything to draw into plays without its picture until
         // the video output starts again.
         mpv.set_text("vo", "libmpv");

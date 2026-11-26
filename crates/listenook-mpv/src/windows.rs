@@ -7,12 +7,19 @@
 //! frames, a tenth of a second or more each, and the window waits for a frame at a new size at
 //! most [`FRAME_WAIT`], so a slow frame holds up the picture but not the window. The shaders
 //! are kept on disk ([`shader_cache`]) and compiled once.
+//!
+//! A video's own window (`holdWindow`) opens out of sight and shows once it has the video's
+//! shape and picture ([`Hold`]): with shaders still to compile, its first frames would show it
+//! empty.
 
 mod shape;
 
 use std::{
     path::PathBuf,
-    sync::{Arc, Condvar, Mutex, MutexGuard},
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard,
+        atomic::{AtomicIsize, Ordering},
+    },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -47,7 +54,7 @@ use nsh_platform_windows::{
 };
 use serde_json::Value as JsonValue;
 
-use self::shape::WindowShape;
+use self::shape::{HOLD_MAX, WindowShape, reveal};
 use crate::{
     player::{Emit, Player, Screen},
     render::{Api, Render},
@@ -57,6 +64,72 @@ use crate::{
 struct Target {
     render: Option<Render>,
     swap_chain: Option<IDXGISwapChain1>,
+    /// The swap chain's size.
+    size: (u32, u32),
+}
+
+/// A window kept out of sight while it opens, shown once a frame of the video is drawn at the
+/// size the view has at the video's shape, or after [`HOLD_MAX`]. Between the window's thread,
+/// which sizes the view, and the drawing thread.
+#[derive(Default)]
+struct Hold {
+    /// The window held (0: none, or shown).
+    window: AtomicIsize,
+    sizes: Mutex<HeldSizes>,
+}
+
+#[derive(Default)]
+struct HeldSizes {
+    /// The view's size, once it has the video's shape.
+    shaped: Option<(u32, u32)>,
+    /// The size the picture of the video was drawn at last.
+    pictured: Option<(u32, u32)>,
+}
+
+impl Hold {
+    /// Keeps `window`, out of sight now, until it is shown.
+    fn held(self: &Arc<Self>, window: isize) {
+        self.window.store(window, Ordering::Relaxed);
+        let hold = Arc::downgrade(self);
+        let _ = std::thread::Builder::new().name("mpv-hold".into()).spawn(move || {
+            std::thread::sleep(HOLD_MAX);
+            if let Some(hold) = hold.upgrade() {
+                hold.release();
+            }
+        });
+    }
+
+    /// The view has the video's shape at `size` (`None`: it has not).
+    fn shaped(&self, size: Option<(u32, u32)>) {
+        self.update(|sizes| sizes.shaped = size);
+    }
+
+    /// The swap chain, of `size`, shows the video (`pictured`) or not yet.
+    fn drawn(&self, size: (u32, u32), pictured: bool) {
+        self.update(|sizes| sizes.pictured = pictured.then_some(size));
+    }
+
+    fn update(&self, change: impl FnOnce(&mut HeldSizes)) {
+        if self.window.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let ready = {
+            let mut sizes = self.sizes.lock().unwrap_or_else(|e| e.into_inner());
+            change(&mut sizes);
+            sizes.shaped.is_some() && sizes.shaped == sizes.pictured
+        };
+        if ready {
+            self.release();
+        }
+    }
+
+    /// Shows the window held, if any.
+    fn release(&self) {
+        let window = self.window.swap(0, Ordering::Relaxed);
+        if window != 0 {
+            reveal(window);
+        }
+    }
 }
 
 // SAFETY: the render context and the swap chain are used by one thread at a time (the mutex);
@@ -179,6 +252,7 @@ pub(crate) struct Video {
     /// The swap chain was made and shown.
     made: bool,
     shape: WindowShape,
+    hold: Arc<Hold>,
 }
 
 /// The picture's visuals, as nsh stacks a web view's: an outer one with what its ancestors
@@ -309,16 +383,21 @@ fn resize_buffers(swap_chain: &IDXGISwapChain1, (width, height): (u32, u32)) -> 
 
 /// Draws whenever woken, until told to stop: at a size asked for first, at once, then telling
 /// the window it is drawn.
-fn draw(target: &Mutex<Target>, wake: &Wake) {
+fn draw(target: &Mutex<Target>, wake: &Wake, hold: &Hold) {
     while wake.wait() {
         let asked = wake.take_size();
         {
-            let target = target.lock().unwrap_or_else(|e| e.into_inner());
+            let mut target = target.lock().unwrap_or_else(|e| e.into_inner());
+            let target = &mut *target;
             if let (Some(render), Some(swap_chain)) = (&target.render, &target.swap_chain) {
                 let resized = asked.is_some_and(|(size, _)| resize_buffers(swap_chain, size));
+                if let (true, Some((size, _))) = (resized, asked) {
+                    target.size = size;
+                }
                 let new = render.has_frame();
                 if resized || new {
                     present(render, swap_chain, if resized { 0 } else { 1 });
+                    hold.drawn(target.size, render.pictured());
                 }
             }
         }
@@ -335,7 +414,8 @@ impl Video {
         options.extend(shader_cache().map(|dir| ("gpu-shader-cache-dir", dir)));
         let screen = Screen { options, wid: None, keep: Box::new(()), before_playing: None };
         let player = Player::new(screen, emit);
-        let target = Arc::new(Mutex::new(Target { render: None, swap_chain: None }));
+        let target = Arc::new(Mutex::new(Target { render: None, swap_chain: None, size: (0, 0) }));
+        let hold = Arc::new(Hold::default());
         let wake = Arc::new(Wake::default());
         let gpu = match Gpu::new() {
             Ok(gpu) => Some(gpu),
@@ -351,10 +431,10 @@ impl Video {
                 Err(why) => log::error!("mpv cannot draw with Direct3D 11: {why}"),
             }
         }
-        let (drawn, woken) = (target.clone(), wake.clone());
+        let (drawn, woken, held) = (target.clone(), wake.clone(), hold.clone());
         let drawing = std::thread::Builder::new()
             .name("mpv-draw".into())
-            .spawn(move || draw(&drawn, &woken))
+            .spawn(move || draw(&drawn, &woken, &held))
             .inspect_err(|why| log::error!("mpv's drawing thread could not start: {why}"))
             .ok();
         Box::new(Video {
@@ -367,6 +447,7 @@ impl Video {
             size: (0, 0),
             made: false,
             shape: WindowShape::default(),
+            hold,
         })
     }
 
@@ -424,13 +505,19 @@ impl NativeComponent for Video {
 
     fn placed(&mut self, at: Option<Placement>) {
         let Some(at) = at else { return };
-        if at.size != self.size && at.size.0 > 0 && at.size.1 > 0 {
-            self.resize(at.size);
+        if let Some(window) = self.shape.placed(&at) {
+            self.hold.held(window.0 as isize);
+        }
+        if at.size.0 > 0 && at.size.1 > 0 {
+            let shaped = self.shape.fits(at.size).then_some((at.size.0 as u32, at.size.1 as u32));
+            self.hold.shaped(shaped);
+            if at.size != self.size {
+                self.resize(at.size);
+            }
         }
         if let Some(visuals) = &self.composition {
             visuals.place(&at);
         }
-        self.shape.placed(&at);
     }
 
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
@@ -439,6 +526,12 @@ impl NativeComponent for Video {
                 .and_then(JsonValue::as_array)
                 .and_then(|pair| Some((pair.first()?.as_f64()?, pair.get(1)?.as_f64()?)));
             self.shape.set(size);
+            return;
+        }
+        if name == "holdWindow" {
+            if value.and_then(JsonValue::as_bool) == Some(true) {
+                self.shape.hold();
+            }
             return;
         }
         self.player.set_prop(name, value);
@@ -452,6 +545,7 @@ impl NativeComponent for Video {
 impl Drop for Video {
     /// The drawing thread stops and the render context goes before the player stops mpv.
     fn drop(&mut self) {
+        self.hold.release();
         self.wake.stop();
         if let Some(drawing) = self.drawing.take() {
             let _ = drawing.join();
