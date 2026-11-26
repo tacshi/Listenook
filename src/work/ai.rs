@@ -13,7 +13,7 @@ use nsh_core::prelude::*;
 use serde_json::{Value, json};
 
 use crate::services::remote::Failure;
-use crate::services::{secrets, secrets::Secret};
+use crate::services::{chatgpt, secrets, secrets::Secret};
 use crate::state::{Store, store};
 
 const SILENCE_LIMIT: Duration = Duration::from_secs(55);
@@ -47,26 +47,6 @@ fn reply_text(body: &[u8]) -> Result<String, Failure> {
         .ok_or_else(|| Failure::new("llm_invalid_response", "The reply had no text."))
 }
 
-fn failure_of(status: u16, body: &str) -> Failure {
-    let lower = body.to_lowercase();
-    let names_missing = ["not found", "does not exist", "unknown"].iter().any(|w| lower.contains(w))
-        && (lower.contains("model") || lower.contains("endpoint"));
-    let code = match status {
-        401 | 403 => "llm_bad_credentials",
-        404 => "llm_endpoint_or_model_not_found",
-        400 if names_missing => "llm_endpoint_or_model_not_found",
-        408 => "llm_timeout",
-        429 => "llm_rate_limit",
-        500.. => "llm_server_failure",
-        _ => "llm_request_failed",
-    };
-    Failure {
-        code: code.into(),
-        message: body.chars().take(300).collect(),
-        retryable: matches!(status, 408 | 429 | 500..),
-    }
-}
-
 fn configured(settings: &LlmProviderSettings, needs_model: bool) -> Result<(String, Option<String>), Failure> {
     configured_with(settings, needs_model, secrets::read(Secret::Llm))
 }
@@ -97,30 +77,45 @@ fn with_key(request: HttpRequest, key: Option<&str>) -> HttpRequest {
 }
 
 pub(crate) async fn list_models(settings: &LlmProviderSettings, key: Option<String>) -> Result<Vec<String>, Failure> {
+    if settings.signs_in() {
+        return chatgpt::models().await;
+    }
     let key = key.filter(|key| !key.trim().is_empty()).or_else(|| secrets::read(Secret::Llm));
     let (endpoint, key) = configured_with(settings, false, key)?;
     let response = fetch(with_key(HttpRequest::get(format!("{endpoint}/models")), key.as_deref()))
         .await
         .map_err(|message| Failure { code: "llm_network_error".into(), message, retryable: true })?;
     if !response.ok() {
-        return Err(failure_of(response.status(), &response.text()));
+        return Err(Failure::llm(response.status(), &response.text()));
     }
     let body: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
-    let mut models: Vec<String> = body
+    let listed = body
         .get("data")
         .and_then(Value::as_array)
-        .ok_or_else(|| Failure::new("llm_invalid_response", "The models list could not be read."))?
-        .iter()
-        .filter_map(|model| model.get("id").and_then(Value::as_str))
-        .map(|id| id.trim().to_owned())
-        .filter(|id| !id.is_empty())
-        .collect();
-    models.sort();
-    models.dedup();
-    Ok(models)
+        .ok_or_else(|| Failure::new("llm_invalid_response", "The models list could not be read."))?;
+    Ok(newest_first(listed))
+}
+
+/// The ids of `listed`, the newest first where the provider says when each was made, and in
+/// its own order otherwise.
+fn newest_first(listed: &[Value]) -> Vec<String> {
+    let mut dated: Vec<(i64, String)> = Vec::new();
+    for model in listed {
+        let Some(id) = model.get("id").and_then(Value::as_str).map(str::trim).filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        if !dated.iter().any(|(_, known)| known == id) {
+            dated.push((model.get("created").and_then(Value::as_i64).unwrap_or(0), id.to_owned()));
+        }
+    }
+    dated.sort_by_key(|(created, _)| std::cmp::Reverse(*created));
+    dated.into_iter().map(|(_, id)| id).collect()
 }
 
 async fn complete(settings: &LlmProviderSettings, ask: &Ask) -> Result<String, Failure> {
+    if settings.signs_in() {
+        return respond(settings, ask).await;
+    }
     let (endpoint, key) = configured(settings, true)?;
     let (system, user) = (ask.system, ask.prompt.as_str());
     let mut json_mode = ask.json;
@@ -145,7 +140,7 @@ async fn complete(settings: &LlmProviderSettings, ask: &Ask) -> Result<String, F
                 Err(Failure { code: "llm_timeout".into(), message, retryable: true })
             }
             Err(message) => Err(Failure { code: "llm_network_error".into(), message, retryable: true }),
-            Ok(response) if !response.ok() => Err(failure_of(response.status(), &response.text())),
+            Ok(response) if !response.ok() => Err(Failure::llm(response.status(), &response.text())),
             Ok(response) => reply_text(&response.body),
         };
         match result {
@@ -157,6 +152,27 @@ async fn complete(settings: &LlmProviderSettings, ask: &Ask) -> Result<String, F
             {
                 stream = false
             }
+            Err(failure) if json_mode && failure.code == "llm_request_failed" => json_mode = false,
+            Err(failure) if failure.retryable && attempt < 3 => {
+                timer(Duration::from_secs(1 << attempt)).await;
+                attempt += 1;
+            }
+            Err(failure) => return Err(failure),
+        }
+    }
+}
+
+/// The answer of a ChatGPT plan, asked once more without JSON mode when the model refuses it,
+/// and again after a pause when it failed for a while.
+async fn respond(settings: &LlmProviderSettings, ask: &Ask) -> Result<String, Failure> {
+    if let Some(code) = settings.validate() {
+        return Err(Failure::new(code, "The AI provider is not configured."));
+    }
+    let mut json_mode = ask.json;
+    let mut attempt = 0_u32;
+    loop {
+        match chatgpt::respond(settings.model.trim(), ask, json_mode).await {
+            Ok(text) => return Ok(text),
             Err(failure) if json_mode && failure.code == "llm_request_failed" => json_mode = false,
             Err(failure) if failure.retryable && attempt < 3 => {
                 timer(Duration::from_secs(1 << attempt)).await;
@@ -181,6 +197,8 @@ pub(crate) fn needs_setup(code: &str) -> bool {
     matches!(
         code,
         "missing_credentials"
+            | "sign_in_required"
+            | "signed_out"
             | "bad_credentials"
             | "invalid_url"
             | "https_required"
@@ -363,6 +381,19 @@ mod tests {
         assert_eq!(reply_text(broken.as_bytes()).unwrap_err().code, "llm_server_failure");
         assert_eq!(reply_text(b"data: [DONE]\n").unwrap_err().code, "llm_invalid_response");
         assert_eq!(reply_text(b"").unwrap_err().code, "llm_invalid_response");
+    }
+
+    #[test]
+    fn models_are_listed_newest_first() {
+        let listed = json!([
+            {"id": "babbage-002", "created": 1_692_634_615},
+            {"id": "gpt-6", "created": 1_790_000_000},
+            {"id": " "},
+            {"id": "local-a"},
+            {"id": "gpt-6", "created": 1_790_000_000},
+            {"id": "local-b"},
+        ]);
+        assert_eq!(newest_first(listed.as_array().unwrap()), ["gpt-6", "babbage-002", "local-a", "local-b"]);
     }
 
     #[test]

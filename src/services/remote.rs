@@ -28,6 +28,27 @@ impl Failure {
     pub(crate) fn network(message: String) -> Self {
         Self { code: "network_error".into(), message, retryable: true }
     }
+
+    /// What an AI provider's refusal with HTTP `status` and `body` means.
+    pub(crate) fn llm(status: u16, body: &str) -> Self {
+        let lower = body.to_lowercase();
+        let names_missing = ["not found", "does not exist", "unknown"].iter().any(|w| lower.contains(w))
+            && (lower.contains("model") || lower.contains("endpoint"));
+        let code = match status {
+            401 | 403 => "llm_bad_credentials",
+            404 => "llm_endpoint_or_model_not_found",
+            400 if names_missing => "llm_endpoint_or_model_not_found",
+            408 => "llm_timeout",
+            429 => "llm_rate_limit",
+            500.. => "llm_server_failure",
+            _ => "llm_request_failed",
+        };
+        Self {
+            code: code.into(),
+            message: body.chars().take(300).collect(),
+            retryable: matches!(status, 408 | 429 | 500..),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

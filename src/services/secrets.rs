@@ -7,6 +7,8 @@ pub(crate) enum Secret {
     Soniox,
     Moss,
     Llm,
+    /// The ChatGPT account signed in for the AI provider, as JSON.
+    ChatGpt,
 }
 
 impl Secret {
@@ -15,6 +17,7 @@ impl Secret {
             Secret::Soniox => "soniox_api_key",
             Secret::Moss => "moss_api_key",
             Secret::Llm => "openai_compatible_translation_api_key",
+            Secret::ChatGpt => "chatgpt_account",
         }
     }
 
@@ -22,7 +25,7 @@ impl Secret {
         match self {
             Secret::Soniox => Some("SONIOX_API_KEY"),
             Secret::Moss => Some("MOSS_API_KEY"),
-            Secret::Llm => None,
+            Secret::Llm | Secret::ChatGpt => None,
         }
     }
 }

@@ -801,6 +801,28 @@ const ZH: &[(&str, &str)] = &[
         "A subtitle file with the same name can become its transcript. Or record a video or audio as it plays in another app. Up to 5 hours each.",
         "同名字幕文件可以作为它的转写。也可以录制其他 App 中正在播放的视频或音频。每个文件最长 5 小时。",
     ),
+    ("Account", "账户"),
+    ("Model ID", "模型 ID"),
+    ("Choose one below.", "请在下方选择一个。"),
+    ("Sign in with ChatGPT", "使用 ChatGPT 登录"),
+    ("Sign In Again", "重新登录"),
+    ("Sign Out", "退出登录"),
+    ("Signed in", "已登录"),
+    ("Sign out of ChatGPT?", "要退出 ChatGPT 登录吗？"),
+    ("Translation and AI Briefs stop working until you sign in again.", "重新登录之前，翻译和 AI 简报将无法使用。"),
+    ("Finish signing in in your browser…", "请在浏览器中完成登录…"),
+    (
+        "Uses your ChatGPT Plus or Pro plan instead of an API key. Your browser opens to sign in.",
+        "使用你的 ChatGPT Plus 或 Pro 订阅，无需 API 密钥。登录时会打开浏览器。",
+    ),
+    ("The models your plan offers are listed once you sign in.", "登录后会列出你的订阅可用的模型。"),
+    ("Sign in with ChatGPT in Settings to translate.", "请先在设置中使用 ChatGPT 登录，再进行翻译。"),
+    ("Sign in with ChatGPT in Settings to create a brief.", "请先在设置中使用 ChatGPT 登录，再生成简报。"),
+    ("You can close this tab and go back to Listenook.", "你可以关闭此标签页，回到聆页。"),
+    ("Sign-in cancelled", "已取消登录"),
+    ("You can close this tab.", "你可以关闭此标签页。"),
+    ("This sign-in is no longer current.", "此次登录已失效。"),
+    ("Close this tab and sign in again from Listenook.", "请关闭此标签页，并从聆页重新登录。"),
 ];
 
 pub fn tr(lang: Lang, text: &'static str) -> &'static str {
@@ -985,6 +1007,32 @@ fn known_error(code: &str) -> Option<(&'static str, &'static str)> {
             "The model returned nothing usable. Try again or choose another model.",
             "模型未返回可用内容，请重试或更换模型。",
         ),
+        "sign_in_required" => ("Sign in with ChatGPT in Settings.", "请在设置中使用 ChatGPT 登录。"),
+        "signed_out" => (
+            "Your ChatGPT sign-in has ended. Sign in again in Settings.",
+            "你的 ChatGPT 登录已失效，请在设置中重新登录。",
+        ),
+        "plan_limit" => (
+            "Your ChatGPT plan has reached its usage limit for now. Try again later.",
+            "你的 ChatGPT 订阅暂时已达用量上限，请稍后重试。",
+        ),
+        "chatgpt_no_plan" => ("This account has no ChatGPT Plus or Pro plan.", "该账户没有 ChatGPT Plus 或 Pro 订阅。"),
+        "chatgpt_cancelled" => ("Sign-in was cancelled.", "登录已取消。"),
+        "chatgpt_unreachable" => (
+            "Couldn’t reach OpenAI to sign in. Check your connection and try again.",
+            "无法连接 OpenAI 进行登录，请检查网络后重试。",
+        ),
+        "chatgpt_browser_unavailable" => ("Couldn’t open your browser to sign in.", "无法打开浏览器进行登录。"),
+        "chatgpt_other_registration" => (
+            "That is another ChatGPT account. Sign out first to switch accounts.",
+            "这是另一个 ChatGPT 账户。如需切换账户，请先退出登录。",
+        ),
+        "chatgpt_keychain" => {
+            ("Couldn’t save the sign-in. Unlock your keychain and try again.", "无法保存登录信息，请解锁钥匙串后重试。")
+        }
+        "chatgpt_unverified" | "chatgpt_sign_in_failed" | "chatgpt_not_registered" | "chatgpt_port_taken" => {
+            ("ChatGPT sign-in didn’t finish. Try again.", "ChatGPT 登录未完成，请重试。")
+        }
         "ai_brief_no_sections" => ("Choose at least one section.", "请至少选择一个部分。"),
         "ad_scan_empty_transcript" => ("There is no transcript to look through yet.", "还没有可查找的文字稿。"),
         _ => return None,

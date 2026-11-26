@@ -102,7 +102,12 @@ LLM translation uses the single OpenAI-compatible endpoint that you configure.
 When you manually translate or enable automatic LLM translation, Listenook sends
 transcript text—not the original media—to that endpoint using its text Chat
 Completions API. The endpoint operator may apply its own retention and privacy
-policy. Changing or removing either translation configuration does not delete
+policy. When the AI provider is a ChatGPT Plus or Pro plan, the text goes to
+OpenAI's Responses API under your ChatGPT account instead, asking OpenAI not to
+store the response, and OpenAI's own policies for that account apply. Signing
+in sends OpenAI an identifier this device keeps for the purpose, apart from the
+one Sync uses; the sign-in Listenook keeps (the account's email and a refresh
+token) is stored with the API keys below, and signing out asks OpenAI to end it. Changing or removing either translation configuration does not delete
 translations already stored locally.
 
 AI Brief generation is also optional and user-invoked. Before the first brief,

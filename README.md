@@ -133,6 +133,11 @@ Text translation and AI Briefs share one configurable AI provider. Provider
 presets prefill connection details, and a successful connection test lists
 the provider's models to choose from.
 
+On macOS, Windows, and Linux the AI provider can also be a ChatGPT Plus or
+Pro plan instead of an API key: choose **ChatGPT Plus or Pro** and sign in
+with ChatGPT in the browser. The plan's models are listed once you are signed
+in. A Claude subscription can't be used this way; Claude takes an API key.
+
 ## Data and privacy
 
 Listenook has no application backend. Cloud transcription sends media directly
@@ -143,7 +148,8 @@ podcasts you follow, and where you left each episode only to the device you
 choose on your local network or your Tailscale network.
 
 Manual or automatic LLM translation and user-requested AI Briefs send
-transcript text to your configured AI endpoint.
+transcript text to your configured AI endpoint, or to OpenAI under your
+ChatGPT account when you sign in with a ChatGPT plan.
 Podcast search, feeds, streaming, and downloads contact the relevant public
 services. API keys are kept in the Keychain on macOS, iPhone, and iPad and in
 the Credential Manager on Windows; on Android they are kept in a file only

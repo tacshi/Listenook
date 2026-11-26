@@ -746,6 +746,7 @@ fn options() -> impl IntoElement {
                         hint(move || {
                             tr(match store.ai_setup() {
                                 Some(AiSetup::Key) => "Add an API key for the AI provider in Settings to translate.",
+                                Some(AiSetup::SignIn) => "Sign in with ChatGPT in Settings to translate.",
                                 _ => "Configure the AI provider in Settings before translating.",
                             })
                         })
