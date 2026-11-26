@@ -1,9 +1,10 @@
 //! Repackages an AVI file's H.264 pictures and MP3 sound as a QuickTime movie, which Apple's
 //! player can open (it opens no AVI), without decoding either.
 
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use super::h264::{self, Order};
+use super::movie::{Brand, MOVIE_TIMESCALE, Movie, Track, boxed, picture_entry, put16, put32};
 
 #[derive(Default)]
 struct Stream {
@@ -248,7 +249,7 @@ struct Sound {
 }
 
 impl Sound {
-    fn take(&mut self, bytes: &[u8], out: &mut impl Write, written: &mut u64) -> std::io::Result<()> {
+    fn take<W: Write + Seek>(&mut self, bytes: &[u8], movie: &mut Movie<W>) -> std::io::Result<()> {
         self.pending.extend_from_slice(bytes);
         let mut at = 0;
         while self.pending.len() - at >= 4 {
@@ -262,9 +263,8 @@ impl Sound {
                 break;
             }
             self.first.get_or_insert(frame);
-            out.write_all(&self.pending[at..at + frame.length])?;
-            self.frames.push((*written, frame.length as u32));
-            *written += frame.length as u64;
+            let start = movie.put(&self.pending[at..at + frame.length])?;
+            self.frames.push((start, frame.length as u32));
             at += frame.length;
         }
         self.pending.drain(..at);
@@ -279,8 +279,6 @@ impl Sound {
         Some(Track {
             sound: true,
             timescale: first.rate,
-            width: 0,
-            height: 0,
             entry: mp3_entry(first),
             durations,
             offsets: None,
@@ -312,12 +310,7 @@ pub fn avi_to_mov<R: Read + Seek, W: Write + Seek>(mut input: R, output: W) -> R
         keep(unit, &mut order);
     }
 
-    let mut out = BufWriter::new(output);
-    let header = ftyp();
-    out.write_all(&header).map_err(fail)?;
-    let mdat = header.len() as u64;
-    out.write_all(&[0, 0, 0, 1, b'm', b'd', b'a', b't', 0, 0, 0, 0, 0, 0, 0, 0]).map_err(fail)?;
-    let mut written = mdat + 16;
+    let mut movie = Movie::start(output, Brand::QuickTime).map_err(fail)?;
 
     let (mut pictures, mut sound) = (Vec::<Picture>::new(), Sound::default());
     let (mut slot, mut data, mut sample) = (0_u64, Vec::new(), Vec::new());
@@ -332,7 +325,7 @@ pub fn avi_to_mov<R: Read + Seek, W: Write + Seek>(mut input: R, output: W) -> R
             input.read_exact(&mut data).map_err(fail)?;
         }
         if !video {
-            sound.take(&data[..chunk.size as usize], &mut out, &mut written).map_err(fail)?;
+            sound.take(&data[..chunk.size as usize], &mut movie).map_err(fail)?;
             continue;
         }
         slot += 1;
@@ -352,9 +345,8 @@ pub fn avi_to_mov<R: Read + Seek, W: Write + Seek>(mut input: R, output: W) -> R
         }
         let place = place.or(pictures.last().map(|picture| picture.place)).unwrap_or_default();
         let sync = units.iter().any(|unit| h264::kind(unit) == 5);
-        out.write_all(&sample).map_err(fail)?;
-        pictures.push(Picture { slot: slot - 1, place, sync, size: sample.len() as u32, at: written });
-        written += sample.len() as u64;
+        let at = movie.put(&sample).map_err(fail)?;
+        pictures.push(Picture { slot: slot - 1, place, sync, size: sample.len() as u32, at });
     }
     let (Some(sps), Some(pps)) = (sps, pps) else {
         return Err("no H.264 parameter sets".into());
@@ -365,38 +357,7 @@ pub fn avi_to_mov<R: Read + Seek, W: Write + Seek>(mut input: R, output: W) -> R
 
     let mut tracks = vec![picture_track(&plan, &pictures, &sps, &pps)?];
     tracks.extend(sound.track());
-    out.seek(SeekFrom::Start(mdat + 8)).map_err(fail)?;
-    out.write_all(&(written - mdat).to_be_bytes()).map_err(fail)?;
-    out.seek(SeekFrom::Start(written)).map_err(fail)?;
-    out.write_all(&moov(&tracks)).map_err(fail)?;
-    out.flush().map_err(fail)
-}
-
-const MOVIE_TIMESCALE: u64 = 1000;
-
-struct Track {
-    sound: bool,
-    timescale: u32,
-    width: u16,
-    height: u16,
-    entry: Vec<u8>,
-    durations: Vec<u32>,
-    offsets: Option<Vec<u32>>,
-    syncs: Option<Vec<u32>>,
-    sizes: Vec<u32>,
-    chunks: Vec<u64>,
-    /// `(length in the movie's timescale, start in the track's media, or -1 for a gap)`.
-    edits: Vec<(u64, i64)>,
-}
-
-impl Track {
-    fn media_length(&self) -> u64 {
-        self.durations.iter().map(|duration| u64::from(*duration)).sum()
-    }
-
-    fn length(&self) -> u64 {
-        self.edits.iter().map(|(length, _)| length).sum()
-    }
+    movie.finish(&tracks).map_err(fail)
 }
 
 fn picture_track(plan: &Plan, pictures: &[Picture], sps: &[u8], pps: &[u8]) -> Result<Track, String> {
@@ -434,8 +395,6 @@ fn picture_track(plan: &Plan, pictures: &[Picture], sps: &[u8], pps: &[u8]) -> R
     Ok(Track {
         sound: false,
         timescale: plan.rate,
-        width: plan.width,
-        height: plan.height,
         entry: avc1(plan.width, plan.height, sps, pps),
         durations,
         offsets: offsets.iter().any(|offset| *offset != 0).then_some(offsets),
@@ -446,61 +405,8 @@ fn picture_track(plan: &Plan, pictures: &[Picture], sps: &[u8], pps: &[u8]) -> R
     })
 }
 
-fn boxed(out: &mut Vec<u8>, name: &[u8; 4], body: impl FnOnce(&mut Vec<u8>)) {
-    let start = out.len();
-    out.extend_from_slice(&[0; 4]);
-    out.extend_from_slice(name);
-    body(out);
-    let size = (out.len() - start) as u32;
-    out[start..start + 4].copy_from_slice(&size.to_be_bytes());
-}
-
-fn full(out: &mut Vec<u8>, name: &[u8; 4], version: u8, flags: u32, body: impl FnOnce(&mut Vec<u8>)) {
-    boxed(out, name, |out| {
-        out.extend_from_slice(&((u32::from(version) << 24) | flags).to_be_bytes());
-        body(out);
-    });
-}
-
-fn put16(out: &mut Vec<u8>, value: u16) {
-    out.extend_from_slice(&value.to_be_bytes());
-}
-
-fn put32(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_be_bytes());
-}
-
-fn put64(out: &mut Vec<u8>, value: u64) {
-    out.extend_from_slice(&value.to_be_bytes());
-}
-
-const MATRIX: [u32; 9] = [0x0001_0000, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000];
-
-fn ftyp() -> Vec<u8> {
-    let mut out = Vec::new();
-    boxed(&mut out, b"ftyp", |out| {
-        out.extend_from_slice(b"qt  ");
-        put32(out, 0x200);
-        out.extend_from_slice(b"qt  ");
-    });
-    out
-}
-
 fn avc1(width: u16, height: u16, sps: &[u8], pps: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    boxed(&mut out, b"avc1", |out| {
-        out.extend_from_slice(&[0; 6]);
-        put16(out, 1);
-        out.extend_from_slice(&[0; 16]);
-        put16(out, width);
-        put16(out, height);
-        put32(out, 0x0048_0000);
-        put32(out, 0x0048_0000);
-        put32(out, 0);
-        put16(out, 1);
-        out.extend_from_slice(&[0; 32]);
-        put16(out, 0x18);
-        put16(out, 0xffff);
+    picture_entry(b"avc1", width, height, |out| {
         boxed(out, b"avcC", |out| {
             out.push(1);
             out.extend_from_slice(sps.get(1..4).unwrap_or(&[0x64, 0, 0x1f]));
@@ -517,8 +423,7 @@ fn avc1(width: u16, height: u16, sps: &[u8], pps: &[u8]) -> Vec<u8> {
                 out.extend_from_slice(&[0xfc | chroma, 0xf8 | luma_depth, 0xf8 | chroma_depth, 0]);
             }
         });
-    });
-    out
+    })
 }
 
 /// A QuickTime sound description (version 1) for MP3: Apple's player drops MP3 described
@@ -541,144 +446,6 @@ fn mp3_entry(frame: Mp3Frame) -> Vec<u8> {
         put32(out, 2);
     });
     out
-}
-
-fn runs(values: &[u32]) -> Vec<(u32, u32)> {
-    let mut out: Vec<(u32, u32)> = Vec::new();
-    for &value in values {
-        match out.last_mut() {
-            Some((count, last)) if *last == value => *count += 1,
-            _ => out.push((1, value)),
-        }
-    }
-    out
-}
-
-fn moov(tracks: &[Track]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let longest = tracks.iter().map(Track::length).max().unwrap_or(0);
-    boxed(&mut out, b"moov", |out| {
-        full(out, b"mvhd", 1, 0, |out| {
-            put64(out, 0);
-            put64(out, 0);
-            put32(out, MOVIE_TIMESCALE as u32);
-            put64(out, longest);
-            put32(out, 0x0001_0000);
-            put16(out, 0x0100);
-            out.extend_from_slice(&[0; 10]);
-            MATRIX.iter().for_each(|value| put32(out, *value));
-            out.extend_from_slice(&[0; 24]);
-            put32(out, tracks.len() as u32 + 1);
-        });
-        for (id, track) in (1..).zip(tracks) {
-            write_track(out, id, track);
-        }
-    });
-    out
-}
-
-fn write_track(out: &mut Vec<u8>, id: u32, track: &Track) {
-    boxed(out, b"trak", |out| {
-        full(out, b"tkhd", 1, 3, |out| {
-            put64(out, 0);
-            put64(out, 0);
-            put32(out, id);
-            put32(out, 0);
-            put64(out, track.length());
-            out.extend_from_slice(&[0; 8]);
-            put16(out, 0);
-            put16(out, 0);
-            put16(out, if track.sound { 0x0100 } else { 0 });
-            put16(out, 0);
-            MATRIX.iter().for_each(|value| put32(out, *value));
-            put32(out, u32::from(track.width) << 16);
-            put32(out, u32::from(track.height) << 16);
-        });
-        boxed(out, b"edts", |out| {
-            full(out, b"elst", 1, 0, |out| {
-                put32(out, track.edits.len() as u32);
-                for (length, start) in &track.edits {
-                    put64(out, *length);
-                    put64(out, *start as u64);
-                    put32(out, 0x0001_0000);
-                }
-            });
-        });
-        boxed(out, b"mdia", |out| {
-            full(out, b"mdhd", 1, 0, |out| {
-                put64(out, 0);
-                put64(out, 0);
-                put32(out, track.timescale);
-                put64(out, track.media_length());
-                put16(out, 0x55c4);
-                put16(out, 0);
-            });
-            full(out, b"hdlr", 0, 0, |out| {
-                put32(out, 0);
-                out.extend_from_slice(if track.sound { b"soun" } else { b"vide" });
-                out.extend_from_slice(&[0; 12]);
-                out.extend_from_slice(if track.sound { b"SoundHandler\0" } else { b"VideoHandler\0" });
-            });
-            boxed(out, b"minf", |out| {
-                if track.sound {
-                    full(out, b"smhd", 0, 0, |out| put32(out, 0));
-                } else {
-                    full(out, b"vmhd", 0, 1, |out| out.extend_from_slice(&[0; 8]));
-                }
-                boxed(out, b"dinf", |out| {
-                    full(out, b"dref", 0, 0, |out| {
-                        put32(out, 1);
-                        full(out, b"url ", 0, 1, |_| {});
-                    });
-                });
-                write_tables(out, track);
-            });
-        });
-    });
-}
-
-fn write_tables(out: &mut Vec<u8>, track: &Track) {
-    boxed(out, b"stbl", |out| {
-        full(out, b"stsd", 0, 0, |out| {
-            put32(out, 1);
-            out.extend_from_slice(&track.entry);
-        });
-        let table = |out: &mut Vec<u8>, name: &[u8; 4], values: &[u32]| {
-            full(out, name, 0, 0, |out| {
-                let runs = runs(values);
-                put32(out, runs.len() as u32);
-                for (count, value) in runs {
-                    put32(out, count);
-                    put32(out, value);
-                }
-            });
-        };
-        table(out, b"stts", &track.durations);
-        if let Some(offsets) = &track.offsets {
-            table(out, b"ctts", offsets);
-        }
-        if let Some(syncs) = &track.syncs {
-            full(out, b"stss", 0, 0, |out| {
-                put32(out, syncs.len() as u32);
-                syncs.iter().for_each(|number| put32(out, *number));
-            });
-        }
-        full(out, b"stsc", 0, 0, |out| {
-            put32(out, 1);
-            put32(out, 1);
-            put32(out, 1);
-            put32(out, 1);
-        });
-        full(out, b"stsz", 0, 0, |out| {
-            put32(out, 0);
-            put32(out, track.sizes.len() as u32);
-            track.sizes.iter().for_each(|size| put32(out, *size));
-        });
-        full(out, b"co64", 0, 0, |out| {
-            put32(out, track.chunks.len() as u32);
-            track.chunks.iter().for_each(|at| put64(out, *at));
-        });
-    });
 }
 
 #[cfg(test)]
@@ -704,12 +471,14 @@ mod tests {
         let mut frame = vec![0_u8; 576];
         frame[..4].copy_from_slice(&[0xff, 0xfb, 0xb4, 0x44]);
         let stream: Vec<u8> = [&[1, 2][..], &frame, &frame].concat();
-        let (mut sound, mut out, mut written) = (Sound::default(), Vec::new(), 100);
+        let mut sound = Sound::default();
+        let mut movie = Movie::start(Cursor::new(Vec::new()), Brand::QuickTime).unwrap();
+        let first = movie.put(&[]).unwrap();
         for piece in stream.chunks(500) {
-            sound.take(piece, &mut out, &mut written).unwrap();
+            sound.take(piece, &mut movie).unwrap();
         }
-        assert_eq!(sound.frames, vec![(100, 576), (676, 576)], "the two bytes before the first frame are dropped");
-        assert_eq!(out, [frame.clone(), frame].concat());
+        let frames = vec![(first, 576), (first + 576, 576)];
+        assert_eq!(sound.frames, frames, "the two bytes before the first frame are dropped");
     }
 
     #[test]

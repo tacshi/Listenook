@@ -90,12 +90,11 @@ fn opened(id: &str) -> impl IntoElement {
             }
             let job_id = review.job_with(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
             if playable::made(&job_id, &path).is_none() {
-                toast(Tone::Info, tr("Preparing this recording for playback…"));
+                toast(Tone::Info, playable::notice(&path));
             }
             spawn(async move {
-                match playable::prepare(job_id, path).await {
-                    Some(made) => source.set(file_url(&made.to_string_lossy())),
-                    None => toast(Tone::Error, tr("This recording's format cannot be played here.")),
+                if !playable::prepare(job_id, path, move |made| source.set(file_url(&made.to_string_lossy()))).await {
+                    toast(Tone::Error, tr("This recording's format cannot be played here."));
                 }
             });
         });

@@ -6,8 +6,10 @@ use listenook_core::media::container;
 #[ignore = "needs MKV and MP4"]
 fn a_matroska_file_is_put_into_an_mp4_file() {
     let (input, output) = (std::env::var("MKV").unwrap(), std::env::var("MP4").unwrap());
-    println!("fits: {}", container::keeps_picture(std::path::Path::new(&input)));
-    let result = container::mkv_to_mp4(|| File::open(&input), File::create(&output).unwrap());
+    let device = container::Device { shows_vp9: true, shows_av1: true, converts_av1: false };
+    println!("plan: {:?}", container::plan(std::path::Path::new(&input), device));
+    let (input, output) = (File::open(&input).unwrap(), File::create(&output).unwrap());
+    let result = container::mkv_to_mp4(input, output, container::Pictures::Copy, &mut |_| true);
     println!("{result:?}");
 }
 

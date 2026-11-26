@@ -221,11 +221,10 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     let waiting_for_source = signal(needs_help);
     if needs_help {
         let (id, video) = (cache_id.clone(), path.clone());
-        toast(Tone::Info, tr("Preparing this recording for playback…"));
+        toast(Tone::Info, playable::notice(&video));
         spawn(async move {
-            match playable::prepare(id, video).await {
-                Some(made) => source.set(file_url(&made.to_string_lossy())),
-                None => toast(Tone::Error, tr("This recording's format cannot be played here.")),
+            if !playable::prepare(id, video, move |made| source.set(file_url(&made.to_string_lossy()))).await {
+                toast(Tone::Error, tr("This recording's format cannot be played here."));
             }
         });
     }

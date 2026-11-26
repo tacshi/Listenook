@@ -432,6 +432,10 @@ const ZH: &[(&str, &str)] = &[
     ("Podcast search and artwork are provided by Apple Podcasts.", "播客搜索和封面由 Apple 播客提供。"),
     ("Podcasts", "播客"),
     ("Preparing this recording for playback…", "正在准备播放此录音…"),
+    (
+        "Converting this video's picture to play here, which takes a few minutes. Its sound plays meanwhile.",
+        "正在转换此视频的画面以便在此播放，需要几分钟。在此期间先播放声音。",
+    ),
     ("Press Test to list the models your endpoint offers.", "点按“测试”以列出端点提供的模型。"),
     ("Privacy", "隐私"),
     ("Product names, people, acronyms…", "产品名、人名、缩写…"),

@@ -22,7 +22,11 @@ every platform.
 3. Open the transcript to listen, read, translate, edit, practice, or export.
 
 Supported media: MP3, WAV, M4A, OGG, MP4, MKV, and AVI. Local transcription
-takes files of up to 5 hours.
+takes files of up to 5 hours. On a Mac, iPhone, or iPad, MKV, WebM, and AVI
+videos are repackaged to play, as Apple's player opens none of them. AV1 video
+is converted to 1080p HEVC on devices that can't decode it (chips before the
+M3 and A17 Pro): the first time takes a few minutes, and the sound plays
+meanwhile.
 
 ## Features
 
