@@ -84,6 +84,33 @@ function Resolve-SignTool {
   throw "signtool.exe is required when LISTENOOK_WINDOWS_PFX is set. Install the Windows SDK, add signtool.exe to PATH, or set LISTENOOK_SIGNTOOL."
 }
 
+# nsh package reuses the app's programs it built before (target\**\nsh-app-*) however the code
+# changed since, so a package could ship old code. Those whose sources (their Cargo dep-info),
+# Cargo.lock, Cargo.toml or nsh.json changed since they were built are removed: nsh builds them
+# again, and Cargo only what changed.
+function Remove-StaleBuilds {
+  $Sep = [string][char]0x1f
+  $Inputs = @("Cargo.lock", "Cargo.toml", "nsh.json") | ForEach-Object { Join-Path $Root $_ }
+  $Infos = @(Get-ChildItem -Path (Join-Path $Root "target\*\nsh-app-*.d"), (Join-Path $Root "target\*\*\nsh-app-*.d") -File -ErrorAction SilentlyContinue)
+  foreach ($Info in $Infos) {
+    # "<output>: <source> <source> ...", with spaces in paths escaped.
+    $Line = (Get-Content -LiteralPath $Info.FullName -TotalCount 1) -replace '\\ ', $Sep
+    $Colon = $Line.IndexOf(": ")
+    if ($Colon -lt 0) { continue }
+    $Output = $Line.Substring(0, $Colon) -replace $Sep, " "
+    if (-not (Test-Path -LiteralPath $Output -PathType Leaf)) { continue }
+    $Built = (Get-Item -LiteralPath $Output).LastWriteTimeUtc
+    $Sources = $Line.Substring($Colon + 2) -split " " | Where-Object { $_ } | ForEach-Object { $_ -replace $Sep, " " }
+    $Changed = @($Inputs) + @($Sources) | Where-Object {
+      (Test-Path -LiteralPath $_ -PathType Leaf) -and (Get-Item -LiteralPath $_).LastWriteTimeUtc -gt $Built
+    } | Select-Object -First 1
+    if ($Changed) {
+      Write-Output "Rebuilding $(Split-Path $Output -Leaf): $Changed changed since it was built"
+      Remove-Item -LiteralPath $Output -Force
+    }
+  }
+}
+
 $SignTool = $null
 function Invoke-CodeSign([string]$Path) {
   if (-not $env:LISTENOOK_WINDOWS_PFX) { return }
@@ -110,6 +137,7 @@ try {
   $PackageArgs = @("package", "--target", "windows", "--out", $Package, "--app-version", $Version)
   $env:LISTENOOK_VERSION = $Version
   if ($BuildNumber) { $PackageArgs += @("--build", $BuildNumber) }
+  Remove-StaleBuilds
   & nsh @PackageArgs
   if ($LASTEXITCODE -ne 0) { throw "nsh package failed." }
 
