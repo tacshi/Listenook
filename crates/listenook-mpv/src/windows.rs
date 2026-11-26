@@ -3,6 +3,8 @@
 //! rounded and covered like the rest of the window. Frames are drawn on a thread of their own
 //! as mpv has them; the swap chain is made again at each new size.
 
+mod shape;
+
 use std::{
     sync::{Arc, Condvar, Mutex},
     thread::JoinHandle,
@@ -34,6 +36,7 @@ use nsh_platform_windows::{
 };
 use serde_json::Value as JsonValue;
 
+use self::shape::WindowShape;
 use crate::{
     player::{Emit, Player, Screen},
     render::{Api, Render},
@@ -88,6 +91,7 @@ pub(crate) struct Video {
     drawing: Option<JoinHandle<()>>,
     composition: Option<Visuals>,
     size: (i32, i32),
+    shape: WindowShape,
 }
 
 /// The picture's visuals, as nsh stacks a web view's: an outer one with what its ancestors
@@ -242,7 +246,16 @@ impl Video {
             .spawn(move || draw(&drawn, &woken))
             .inspect_err(|why| log::error!("mpv's drawing thread could not start: {why}"))
             .ok();
-        Box::new(Video { player, gpu, target, wake, drawing, composition: None, size: (0, 0) })
+        Box::new(Video {
+            player,
+            gpu,
+            target,
+            wake,
+            drawing,
+            composition: None,
+            size: (0, 0),
+            shape: WindowShape::default(),
+        })
     }
 
     /// A new swap chain of `size`, shown in the visual from now on.
@@ -285,9 +298,17 @@ impl NativeComponent for Video {
         if let Some(visuals) = &self.composition {
             visuals.place(&at);
         }
+        self.shape.placed(&at);
     }
 
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
+        if name == "windowShape" {
+            let size = value
+                .and_then(JsonValue::as_array)
+                .and_then(|pair| Some((pair.first()?.as_f64()?, pair.get(1)?.as_f64()?)));
+            self.shape.set(size);
+            return;
+        }
         self.player.set_prop(name, value);
     }
 
