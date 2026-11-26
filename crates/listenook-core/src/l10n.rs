@@ -365,6 +365,7 @@ const ZH: &[(&str, &str)] = &[
     ("Show Dock icon", "显示程序坞图标"),
     ("Repeat the sentence while held", "按住时重复当前句"),
     ("Minimize", "最小化"),
+    ("Restore", "还原"),
     ("Exit full screen", "退出全屏"),
     ("Subtitles", "字幕"),
     ("Transcription options", "转写选项"),

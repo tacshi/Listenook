@@ -62,6 +62,10 @@ pub enum Icon {
     Record,
     Stop,
     File,
+    /// Windows' caption buttons, as the video player draws them.
+    WindowMinimize,
+    WindowMaximize,
+    WindowRestore,
 }
 
 impl Icon {
@@ -122,6 +126,11 @@ impl Icon {
             Icon::Search => r#"<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>"#,
             Icon::Plus => r#"<path d="M5 12h14"/><path d="M12 5v14"/>"#,
             Icon::Close => r#"<path d="M18 6 6 18"/><path d="m6 6 12 12"/>"#,
+            Icon::WindowMinimize => r#"<path d="M5 12h14"/>"#,
+            Icon::WindowMaximize => r#"<rect width="14" height="14" x="5" y="5" rx="1.5"/>"#,
+            Icon::WindowRestore => {
+                r#"<rect width="12" height="12" x="5" y="7" rx="1.5"/><path d="M9 5h8.5A1.5 1.5 0 0 1 19 6.5V15"/>"#
+            }
             Icon::Check => r#"<path d="M20 6 9 17l-5-5"/>"#,
             Icon::ChevronLeft => r#"<path d="m15 18-6-6 6-6"/>"#,
             Icon::ChevronRight => r#"<path d="m9 18 6-6-6-6"/>"#,

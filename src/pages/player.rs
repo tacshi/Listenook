@@ -7,7 +7,10 @@ use listenook_core::{
 };
 use nsh_base::theme;
 use nsh_core::{
-    desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes, WindowFrame, WindowMode},
+    desktop::{
+        TitleBarOptions, TitleBarStyle, WindowAttributes, WindowControl, WindowFrame, WindowFrameStyle, WindowMode,
+        WindowPosition,
+    },
     element::desktop::{current_window, displays, open_window, title_bar},
     prelude::*,
 };
@@ -103,16 +106,19 @@ pub(crate) fn open_player(path: &str) -> bool {
     }
     let mut attributes = WindowAttributes::default();
     attributes.title_bar = Some(bar);
-    open_window(
-        nsh_core::element::desktop::window()
-            .id(format!("video:{path}"))
-            .title(title)
-            .attributes(attributes)
-            .default_size(size(px(960.0), px(600.0)))
-            .content(move || player(&content).into_element()),
-    )
-    .inspect(|player| player.focus())
-    .is_some()
+    let mut window = nsh_core::element::desktop::window()
+        .id(format!("video:{path}"))
+        .title(title)
+        .default_size(size(px(960.0), px(600.0)));
+    if cfg!(windows) {
+        // The window draws its own buttons, which hide with the controls (`caption_buttons`).
+        // Without the system's frame it would open in the screen's top left corner.
+        attributes.frame = Some(WindowFrameStyle::None);
+        window = window.default_position(WindowPosition::Center);
+    }
+    open_window(window.attributes(attributes).content(move || player(&content).into_element()))
+        .inspect(|player| player.focus())
+        .is_some()
 }
 
 pub(crate) fn player(path: &str) -> impl IntoElement {
@@ -555,6 +561,15 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         }
     });
     let shown = move |s: nsh_core::element::StyleRefinement| s.opacity(if hud.get() { 1.0 } else { 0.0 });
+    // The title bar's buttons take no clicks while it is hidden: a click there shows it.
+    let clickable = move || if hud.get() { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None };
+    let maximized = move || frame.with(|frame| frame.state()).is_some_and(|state| state.mode == WindowMode::Maximized);
+    // Each end of the title bar, as wide as the other so that the title stays centered: the
+    // window's buttons on Windows, which the window draws (`caption_buttons`), else the room
+    // the system's take.
+    let side = move || {
+        if own_window && cfg!(windows) { CAPTION_BUTTON * 3.0 } else { title_bar().right.0.max(84.0) }
+    };
     let surface = if crate::platform::is_phone() {
         let wake = wake.clone();
         gestures::layer(gestures::Video {
@@ -605,45 +620,50 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                     .duration(tokens::motion::BASE)
                     .style_with(shown)
                     .child(
-                        view().style_with(|s| s.w(px(title_bar().right.0.max(84.0)))).items_start().ps_3().child(
-                            when(
-                                move || !own_window,
-                                move || {
-                                    view().window_drag(false).child(stage_button(
-                                        || Icon::ChevronLeft,
-                                        "Back",
-                                        || false,
-                                        move || store.act(crate::state::Action::CloseVideo),
-                                    ))
-                                },
-                            )
-                            .otherwise(move || {
+                        view()
+                            .style_with(move |s| s.w(px(side())))
+                            .items_start()
+                            .ps_3()
+                            .pointer_events(clickable)
+                            .child(
                                 when(
-                                    || cfg!(target_os = "macos"),
+                                    move || !own_window,
                                     move || {
-                                        view()
-                                            .flex_row()
-                                            .gap_2()
-                                            .window_drag(false)
-                                            .child(window_button(
-                                                "Close",
-                                                || tokens::ink(tokens::Ink::WindowClose),
-                                                move || frame.with(|frame| frame.close()),
-                                            ))
-                                            .child(window_button(
-                                                "Minimize",
-                                                || tokens::ink(tokens::Ink::WindowMinimize),
-                                                move || frame.with(|frame| frame.minimize()),
-                                            ))
-                                            .child(window_button(
-                                                "Full screen",
-                                                || tokens::ink(tokens::Ink::WindowZoom),
-                                                move || set_fullscreen(true),
-                                            ))
+                                        view().window_drag(false).child(stage_button(
+                                            || Icon::ChevronLeft,
+                                            "Back",
+                                            || false,
+                                            move || store.act(crate::state::Action::CloseVideo),
+                                        ))
                                     },
                                 )
-                            }),
-                        ),
+                                .otherwise(move || {
+                                    when(
+                                        || cfg!(target_os = "macos"),
+                                        move || {
+                                            view()
+                                                .flex_row()
+                                                .gap_2()
+                                                .window_drag(false)
+                                                .child(window_button(
+                                                    "Close",
+                                                    || tokens::ink(tokens::Ink::WindowClose),
+                                                    move || frame.with(|frame| frame.close()),
+                                                ))
+                                                .child(window_button(
+                                                    "Minimize",
+                                                    || tokens::ink(tokens::Ink::WindowMinimize),
+                                                    move || frame.with(|frame| frame.minimize()),
+                                                ))
+                                                .child(window_button(
+                                                    "Full screen",
+                                                    || tokens::ink(tokens::Ink::WindowZoom),
+                                                    move || set_fullscreen(true),
+                                                ))
+                                        },
+                                    )
+                                }),
+                            ),
                     )
                     .child(
                         text(title.clone())
@@ -654,7 +674,10 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                             .flex_1()
                             .text_color(ink),
                     )
-                    .child(view().style_with(|s| s.w(px(title_bar().right.0.max(84.0)))))
+                    .child(
+                        when(move || own_window && cfg!(windows), move || caption_buttons(maximized, clickable))
+                            .otherwise(move || view().style_with(move |s| s.w(px(side())))),
+                    )
             },
         ))
         .child(
@@ -704,6 +727,54 @@ fn stage_button(
             .active(|s| s.bg(|| ink().opacity(0.24)))
             .child(ui::icon_of(glyph, 18.0)),
     )
+}
+
+/// The width of each of Windows' caption buttons, in points.
+const CAPTION_BUTTON: f32 = 46.0;
+
+/// Windows' minimize, maximize (restore when `maximized`) and close buttons, which the video
+/// player's window draws in its title bar so that they hide with its controls; the system
+/// carries out their presses, with its snap layouts over maximize. `clickable`: whether they
+/// take clicks (not while hidden).
+fn caption_buttons(
+    maximized: impl Fn() -> bool + Copy + 'static,
+    clickable: impl Fn() -> nsh_core::PointerEvents + 'static,
+) -> impl IntoElement {
+    view()
+        .flex_row()
+        .self_stretch()
+        .pointer_events(clickable)
+        .child(caption_button(WindowControl::Minimize, || "Minimize", || Icon::WindowMinimize))
+        .child(caption_button(
+            WindowControl::Maximize,
+            move || if maximized() { "Restore" } else { "Maximize" },
+            move || if maximized() { Icon::WindowRestore } else { Icon::WindowMaximize },
+        ))
+        .child(caption_button(WindowControl::Close, || "Close", || Icon::Close))
+}
+
+fn caption_button(
+    control: WindowControl,
+    name: impl Fn() -> &'static str + 'static,
+    glyph: impl Fn() -> Icon + 'static,
+) -> impl IntoElement {
+    let close = control == WindowControl::Close;
+    view()
+        .window_control(control)
+        .label(move || tr(name()))
+        .w(px(CAPTION_BUTTON))
+        .self_stretch()
+        .items_center()
+        .justify_center()
+        .text_color(ink)
+        .hover(move |s| {
+            if close {
+                s.bg(|| tokens::ink(tokens::Ink::WindowClose)).text_color(Hsla::white)
+            } else {
+                s.bg(|| ink().opacity(0.14))
+            }
+        })
+        .child(ui::icon_of(glyph, 16.0))
 }
 
 fn window_button(name: &'static str, color: fn() -> AdaptiveColor, on_press: impl Fn() + 'static) -> impl IntoElement {
