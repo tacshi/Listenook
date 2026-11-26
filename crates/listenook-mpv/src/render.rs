@@ -20,6 +20,7 @@ struct OpenGlInit {
     get_proc_address_ctx: *mut c_void,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 #[repr(C)]
 struct OpenGlFbo {
     fbo: c_int,
@@ -30,7 +31,9 @@ struct OpenGlFbo {
 
 const PARAM_API_TYPE: c_int = 1;
 const PARAM_OPENGL_INIT_PARAMS: c_int = 2;
+#[cfg_attr(windows, allow(dead_code))]
 const PARAM_OPENGL_FBO: c_int = 3;
+#[cfg_attr(windows, allow(dead_code))]
 const PARAM_FLIP_Y: c_int = 4;
 const PARAM_BLOCK_FOR_TARGET_TIME: c_int = 12;
 const UPDATE_FRAME: u64 = 1;
@@ -74,6 +77,7 @@ unsafe extern "C" fn frame_ready(ctx: *mut c_void) {
 pub(crate) enum Api {
     /// With the OpenGL (ES) context current when the renderer is made and used, finding its
     /// functions with the function given.
+    #[cfg_attr(windows, allow(dead_code))]
     OpenGl(unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
     /// With this `ID3D11Device`, into textures the app gives it.
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -135,6 +139,7 @@ impl Render {
 
     /// Draws the current frame into framebuffer `fbo`, `width` × `height` pixels, upside down
     /// for OpenGL's own framebuffers (`flip`).
+    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn draw(&self, fbo: i32, width: i32, height: i32, flip: bool) {
         let mut target = OpenGlFbo { fbo, w: width, h: height, internal_format: 0 };
         let mut flip = c_int::from(flip);

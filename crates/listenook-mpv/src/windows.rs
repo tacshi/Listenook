@@ -14,13 +14,14 @@ use nsh_platform_windows::{
         Win32::{
             Foundation::HMODULE,
             Graphics::{
-                Direct2D::Common::D2D_RECT_F,
                 Direct3D::D3D_DRIVER_TYPE_HARDWARE,
                 Direct3D11::{
                     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
-                    D3D11CreateDevice, ID3D11Device, ID3D11Texture2D,
+                    D3D11CreateDevice, ID3D11Device, ID3D11Multithread, ID3D11Texture2D,
                 },
-                DirectComposition::{IDCompositionDesktopDevice, IDCompositionVisual2, IDCompositionVisual3},
+                DirectComposition::{
+                    IDCompositionDesktopDevice, IDCompositionRectangleClip, IDCompositionVisual2, IDCompositionVisual3,
+                },
                 Dxgi::{
                     Common::{DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
                     DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
@@ -85,8 +86,58 @@ pub(crate) struct Video {
     target: Arc<Mutex<Target>>,
     wake: Arc<Wake>,
     drawing: Option<JoinHandle<()>>,
-    composition: Option<(IDCompositionDesktopDevice, IDCompositionVisual2)>,
+    composition: Option<Visuals>,
     size: (i32, i32),
+}
+
+/// The picture's visuals, as nsh stacks a web view's: an outer one with what its ancestors
+/// leave visible (window pixels) and its opacity, holding an inner one with its transform and
+/// rounded corners, whose content is the swap chain.
+struct Visuals {
+    outer: IDCompositionVisual2,
+    inner: IDCompositionVisual2,
+    corners: IDCompositionRectangleClip,
+}
+
+impl Visuals {
+    fn new(device: &IDCompositionDesktopDevice) -> nsh_platform_windows::windows::core::Result<Visuals> {
+        // SAFETY: DirectComposition's documented API, on the window's thread.
+        unsafe {
+            let outer = device.CreateVisual()?;
+            let inner = device.CreateVisual()?;
+            let corners = device.CreateRectangleClip()?;
+            inner.SetClip(&corners)?;
+            outer.AddVisual(&inner, true, None)?;
+            Ok(Visuals { outer, inner, corners })
+        }
+    }
+
+    /// Puts the picture at `at` (the window commits after `placed`).
+    fn place(&self, at: &Placement) {
+        let (width, height) = (at.size.0 as f32, at.size.1 as f32);
+        let corners = &self.corners;
+        let [top_left, top_right, bottom_right, bottom_left] = at.radii;
+        // SAFETY: DirectComposition's documented API, on the window's thread.
+        unsafe {
+            let _ = self.inner.SetTransform2(&at.matrix);
+            let _ = corners.SetLeft2(0.0);
+            let _ = corners.SetTop2(0.0);
+            let _ = corners.SetRight2(width);
+            let _ = corners.SetBottom2(height);
+            let _ = corners.SetTopLeftRadiusX2(top_left);
+            let _ = corners.SetTopLeftRadiusY2(top_left);
+            let _ = corners.SetTopRightRadiusX2(top_right);
+            let _ = corners.SetTopRightRadiusY2(top_right);
+            let _ = corners.SetBottomRightRadiusX2(bottom_right);
+            let _ = corners.SetBottomRightRadiusY2(bottom_right);
+            let _ = corners.SetBottomLeftRadiusX2(bottom_left);
+            let _ = corners.SetBottomLeftRadiusY2(bottom_left);
+            let _ = self.outer.SetClip2(&at.clip);
+            if let Ok(outer) = self.outer.cast::<IDCompositionVisual3>() {
+                let _ = outer.SetOpacity2(at.alpha.clamp(0.0, 1.0));
+            }
+        }
+    }
 }
 
 /// The Direct3D device mpv draws with, and the factory of its swap chains.
@@ -113,6 +164,13 @@ impl Gpu {
             )?;
         }
         let device = device.expect("D3D11CreateDevice made a device");
+        // mpv draws on its own threads and the drawing thread presents: the device is shared.
+        if let Ok(multithread) = device.cast::<ID3D11Multithread>() {
+            // SAFETY: Direct3D's documented API on a live device.
+            unsafe {
+                let _ = multithread.SetMultithreadProtected(true);
+            }
+        }
         // SAFETY: DXGI's documented API on a live device.
         let factory = unsafe { device.cast::<IDXGIDevice>()?.GetAdapter()?.GetParent::<IDXGIFactory2>()? };
         Ok(Gpu { device, factory })
@@ -189,11 +247,11 @@ impl Video {
 
     /// A new swap chain of `size`, shown in the visual from now on.
     fn resize(&mut self, size: (i32, i32)) {
-        let (Some(gpu), Some((_, visual))) = (&self.gpu, &self.composition) else { return };
+        let (Some(gpu), Some(visuals)) = (&self.gpu, &self.composition) else { return };
         match gpu.swap_chain(size) {
             Ok(swap_chain) => {
                 // SAFETY: DirectComposition's documented API; the window commits after `placed`.
-                if let Err(why) = unsafe { visual.SetContent(&swap_chain) } {
+                if let Err(why) = unsafe { visuals.inner.SetContent(&swap_chain) } {
                     log::warn!("mpv's picture cannot be shown: {why}");
                 }
                 let mut target = self.target.lock().unwrap_or_else(|e| e.into_inner());
@@ -207,39 +265,16 @@ impl Video {
     }
 }
 
-/// `clip` (window pixels) in the coordinates of an item `matrix` places, as far as it is only
-/// scaled and moved (nsh's views are).
-fn local_clip(placement: &Placement) -> D2D_RECT_F {
-    let m = &placement.matrix;
-    let (sx, sy) =
-        (if m.M11.abs() > f32::EPSILON { m.M11 } else { 1.0 }, if m.M22.abs() > f32::EPSILON { m.M22 } else { 1.0 });
-    let clip = &placement.clip;
-    let local = D2D_RECT_F {
-        left: (clip.left - m.M31) / sx,
-        top: (clip.top - m.M32) / sy,
-        right: (clip.right - m.M31) / sx,
-        bottom: (clip.bottom - m.M32) / sy,
-    };
-    D2D_RECT_F {
-        left: local.left.max(0.0),
-        top: local.top.max(0.0),
-        right: local.right.min(placement.size.0 as f32),
-        bottom: local.bottom.min(placement.size.1 as f32),
-    }
-}
-
 impl NativeComponent for Video {
     fn composed(&self) -> bool {
         true
     }
 
     fn visual(&mut self, device: &IDCompositionDesktopDevice) -> Option<IDCompositionVisual2> {
-        // SAFETY: DirectComposition's documented API.
-        let visual = unsafe { device.CreateVisual() }
-            .inspect_err(|why| log::warn!("no visual for mpv's picture: {why}"))
-            .ok()?;
-        self.composition = Some((device.clone(), visual.clone()));
-        Some(visual)
+        let visuals = Visuals::new(device).inspect_err(|why| log::warn!("no visual for mpv's picture: {why}")).ok()?;
+        let outer = visuals.outer.clone();
+        self.composition = Some(visuals);
+        Some(outer)
     }
 
     fn placed(&mut self, at: Option<Placement>) {
@@ -247,30 +282,8 @@ impl NativeComponent for Video {
         if at.size != self.size && at.size.0 > 0 && at.size.1 > 0 {
             self.resize(at.size);
         }
-        let Some((device, visual)) = &self.composition else { return };
-        let clip = local_clip(&at);
-        // SAFETY: DirectComposition's documented API; the window commits after `placed`.
-        unsafe {
-            let _ = visual.SetTransform2(&at.matrix);
-            if let Ok(rectangle) = device.CreateRectangleClip() {
-                let _ = rectangle.SetLeft2(clip.left);
-                let _ = rectangle.SetTop2(clip.top);
-                let _ = rectangle.SetRight2(clip.right);
-                let _ = rectangle.SetBottom2(clip.bottom);
-                let [top_left, top_right, bottom_right, bottom_left] = at.radii;
-                let _ = rectangle.SetTopLeftRadiusX2(top_left);
-                let _ = rectangle.SetTopLeftRadiusY2(top_left);
-                let _ = rectangle.SetTopRightRadiusX2(top_right);
-                let _ = rectangle.SetTopRightRadiusY2(top_right);
-                let _ = rectangle.SetBottomRightRadiusX2(bottom_right);
-                let _ = rectangle.SetBottomRightRadiusY2(bottom_right);
-                let _ = rectangle.SetBottomLeftRadiusX2(bottom_left);
-                let _ = rectangle.SetBottomLeftRadiusY2(bottom_left);
-                let _ = visual.SetClip(&rectangle);
-            }
-            if let Ok(visual) = visual.cast::<IDCompositionVisual3>() {
-                let _ = visual.SetOpacity2(at.alpha);
-            }
+        if let Some(visuals) = &self.composition {
+            visuals.place(&at);
         }
     }
 
