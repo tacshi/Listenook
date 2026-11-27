@@ -1,7 +1,8 @@
 //! A player on every platform: the props the app sets become mpv's properties, and what mpv
 //! reports becomes the events the app listens to (`load`, `progress`, `end`, `error`,
 //! `buffer`), as nsh's own video element sends them. A source ending in `#t=<seconds>` (a media
-//! fragment) plays from there. Only how the picture is shown differs by platform ([`Screen`]).
+//! fragment) plays from there. Only how the picture is shown differs by platform ([`Screen`]),
+//! and on macOS the sound mpv sends to CoreAudio ([`MACOS_OPTIONS`]).
 
 use std::{
     sync::{
@@ -63,6 +64,13 @@ const OPTIONS: [(&str, &str); 23] = [
     ("input-vo-keyboard", "no"),
 ];
 
+/// What a player on macOS is started with besides: interleaved stereo, which mpv 0.41's CoreAudio
+/// output still starts with on macOS 27. Mono or planar sound (as AAC decodes to) made it fail
+/// there (mpv#18384); mpv then played through AVFoundation, but left the failed output's device
+/// listener behind, and the next change of audio devices crashed the app. mpv 0.42 fixes both.
+#[cfg(target_os = "macos")]
+const MACOS_OPTIONS: [(&str, &str); 2] = [("audio-format", "float"), ("audio-channels", "stereo")];
+
 /// What the app's props and mpv's thread share.
 #[derive(Default)]
 struct Shared {
@@ -96,6 +104,8 @@ impl Player {
     pub(crate) fn new(screen: Screen, emit: Emit) -> Self {
         let shared = Arc::new(Shared { every_ms: AtomicU32::new(250), ..Shared::default() });
         let mut options: Vec<(&str, &str)> = OPTIONS.to_vec();
+        #[cfg(target_os = "macos")]
+        options.extend(MACOS_OPTIONS);
         options.extend(screen.options.iter().map(|(name, value)| (*name, value.as_str())));
         let mpv = match Mpv::start(&options, screen.wid, screen.keep) {
             Ok(mpv) => Arc::new(mpv),
