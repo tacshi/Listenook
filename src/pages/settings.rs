@@ -922,6 +922,7 @@ fn shortcuts() -> impl IntoElement {
                 ("r", "Repeat the sentence while held"),
                 ("s", "Reveal current sentence"),
                 ("e", "Edit current sentence"),
+                ("enter", "Show a video full screen"),
             ],
         ))
         .child(group(

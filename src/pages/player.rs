@@ -273,6 +273,7 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     on_key("right", move |_| step(true));
     on_key("r", move |_| repeating.set(!repeating.get_untracked()));
     on_key("f", move |_| set_fullscreen(!fullscreen.get_untracked()));
+    on_key("enter", move |_| set_fullscreen(true));
     on_key("escape", move |_| {
         if fullscreen.get_untracked() {
             set_fullscreen(false);

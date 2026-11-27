@@ -185,6 +185,11 @@ fn opened(id: &str) -> impl IntoElement {
         }
     });
     let frame = stored(current_window());
+    on_key("enter", move |_| {
+        if review.has_video {
+            set_fullscreen(review, frame, true);
+        }
+    });
     on_key("escape", move |_| {
         if untracked(|| review.is_picking_skip()) {
             review.stop_picking_skip();

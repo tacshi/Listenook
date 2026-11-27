@@ -666,6 +666,7 @@ const ZH: &[(&str, &str)] = &[
     ("highlights ·", "处标记 ·"),
     ("the AI decides whether each is a word to learn or a key point.", "AI 会判断每处是要学的词句还是要点。"),
     ("Edit current sentence", "编辑当前句子"),
+    ("Show a video full screen", "全屏显示视频"),
     ("Maximize", "最大化"),
     ("More actions", "更多操作"),
     ("More sentence actions", "更多句子操作"),
