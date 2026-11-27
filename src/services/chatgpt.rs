@@ -488,6 +488,11 @@ impl Access {
             "invalid_grant" => Failure::new("llm_signed_out", failure.message),
             _ => failure,
         })?;
+        // Signed out, or in as someone else, while this was renewing: what came back is not kept,
+        // or it would put the account back.
+        if Account::saved().is_none_or(|saved| saved.refresh_token != account.refresh_token) {
+            return Err(Failure::new("llm_sign_in_required", "Not signed in with ChatGPT."));
+        }
         if !tokens.refresh_token.is_empty() && tokens.refresh_token != account.refresh_token {
             let renewed = Account { refresh_token: tokens.refresh_token.clone(), ..account.clone() };
             if let Err(error) = secrets::write(Secret::ChatGpt, &renewed.secret()) {

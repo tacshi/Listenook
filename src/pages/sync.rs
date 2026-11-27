@@ -176,6 +176,10 @@ fn choosing(address: Signal<String>) -> impl IntoElement {
                             BoundField { value: move || store.device_name(), set: move |name: String| SyncState::get().act(crate::work::sync::SyncAction::SetDeviceName(&name)), placeholder: SharedString::default },
                         )
                     },
+                ))
+                .child(when(
+                    move || !store.sync_visible() && paired(),
+                    || hint(l("Syncing is paused while this device is hidden.")),
                 )),
         )
         .child(when(paired, move || {

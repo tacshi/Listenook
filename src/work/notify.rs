@@ -25,7 +25,7 @@ fn title(job: &Job, was: JobStatus) -> Option<&'static str> {
 pub(crate) fn job_changed(job: &Job, was: JobStatus) {
     let store = store();
     let wanted = store.setting(|s| s.extra.get("notify_when_done").and_then(|v| v.as_bool()).unwrap_or(true));
-    if !wanted || store.focused() {
+    if !wanted || store.focused_now() {
         return;
     }
     let Some(title) = title(job, was).map(tr) else {

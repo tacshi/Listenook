@@ -62,7 +62,7 @@ pub(crate) fn shell() -> impl IntoElement {
     });
     if cfg!(target_os = "ios") {
         set_interval(std::time::Duration::from_millis(500), move || {
-            if store.focused() {
+            if store.focused_now() {
                 crate::services::keep_keys();
                 crate::services::keep_scroll_on_status_bar_taps();
             }

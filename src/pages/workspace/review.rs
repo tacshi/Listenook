@@ -745,7 +745,7 @@ impl Review {
         self.job.with_untracked(|job| job.as_ref()?.document()?.play_end(index, loudness.as_deref()))
     }
 
-    fn index_of(&self, segment_id: &str) -> Option<usize> {
+    pub(super) fn index_of(&self, segment_id: &str) -> Option<usize> {
         self.job.with_untracked(|job| {
             job.as_ref()?.document()?.segments.iter().position(|segment| segment.id == segment_id)
         })
@@ -1058,15 +1058,20 @@ impl Review {
             }
             return;
         }
+        let waited = self.waiting.get_untracked();
         self.cancel_wait();
         self.stop_at.set(None);
+        // Waiting to play again shows as playing: pressing then stops the wait and stays paused.
+        if waited {
+            return;
+        }
         if self.paused.get_untracked() {
             self.follow();
         }
         self.paused.set(!self.paused.get_untracked());
     }
 
-    /// Stops playing, and any wait to play again: the sleep timer is up.
+    /// Stops playing, and any wait to play again.
     pub(super) fn pause(&self) {
         self.cancel_wait();
         batch(|| {
@@ -1700,17 +1705,18 @@ impl Review {
         let before = self.job.with_untracked(|job| job.as_ref().and_then(|job| job.document()));
         let mut changed = false;
         self.store.update_document(&id, |document| changed = edit(document));
-        if let (true, Some(before)) = (changed, before) {
-            let generation = super::undo::keep(id, before);
+        let after = self.store.job_now(&id).and_then(|job| job.document());
+        if let (true, Some(before), Some(after)) = (changed, before, after) {
+            let generation = super::undo::keep(id.clone(), before, after);
             toast_with_action(Tone::Success, tr(done), tr("Undo"), move || {
-                super::undo::undo(Some(generation));
+                super::undo::undo(Some(generation), &id);
             });
         }
         changed
     }
 
     pub(super) fn undo(&self) -> bool {
-        let undone = super::undo::undo(None);
+        let undone = super::undo::undo(None, &self.id());
         if undone {
             self.editing.set(None);
         }
@@ -1909,6 +1915,7 @@ impl Review {
         };
         let text = editing.original.then(|| self.draft.get_untracked().trim().to_owned()).filter(|t| !t.is_empty());
         let translation = editing.translation.then(|| self.translation_draft.get_untracked().trim().to_owned());
+        let joined = self.segment_now(index + 1).map(|segment| segment.id);
         let merged = self.change("Sentences merged", |document| {
             let mut trial = document.clone();
             let segment = &mut trial.segments[index];
@@ -1926,7 +1933,20 @@ impl Review {
             merged
         });
         if merged {
-            self.editing.set(None);
+            batch(|| {
+                self.editing.set(None);
+                // The sentence joined to this one may be an end of what repeats: this one is now.
+                if let (Some(joined), Some(mut span)) = (joined, self.repeating.get_untracked())
+                    && (span.first == joined || span.last == joined)
+                {
+                    for end in [&mut span.first, &mut span.last] {
+                        if *end == joined {
+                            end.clone_from(&editing.segment_id);
+                        }
+                    }
+                    self.repeating.set(Some(span));
+                }
+            });
         }
     }
 

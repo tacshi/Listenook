@@ -451,7 +451,12 @@ impl Store {
         });
     }
 
+    /// Whether the app's window has the focus, followed as it comes and goes.
     pub(crate) fn focused(&self) -> bool {
+        self.focused.get()
+    }
+
+    pub(crate) fn focused_now(&self) -> bool {
         self.focused.get_untracked()
     }
 
@@ -837,7 +842,7 @@ impl Store {
     fn erase_job(&self, id: &str) {
         self.shelve(Shelf::Continue, id, true);
         self.shelve(Shelf::Recent, id, true);
-        for key in [id.to_owned(), format!("{id}:translate"), format!("{id}:brief")] {
+        for key in [id.to_owned(), format!("{id}:translate"), format!("{id}:brief"), format!("{id}:ads")] {
             self.cancel_work(&key);
         }
         if let (Some(root), Some(job)) = (self.data_root(), self.job_now(id))

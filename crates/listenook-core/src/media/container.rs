@@ -6,6 +6,8 @@ use std::{
 
 use matroska_demuxer::{Frame, MatroskaFile, TrackType};
 
+use crate::media::subtitles;
+
 /// The subtitles of the video at `video`: each file beside it named after it, then each track
 /// inside it.
 pub fn subtitle_tracks(video: &str) -> Vec<SubtitleTrack> {
@@ -238,28 +240,10 @@ pub struct SubtitleTrack {
     pub cues: Vec<crate::media::subtitles::Cue>,
 }
 
-fn ass_text(line: &str) -> String {
-    let text = line.splitn(9, ',').nth(8).unwrap_or(line);
-    let mut out = String::new();
-    let mut styling = false;
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '{' => styling = true,
-            '}' => styling = false,
-            '\\' if !styling && matches!(chars.peek(), Some('N' | 'n')) => {
-                chars.next();
-                out.push('\n');
-            }
-            '\\' if !styling && chars.peek() == Some(&'h') => {
-                chars.next();
-                out.push(' ');
-            }
-            c if !styling => out.push(c),
-            _ => {}
-        }
-    }
-    out
+/// The text of an ASS line as a Matroska frame holds it: the ninth of its fields, after its
+/// order, layer, style, name, margins and effect.
+fn ass_frame_text(frame: &str) -> String {
+    subtitles::ass_text(frame.splitn(9, ',').nth(8).unwrap_or(frame))
 }
 
 fn label_of(name: Option<&str>, language: Option<&str>, number: usize) -> String {
@@ -295,14 +279,23 @@ fn mkv_subtitles<R: Read + Seek>(input: R) -> Vec<SubtitleTrack> {
             continue;
         };
         let raw = String::from_utf8_lossy(&frame.data);
-        let text = crate::media::subtitles::clean_caption(&if *ass { ass_text(&raw) } else { raw.into_owned() }, true);
+        let text = subtitles::plain(&if *ass { ass_frame_text(&raw) } else { raw.into_owned() });
         let start_ms = milliseconds(frame.timestamp);
         let end_ms = start_ms + frame.duration.map_or(4000, milliseconds).max(1);
         if !text.trim().is_empty() {
-            track.cues.push(crate::media::subtitles::Cue { start_ms, end_ms, text });
+            track.cues.push(subtitles::Cue { start_ms, end_ms, text });
         }
     }
-    tracks.into_iter().map(|(.., track)| track).filter(|track| !track.cues.is_empty()).collect()
+    tracks
+        .into_iter()
+        .map(|(_, ass, mut track)| {
+            if ass {
+                track.cues = subtitles::together(track.cues);
+            }
+            track
+        })
+        .filter(|track| !track.cues.is_empty())
+        .collect()
 }
 
 /// How many seconds at the start of an MP4's first audio track its edit list
@@ -364,7 +357,7 @@ mod subtitle_tests {
 
     #[test]
     fn ass_events_lose_their_fields_and_styling() {
-        assert_eq!(ass_text("1,0,Default,,0,0,0,,{\\i1}Hello,{\\i0} there\\Nfriend"), "Hello, there\nfriend");
+        assert_eq!(ass_frame_text("1,0,Default,,0,0,0,,{\\i1}Hello,{\\i0} there\\Nfriend"), "Hello, there\nfriend");
         assert_eq!(label_of(Some("English (SDH)"), Some("en"), 1), "English (SDH)");
         assert_eq!(label_of(None, Some("und"), 2), "Track 2");
     }

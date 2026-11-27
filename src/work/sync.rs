@@ -436,6 +436,8 @@ impl SyncState {
     fn remove(&self, id: &str) {
         service::remove(id);
         self.mates.set(service::mates());
+        // Tells the devices that stay, so they stop answering the one removed.
+        self.round(Large::Left);
     }
 
     fn leave(&self) {

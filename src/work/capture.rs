@@ -447,6 +447,13 @@ impl CaptureState {
             .setting(|s| s.extra.get("capture_transcribe").and_then(|value| value.as_bool()).unwrap_or(false))
     }
 
+    /// Chooses whether to transcribe what is saved.
+    pub(crate) fn set_transcribes(&self, transcribe: bool) {
+        crate::state::store().update_settings(|s| {
+            s.extra.insert("capture_transcribe".into(), transcribe.into());
+        });
+    }
+
     /// Finishes the file of a recording that runs as the app quits, so it is
     /// offered again at the next start.
     fn finish_on_quit(&self) {

@@ -2,7 +2,7 @@ pub mod activity;
 pub mod ai;
 pub mod format;
 mod job;
-pub use job::Change;
+pub use job::{Change, Found};
 pub mod l10n;
 pub mod media;
 pub mod models;

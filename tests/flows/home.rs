@@ -17,6 +17,18 @@ fn the_sleep_timer_shows_what_is_left_until_it_is_turned_off() {
 }
 
 #[test]
+fn search_finds_a_recording_by_a_sentence_of_its_transcript() {
+    let mut it = start("found", seed_transcript, Vec::new());
+    it.app.press("role:button[Home]").unwrap();
+    it.app.press("label:Search").unwrap();
+    it.app.type_text("text:Search your library", "Beginner").unwrap();
+    it.app.wait_for("“So, what should a beginner do first?”").unwrap();
+    assert!(it.app.shows("Learning languages"), "the sentence is shown under its recording");
+    it.app.press("“So, what should a beginner do first?”").unwrap();
+    it.app.wait_for("Start with short episodes, and repeat each sentence out loud.").unwrap();
+}
+
+#[test]
 fn home_resumes_what_was_played_last_and_lists_what_was_added() {
     let mut it = start(
         "home",

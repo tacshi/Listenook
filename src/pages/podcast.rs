@@ -317,7 +317,17 @@ fn discover(page: Page) -> impl IntoElement {
                                     .transition_opacity()
                                     .duration(motion::FAST)
                                     .child(each(
-                                        featured,
+                                        // Shows followed are in Following, just above.
+                                        move || {
+                                            let podcasts = crate::state::podcast::PodcastState::get();
+                                            featured.with(|shows| {
+                                                shows
+                                                    .iter()
+                                                    .filter(|show| !podcasts.is_followed(&show.feed_url))
+                                                    .cloned()
+                                                    .collect::<Vec<_>>()
+                                            })
+                                        },
                                         |show: &ShowSummary| show.feed_url.clone(),
                                         move |show, _| show_card(page, move || show.get()),
                                     )),

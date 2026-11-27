@@ -707,6 +707,7 @@ const ZH: &[(&str, &str)] = &[
     ),
     ("My devices", "我的设备"),
     ("Sync now", "立即同步"),
+    ("Syncing is paused while this device is hidden.", "此设备隐藏期间暂停同步。"),
     ("Add a device", "添加设备"),
     ("Pair", "配对"),
     ("Pairing…", "正在配对…"),

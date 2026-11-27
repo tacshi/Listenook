@@ -72,6 +72,16 @@ fn carries_on(previous: &str, next: &str) -> bool {
     previous.trim_end().ends_with('.') && next.chars().next().is_some_and(|c| c.is_ascii_digit() || c.is_lowercase())
 }
 
+/// Whether `text` ends in an abbreviation that a name or more of the sentence follows (`Dr.`,
+/// `Mr.`, `e.g.`), whose full stop ends nothing.
+pub(crate) fn ends_in_abbreviation(text: &str) -> bool {
+    const ABBREVIATIONS: [&str; 8] = ["Mr", "Mrs", "Ms", "Dr", "Prof", "vs", "e.g", "i.e"];
+    text.split_whitespace()
+        .last()
+        .and_then(|word| word.strip_suffix('.'))
+        .is_some_and(|word| ABBREVIATIONS.contains(&word.trim_start_matches(|c: char| !c.is_alphanumeric())))
+}
+
 /// Sentences of timed `tokens`, each with the space before it: cut where a sentence ends, the
 /// speaker changes or there is a pause, and cut again into clauses where too long to practise.
 pub(crate) fn plain_segments(tokens: &[Token]) -> Vec<Segment> {
@@ -84,7 +94,10 @@ pub(crate) fn plain_segments(tokens: &[Token]) -> Vec<Segment> {
         {
             let speaker_changed = matches!((&previous.speaker, &token.speaker), (Some(a), Some(b)) if a != b);
             let paused = token.start_ms > 0 && previous.end_ms > 0 && token.start_ms - previous.end_ms > PAUSE_MS;
-            if speaker_changed || paused || (ended && !carries_on(&previous.text, &token.text)) {
+            // The full stop may be a token of its own after the word (` Dr`, `.`).
+            let tail: String = current.iter().rev().take(2).rev().map(|token| token.text.as_str()).collect();
+            let ends = ended && !carries_on(&previous.text, &token.text) && !ends_in_abbreviation(&tail);
+            if speaker_changed || paused || ends {
                 push_sentence(&mut segments, &current);
                 current.clear();
             }
@@ -319,10 +332,14 @@ pub(crate) fn is_spaced_letter(c: char) -> bool {
 }
 
 /// Whether a space goes between `left` and `right` put together: between the words of a script
-/// that spaces them, and after the ASCII punctuation that ends one.
+/// that spaces them, after the punctuation that ends one and before the punctuation that opens
+/// one (`said,` and `"You`, `costs` and `$5`).
 pub(crate) fn spaced_apart(left: &str, right: &str) -> bool {
-    left.chars().last().is_some_and(|c| !c.is_whitespace() && (c.is_ascii() || is_spaced_letter(c)))
-        && right.chars().next().is_some_and(is_spaced_letter)
+    let closes = |c: char| c.is_ascii() || is_spaced_letter(c) || matches!(c, '…' | '”' | '’' | '»');
+    let opens =
+        |c: &char| matches!(c, '"' | '\'' | '(' | '[' | '$' | '€' | '£' | '#' | '@' | '¿' | '¡' | '“' | '‘' | '«');
+    left.chars().last().is_some_and(|c| !c.is_whitespace() && closes(c))
+        && right.chars().find(|c| !opens(c)).is_some_and(is_spaced_letter)
 }
 
 fn join_text(left: &str, right: &str) -> String {
@@ -517,6 +534,13 @@ mod tests {
         let pieces = [" Both", " screens", " are", " 7", ".", "6", " inches", " wide.", " That's", " big."];
         assert_eq!(texts_of(&pieces), ["Both screens are 7.6 inches wide.", "That's big."]);
         assert_eq!(texts_of(&[" It", " is", " 7", ".", " Six", " more."]), ["It is 7.", "Six more."]);
+    }
+
+    #[test]
+    fn the_full_stop_of_a_title_does_not_end_the_sentence() {
+        let pieces = [" Good", " morning,", " Dr", ".", " Smith", ".", " Sit", " down."];
+        assert_eq!(texts_of(&pieces), ["Good morning, Dr. Smith.", "Sit down."]);
+        assert_eq!(texts_of(&[" Ask", " Mr.", " Jones.", " He", " knows."]), ["Ask Mr. Jones.", "He knows."]);
     }
 
     #[test]

@@ -110,6 +110,15 @@ pub enum Change<'a> {
     Touch,
 }
 
+/// Where a search found a recording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
+    /// In its title or its file's name.
+    Name,
+    /// In a sentence of its transcript: the line that has it, and when it is said.
+    Sentence { start_ms: i64, text: String },
+}
+
 impl Job {
     /// Applies `change` to it.
     pub fn apply(&mut self, change: Change<'_>) {
@@ -257,6 +266,29 @@ impl Job {
     /// Whether its media was sent to a transcription service, and is still there.
     pub fn is_uploaded(&self) -> bool {
         self.remote_file_id.is_some()
+    }
+
+    /// Whether a subtitle file can become its transcript now: not while it is being downloaded
+    /// or transcribed, whose work the new transcript would cut short.
+    /// Where `needle`, in lower case, is in this recording: its name first, then the first
+    /// sentence shown that has it, in its words or their translation. A single character is
+    /// looked for in names only, as nearly every sentence has it.
+    pub fn find(&self, needle: &str) -> Option<Found> {
+        if self.title().to_lowercase().contains(needle) || self.file_name().to_lowercase().contains(needle) {
+            return Some(Found::Name);
+        }
+        if needle.chars().count() < 2 {
+            return None;
+        }
+        self.document.as_ref()?.segments.iter().filter(|segment| !segment.skipped).find_map(|segment| {
+            let has = |text: &&str| text.to_lowercase().contains(needle);
+            let text = Some(segment.text.as_str()).filter(has).or(segment.translated_text.as_deref().filter(has))?;
+            Some(Found::Sentence { start_ms: segment.start_ms, text: text.trim().to_owned() })
+        })
+    }
+
+    pub fn takes_subtitles(&self) -> bool {
+        !self.status.is_active() || self.status == JobStatus::Probing
     }
 
     /// Whether a finished job left its media with a service, as deleting it there failed.
@@ -419,8 +451,7 @@ impl Job {
     /// The service queued transcribing it as `transcription_id`.
     fn queued(&mut self, transcription_id: String) {
         self.remote_transcription_id = Some(transcription_id);
-        self.status = JobStatus::QueuedRemote;
-        self.progress.stage = "queued_remote".into();
+        self.advance(JobStatus::QueuedRemote, "queued_remote");
     }
 
     /// What it left with a transcription service is deleted there.
@@ -428,9 +459,12 @@ impl Job {
         self.cleanup_state = CleanupState::Complete;
     }
 
-    /// Notes what its media is, unless it is known.
+    /// Notes what its media is, unless it is known. Media noted without its length (a podcast
+    /// just downloaded, with no captions to tell it) is not known yet.
     fn note_media(&mut self, metadata: MediaMetadata) {
-        self.metadata.get_or_insert(metadata);
+        if self.metadata.as_ref().is_none_or(|known| known.duration_ms <= 0) {
+            self.metadata = Some(metadata);
+        }
     }
 
     /// Puts `document` in place of its transcript, got the way `mode` says (by its provider

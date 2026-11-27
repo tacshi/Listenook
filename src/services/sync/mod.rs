@@ -625,7 +625,9 @@ pub(crate) fn remove(id: &str) {
         return;
     };
     member.remove();
-    state.ledger.seen.remove(id);
+    // No device counts as in step now: who is in the circle travels only in an exchange, and
+    // the others are to hear of this at the next one, not at the next change to the library.
+    state.ledger.seen.clear();
     state.save();
 }
 
@@ -1393,7 +1395,8 @@ fn route(call: &mut Call) -> io::Result<()> {
             reply(call.out(), 200, b"{}")
         }
         ("POST", ["sync"]) => {
-            let hello: Hello = serde_json::from_slice(&read_body(call, 4 * 1024 * 1024)?)?;
+            // As large as the index sent back: both hold the same library.
+            let hello: Hello = serde_json::from_slice(&read_body(call, MANIFEST_LIMIT)?)?;
             let from = call.from;
             welcome(call.out(), &root, me, hello, from, &peer)
         }

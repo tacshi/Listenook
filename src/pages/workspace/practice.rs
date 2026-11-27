@@ -53,7 +53,7 @@ pub(super) fn stop(review: Review) {
     batch(|| {
         review.set_practice(Practice::None);
         review.stop_repeating();
-        review.set_paused(true);
+        review.pause();
     });
 }
 

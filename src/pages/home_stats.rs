@@ -496,7 +496,8 @@ pub(crate) fn activity_card() -> impl IntoElement {
         let (weeks, today, goal_s) = (heat_weeks(), today.get(), goal.get() * 60);
         let start = today - activity::Days::new(u64::from(weekday_index(today) + 7 * (weeks - 1)));
         let totals = ActivityState::get().with(|log| log.days(today, (today - start).num_days() as u32 + 1));
-        let learned = totals.iter().filter(|(_, time)| time.total_s() > 0).count() as u32;
+        // A day counts once it has a minute, the least Today shows of it.
+        let learned = totals.iter().filter(|(_, time)| time.total_s() >= 60).count() as u32;
         let met: Vec<bool> = totals.iter().map(|(_, time)| time.total_s() >= goal_s).collect();
         let at_goal = met.iter().filter(|met| **met).count() as u32;
         let best = met.split(|met| !met).map(<[bool]>::len).max().unwrap_or(0) as u32;
