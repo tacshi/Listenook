@@ -186,7 +186,7 @@ impl Provider {
     /// Uploads the file at `path`, counting what is sent in `sending`. Dropping the upload before
     /// it ends stops the sending.
     pub(crate) async fn upload(self, path: PathBuf, key: &str, sending: Sending) -> Result<String, Failure> {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("audio").replace('"', "");
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("audio").replace(['"', '\r', '\n'], "");
         let boundary = format!("listenook-{}", uuid::Uuid::new_v4().simple());
         let mut head = Vec::new();
         if self == Provider::Moss {

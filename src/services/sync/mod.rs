@@ -1065,14 +1065,23 @@ fn accept_from(turn: u64, listener: &TcpListener) -> io::Result<()> {
             return Ok(());
         }
         static ANSWERING: AtomicUsize = AtomicUsize::new(0);
+        struct Slot(&'static AtomicUsize);
+        impl Drop for Slot {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
         let local = is_local(from.ip(), on_tailscale);
         if local && ANSWERING.fetch_add(1, Ordering::SeqCst) < HANDLERS {
-            thread::spawn(move || {
+            let slot = Slot(&ANSWERING);
+            if let Err(error) = thread::Builder::new().spawn(move || {
+                let _slot = slot;
                 if let Err(error) = handle(stream, from.ip()) {
                     log::debug!("sync: {error}");
                 }
-                ANSWERING.fetch_sub(1, Ordering::SeqCst);
-            });
+            }) {
+                log::warn!("sync: could not start handler thread: {error}");
+            }
         } else if local {
             ANSWERING.fetch_sub(1, Ordering::SeqCst);
         }

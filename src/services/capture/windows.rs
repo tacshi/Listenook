@@ -81,7 +81,7 @@ pub(super) fn open(sink: Sink) -> Result<(u32, Box<dyn Stream>), &'static str> {
     let thread = std::thread::Builder::new()
         .name("capture-loopback".into())
         .spawn(move || {
-            let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
             match unsafe { Loopback::open() } {
                 Ok(loopback) => {
                     let _ = ready.send(Some(loopback.rate));
@@ -95,7 +95,9 @@ pub(super) fn open(sink: Sink) -> Result<(u32, Box<dyn Stream>), &'static str> {
                     let _ = ready.send(None);
                 }
             }
-            unsafe { CoUninitialize() };
+            if com.is_ok() {
+                unsafe { CoUninitialize() };
+            }
         })
         .map_err(|_| "capture_failed")?;
     let running = Running { stop, thread: Some(thread) };
@@ -213,15 +215,17 @@ impl Loopback {
 /// Encodes a 16-bit WAV as AAC (128 kbit/s) in an M4A with Media
 /// Foundation; false where it cannot (its encoder takes 44.1 and 48 kHz).
 pub(super) fn encode(wav: &Path, m4a: &Path) -> bool {
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-    let started = unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) };
-    let encoded = started.and_then(|_| unsafe { encode_started(wav, m4a) });
+    let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    let encoded = unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.and_then(|_| {
+        let encoded = unsafe { encode_started(wav, m4a) };
+        let _ = unsafe { MFShutdown() };
+        encoded
+    });
     if let Err(error) = &encoded {
         log::error!("capture: encoding {}: {error}", wav.display());
     }
-    unsafe {
-        let _ = MFShutdown();
-        CoUninitialize();
+    if com.is_ok() {
+        unsafe { CoUninitialize() };
     }
     encoded.is_ok()
 }

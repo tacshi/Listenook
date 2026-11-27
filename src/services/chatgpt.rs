@@ -464,9 +464,9 @@ impl Access {
     /// A token that is good for a minute more, renewed from the saved refresh token when the one
     /// in hand is not.
     async fn token() -> Result<String, Failure> {
+        let mut access = ACCESS.lock().await;
         let account =
             Account::saved().ok_or_else(|| Failure::new("llm_sign_in_required", "Not signed in with ChatGPT."))?;
-        let mut access = ACCESS.lock().await;
         if let Some(held) = access.as_ref()
             && held.client_id == account.client_id
             && Instant::now() + Duration::from_secs(60) < held.until

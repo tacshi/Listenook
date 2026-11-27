@@ -263,7 +263,9 @@ fn fetch_to_file(
     let resumed = have > 0 && response.status() == 206;
     let length: u64 = response.header("Content-Length").and_then(|value| value.parse().ok()).unwrap_or(0);
     let start = if resumed { have } else { 0 };
-    total.store(start + length, Ordering::Relaxed);
+    if length > 0 {
+        total.store(start.saturating_add(length), Ordering::Relaxed);
+    }
     received.store(start, Ordering::Relaxed);
     let mut file =
         std::fs::OpenOptions::new().create(true).write(true).append(resumed).truncate(!resumed).open(&part)?;
