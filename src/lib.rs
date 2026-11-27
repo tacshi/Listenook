@@ -1,3 +1,7 @@
+// On Android, `thread_local!` expands to std's platform-specific form, where clippy reports
+// every one as able to be `const` even when it already is (`= const { … }`).
+#![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
+
 mod pages;
 mod platform;
 mod services;
