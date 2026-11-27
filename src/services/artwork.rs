@@ -105,12 +105,34 @@ fn make(source: &Path, folder: &Path, video: bool, at_ms: i64) -> Option<String>
         if let Some(path) = frame::grab(source, folder, at_ms) {
             return Some(path.to_string_lossy().into_owned());
         }
+        // What the system cannot open (an MKV on Apple devices), mpv, which plays it, can.
+        if let Some(picture) = listenook_mpv::picture(source, at_ms)
+            && let Some(path) = save_png(folder, picture.width, picture.height, &picture.rgba)
+        {
+            return Some(path.to_string_lossy().into_owned());
+        }
         if !frame::SUPPORTED {
             return None;
         }
     }
     let _ = std::fs::write(folder.join(NONE), b"");
     None
+}
+
+/// Saves `rgba`, `width` × `height` pixels row by row, as `cover.png` in `folder`.
+fn save_png(folder: &Path, width: u32, height: u32, rgba: &[u8]) -> Option<PathBuf> {
+    let path = folder.join("cover.png");
+    let file = std::io::BufWriter::new(std::fs::File::create(&path).ok()?);
+    let mut encoder = png::Encoder::new(file, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let written = encoder.write_header().and_then(|mut writer| writer.write_image_data(rgba)).is_ok();
+    if written {
+        Some(path)
+    } else {
+        let _ = std::fs::remove_file(&path);
+        None
+    }
 }
 
 #[cfg(not(any(target_vendor = "apple", windows)))]
@@ -156,18 +178,7 @@ mod frame {
             unsafe { CoUninitialize() };
         }
         let (width, height, rgba) = pixels?;
-        let path = folder.join("cover.png");
-        let file = std::io::BufWriter::new(std::fs::File::create(&path).ok()?);
-        let mut encoder = png::Encoder::new(file, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let written = encoder.write_header().and_then(|mut writer| writer.write_image_data(&rgba)).is_ok();
-        if written {
-            Some(path)
-        } else {
-            let _ = std::fs::remove_file(&path);
-            None
-        }
+        super::save_png(folder, width, height, &rgba)
     }
 
     fn thumbnail(source: &Path) -> Option<(u32, u32, Vec<u8>)> {

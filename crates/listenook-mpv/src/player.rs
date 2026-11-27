@@ -34,21 +34,7 @@ pub(crate) struct Screen {
 pub(crate) type BeforePlaying = Box<dyn Fn((f64, f64)) + Send + Sync>;
 
 /// What every player is started with, whatever the platform.
-const OPTIONS: [(&str, &str); 23] = [
-    ("config", "no"),
-    // None of mpv's Lua scripts: the app draws its own controls. Each runs LuaJIT, whose
-    // compiled code the hardened runtime of a signed macOS app kills on its first run.
-    ("load-scripts", "no"),
-    ("osc", "no"),
-    ("ytdl", "no"),
-    ("load-stats-overlay", "no"),
-    ("load-console", "no"),
-    ("load-auto-profiles", "no"),
-    ("load-select", "no"),
-    ("load-positioning", "no"),
-    ("load-commands", "no"),
-    ("load-context-menu", "no"),
-    ("terminal", "no"),
+const OPTIONS: [(&str, &str); 11] = [
     ("idle", "yes"),
     // At its end a file stays open and paused, so it can be played again or sought in.
     ("keep-open", "yes"),

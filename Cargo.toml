@@ -22,6 +22,7 @@ serde_json = "1"
 serde = "1"
 ureq = "2"
 sha2 = "0.10"
+png = "0.18"
 matrixmultiply = { version = "0.3", features = ["threading"] }
 symphonia = { version = "0.5", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 # Decodes Opus, which symphonia 0.5 cannot. It is written for symphonia 0.6, whose readers open
@@ -54,7 +55,6 @@ nsh-platform-macos = { version = "0.7.2", default-features = false, features = [
 [target.'cfg(target_os = "windows")'.dependencies]
 nsh-platform-windows = { version = "0.7.2", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "svg", "net", "media", "updater"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_KernelStreaming", "Win32_Media_MediaFoundation", "Win32_Media_Multimedia", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell"] }
-png = "0.18"
 
 [dev-dependencies]
 nsh-engine = { version = "0.7.2", default-features = false }
