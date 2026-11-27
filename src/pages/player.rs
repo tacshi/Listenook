@@ -391,28 +391,22 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         .child(when(
             move || current.get().is_some(),
             move || {
-                view()
-                    .max_w(px(960.0))
-                    .px_4()
-                    .py_2()
-                    .rounded(|| tokens::corner(tokens::Corner::Medium))
-                    .bg(|| tokens::ink(tokens::Ink::Stage).opacity(0.7))
-                    .child(
-                        text(move || {
-                            let index = current.get();
-                            cues.with(|cues| {
-                                index
-                                    .and_then(|index| {
-                                        cues.as_ref()?.get(index).map(|cue| SharedString::from(cue.text.clone()))
-                                    })
-                                    .unwrap_or_default()
-                            })
+                view().max_w(px(960.0)).px_4().py_2().child(
+                    text(move || {
+                        let index = current.get();
+                        cues.with(|cues| {
+                            index
+                                .and_then(|index| {
+                                    cues.as_ref()?.get(index).map(|cue| SharedString::from(cue.text.clone()))
+                                })
+                                .unwrap_or_default()
                         })
-                        .text_2xl()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_center()
-                        .text_color(ink),
-                    )
+                    })
+                    .text_2xl()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_center()
+                    .text_color(ink),
+                )
             },
         ));
 
