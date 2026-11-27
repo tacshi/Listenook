@@ -1,7 +1,9 @@
 //! Plays recordings and videos with libmpv: the `listenook.mpv` native component, which the app
 //! registers with nsh on each platform ([`register`]). Its props and events follow nsh's own
 //! video element (see `player`), so pages use it the same way, and any format FFmpeg reads plays.
+//! [`picture`] decodes a picture of a video, for its cover.
 
+mod frame;
 #[cfg(any(target_os = "macos", windows))]
 mod hold;
 mod mpv;
@@ -21,6 +23,8 @@ mod linux;
 mod macos;
 #[cfg(windows)]
 mod windows;
+
+pub use frame::{Picture, picture};
 
 /// The component's name, as `native(NAME)` uses it.
 pub const NAME: &str = "listenook.mpv";

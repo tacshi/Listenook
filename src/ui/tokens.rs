@@ -58,6 +58,17 @@ pub fn ink(which: Ink) -> AdaptiveColor {
     }
 }
 
+/// The shadow under a video's subtitles, which have nothing behind them: it keeps the white text
+/// readable on a bright picture. nsh's text-shadow presets are too faint for text on a video.
+pub fn subtitle_shadow() -> TextShadow {
+    TextShadow {
+        color: ink(Ink::Stage).dark.opacity(0.9).into(),
+        offset_x: px(0.0),
+        offset_y: px(1.0),
+        radius: px(4.0),
+    }
+}
+
 /// How round a corner is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Corner {

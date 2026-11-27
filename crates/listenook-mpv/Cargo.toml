@@ -3,7 +3,7 @@ name = "listenook-mpv"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Plays recordings and videos with libmpv, as an nsh native component on each platform."
+description = "Plays recordings and videos with libmpv, as an nsh native component on each platform, and decodes pictures of videos for their covers."
 license = "LGPL-2.1-or-later"
 
 [dependencies]

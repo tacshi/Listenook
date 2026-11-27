@@ -185,6 +185,11 @@ fn opened(id: &str) -> impl IntoElement {
         }
     });
     let frame = stored(current_window());
+    on_key("enter", move |_| {
+        if review.has_video {
+            set_fullscreen(review, frame, true);
+        }
+    });
     on_key("escape", move |_| {
         if untracked(|| review.is_picking_skip()) {
             review.stop_picking_skip();
@@ -1394,8 +1399,6 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
                     .py_2()
                     .gap_1()
                     .items_center()
-                    .rounded(|| tokens::corner(tokens::Corner::Medium))
-                    .bg(|| tokens::ink(tokens::Ink::Stage).opacity(0.7))
                     .child(when(shows_translation, move || {
                         subtitle_text(text(move || {
                             current()
@@ -1452,7 +1455,11 @@ fn subtitle(review: Review, hud: Signal<bool>) -> impl IntoElement {
 }
 
 fn subtitle_text(line: Text) -> Text {
-    line.text_2xl().font_weight(FontWeight::SEMIBOLD).text_center().text_color(|| theme().foreground.dark)
+    line.text_2xl()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_center()
+        .text_color(|| theme().foreground.dark)
+        .text_shadow([tokens::subtitle_shadow()])
 }
 
 fn translate_dialog(review: Review, open: Signal<bool>) -> impl IntoElement {

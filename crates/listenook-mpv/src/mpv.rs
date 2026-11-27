@@ -42,9 +42,39 @@ struct RawLogMessage {
     log_level: c_int,
 }
 
+/// An `mpv_node`: a value of `format`.
+#[repr(C)]
+struct RawNode {
+    value: RawNodeValue,
+    format: c_int,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union RawNodeValue {
+    int64: i64,
+    list: *const RawNodeList,
+    bytes: *const RawByteArray,
+}
+
+#[repr(C)]
+struct RawNodeList {
+    count: c_int,
+    values: *const RawNode,
+    keys: *const *const c_char,
+}
+
+#[repr(C)]
+struct RawByteArray {
+    data: *const u8,
+    size: usize,
+}
+
 const FORMAT_FLAG: c_int = 3;
 const FORMAT_INT64: c_int = 4;
 const FORMAT_DOUBLE: c_int = 5;
+const FORMAT_NODE_MAP: c_int = 8;
+const FORMAT_BYTE_ARRAY: c_int = 9;
 
 #[cfg_attr(windows, link(name = "libmpv-2", kind = "raw-dylib"))]
 unsafe extern "C" {
@@ -59,6 +89,8 @@ unsafe extern "C" {
     fn mpv_get_property_string(handle: *mut c_void, name: *const c_char) -> *mut c_char;
     fn mpv_free(data: *mut c_void);
     fn mpv_command_async(handle: *mut c_void, reply: u64, args: *const *const c_char) -> c_int;
+    fn mpv_command_ret(handle: *mut c_void, args: *const *const c_char, result: *mut RawNode) -> c_int;
+    fn mpv_free_node_contents(node: *mut RawNode);
     fn mpv_observe_property(handle: *mut c_void, reply: u64, name: *const c_char, format: c_int) -> c_int;
     fn mpv_request_log_messages(handle: *mut c_void, min_level: *const c_char) -> c_int;
     fn mpv_wait_event(handle: *mut c_void, timeout: c_double) -> *mut RawEvent;
@@ -103,6 +135,8 @@ pub(crate) enum Event {
     Starting,
     /// A file is loaded and starts playing.
     Loaded,
+    /// Playback started again after a load or a seek: the picture there is shown.
+    Restarted,
     Ended(Ended),
     Changed(Change),
     /// Shutting down: the handle is about to go.
@@ -121,6 +155,24 @@ const OBSERVED: [(&str, c_int); 5] = [
     ("pause", FORMAT_FLAG),
     ("paused-for-cache", FORMAT_FLAG),
     ("eof-reached", FORMAT_FLAG),
+];
+
+/// What every instance is started with: no config files, no terminal, and none of mpv's Lua
+/// scripts, as the app draws its own controls. Each script runs LuaJIT, whose compiled code the
+/// hardened runtime of a signed macOS app kills on its first run.
+const BARE: [(&str, &str); 12] = [
+    ("config", "no"),
+    ("terminal", "no"),
+    ("load-scripts", "no"),
+    ("osc", "no"),
+    ("ytdl", "no"),
+    ("load-stats-overlay", "no"),
+    ("load-console", "no"),
+    ("load-auto-profiles", "no"),
+    ("load-select", "no"),
+    ("load-positioning", "no"),
+    ("load-commands", "no"),
+    ("load-context-menu", "no"),
 ];
 
 /// An mpv instance. libmpv's functions may be called from any thread, except that
@@ -150,7 +202,7 @@ pub(crate) fn checked(code: c_int) -> Result<(), String> {
 }
 
 impl Mpv {
-    /// A new instance with `options` (and `wid`, the native view it draws into, if any, which
+    /// A new instance with [`BARE`] and `options` (and `wid`, the native view it draws into, if any, which
     /// `keep` holds on to until mpv has stopped), started.
     pub(crate) fn start(options: &[(&str, &str)], wid: Option<i64>, keep: Box<dyn Send>) -> Result<Self, String> {
         // SAFETY: mpv_create has no preconditions; null means it failed.
@@ -161,7 +213,7 @@ impl Mpv {
             // SAFETY: an INT64 option reads an i64 from `data`, during the call.
             checked(unsafe { mpv_set_option(mpv.raw(), name.as_ptr(), FORMAT_INT64, (&raw mut wid).cast()) })?;
         }
-        for (name, value) in options {
+        for (name, value) in BARE.iter().chain(options) {
             let (name, value) = (c(name), c(value));
             // SAFETY: both are NUL-terminated and live through the call.
             let code = unsafe { mpv_set_option_string(mpv.raw(), name.as_ptr(), value.as_ptr()) };
@@ -194,6 +246,24 @@ impl Mpv {
         if let Err(why) = checked(unsafe { mpv_command_async(self.raw(), 0, pointers.as_ptr()) }) {
             log::warn!("mpv {args:?}: {why}");
         }
+    }
+
+    /// The picture shown, unscaled and without subtitles (`screenshot-raw video rgba`): its
+    /// width, height and RGBA pixels, row by row. Waits for it.
+    pub(crate) fn picture(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let owned = [c("screenshot-raw"), c("video"), c("rgba")];
+        let pointers: Vec<*const c_char> = owned.iter().map(|arg| arg.as_ptr()).chain([ptr::null()]).collect();
+        let mut result = RawNode { value: RawNodeValue { int64: 0 }, format: 0 };
+        // SAFETY: a NULL-terminated array of NUL-terminated strings; mpv fills `result`.
+        if let Err(why) = checked(unsafe { mpv_command_ret(self.raw(), pointers.as_ptr(), &raw mut result) }) {
+            log::warn!("mpv screenshot-raw: {why}");
+            return None;
+        }
+        // SAFETY: `result` is what mpv returned, read before it is freed.
+        let picture = unsafe { rgba(&result) };
+        // SAFETY: `result` was filled by mpv and is not used after this.
+        unsafe { mpv_free_node_contents(&raw mut result) };
+        picture
     }
 
     pub(crate) fn set_flag(&self, name: &str, value: bool) {
@@ -313,6 +383,7 @@ impl Mpv {
                 })
             }
             8 => Event::Loaded,
+            21 => Event::Restarted,
             25 => {
                 // SAFETY: a HOOK event carries an mpv_event_hook.
                 let hook = unsafe { &*event.data.cast::<RawHook>() };
@@ -326,6 +397,41 @@ impl Mpv {
             _ => Event::Other,
         }
     }
+}
+
+/// The picture in `screenshot-raw`'s result: a map of `w`, `h`, `stride` and `data`.
+///
+/// SAFETY: `node` is a node mpv returned, not freed yet.
+unsafe fn rgba(node: &RawNode) -> Option<(u32, u32, Vec<u8>)> {
+    if node.format != FORMAT_NODE_MAP {
+        return None;
+    }
+    // SAFETY: a NODE_MAP holds a list of `count` values with as many keys.
+    let list = unsafe { &*node.value.list };
+    let count = usize::try_from(list.count).ok()?;
+    let (mut width, mut height, mut stride, mut data) = (None, None, None, None);
+    for at in 0..count {
+        // SAFETY: both arrays have `count` entries; keys are NUL-terminated.
+        let (key, value) = unsafe { (CStr::from_ptr(*list.keys.add(at)), &*list.values.add(at)) };
+        match (key.to_bytes(), value.format) {
+            // SAFETY: the format says which field of the union is set.
+            (b"w", FORMAT_INT64) => width = Some(unsafe { value.value.int64 }),
+            (b"h", FORMAT_INT64) => height = Some(unsafe { value.value.int64 }),
+            (b"stride", FORMAT_INT64) => stride = Some(unsafe { value.value.int64 }),
+            (b"data", FORMAT_BYTE_ARRAY) => data = Some(unsafe { &*value.value.bytes }),
+            _ => {}
+        }
+    }
+    let (width, height, stride) =
+        (usize::try_from(width?).ok()?, usize::try_from(height?).ok()?, usize::try_from(stride?).ok()?);
+    let data = data?;
+    if width == 0 || height == 0 || stride < width * 4 || data.size < stride * (height - 1) + width * 4 {
+        return None;
+    }
+    // SAFETY: mpv's byte array holds `size` bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(data.data, data.size) };
+    let pixels = (0..height).flat_map(|row| &bytes[row * stride..row * stride + width * 4]).copied().collect();
+    Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?, pixels))
 }
 
 fn change(id: u64, property: &RawProperty) -> Change {
