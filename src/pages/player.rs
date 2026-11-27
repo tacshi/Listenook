@@ -112,9 +112,13 @@ pub(crate) fn open_player(path: &str) -> bool {
         .default_size(size(px(960.0), px(600.0)));
     if cfg!(windows) {
         // The window draws its own buttons, which hide with the controls (`caption_buttons`).
-        // Without the system's frame it would open in the screen's top left corner.
+        // Without the system's frame it would open in the screen's top left corner; centred, it
+        // opens on the main window's display (macOS opens it from the main window's corner).
         attributes.frame = Some(WindowFrameStyle::None);
         window = window.default_position(WindowPosition::Center);
+        if let Some(display) = nsh_core::element::desktop::main_window().state().and_then(|state| state.display) {
+            window = window.display(display);
+        }
     }
     open_window(window.attributes(attributes).content(move || player(&content).into_element()))
         .inspect(|player| player.focus())
