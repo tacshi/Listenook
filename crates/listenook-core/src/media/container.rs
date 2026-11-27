@@ -368,4 +368,25 @@ mod subtitle_tests {
         assert_eq!(label_of(Some("English (SDH)"), Some("en"), 1), "English (SDH)");
         assert_eq!(label_of(None, Some("und"), 2), "Track 2");
     }
+
+    #[test]
+    fn a_videos_subtitles_are_the_files_named_after_it() {
+        let folder = std::env::temp_dir().join(format!("listenook-tracks-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = |name: &str, text: &str| {
+            let path = folder.join(name);
+            std::fs::write(&path, text).unwrap();
+            path.to_str().unwrap().to_owned()
+        };
+        let video = file("talk.mp4", "");
+        let srt = file("talk.srt", "1\n00:00:01,000 --> 00:00:02,500\nHello <i>there</i>\n");
+        let vtt = file("talk.en.vtt", "WEBVTT\n\n00:00:03.000 --> 00:00:04.000\nBye\n");
+        file("other.srt", "1\n00:00:01,000 --> 00:00:02,000\nNo\n");
+        let tracks = subtitle_tracks(&video);
+        let found: Vec<(&str, &str, usize)> =
+            tracks.iter().map(|track| (track.id.as_str(), track.label.as_str(), track.cues.len())).collect();
+        assert_eq!(found, [(&*format!("file:{vtt}"), "talk.en.vtt", 1), (&*format!("file:{srt}"), "talk.srt", 1)]);
+        assert_eq!((tracks[1].cues[0].start_ms, tracks[1].cues[0].text.as_str()), (1_000, "Hello there"));
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 }
