@@ -34,6 +34,11 @@ use crate::{
 
 pub(crate) const GLOBAL_PLAY_PAUSE: &str = "ctrl+alt+space";
 
+/// How long a reopen waits for the files it came with.
+const REOPEN_SETTLES: std::time::Duration = std::time::Duration::from_millis(120);
+/// A reopen this soon after a video opened came with it.
+const REOPEN_WITH_FILES: std::time::Duration = std::time::Duration::from_secs(1);
+
 pub(crate) fn shell() -> impl IntoElement {
     let store = store();
     let mut bar = TitleBarOptions::default();
@@ -73,8 +78,19 @@ pub(crate) fn shell() -> impl IntoElement {
         current_window().show();
         current_window().focus();
     };
+    // When a video opened with the app last played, in a window of its own.
+    let video_opened = stored(None::<std::time::Instant>);
     // A click on the Dock icon brings back the window the tray icon hid: nothing shows on its own.
-    on_reopen(show_window);
+    // The app also hears it with each file it is opened with (macOS) and each later launch
+    // (Windows, Linux), around the files: it waits for them, and a video plays alone.
+    on_reopen(move || {
+        spawn(async move {
+            timer(REOPEN_SETTLES).await;
+            if !video_opened.get().is_some_and(|at| at.elapsed() < REOPEN_WITH_FILES) {
+                show_window();
+            }
+        });
+    });
     effect(move || {
         let stays = in_tray();
         if stays {
@@ -123,6 +139,7 @@ pub(crate) fn shell() -> impl IntoElement {
     let open_media =
         move |paths: Vec<String>| match paths.iter().find(|path| subtitles::is(path, subtitles::Kind::Video)) {
             Some(video) => {
+                video_opened.replace(Some(std::time::Instant::now()));
                 pages::open_video(video);
                 if launched.elapsed() < std::time::Duration::from_secs(2) && !platform::is_phone() {
                     store.act(crate::state::Action::SetVideoOnly(true));

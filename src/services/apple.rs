@@ -45,6 +45,27 @@ pub(super) fn set_dock_icon(visible: bool) {
     });
 }
 
+/// Takes the key window out of full screen through AppKit, on the main queue. nsh's own request
+/// runs while nsh applies a batch, and macOS then animated the window's old full-screen content
+/// (longbridge/nsh#3494). From here it animates the content laid out at the new size while the
+/// video is paused, but not always while it plays. nsh's fix (longbridge/nsh#3497) did it every
+/// time: once a release has it, nsh's `set_mode` takes this one's place.
+#[cfg(target_os = "macos")]
+pub(super) fn leave_full_screen() {
+    /// `NSWindowStyleMaskFullScreen`.
+    const FULL_SCREEN: usize = 1 << 14;
+    on_main(|| unsafe {
+        let window = send(send(class(c"NSApplication"), c"sharedApplication"), c"keyWindow");
+        if window.is_null() {
+            return;
+        }
+        let mask: unsafe extern "C" fn(Id, Sel) -> usize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        if mask(window, sel(c"styleMask")) & FULL_SCREEN != 0 {
+            send_id(window, c"toggleFullScreen:", std::ptr::null_mut());
+        }
+    });
+}
+
 /// How long sound takes from the player to the ears on the current route: a
 /// few milliseconds on the speaker, 150 or more on Bluetooth headphones.
 #[cfg(target_os = "ios")]
