@@ -11,7 +11,7 @@ use nsh_core::{
         TitleBarOptions, TitleBarStyle, WindowAttributes, WindowControl, WindowFrame, WindowFrameStyle, WindowMode,
         WindowPosition,
     },
-    element::desktop::{current_window, displays, open_window, title_bar},
+    element::desktop::{WindowRef, current_window, displays, open_window, title_bar},
     prelude::*,
 };
 
@@ -95,6 +95,19 @@ pub(crate) fn pick_video() {
     });
 }
 
+thread_local! {
+    /// The app's own window, where [`open_player`] opens a video's window ([`keep_app_window`]).
+    /// Not `main_window()`: that is nsh's launch window, an invisible host that stays where it
+    /// opened, on the primary display.
+    static APP_WINDOW: std::cell::RefCell<Option<WindowRef>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Keeps `window`, the app's own window, for videos to open on its display. From `shell`, which
+/// renders in it.
+pub(crate) fn keep_app_window(window: WindowRef) {
+    APP_WINDOW.with(|app| *app.borrow_mut() = Some(window));
+}
+
 pub(crate) fn open_player(path: &str) -> bool {
     let title = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_owned();
     let content = path.to_owned();
@@ -116,7 +129,9 @@ pub(crate) fn open_player(path: &str) -> bool {
         // opens on the main window's display (macOS opens it from the main window's corner).
         attributes.frame = Some(WindowFrameStyle::None);
         window = window.default_position(WindowPosition::Center);
-        if let Some(display) = nsh_core::element::desktop::main_window().state().and_then(|state| state.display) {
+        let display =
+            APP_WINDOW.with(|app| app.borrow().as_ref().and_then(WindowRef::state)).and_then(|state| state.display);
+        if let Some(display) = display {
             window = window.display(display);
         }
     }

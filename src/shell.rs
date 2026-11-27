@@ -42,6 +42,8 @@ pub(crate) fn shell() -> impl IntoElement {
     let mut attributes = WindowAttributes::default();
     attributes.title_bar = Some(bar);
     current_window().set(attributes);
+    // Videos open their own window on this one's display.
+    pages::keep_app_window(current_window());
 
     spawn(async move {
         loop {
