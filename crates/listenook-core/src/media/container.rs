@@ -1,10 +1,26 @@
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::{
+    fs::File,
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+};
 
 use matroska_demuxer::{Frame, MatroskaFile, TrackType};
 
+/// The subtitles of the video at `video`: each file beside it named after it, then each track
+/// inside it.
+pub fn subtitle_tracks(video: &str) -> Vec<SubtitleTrack> {
+    let files = crate::media::subtitles::paired(video, &[]).into_iter().filter_map(|path| {
+        let cues = crate::media::subtitles::read_cues(&path)?;
+        let label = Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or(&path).to_owned();
+        Some(SubtitleTrack { id: format!("file:{path}"), label, cues })
+    });
+    let inside = subtitles_in(Path::new(video)).into_iter().enumerate();
+    files.chain(inside.map(|(index, track)| SubtitleTrack { id: format!("embedded:{index}"), ..track })).collect()
+}
+
 /// The subtitle tracks inside the video at `path`.
-pub fn subtitles_in(path: &std::path::Path) -> Vec<SubtitleTrack> {
-    let Ok(file) = std::fs::File::open(path) else {
+pub fn subtitles_in(path: &Path) -> Vec<SubtitleTrack> {
+    let Ok(file) = File::open(path) else {
         return Vec::new();
     };
     match crate::media::subtitles::extension(&path.to_string_lossy()).as_str() {
@@ -89,6 +105,22 @@ impl<R: Read + Seek, W: Write + Seek> Avi<'_, R, W> {
             self.input.seek(SeekFrom::Start(next))?;
         }
     }
+}
+
+/// Writes the sound of the AVI file `source` beside `stem`, in the format it comes in: the
+/// file it wrote, or why it could not.
+pub fn avi_sound_file(source: &Path, stem: &Path) -> Result<PathBuf, String> {
+    let part = stem.with_extension("part");
+    let opened = File::open(source).and_then(|input| Ok((input, File::create(&part)?)));
+    let written = opened.map_err(|error| error.to_string()).and_then(|(input, output)| avi_sound(input, output));
+    let renamed = written.and_then(|kind| {
+        let path = stem.with_extension(kind.extension());
+        std::fs::rename(&part, &path).map(|()| path).map_err(|error| error.to_string())
+    });
+    if renamed.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    renamed
 }
 
 pub fn avi_sound<R: Read + Seek, W: Write + Seek>(mut input: R, mut output: W) -> Result<AviSound, String> {
@@ -199,6 +231,9 @@ mod tests {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubtitleTrack {
+    /// What it is told apart by: `file:` and the file's path, or `embedded:` and its number
+    /// among the video's own.
+    pub id: String,
     pub label: String,
     pub cues: Vec<crate::media::subtitles::Cue>,
 }
@@ -248,7 +283,7 @@ fn mkv_subtitles<R: Read + Seek>(input: R) -> Vec<SubtitleTrack> {
         .map(|(index, track)| {
             let label = label_of(track.name(), track.language_bcp47().or(track.language()), index + 1);
             let ass = matches!(track.codec_id(), "S_TEXT/ASS" | "S_TEXT/SSA");
-            (track.track_number().get(), ass, SubtitleTrack { label, cues: Vec::new() })
+            (track.track_number().get(), ass, SubtitleTrack { id: String::new(), label, cues: Vec::new() })
         })
         .collect();
     if tracks.is_empty() {
@@ -317,7 +352,7 @@ fn mp4_subtitles<R: Read + Seek>(input: R, size: u64) -> Vec<SubtitleTrack> {
             cues.push(crate::media::subtitles::Cue { start_ms, end_ms: end_ms.max(start_ms + 1), text });
         }
         if !cues.is_empty() {
-            out.push(SubtitleTrack { label: label_of(None, Some(&language), index + 1), cues });
+            out.push(SubtitleTrack { id: String::new(), label: label_of(None, Some(&language), index + 1), cues });
         }
     }
     out

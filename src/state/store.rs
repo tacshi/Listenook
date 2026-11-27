@@ -794,14 +794,7 @@ impl Store {
             added += 1;
             // A matching subtitle file is only offered, never taken on its own: subtitles from
             // YouTube are often auto-generated and read badly, so the person chooses.
-            let mut matching: Vec<String> = paths
-                .iter()
-                .filter(|other| subtitles::is(other, subtitles::Kind::Subtitles) && subtitles::pairs_with(other, path))
-                .cloned()
-                .chain(sibling_subtitles(path))
-                .collect();
-            matching.sort();
-            matching.dedup();
+            let matching = subtitles::paired(path, paths);
             if !matching.is_empty() {
                 self.subtitle_choices.update(|choices| choices.push((id, matching)));
             }
@@ -1186,19 +1179,4 @@ fn found_again(job: &mut Job) {
     if is_file(&job.source_path) {
         job.apply(listenook_core::Change::Relink(job.source_path.clone()));
     }
-}
-
-fn sibling_subtitles(media: &str) -> Vec<String> {
-    let Some(directory) = std::path::Path::new(media).parent() else {
-        return Vec::new();
-    };
-    let mut found: Vec<String> = std::fs::read_dir(directory)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| entry.path().to_str().map(str::to_owned))
-        .filter(|path| subtitles::is(path, subtitles::Kind::Subtitles) && subtitles::pairs_with(path, media))
-        .collect();
-    found.sort();
-    found
 }

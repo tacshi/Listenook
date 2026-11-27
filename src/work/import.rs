@@ -89,9 +89,7 @@ pub(crate) fn import_subtitle_file(job_id: String, path: String) {
         return;
     };
     let duration = Some(job.duration_ms()).filter(|duration| *duration > 0);
-    let imported = std::fs::read(&path).map_err(|_| "subtitle_read_failed").and_then(|bytes| {
-        subtitles::import_subtitles(&subtitles::decode(&bytes), &subtitles::extension(&path), duration)
-    });
+    let imported = subtitles::read(&path, duration);
     let document = match imported {
         Ok(imported) => imported.document,
         Err(code) => {
