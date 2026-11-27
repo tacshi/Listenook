@@ -117,7 +117,7 @@ pub fn surface(which: Surface, s: StyleRefinement) -> StyleRefinement {
             .bg(|| theme().card.opacity(0.6))
             .shadow_sm(),
         Surface::Glass => {
-            s.glass_effect(nsh_core::GlassEffect::Regular).backdrop_blur(px(24.0)).bg(|| ink(Ink::Stage).opacity(0.3))
+            s.glass_effect(nsh_core::GlassEffect::Regular).backdrop_blur(px(24.0)).bg(|| ink(Ink::Stage).opacity(0.12))
         }
     }
 }

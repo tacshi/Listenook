@@ -13,6 +13,9 @@ fn main() -> impl std::process::Termination {
     #[cfg(target_os = "macos")]
     dock_icon::set(concat!(env!("CARGO_MANIFEST_DIR"), "/icon.png"));
     platform::set_ui_sets(vec![nsh_base::registry(), nsh_app_listenook::registry()]);
+    // The app's native components (`#[native_components]` in lib.rs), as the hosts nsh
+    // generates register them.
+    platform::set_components(nsh_app_listenook::components);
     let theme = nsh_base::Theme::from_json(include_str!("../theme.json")).expect("theme.json is a valid theme");
     let app_id = "app.capyvibe.listenook";
     platform::run_app(

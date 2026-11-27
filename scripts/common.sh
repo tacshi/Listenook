@@ -41,5 +41,42 @@ nsh_package() {
   export LISTENOOK_VERSION="$VERSION"
   if [[ -n "${BUILD_NUMBER:-}" ]]; then args+=(--build "$BUILD_NUMBER"); fi
   rm -rf "$out"
+  remove_stale_builds
   (cd "$ROOT" && quiet nsh package "${args[@]}" "$@")
+}
+
+# nsh package reuses the app's programs it built before (target/**/nsh-app-*) however the code
+# changed since, so a package could ship old code. Those whose sources (their Cargo dep-info),
+# Cargo.lock, Cargo.toml or nsh.json changed since they were built are removed: nsh builds them
+# again, and Cargo only what changed.
+remove_stale_builds() {
+  local info line output dep stale deps
+  local sep=$'\x1f' escaped='\ '
+  for info in "$ROOT"/target/*/nsh-app-*.d "$ROOT"/target/*/*/nsh-app-*.d; do
+    [[ -f "$info" ]] || continue
+    # "<output>: <source> <source> ...", with spaces in paths escaped.
+    IFS= read -r line <"$info" || true
+    line="${line//"$escaped"/$sep}"
+    output="${line%%: *}"
+    output="${output//$sep/ }"
+    [[ -f "$output" ]] || continue
+    stale=""
+    for dep in "$ROOT/Cargo.lock" "$ROOT/Cargo.toml" "$ROOT/nsh.json"; do
+      [[ "$dep" -nt "$output" ]] && stale=1
+    done
+    if [[ -z "$stale" ]]; then
+      IFS=' ' read -ra deps <<<"${line#*: }"
+      for dep in "${deps[@]}"; do
+        dep="${dep//$sep/ }"
+        if [[ -f "$dep" && "$dep" -nt "$output" ]]; then
+          stale=1
+          break
+        fi
+      done
+    fi
+    if [[ -n "$stale" ]]; then
+      echo "Rebuilding $(basename "$output"): its code changed since it was built"
+      rm -f "$output"
+    fi
+  done
 }

@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::pages::media::{MediaRef, media_ref};
 use listenook_core::activity::Kind;
 use listenook_core::transcript::structure::{self, Edit};
 use listenook_core::{
@@ -143,7 +144,7 @@ pub(super) struct Review {
     pub(super) job: Memo<Option<Rc<Job>>>,
     /// How loud the recording is, once measured: where its pauses are.
     loudness: Signal<Option<Rc<Loudness>>>,
-    pub(super) player: ElementRef,
+    pub(super) player: MediaRef,
     pub(super) list: ElementRef,
     pub(super) position_ms: Signal<i64>,
     pub(super) duration_ms: Signal<i64>,
@@ -274,7 +275,7 @@ impl Review {
     }
 
     /// The player, for its view to bind.
-    pub(super) fn player(&self) -> ElementRef {
+    pub(super) fn player(&self) -> MediaRef {
         self.player
     }
 
@@ -554,15 +555,11 @@ impl Review {
         });
         let has_video = job.with_untracked(|job| {
             job.as_ref().is_some_and(|job| {
-                if crate::services::playable::needs_help(&job.source_path) {
-                    crate::services::playable::keeps_picture(&job.source_path)
-                } else {
-                    job.has_video()
-                        || matches!(
-                            listenook_core::media::subtitles::extension(&job.source_path).as_str(),
-                            "mp4" | "mkv" | "avi"
-                        )
-                }
+                job.has_video()
+                    || matches!(
+                        listenook_core::media::subtitles::extension(&job.source_path).as_str(),
+                        "mp4" | "mkv" | "avi" | "webm"
+                    )
             })
         });
         let video_wanted = has_video
@@ -638,7 +635,7 @@ impl Review {
             id: stored(id.to_owned()),
             job,
             loudness,
-            player: element_ref(),
+            player: media_ref(),
             list: element_ref(),
             position_ms,
             duration_ms: signal(0),

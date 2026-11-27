@@ -13,12 +13,13 @@ use nsh_core::{desktop::WindowMode, element::desktop::current_window, prelude::*
 use review::{Practice, Review, Side};
 
 use super::dialogs::{ExportDialog, JobDialog, export_dialog, rename_dialog};
+use super::media::{MediaEvent, Playback, media_view};
 use crate::ui::{error_text, l, tr};
 use crate::work::{ai, podcasts};
 use crate::{
     pages::chrome::{rate_menu, sleep_menu, time_text, top_bar},
     platform::file_url,
-    services::{media, playable},
+    services::media,
     state::{AiSetup, SettingsTab, store},
     ui::{
         self, EmptyState, Icon, IconButton, MenuAction, MenuDivider, MenuToggle, Modal, ModalActions, Size, Tone,
@@ -71,7 +72,6 @@ fn opened(id: &str) -> impl IntoElement {
     let brief_dialog = signal(false);
     let has_video = review.has_video;
     let source = signal(String::new());
-    let waiting_for_source = signal(false);
     let loaded = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
     effect(move || {
         let path = review.job_with(|job| job.as_ref().map(|job| job.source_path.clone()).unwrap_or_default());
@@ -79,25 +79,7 @@ fn opened(id: &str) -> impl IntoElement {
             return;
         }
         loaded.replace(Some(path.clone()));
-        untracked(|| {
-            let helps = playable::needs_help(&path);
-            batch(|| {
-                waiting_for_source.set(helps);
-                source.set(if helps { String::new() } else { file_url(&path) });
-            });
-            if !helps {
-                return;
-            }
-            let job_id = review.job_with(|job| job.as_ref().map(|job| job.id.clone()).unwrap_or_default());
-            if playable::made(&job_id, &path).is_none() {
-                toast(Tone::Info, playable::notice(&path));
-            }
-            spawn(async move {
-                if !playable::prepare(job_id, path, move |made| source.set(file_url(&made.to_string_lossy()))).await {
-                    toast(Tone::Error, tr("This recording's format cannot be played here."));
-                }
-            });
-        });
+        untracked(|| source.set(file_url(&path)));
     });
     let plays_on_load = std::cell::Cell::new(store.take_play_on_open(id));
     let restore = move || {
@@ -282,37 +264,38 @@ fn opened(id: &str) -> impl IntoElement {
         }
     });
     let (boost, volume) = (signal(false), signal(1.0_f32));
-    let media = video(move || source.get())
-        .element_ref(&review.player())
-        .paused(move || review.is_paused() && !review.holding.get())
-        .muted(move || review.hushed.get())
-        .volume(move || volume.get())
-        .rate(move || if boost.get() { super::gestures::BOOST } else { review.rate.get() })
-        .audio_session(|| nsh_core::AudioSession::Playback)
-        .progress_interval(move || if review.ticks_often() { 50.0_f32 } else { 500.0 })
-        .on_load(move |info: &VideoInfo| {
-            review.loaded((info.duration * 1000.0) as i64, plays_on_load.replace(false));
-        })
-        .on_progress(move |progress: &VideoProgress| {
-            review.on_progress((progress.current_time * 1000.0) as i64, (progress.duration * 1000.0) as i64);
-        })
-        // Looped only while playing: a pause that lands at the very end, just
-        // before the player reports it, would otherwise be undone by the loop
-        // starting over (seen on the iPad, Space pressed at the last word).
-        // Played again, a recording paused at its end starts from the top.
-        .repeat(move || review.looping.get() && !review.is_paused())
-        .on_end(move || {
-            if crate::state::sleep::SleepState::get().ended() || !untracked(|| review.is_looping()) {
-                review.set_paused(true);
+    let media = media_view(
+        &review.player(),
+        move || source.get(),
+        move || Playback {
+            paused: review.is_paused() && !review.holding.get(),
+            muted: review.hushed.get(),
+            volume: volume.get(),
+            rate: if boost.get() { super::gestures::BOOST } else { review.rate.get() },
+            // Looped only while playing: a pause that lands at the very end, just
+            // before the player reports it, would otherwise be undone by the loop
+            // starting over (seen on the iPad, Space pressed at the last word).
+            // Played again, a recording paused at its end starts from the top.
+            repeat: review.looping.get() && !review.is_paused(),
+            progress_ms: if review.ticks_often() { 50.0 } else { 500.0 },
+        },
+        move |event| match event {
+            MediaEvent::Loaded(info) => review.loaded((info.duration * 1000.0) as i64, plays_on_load.replace(false)),
+            MediaEvent::Progress(progress) => {
+                review.on_progress((progress.current_time * 1000.0) as i64, (progress.duration * 1000.0) as i64)
             }
-        })
-        .on_error(move |_: &str| {
-            if waiting_for_source.get_untracked() {
-                waiting_for_source.set(false);
-            } else {
-                toast(Tone::Error, error_text("missing_source"));
+            MediaEvent::Ended => {
+                if crate::state::sleep::SleepState::get().ended() || !untracked(|| review.is_looping()) {
+                    review.set_paused(true);
+                }
             }
-        });
+            MediaEvent::Failed => {
+                let path = review.job_with(|job| job.as_ref().map(|job| job.source_path.clone()).unwrap_or_default());
+                let missing = !std::path::Path::new(&path).is_file();
+                toast(Tone::Error, error_text(if missing { "missing_source" } else { "unsupported_format" }));
+            }
+        },
+    );
 
     let side = move || review.side.get();
     let dock = move || review.docked();
@@ -398,7 +381,7 @@ fn opened(id: &str) -> impl IntoElement {
                             (true, Side::Video, _) | (true, _, true) => s.flex_1(),
                             _ => s.h(px(1.0)).opacity(0.0),
                         })
-                        .child(media.flex_1())
+                        .child(media)
                         .child(when(move || review.fullscreen.get(), move || subtitle(review, hud)))
                         .child(when(
                             move || {

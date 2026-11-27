@@ -21,3 +21,6 @@ target/
 
 # NSH build state
 .nsh/
+
+# libmpv builds (scripts/fetch-mpv.sh)
+/vendor/mpv/
