@@ -29,12 +29,34 @@ type Handler = Rc<dyn Fn(Command)>;
 thread_local! {
     static CLAIMS: RefCell<Vec<(u32, Handler)>> = const { RefCell::new(Vec::new()) };
     static NEXT: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+    /// The claim whose player plays now.
+    static PLAYING: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
 pub(crate) struct Claim(u32);
 
 impl Claim {
+    /// Shows `now` while this claim has the controls. A player that starts playing takes them,
+    /// and every other claim's player pauses: the app plays one thing at a time.
     pub(crate) fn publish(&self, now: Option<Now>) {
+        let playing = now.as_ref().is_some_and(|now| now.playing);
+        let was = PLAYING.with(|current| current.get());
+        if playing && was != Some(self.0) {
+            PLAYING.with(|current| current.set(Some(self.0)));
+            let others: Vec<Handler> = CLAIMS.with(|claims| {
+                let mut claims = claims.borrow_mut();
+                if let Some(index) = claims.iter().position(|(id, _)| *id == self.0) {
+                    let mine = claims.remove(index);
+                    claims.push(mine);
+                }
+                claims.iter().filter(|(id, _)| *id != self.0).map(|(_, handler)| handler.clone()).collect()
+            });
+            for handler in others {
+                handler(Command::Pause);
+            }
+        } else if !playing && was == Some(self.0) {
+            PLAYING.with(|current| current.set(None));
+        }
         if CLAIMS.with(|claims| claims.borrow().last().is_some_and(|(id, _)| *id == self.0)) {
             show(now);
         }
@@ -43,6 +65,11 @@ impl Claim {
 
 impl Drop for Claim {
     fn drop(&mut self) {
+        PLAYING.with(|current| {
+            if current.get() == Some(self.0) {
+                current.set(None);
+            }
+        });
         let was_top = CLAIMS.with(|claims| {
             let mut claims = claims.borrow_mut();
             let top = claims.last().is_some_and(|(id, _)| *id == self.0);
