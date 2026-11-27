@@ -405,7 +405,14 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
                     .text_2xl()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_center()
-                    .text_color(ink),
+                    .text_color(ink)
+                    // Nothing is behind the text: a shadow keeps it readable on a bright picture.
+                    .text_shadow([TextShadow {
+                        color: tokens::ink(tokens::Ink::Stage).dark.opacity(0.9).into(),
+                        offset_x: px(0.0),
+                        offset_y: px(1.0),
+                        radius: px(4.0),
+                    }]),
                 )
             },
         ));
