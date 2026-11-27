@@ -9,7 +9,11 @@ use listenook_core::{
     format::track_position, transcript::caption, transcript::export,
 };
 use nsh_base::theme;
-use nsh_core::{desktop::WindowMode, element::desktop::current_window, prelude::*};
+use nsh_core::{
+    desktop::WindowMode,
+    element::desktop::{WindowRef, current_window},
+    prelude::*,
+};
 use review::{Practice, Review, Side};
 
 use super::dialogs::{ExportDialog, JobDialog, export_dialog, rename_dialog};
@@ -82,10 +86,16 @@ fn opened(id: &str) -> impl IntoElement {
         untracked(|| source.set(file_url(&path)));
     });
     let plays_on_load = std::cell::Cell::new(store.take_play_on_open(id));
+    // Two frames on: nsh tells the window's new size as macOS starts its animation, and the reader
+    // switched in that same update was what macOS animated, its transcript not drawn yet.
     let restore = move || {
-        if untracked(|| review.is_fullscreen()) {
-            batch(|| review.set_fullscreen(false));
-        }
+        spawn(async move {
+            next_frame().await;
+            next_frame().await;
+            if untracked(|| review.is_fullscreen()) {
+                batch(|| review.set_fullscreen(false));
+            }
+        });
     };
     let leaving = std::rc::Rc::new(std::cell::Cell::new(false));
     {
@@ -174,11 +184,12 @@ fn opened(id: &str) -> impl IntoElement {
             review.edit(index);
         }
     });
+    let frame = stored(current_window());
     on_key("escape", move |_| {
         if untracked(|| review.is_picking_skip()) {
             review.stop_picking_skip();
         } else if untracked(|| review.is_fullscreen()) {
-            set_fullscreen(review, false);
+            set_fullscreen(review, frame, false);
         } else if untracked(|| review.is_editing()) {
             review.close_editor();
         } else if untracked(|| review.is_searching()) {
@@ -1184,6 +1195,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
             },
         )
     };
+    let frame = stored(current_window());
     let screen = move |picture: bool| {
         when(
             move || review.has_video,
@@ -1194,7 +1206,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                         glyph: Icon::Minimize,
                         name: tr("Exit full screen"),
                         size: Size::Sm,
-                        on_press: move || set_fullscreen(review, false),
+                        on_press: move || set_fullscreen(review, frame, false),
                     }
                     .into_element()
                 } else {
@@ -1202,7 +1214,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
                         glyph: Icon::Maximize,
                         name: tr("Full screen"),
                         size: Size::Sm,
-                        on_press: move || set_fullscreen(review, true),
+                        on_press: move || set_fullscreen(review, frame, true),
                     }
                     .into_element()
                 }
@@ -1311,7 +1323,9 @@ const FIRST_REPEAT: std::time::Duration =
     std::time::Duration::from_millis(if cfg!(target_os = "ios") { 650 } else { 1500 });
 const REPEAT_GAP: std::time::Duration = std::time::Duration::from_millis(450);
 
-fn set_fullscreen(review: Review, on: bool) {
+/// Shows the reader full screen, or not. `frame`: the reader's window, kept from its render, as
+/// `current_window()` in a press is nsh's invisible host, whose modes do nothing.
+fn set_fullscreen(review: Review, frame: Stored<WindowRef>, on: bool) {
     if untracked(|| review.is_fullscreen()) == on {
         return;
     }
@@ -1319,11 +1333,24 @@ fn set_fullscreen(review: Review, on: bool) {
         batch(|| review.set_fullscreen(on));
         return;
     }
+    let window = frame.with(|frame| frame.clone());
     if on {
         batch(|| review.set_fullscreen(true));
-        current_window().set_mode(WindowMode::FullScreen);
+        // The window follows once the page is drawn full screen. As macOS grows it, nsh waits
+        // only a frame's time for the layout at the new size; the page's own switch made the
+        // engine miss that, and the old frame showed through the animation. The store runs the
+        // wait: the button pressed goes with the switch, and a task of its own would go too.
+        store().run(async move {
+            next_frame().await;
+            next_frame().await;
+            window.set_mode(WindowMode::FullScreen);
+        });
+    } else if cfg!(target_os = "macos") {
+        // Through AppKit, not nsh's `set_mode`, which macOS answered with the window's old
+        // full-screen content through its animation (longbridge/nsh#3494).
+        crate::services::leave_full_screen();
     } else {
-        current_window().set_mode(WindowMode::Normal);
+        window.set_mode(WindowMode::Normal);
     }
 }
 

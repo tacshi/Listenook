@@ -46,6 +46,13 @@ pub(crate) fn set_dock_icon(visible: bool) {
     let _ = visible;
 }
 
+/// Takes the key window out of full screen on macOS, through AppKit (`apple::leave_full_screen`).
+/// Nothing elsewhere: nsh's `set_mode` does it there.
+pub(crate) fn leave_full_screen() {
+    #[cfg(target_os = "macos")]
+    apple::leave_full_screen();
+}
+
 /// How far behind the player the listener hears it: what has reached the
 /// headphones plays on after a pause or a seek.
 pub(crate) fn output_latency_ms() -> f64 {
