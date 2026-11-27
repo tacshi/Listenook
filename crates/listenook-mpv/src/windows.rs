@@ -10,7 +10,8 @@
 //!
 //! A video's own window (`holdWindow`) opens out of sight and shows once it has the video's
 //! shape and picture ([`Hold`]): with shaders still to compile, its first frames would show it
-//! empty.
+//! empty. A frame presented is on screen only once the compositor has taken it, 40 ms or more
+//! later for the first ([`Taken`]), so the window waits for that too.
 
 mod shape;
 
@@ -28,7 +29,7 @@ use nsh_platform_windows::{
     ComponentContext, NativeComponent, Placement,
     windows::{
         Win32::{
-            Foundation::HMODULE,
+            Foundation::{CloseHandle, HANDLE, HMODULE, WAIT_OBJECT_0},
             Graphics::{
                 Direct3D::D3D_DRIVER_TYPE_HARDWARE,
                 Direct3D11::{
@@ -43,11 +44,12 @@ use nsh_platform_windows::{
                         DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
                         DXGI_SAMPLE_DESC,
                     },
-                    DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
-                    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2,
-                    IDXGISwapChain1,
+                    DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
+                    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISwapChain1, IDXGISwapChain2,
                 },
             },
+            System::Threading::WaitForSingleObject,
         },
         core::Interface,
     },
@@ -65,8 +67,54 @@ use crate::{
 struct Target {
     render: Option<Render>,
     swap_chain: Option<IDXGISwapChain1>,
+    /// When the swap chain's frames are taken.
+    taken: Option<Taken>,
     /// The swap chain's size.
     size: (u32, u32),
+}
+
+/// The longest the drawing thread waits for the compositor to take a frame of a held window.
+const TAKEN_WAIT: Duration = Duration::from_millis(100);
+
+/// When the compositor has taken a frame presented to the swap chain, and so shows it from its
+/// next composition: the swap chain's frame latency waitable object, signalled once for each
+/// frame taken. A frame presented for the next vertical blank (`Present(1)`) is taken only once
+/// it is drawn, at a vertical blank: the first of a video, 40 to 50 ms after it was presented.
+/// The object counts free places in the queue, not frames: [`Self::new`] empties it, and while
+/// a window is held each frame is waited for ([`Self::wait`]), so a signal is always the last
+/// frame's. The swap chain is made once the view is placed, after its window is held, so this
+/// holds from its first frame.
+struct Taken(HANDLE);
+
+impl Taken {
+    fn new(swap_chain: &IDXGISwapChain1) -> Option<Taken> {
+        // SAFETY: DXGI's documented API, on a swap chain made with the frame latency waitable
+        // object; the handle is the caller's to close.
+        let handle = unsafe { swap_chain.cast::<IDXGISwapChain2>().ok()?.GetFrameLatencyWaitableObject() };
+        if handle.is_invalid() {
+            return None;
+        }
+        let taken = Taken(handle);
+        while taken.after(Duration::ZERO) {}
+        Some(taken)
+    }
+
+    /// Waits for the frame presented last to be taken: whether it was (in time).
+    fn wait(&self) -> bool {
+        self.after(TAKEN_WAIT)
+    }
+
+    fn after(&self, wait: Duration) -> bool {
+        // SAFETY: a handle this owns.
+        unsafe { WaitForSingleObject(self.0, wait.as_millis() as u32) == WAIT_OBJECT_0 }
+    }
+}
+
+impl Drop for Taken {
+    fn drop(&mut self) {
+        // SAFETY: the handle is this one's, closed once.
+        let _ = unsafe { CloseHandle(self.0) };
+    }
 }
 
 /// A window kept out of sight while it opens, shown once a frame of the video is drawn at the
@@ -98,6 +146,11 @@ impl Hold {
                 hold.release();
             }
         });
+    }
+
+    /// A window is held, not shown yet.
+    fn holding(&self) -> bool {
+        self.window.load(Ordering::Relaxed) != 0
     }
 
     /// The view has the video's shape at `size` (`None`: it has not).
@@ -134,7 +187,8 @@ impl Hold {
 }
 
 // SAFETY: the render context and the swap chain are used by one thread at a time (the mutex);
-// the device was made with Direct3D's multithread protection, which mpv turns on.
+// the device was made with Direct3D's multithread protection, which mpv turns on. The waitable
+// object's handle may be waited on from any thread.
 unsafe impl Send for Target {}
 
 /// Between the window and the drawing thread: something to draw, a size to take, time to
@@ -353,6 +407,8 @@ impl Gpu {
             Scaling: DXGI_SCALING_STRETCH,
             SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
             AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+            // To know when a frame is taken ([`Taken`]).
+            Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
             ..Default::default()
         };
         // SAFETY: DXGI's documented API, with a device of this factory's adapter.
@@ -375,9 +431,11 @@ fn present(render: &Render, swap_chain: &IDXGISwapChain1, vsyncs: u32) {
 
 /// Gives `swap_chain` buffers of `size`: whether it has them.
 fn resize_buffers(swap_chain: &IDXGISwapChain1, (width, height): (u32, u32)) -> bool {
+    // The swap chain keeps the flags it was made with ([`Gpu::swap_chain`]).
+    let flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
     // SAFETY: nothing holds the swap chain's buffers: frames take and let go of them on this
     // thread, and mpv keeps none.
-    unsafe { swap_chain.ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0)) }
+    unsafe { swap_chain.ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, flags) }
         .inspect_err(|why| log::warn!("mpv's picture cannot take its new size: {why}"))
         .is_ok()
 }
@@ -398,6 +456,10 @@ fn draw(target: &Mutex<Target>, wake: &Wake, hold: &Hold) {
                 let new = render.has_frame();
                 if resized || new {
                     present(render, swap_chain, if resized { 0 } else { 1 });
+                    // A held window shows once its frame is on screen, not just presented.
+                    if hold.holding() && !target.taken.as_ref().is_some_and(Taken::wait) {
+                        log::debug!("mpv's frame was not taken in time: the window may show before it");
+                    }
                     hold.drawn(target.size, render.pictured());
                 }
             }
@@ -420,7 +482,7 @@ impl Video {
         options.extend(shader_cache().map(|dir| ("gpu-shader-cache-dir", dir)));
         let screen = Screen { options, wid: None, keep: Box::new(()), before_playing: None };
         let player = Player::new(screen, emit);
-        let target = Arc::new(Mutex::new(Target { render: None, swap_chain: None, size: (0, 0) }));
+        let target = Arc::new(Mutex::new(Target { render: None, swap_chain: None, taken: None, size: (0, 0) }));
         let hold = Arc::new(Hold::default());
         let wake = Arc::new(Wake::default());
         let gpu = match Gpu::new() {
@@ -486,7 +548,11 @@ impl Video {
             }
         };
         // The drawing thread has had nothing to draw into, so it does not hold this for long.
-        self.target.lock().unwrap_or_else(|e| e.into_inner()).swap_chain = Some(swap_chain.clone());
+        {
+            let mut target = self.target.lock().unwrap_or_else(|e| e.into_inner());
+            target.taken = Taken::new(&swap_chain);
+            target.swap_chain = Some(swap_chain.clone());
+        }
         let asked = self.wake.resize((width, height));
         self.wake.wait_drawn(asked, FRAME_WAIT);
         // SAFETY: DirectComposition's documented API; the window commits after `placed`.
