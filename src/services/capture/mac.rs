@@ -194,7 +194,7 @@ pub(super) fn access() -> Access {
     }
 }
 
-static ANSWER: Mutex<Option<mpsc::Sender<bool>>> = Mutex::new(None);
+static ANSWERS: Mutex<Vec<mpsc::Sender<bool>>> = Mutex::new(Vec::new());
 
 #[repr(C)]
 struct BlockDescriptor {
@@ -220,7 +220,8 @@ const BLOCK_IS_GLOBAL: i32 = 1 << 28;
 static DESCRIPTOR: BlockDescriptor = BlockDescriptor { reserved: 0, size: std::mem::size_of::<Block>() };
 
 unsafe extern "C" fn answered(_: *const Block, granted: u8) {
-    if let Some(answer) = ANSWER.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
+    let waiters = std::mem::take(&mut *ANSWERS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    for answer in waiters {
         let _ = answer.send(granted != 0);
     }
 }
@@ -240,7 +241,7 @@ pub(super) fn ask() -> bool {
     }
     let request: unsafe extern "C" fn(CFStringRef, CFTypeRef, *const Block) = unsafe { std::mem::transmute(request) };
     let (answer, answered) = mpsc::channel();
-    *ANSWER.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(answer);
+    ANSWERS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(answer);
     let service = cf_string(SERVICE);
     unsafe {
         request(service, std::ptr::null(), &ANSWERED.0);

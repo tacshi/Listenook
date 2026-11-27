@@ -68,16 +68,20 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
 
 /// Writes `contents` to a file beside `path` and renames it over `path`, flushing both to the
 /// disk first: after a crash or power loss the file holds the old contents or the new ones,
-/// never a part. `private` makes the file readable by this user only, from its first byte.
+/// never a part. Each write has a file of its own, so two writers of one path never share one.
+/// `private` makes the file readable by this user only, from its first byte.
 pub(crate) fn write_durably(path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
     use io::Write;
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let parent = path.parent();
     if let Some(parent) = parent {
         fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("file");
+    let turn = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(".{name}.{}.{turn}.tmp", std::process::id()));
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     if private {
         use std::os::unix::fs::OpenOptionsExt;
@@ -85,11 +89,17 @@ pub(crate) fn write_durably(path: &Path, contents: &[u8], private: bool) -> io::
     }
     #[cfg(not(unix))]
     let _ = private;
-    let mut file = options.open(&tmp)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    drop(file);
-    fs::rename(&tmp, path)?;
+    let written = options
+        .open(&tmp)
+        .and_then(|mut file| {
+            file.write_all(contents)?;
+            file.sync_all()
+        })
+        .and_then(|()| fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written?;
     #[cfg(unix)]
     if let Some(parent) = parent.and_then(|parent| fs::File::open(parent).ok()) {
         let _ = parent.sync_all();
@@ -264,7 +274,8 @@ mod tests {
         let path = root.join("keys.json");
         write_durably(&path, b"{}", true).unwrap();
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-        assert!(!root.join("keys.json.tmp").exists());
+        let left: Vec<_> = fs::read_dir(&root).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(left, ["keys.json"]);
         let _ = fs::remove_dir_all(root);
     }
 

@@ -211,7 +211,8 @@ fn block_cues(text: &str, vtt: bool) -> (Vec<Cue>, usize) {
     (cues, invalid)
 }
 
-fn ass_text(text: &str) -> String {
+/// The text of an ASS line as shown: without its styling and drawings.
+pub(crate) fn ass_text(text: &str) -> String {
     let mut out = String::new();
     let (mut rest, mut drawing) = (text, false);
     while let Some(found) = ASS_OVERRIDE.find(rest) {
@@ -254,6 +255,12 @@ fn ass_cues(text: &str) -> (Vec<Cue>, usize) {
             }
         }
     }
+    (together(cues), invalid)
+}
+
+/// `cues` in time order, those shown over the same time (an ASS file's two languages, each a
+/// line of its own) as one cue of several lines.
+pub(crate) fn together(mut cues: Vec<Cue>) -> Vec<Cue> {
     cues.sort_by_key(|c| (c.start_ms, c.end_ms));
     let mut merged: Vec<Cue> = Vec::new();
     for cue in cues {
@@ -266,7 +273,13 @@ fn ass_cues(text: &str) -> (Vec<Cue>, usize) {
             _ => merged.push(cue),
         }
     }
-    (merged, invalid)
+    merged
+}
+
+/// A cue's text as shown: without the tags and entities that mark it up.
+pub(crate) fn plain(text: &str) -> String {
+    let text = OVERRIDE_TAG.replace_all(text, "");
+    clean_caption(&decode_entities(&TAG.replace_all(&text, "")), true)
 }
 
 fn decode_entities(text: &str) -> String {
@@ -304,8 +317,7 @@ pub fn import_cues(text: &str, extension: &str, duration_ms: Option<i64>) -> Res
     let mut speakers: Vec<Speaker> = Vec::new();
     for (index, cue) in cues.iter().enumerate() {
         let voice = VOICE.captures(&cue.text).map(|found| found[1].trim().to_owned());
-        let text = OVERRIDE_TAG.replace_all(&cue.text, "");
-        let text = clean_caption(&decode_entities(&TAG.replace_all(&text, "")), true);
+        let text = plain(&cue.text);
         let mut end_ms = cue.end_ms;
         if let Some(duration) = duration_ms.filter(|d| *d > 0) {
             if cue.start_ms >= duration {

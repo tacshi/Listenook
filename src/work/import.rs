@@ -98,13 +98,13 @@ pub(crate) fn import_subtitle_file(job_id: String, path: String) {
         }
     };
     let apply = move || {
-        store.update_job(&job_id, |job| {
-            job.apply(listenook_core::Change::ReplaceTranscript(
-                document,
-                Some(listenook_core::TranscriptAcquisitionMode::ImportedSubtitles),
-            ));
-            job.apply(listenook_core::Change::Finish(false));
-        });
+        // Asked again here: the answer to the question below may come after work started.
+        if !store.job_now(&job_id).is_some_and(|job| job.takes_subtitles()) {
+            return;
+        }
+        let mode = listenook_core::TranscriptAcquisitionMode::ImportedSubtitles;
+        super::transcribe::put_transcript(store, &job_id, document, Some(mode));
+        store.update_job(&job_id, |job| job.apply(listenook_core::Change::Finish(false)));
         let id = job_id.clone();
         store.run_for(&job_id, async move { super::timing::add_word_timing(store, &id, None).await });
         toast(Tone::Success, tr("Subtitles imported."));

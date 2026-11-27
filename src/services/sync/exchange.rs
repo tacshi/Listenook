@@ -543,7 +543,7 @@ pub(super) fn exchange(
             let length: u64 =
                 response.header("Content-Length").and_then(|length| length.parse().ok()).ok_or("sync_failed")?;
             let from: u64 = response.header("X-Listenook-Offset").and_then(|from| from.parse().ok()).unwrap_or(0);
-            if from > 0 && (from != have || from + length != transfer.media_size) {
+            if from > 0 && (from != have || from.checked_add(length) != Some(transfer.media_size)) {
                 let _ = fs::remove_file(&part);
                 return Err("sync_interrupted");
             }

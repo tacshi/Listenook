@@ -151,7 +151,9 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
         })
     });
     let seek = move |ms: i64| {
-        let ms = ms.clamp(0, duration_ms.get_untracked().max(0));
+        // The end is not known until the video has loaded, and never for some: no limit then.
+        let end = Some(duration_ms.get_untracked()).filter(|end| *end > 0).unwrap_or(i64::MAX);
+        let ms = ms.clamp(0, end);
         position_ms.set(ms);
         media.seek(ms as f64 / 1000.0);
     };

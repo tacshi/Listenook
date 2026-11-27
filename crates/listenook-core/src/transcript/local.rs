@@ -320,7 +320,8 @@ pub fn sentences(text: &str) -> Vec<String> {
         let length = current.chars().map(|c| if is_cjk(c) { 3 } else { 1 }).sum::<usize>();
         let ends = match c {
             '。' | '？' | '！' => true,
-            '.' | '?' | '!' | '…' => next_breaks,
+            '.' => next_breaks && !super::parser::ends_in_abbreviation(&current),
+            '?' | '!' | '…' => next_breaks,
             '，' | '、' | '；' => length > 120,
             ',' | ';' => next_breaks && length > 120,
             _ => false,

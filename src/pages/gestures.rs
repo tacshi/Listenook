@@ -156,8 +156,7 @@ impl State {
         };
         self.streak.set(Some((now + STREAK_MS, forward, total)));
         let by = if forward { SKIP_MS } else { -SKIP_MS };
-        let to = ((self.video.position)() + by).clamp(0, (self.video.duration)().max(0));
-        (self.video.seek)(to);
+        (self.video.seek)((self.video.position)() + by);
         Timers::cancel(&self.timers.linger);
         self.shown.set(Some(Shown::Skip { forward, ms: total }));
         self.linger();

@@ -265,25 +265,27 @@ pub(super) fn brief_pane(review: Review, dialog: Signal<bool>) -> impl IntoEleme
 }
 
 fn evidence(review: Review, ids: &[String]) -> impl IntoElement {
-    let moments: Vec<(usize, i64)> = review.job_now_with(|job| {
+    let moments: Vec<(String, i64)> = review.job_now_with(|job| {
         let Some(document) = job.as_ref().and_then(|job| job.document()) else {
             return Vec::new();
         };
         document
             .segments
             .iter()
-            .enumerate()
-            .filter(|(_, segment)| ids.contains(&segment.id))
-            .map(|(index, segment)| (index, segment.start_ms))
+            .filter(|segment| ids.contains(&segment.id))
+            .map(|segment| (segment.id.clone(), segment.start_ms))
             .take(6)
             .collect()
     });
-    view().flex_row().flex_wrap().gap_1().children(moments.into_iter().map(move |(index, start_ms)| {
+    view().flex_row().flex_wrap().gap_1().children(moments.into_iter().map(move |(id, start_ms)| {
         moment_chip(format::shown(format::Shown::Clock(start_ms)))
             .accessibility_label(format!("{} {}", tr("Play from"), format::shown(format::Shown::Clock(start_ms))))
+            // Found by its sentence as it is pressed: editing the transcript moves sentences.
             .on_press(move || {
-                review.follow();
-                review.play_from(index);
+                if let Some(index) = review.index_of(&id) {
+                    review.follow();
+                    review.play_from(index);
+                }
             })
     }))
 }

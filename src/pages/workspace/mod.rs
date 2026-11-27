@@ -54,6 +54,9 @@ pub(crate) fn reader(id: &str) -> impl IntoElement {
 /// window, within these.
 const ANSWER_MIN: f32 = 200.0;
 const ANSWER_MAX: f32 = 360.0;
+/// What the transcript keeps of the reader beside or under a video.
+const TEXT_HEIGHT: f32 = 200.0;
+const TEXT_WIDTH: f32 = 320.0;
 /// A keyboard taller than this is the software one (a hardware keyboard
 /// leaves only its shortcut bar).
 const SOFT_KEYBOARD: f32 = 120.0;
@@ -216,11 +219,7 @@ fn opened(id: &str) -> impl IntoElement {
                 review.toggle_play();
             }
         }
-        media::Command::Pause => {
-            if !untracked(|| review.is_paused()) {
-                review.toggle_play();
-            }
-        }
+        media::Command::Pause => review.pause(),
         media::Command::Toggle => review.toggle_play(),
         media::Command::Next => review.step(1),
         media::Command::Previous => review.step(-1),
@@ -366,11 +365,11 @@ fn opened(id: &str) -> impl IntoElement {
                 s.w_full().h(px(height))
             }
             (false, Side::Video) if narrow() => {
-                s.w_full().h(px(crate::pages::chrome::page_width() * 9.0 / 16.0)).border_b_1()
+                s.w_full().h(px((crate::pages::chrome::page_width() * 9.0 / 16.0).min(video_room(true)))).border_b_1()
             }
             (false, _) if narrow() => s.w_full().h(px(window().height.0 * 0.45)).border_t_1(),
-            (false, _) if on_top() => s.w_full().h(px(review.video_height.get())).border_b_1(),
-            (false, _) => s.w(px(review.side_width.get())).border_l_1(),
+            (false, _) if on_top() => s.w_full().h(px(review.video_height.get().min(video_room(false)))).border_b_1(),
+            (false, _) => s.w(px(review.side_width.get().min(side_room()))).border_l_1(),
         })
         .flex_shrink_0()
         .overflow_hidden()
@@ -383,7 +382,11 @@ fn opened(id: &str) -> impl IntoElement {
         .child(
             view()
                 .style_with(move |s| {
-                    if review.fullscreen.get() || stacked() { s.w_full() } else { s.w(px(review.side_width.get())) }
+                    if review.fullscreen.get() || stacked() {
+                        s.w_full()
+                    } else {
+                        s.w(px(review.side_width.get().min(side_room())))
+                    }
                 })
                 .flex_1()
                 .child(
@@ -1599,12 +1602,29 @@ fn search_bar(review: Review) -> impl IntoElement {
     )
 }
 
+/// The tallest the video above the transcript may be: the window's height less the bars
+/// and the room the transcript keeps, so a height chosen in a tall window never leaves
+/// a short one with a line of text.
+fn video_room(narrow: bool) -> f32 {
+    let transport = if narrow { 90.0 } else { 50.0 };
+    (window().height.0 - crate::pages::chrome::BAR - transport - TEXT_HEIGHT).max(review::VIDEO_MIN)
+}
+
+/// The widest the side column may be, for the same reason.
+fn side_room() -> f32 {
+    (crate::pages::chrome::page_width() - TEXT_WIDTH).max(review::SIDE_MIN)
+}
+
 fn divider(review: Review, under: bool) -> impl IntoElement {
     use nsh_core::{TouchPhase, element::TouchEvent};
 
     use self::review::{SIDE_MAX, SIDE_MIN, VIDEO_MAX, VIDEO_MIN};
     let from = signal(None::<(f32, f32)>);
     let size = if under { review.video_height } else { review.side_width };
+    // A drag starts from the size shown, which a small window may hold under the one kept.
+    let shown = move || {
+        if under { size.get_untracked().min(video_room(false)) } else { size.get_untracked().min(side_room()) }
+    };
     let handle = view().absolute();
     let handle = if under {
         handle.left(px(0.0)).right(px(0.0)).bottom(px(0.0)).h(px(8.0)).cursor(Cursor::RowResize)
@@ -1622,13 +1642,13 @@ fn divider(review: Review, under: bool) -> impl IntoElement {
             };
             let at = if under { point.page.y.0 } else { point.page.x.0 };
             match event.phase {
-                TouchPhase::Start => from.set(Some((at, size.get_untracked()))),
+                TouchPhase::Start => from.set(Some((at, shown()))),
                 TouchPhase::Move => {
                     if let Some((start, before)) = from.get_untracked() {
                         size.set(if under {
-                            (before + at - start).clamp(VIDEO_MIN, VIDEO_MAX)
+                            (before + at - start).clamp(VIDEO_MIN, VIDEO_MAX.min(video_room(false)))
                         } else {
-                            (before + start - at).clamp(SIDE_MIN, SIDE_MAX)
+                            (before + start - at).clamp(SIDE_MIN, SIDE_MAX.min(side_room()))
                         });
                     }
                 }

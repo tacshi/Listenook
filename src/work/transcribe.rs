@@ -32,7 +32,13 @@ pub(crate) fn start(id: &str) {
         if !job.is_uploaded() {
             store.apply_options(job);
         }
-        job.apply(listenook_core::Change::Start(JobStatus::Uploading, "uploading"));
+        // Only a transcription service is sent the media: on the device it is converted, once
+        // the recordings ahead of it are done.
+        let (status, stage) = match provider_of(job) {
+            Ok(_) => (JobStatus::Uploading, "uploading"),
+            Err(_) => (JobStatus::Converting, "converting"),
+        };
+        job.apply(listenook_core::Change::Start(status, stage));
     });
     store.run_for(&id.clone(), async move {
         if let Err(failure) = run(store, &id).await {
@@ -55,7 +61,9 @@ pub(crate) fn start(id: &str) {
 /// The transcript it has stays readable until the new one replaces it, and stays for good if
 /// transcribing fails or is cancelled.
 pub(crate) fn again(id: &str) {
-    store().update_job(id, |job| job.apply(listenook_core::Change::ForgetUpload));
+    let store = store();
+    delete_left(store, id);
+    store.update_job(id, |job| job.apply(listenook_core::Change::ForgetUpload));
     start(id);
 }
 
@@ -71,23 +79,43 @@ fn keep_if_silent(store: Store, id: &str, empty: bool) -> Result<(), Failure> {
     }
 }
 
-/// Puts a new transcript in place, dropping what was made from the one it replaces.
-fn put_transcript(store: Store, id: &str, document: Document) {
+/// Puts a new transcript in place, got the way `mode` says (by the recording's provider when
+/// `None`), dropping what was made from the one it replaces and stopping what is being made.
+pub(super) fn put_transcript(
+    store: Store,
+    id: &str,
+    document: Document,
+    mode: Option<listenook_core::TranscriptAcquisitionMode>,
+) {
     ai::cancel_translation(id);
     ai::cancel_brief(id);
     ai::cancel_ad_scan(id);
-    store.update_job(id, |job| job.apply(listenook_core::Change::ReplaceTranscript(document, None)));
+    store.update_job(id, |job| job.apply(listenook_core::Change::ReplaceTranscript(document, mode)));
 }
 
-pub(crate) fn cancel(id: &str) {
+/// Removes a recording for good: its work stops, and what it left with a transcription service
+/// and among the temporary files goes with it.
+pub(crate) fn remove(id: &str) {
     let store = store();
-    store.cancel_work(id);
+    delete_left(store, id);
+    store.act(crate::state::Action::RemoveJob(id));
+    delete_temporary(store, id);
+}
+
+/// Deletes the files made of a recording's media to transcribe it.
+fn delete_temporary(store: Store, id: &str) {
     if let Some(root) = store.data_root() {
         let _ = std::fs::remove_file(root.join("temporary").join(format!("{id}-local.wav")));
     }
     for kind in ["wav", "m4a"] {
         let _ = std::fs::remove_file(std::env::temp_dir().join(format!("listenook-{id}.{kind}")));
     }
+}
+
+pub(crate) fn cancel(id: &str) {
+    let store = store();
+    store.cancel_work(id);
+    delete_temporary(store, id);
     let job = store.job_now(id);
     if job.as_ref().is_some_and(|job| job.status == JobStatus::Aligning) {
         store.update_job(id, |job| {
@@ -146,6 +174,7 @@ pub(crate) fn retry(id: &str) {
     {
         return super::podcasts::download(id);
     }
+    delete_left(store, id);
     store.update_job(id, |job| {
         let missing = !std::path::Path::new(&job.source_path).exists();
         job.apply(listenook_core::Change::ReadyAgain(missing));
@@ -300,7 +329,7 @@ async fn run(store: Store, id: &str) -> Result<(), Failure> {
     let translated = document.segments.iter().filter(|s| s.has_translation()).count() as u32;
     let total = document.segments.len() as u32;
     keep_if_silent(store, id, empty)?;
-    put_transcript(store, id, document);
+    put_transcript(store, id, document, None);
     store.update_job(id, |job| {
         if let Some(target) = soniox_target {
             job.apply(listenook_core::Change::TranslatedWithTranscript(target, SONIOX_MODEL, translated, total));
@@ -346,7 +375,7 @@ async fn run_local(store: Store, id: &str, job: &Job) -> Result<(), Failure> {
     let timed = !document.tokens.is_empty();
     let has_video = matches!(subtitles::extension(&job.source_path).as_str(), "mp4" | "mkv" | "avi");
     keep_if_silent(store, id, empty)?;
-    put_transcript(store, id, document);
+    put_transcript(store, id, document, None);
     store.update_job(id, |job| {
         job.apply(listenook_core::Change::NoteMedia(MediaMetadata {
             size_bytes: size as i64,
@@ -368,24 +397,53 @@ async fn run_local(store: Store, id: &str, job: &Job) -> Result<(), Failure> {
     Ok(())
 }
 
-async fn clean_up(store: Store, id: &str) {
-    let Some(job) = store.job_now(id) else {
-        return;
-    };
-    if job.cleanup_state != CleanupState::Pending {
-        return;
+/// What a recording left with a transcription service, to delete there once it is done with.
+struct Left {
+    provider: Provider,
+    transcription_id: Option<String>,
+    file_id: Option<String>,
+}
+
+impl Left {
+    fn of(job: &Job) -> Option<Left> {
+        let provider = provider_of(job).ok()?;
+        (job.is_uploaded() && job.cleanup_state == CleanupState::Pending).then(|| Left {
+            provider,
+            transcription_id: job.remote_transcription_id.clone(),
+            file_id: job.remote_file_id.clone(),
+        })
     }
-    let (Ok(provider), true) = (provider_of(&job), job.is_uploaded()) else {
+
+    async fn delete(&self) -> bool {
+        let Some(key) = secrets::read(self.provider.secret()) else {
+            return false;
+        };
+        self.provider.cleanup(self.transcription_id.as_deref(), self.file_id.as_deref(), &key).await
+    }
+}
+
+async fn clean_up(store: Store, id: &str) {
+    let Some(left) = store.job_now(id).and_then(|job| Left::of(&job)) else {
         return;
     };
-    let Some(key) = secrets::read(provider.secret()) else {
-        return;
-    };
-    if provider.cleanup(job.remote_transcription_id.as_deref(), job.remote_file_id.as_deref(), &key).await {
+    if left.delete().await {
         store.update_job(id, |job| job.apply(listenook_core::Change::CleanedUp));
     } else {
-        // Left pending: the media is still with the provider, and the next start tries again.
+        // Left pending: the media is still with the provider, and the next launch tries again.
         log::warn!("job {id}: the provider's copy could not be deleted yet");
+    }
+}
+
+/// Deletes what a recording left with a transcription service, as it is about to forget it
+/// (to send its media again) or to go for good: nothing would know to delete it later.
+fn delete_left(store: Store, id: &str) {
+    if let Some(left) = store.job_now(id).and_then(|job| Left::of(&job)) {
+        let id = id.to_owned();
+        store.run(async move {
+            if !left.delete().await {
+                log::warn!("job {id}: the provider's copy could not be deleted");
+            }
+        });
     }
 }
 

@@ -77,6 +77,12 @@ fn timed_words(cue: &Segment) -> Vec<Token> {
     let mut texts: Vec<String> = Vec::new();
     for line in cue.text.lines() {
         let mut words = words(line);
+        // A dash that opens a line (`- I don't know.`) goes with the word after it, not as a
+        // mark of its own that would end the sentence before.
+        if words.len() > 1 && words[0].chars().all(|c| matches!(c, '-' | '–' | '—')) {
+            let dash = words.remove(0);
+            words[0].insert_str(0, &dash);
+        }
         if let (Some(last), Some(first)) = (texts.last(), words.first_mut())
             && spaced_apart(last, first)
         {
@@ -177,6 +183,24 @@ mod tests {
         let at = "But how many came ".chars().count();
         assert!(crate::transcript::structure::apply(&mut document, crate::transcript::structure::Edit::SplitAt(0, at)));
         assert_eq!(document.segments[1].start_ms, 2600);
+    }
+
+    #[test]
+    fn a_cue_that_opens_with_a_mark_is_spaced_from_the_one_before() {
+        let said = joined(vec![cue(0, 1000, "He looked at me and said,"), cue(1000, 2000, "\"You're not going.\"")]);
+        assert_eq!(sentences(&said), [("He looked at me and said, \"You're not going.\"", 0, 2000)]);
+        let costs = joined(vec![cue(0, 1000, "It only costs"), cue(1000, 2000, "$5 a month.")]);
+        assert_eq!(sentences(&costs)[0].0, "It only costs $5 a month.");
+        let asked = joined(vec![cue(0, 1000, "Hola, María,"), cue(1000, 2000, "¿cómo estás?")]);
+        assert_eq!(sentences(&asked)[0].0, "Hola, María, ¿cómo estás?");
+        let trailed = joined(vec![cue(0, 1000, "I was thinking…"), cue(1000, 2000, "maybe we should go.")]);
+        assert_eq!(sentences(&trailed)[0].0, "I was thinking… maybe we should go.");
+    }
+
+    #[test]
+    fn a_cue_that_opens_with_a_dash_starts_its_own_sentence() {
+        let document = joined(vec![cue(1000, 3000, "Where is he?"), cue(30000, 32000, "- I don't know.")]);
+        assert_eq!(sentences(&document), [("Where is he?", 1000, 3000), ("- I don't know.", 30000, 32000)]);
     }
 
     #[test]

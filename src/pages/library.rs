@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use listenook_core::{
-    Job, JobSourceOrigin, JobStatus, TRANSLATION_LANGUAGES, TranscriptionProvider, TranslationStatus, format,
+    Found, Job, JobSourceOrigin, JobStatus, TRANSLATION_LANGUAGES, TranscriptionProvider, TranslationStatus, format,
     l10n::status_label,
 };
 use nsh_base::theme;
@@ -99,16 +99,13 @@ pub(crate) fn library() -> impl IntoElement {
         tags: JobDialog::new(),
     };
     let sort = computed(Sort::saved);
+    let needle = computed(move || query.with(|q| q.trim().to_lowercase()));
     let shown = computed(move || {
-        let needle = query.with(|q| q.trim().to_lowercase());
+        let needle = needle.get();
         let mut jobs = store
             .library()
             .into_iter()
-            .filter(|job| {
-                needle.is_empty()
-                    || job.title().to_lowercase().contains(&needle)
-                    || job.file_name().to_lowercase().contains(&needle)
-            })
+            .filter(|job| needle.is_empty() || job.find(&needle).is_some())
             .collect::<Vec<Rc<Job>>>();
         sort.get().apply(&mut jobs);
         jobs
@@ -216,7 +213,7 @@ pub(crate) fn library() -> impl IntoElement {
                 },
             )
             .otherwise(move || {
-                virtual_list(move || shown.with(Vec::len), move |at| row(shown, at, dialogs))
+                virtual_list(move || shown.with(Vec::len), move |at| row(shown, needle, at, dialogs))
                     .smooth_wheel(true)
                     .keys(move || shown.with(|jobs| jobs.iter().map(|job| job.id.clone()).collect::<Vec<_>>()))
                     .estimated_item_size(px(64.0))
@@ -301,6 +298,31 @@ pub(super) fn detail(job: &Job) -> SharedString {
     parts.join(" · ").into()
 }
 
+/// What a search for `needle` shows under a recording: the sentence it was found in, or
+/// what the library says of the recording when its name has it.
+pub(super) fn found_line(job: &Job, needle: &str) -> SharedString {
+    match job.find(needle).filter(|_| !needle.is_empty()) {
+        Some(Found::Sentence { text, .. }) => format!("“{text}”").into(),
+        _ => detail(job),
+    }
+}
+
+/// How far into a sentence a search opens a recording: past a frame of the slowest video.
+const INTO_SENTENCE: i64 = 100;
+
+/// Opens a recording a search for `needle` found, at the sentence when it was found in one.
+pub(super) fn open_found(id: &str, needle: &str) {
+    let store = store();
+    let at = store.job_now(id).filter(|job| !needle.is_empty() && can_open(job)).and_then(|job| job.find(needle));
+    if let Some(Found::Sentence { start_ms, .. }) = at {
+        // A video settles on the frame showing at the time asked for, which starts a little
+        // before it: aimed at the sentence's very start, that frame is in the pause ahead of
+        // it, where the reader still marks the sentence before.
+        store.act(crate::state::Action::RememberPosition(id, Some(start_ms + INTO_SENTENCE)));
+    }
+    open(id);
+}
+
 fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: Dialogs) -> ui::Menu {
     let store = store();
     menu.child(MenuAction { glyph: Icon::Pencil, label: l("Rename…"), on_select: move || dialogs.rename.show(&id()) })
@@ -318,7 +340,7 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
             },
         })
         .child(when(
-            || !platform::is_phone(),
+            move || !platform::is_phone() && store.job(&id()).is_some_and(|job| job.takes_subtitles()),
             move || MenuAction {
                 glyph: Icon::Languages,
                 label: l("Use a subtitle file…"),
@@ -393,7 +415,7 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
                 let owned =
                     store.data_root().is_some_and(|root| std::path::Path::new(&job.source_path).starts_with(root));
                 if !job.has_transcript() && !owned && !job.status().is_active() {
-                    store.act(crate::state::Action::RemoveJob(&id));
+                    transcribe::remove(&id);
                     return;
                 }
                 confirm_destructive(
@@ -405,7 +427,7 @@ fn row_menu(menu: ui::Menu, id: impl Fn() -> String + Copy + 'static, dialogs: D
                     }),
                     tr("Cancel"),
                     tr("Remove"),
-                    move || store.act(crate::state::Action::RemoveJob(&id)),
+                    move || transcribe::remove(&id),
                 );
             },
         })
@@ -490,7 +512,7 @@ fn tag_pill(name: impl Into<SharedString>) -> View {
         .child(text(name.into()).text_xs().number_of_lines(1).text_color(|| theme().muted_foreground))
 }
 
-fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoElement {
+fn row(shown: Memo<Vec<Rc<Job>>>, needle: Memo<String>, at: Position, dialogs: Dialogs) -> impl IntoElement {
     let store = store();
     let job = computed(move || shown.with(|jobs| jobs.get(at.index()).cloned()));
     let read = move |f: fn(&Job) -> bool| job.with(|job| job.as_deref().is_some_and(f));
@@ -512,7 +534,7 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
         .gap_1()
         .child(
             ui::list_row(|| false)
-                .on_press(move || open(&id()))
+                .on_press(move || open_found(&id(), &needle.get_untracked()))
                 .flex_1()
                 .min_w(px(0.0))
                 .child(
@@ -577,16 +599,15 @@ fn row(shown: Memo<Vec<Rc<Job>>>, at: Position, dialogs: Dialogs) -> impl IntoEl
                                 })),
                         )
                         .child(
-                            text(move || job.with(|job| job.as_deref().map(detail).unwrap_or_default()))
-                                .text_xs()
-                                .number_of_lines(1)
-                                .text_color(move || {
-                                    if status() == Status::Danger {
-                                        theme().destructive
-                                    } else {
-                                        theme().muted_foreground
-                                    }
-                                }),
+                            text(move || {
+                                let needle = needle.get();
+                                job.with(|job| job.as_deref().map(|job| found_line(job, &needle)).unwrap_or_default())
+                            })
+                            .text_xs()
+                            .number_of_lines(1)
+                            .text_color(move || {
+                                if status() == Status::Danger { theme().destructive } else { theme().muted_foreground }
+                            }),
                         )
                         .child(when(busy, move || {
                             progress_bar(move || {

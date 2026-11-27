@@ -27,6 +27,9 @@ enum Cover {
 thread_local! {
     static COVERS: RefCell<HashMap<String, Cover>> = RefCell::new(HashMap::new());
     static CHANGED: Signal<u64> = Owner::detached().run(|| signal(0));
+    /// Owns the making of covers: a cover asked for by a view is made whether or not that
+    /// view stays, as it is remembered as being made until it is.
+    static MAKERS: Owner = Owner::detached();
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,11 +72,12 @@ impl File {
         }
         remember(&self.id, Cover::Making);
         let (id, source, video, at_ms) = (self.id.clone(), self.source.clone(), self.video, frame_at(self.duration_ms));
-        spawn(async move {
+        let making = async move {
             let made = blocking(move || make(&source, &folder, video, at_ms)).await.ok().flatten();
             remember(&id, made.map_or(Cover::Missing, Cover::Found));
             CHANGED.with(|changed| changed.update(|count| *count += 1));
-        });
+        };
+        drop(MAKERS.with(|makers| makers.run(|| spawn(making))));
         String::new()
     }
 }

@@ -502,7 +502,6 @@ fn trimming_actions() -> AnyElement {
     let capture = crate::work::capture::CaptureState::get();
     let saving = move || capture.phase() == Phase::Saving;
     let nothing = move || capture.take().is_none_or(|take| !capture::heard(&take.levels));
-    let transcribe = signal(capture.transcribes());
     if untracked(nothing) {
         return view()
             .flex_row()
@@ -524,12 +523,12 @@ fn trimming_actions() -> AnyElement {
         .gap_3()
         .child(button(Variant::Ghost, Size::Md, l("Discard…")).disabled(saving).on_press(confirm_discard))
         .child(view().flex_1())
-        .child(ui::checkbox(l("Transcribe"), move || transcribe.get(), move |on| transcribe.set(on)))
+        .child(ui::checkbox(l("Transcribe"), move || capture.transcribes(), move |on| capture.set_transcribes(on)))
         .child(
             button(Variant::Primary, Size::Md, move || tr(if saving() { "Saving…" } else { "Save to Library" }))
                 .busy(saving)
                 .disabled(move || saving() || capture.kept().is_empty())
-                .on_press(move || capture.act(crate::work::capture::CaptureAction::Save(transcribe.get_untracked()))),
+                .on_press(move || capture.act(crate::work::capture::CaptureAction::Save(capture.transcribes()))),
         )
         .into_element()
 }

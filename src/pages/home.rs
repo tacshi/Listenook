@@ -264,18 +264,13 @@ pub(crate) fn home() -> impl IntoElement {
     let processing = computed(move || store.jobs().into_iter().filter(|job| job.is_busy()).collect::<Vec<_>>());
     let waiting = computed(move || store.jobs().iter().filter(|job| job.status().is_transcribable()).count());
     let fresh = computed(fresh_episodes);
+    let needle = computed(move || query.with(|q| q.trim().to_lowercase()));
     let found = computed(move || {
-        let needle = query.with(|q| q.trim().to_lowercase());
+        let needle = needle.get();
         if needle.is_empty() {
             return Vec::new();
         }
-        store
-            .jobs()
-            .into_iter()
-            .filter(|job| {
-                job.title().to_lowercase().contains(&needle) || job.file_name().to_lowercase().contains(&needle)
-            })
-            .collect::<Vec<Rc<Job>>>()
+        store.jobs().into_iter().filter(|job| job.find(&needle).is_some()).collect::<Vec<Rc<Job>>>()
     });
     let open = store.home_search();
     effect(move || {
@@ -373,7 +368,7 @@ pub(crate) fn home() -> impl IntoElement {
                         .pt(px(ui::PAGE_INSET))
                         .pb(px(ui::PAGE_INSET))
                         .gap_6()
-                        .child(when(searching, move || results(found)).otherwise(move || {
+                        .child(when(searching, move || results(found, needle)).otherwise(move || {
                             let has_continue = move || continued.with(|items| !items.is_empty());
                             let beside = move || home_stats::beside();
                             view()
@@ -822,7 +817,7 @@ fn fresh_list(fresh: Memo<Vec<Fresh>>) -> impl IntoElement {
     ))
 }
 
-fn results(found: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
+fn results(found: Memo<Vec<Rc<Job>>>, needle: Memo<String>) -> impl IntoElement {
     view()
         .child(each(
             move || found.get(),
@@ -830,7 +825,7 @@ fn results(found: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
             move |job, _| {
                 let id = job.with_untracked(|job| job.id.clone());
                 list_row(|| false)
-                    .on_press(move || super::library::open(&id))
+                    .on_press(move || super::library::open_found(&id, &needle.get_untracked()))
                     .child(job.with_untracked(|job| job_tile(job)))
                     .child(
                         view()
@@ -845,10 +840,13 @@ fn results(found: Memo<Vec<Rc<Job>>>) -> impl IntoElement {
                                     .text_color(|| theme().foreground),
                             )
                             .child(
-                                text(move || job.with(|job| detail(job)))
-                                    .text_xs()
-                                    .number_of_lines(1)
-                                    .text_color(|| theme().muted_foreground),
+                                text(move || {
+                                    let needle = needle.get();
+                                    job.with(|job| super::library::found_line(job, &needle))
+                                })
+                                .text_xs()
+                                .number_of_lines(1)
+                                .text_color(|| theme().muted_foreground),
                             ),
                     )
             },

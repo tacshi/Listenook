@@ -425,7 +425,9 @@ unsafe fn rgba(node: &RawNode) -> Option<(u32, u32, Vec<u8>)> {
     let (width, height, stride) =
         (usize::try_from(width?).ok()?, usize::try_from(height?).ok()?, usize::try_from(stride?).ok()?);
     let data = data?;
-    if width == 0 || height == 0 || stride < width * 4 || data.size < stride * (height - 1) + width * 4 {
+    let row_bytes = width.checked_mul(4)?;
+    let needed = height.checked_sub(1)?.checked_mul(stride)?.checked_add(row_bytes)?;
+    if width == 0 || stride < row_bytes || data.size < needed {
         return None;
     }
     // SAFETY: mpv's byte array holds `size` bytes.

@@ -625,7 +625,9 @@ pub(crate) fn remove(id: &str) {
         return;
     };
     member.remove();
-    state.ledger.seen.remove(id);
+    // No device counts as in step now: who is in the circle travels only in an exchange, and
+    // the others are to hear of this at the next one, not at the next change to the library.
+    state.ledger.seen.clear();
     state.save();
 }
 
@@ -1065,14 +1067,23 @@ fn accept_from(turn: u64, listener: &TcpListener) -> io::Result<()> {
             return Ok(());
         }
         static ANSWERING: AtomicUsize = AtomicUsize::new(0);
+        struct Slot(&'static AtomicUsize);
+        impl Drop for Slot {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
         let local = is_local(from.ip(), on_tailscale);
         if local && ANSWERING.fetch_add(1, Ordering::SeqCst) < HANDLERS {
-            thread::spawn(move || {
+            let slot = Slot(&ANSWERING);
+            if let Err(error) = thread::Builder::new().spawn(move || {
+                let _slot = slot;
                 if let Err(error) = handle(stream, from.ip()) {
                     log::debug!("sync: {error}");
                 }
-                ANSWERING.fetch_sub(1, Ordering::SeqCst);
-            });
+            }) {
+                log::warn!("sync: could not start handler thread: {error}");
+            }
         } else if local {
             ANSWERING.fetch_sub(1, Ordering::SeqCst);
         }
@@ -1384,7 +1395,8 @@ fn route(call: &mut Call) -> io::Result<()> {
             reply(call.out(), 200, b"{}")
         }
         ("POST", ["sync"]) => {
-            let hello: Hello = serde_json::from_slice(&read_body(call, 4 * 1024 * 1024)?)?;
+            // As large as the index sent back: both hold the same library.
+            let hello: Hello = serde_json::from_slice(&read_body(call, MANIFEST_LIMIT)?)?;
             let from = call.from;
             welcome(call.out(), &root, me, hello, from, &peer)
         }
