@@ -3,8 +3,11 @@
 
 use serde_json::Value;
 
-use super::{Ask, JsonQuestion};
-use crate::models::{AdFinding, Document};
+use super::{Ask, JsonQuestion, Task};
+use crate::{
+    Change,
+    models::{AdFinding, Document},
+};
 
 /// How much transcript goes in one request. Whether a stretch is an ad
 /// depends on the whole episode, so a recording is sent whole up to this
@@ -122,33 +125,40 @@ impl Scan {
         Some(JsonQuestion::new(SYSTEM_PROMPT, prompt(&self.title, chunk, index, self.chunks.len())))
     }
 
-    /// What to ask the model next, or `None` once every chunk is answered.
-    pub fn ask(&self) -> Option<Ask> {
-        self.question.as_ref().map(JsonQuestion::ask)
+    /// The chunks answered, and how many there are.
+    fn progress(&self) -> (u32, u32) {
+        (self.replies.len() as u32, self.chunks.len() as u32)
+    }
+}
+
+impl Task for Scan {
+    const ERRORS: &'static str = "ad_scan_";
+
+    /// A question for each chunk, noting the chunks answered and how many there are.
+    fn ask(&self) -> Option<(Ask, Option<Change<'static>>)> {
+        let (done, total) = self.progress();
+        self.question.as_ref().map(|question| (question.ask(), Some(Change::AdScanAt(done, total))))
     }
 
-    /// Takes the model's reply to [`ask`](Self::ask); `Err` with the code to show when it
-    /// answered twice with no JSON.
-    pub fn answer(&mut self, reply: &str) -> Result<(), &'static str> {
+    /// `Err` when it answered twice with no JSON.
+    fn answer(&mut self, reply: &str) -> Result<Option<Change<'static>>, &'static str> {
         let Some(question) = &mut self.question else {
-            return Ok(());
+            return Ok(None);
         };
         if let Some(value) = question.read(reply, decode_reply).map_err(|()| "ad_scan_invalid_response")? {
             self.replies.push(value);
             self.question = self.question_for(self.replies.len());
         }
-        Ok(())
-    }
-
-    /// The chunks answered, and how many there are.
-    pub fn progress(&self) -> (u32, u32) {
-        (self.replies.len() as u32, self.chunks.len() as u32)
+        Ok(None)
     }
 
     /// The ads the replies name in `document`, read again once they are all in, as its
     /// sentences may have changed while the model thought.
-    pub fn findings(&self, document: &Document) -> Vec<AdFinding> {
-        findings(&self.replies, document)
+    fn end(self, error: Option<String>, document: &Document) -> Change<'static> {
+        match error {
+            Some(code) => Change::AdScanFailed(code),
+            None => Change::AdsFound(findings(&self.replies, document), self.progress().1),
+        }
     }
 }
 
@@ -262,17 +272,17 @@ mod tests {
     #[test]
     fn a_scan_asks_again_once_for_a_reply_that_is_not_json() {
         let mut scan = Scan::new(&document(), "Why do we itch?").unwrap();
-        let first = scan.ask().unwrap();
+        let (first, at) = scan.ask().unwrap();
         assert!(first.json && !first.prompt.contains("not valid JSON"));
+        assert!(matches!(at, Some(Change::AdScanAt(0, 1))));
         scan.answer("Sorry, no.").unwrap();
-        assert!(scan.ask().unwrap().prompt.contains("not valid JSON"));
-        assert_eq!(scan.progress(), (0, 1));
+        assert!(scan.ask().unwrap().0.prompt.contains("not valid JSON"));
         scan.answer(r#"{"ads": [{"first": "s2", "last": "s3"}]}"#).unwrap();
-        assert_eq!((scan.ask(), scan.progress()), (None, (1, 1)));
-        assert_eq!(scan.findings(&document()).len(), 1);
+        assert!(scan.ask().is_none());
+        assert!(matches!(scan.end(None, &document()), Change::AdsFound(found, 1) if found.len() == 1));
         let mut stubborn = Scan::new(&document(), "t").unwrap();
         stubborn.answer("no").unwrap();
-        assert_eq!(stubborn.answer("still no"), Err("ad_scan_invalid_response"));
+        assert_eq!(stubborn.answer("still no").unwrap_err(), "ad_scan_invalid_response");
         assert_eq!(Scan::new(&Document::default(), "t").unwrap_err(), "ad_scan_empty_transcript");
     }
 }

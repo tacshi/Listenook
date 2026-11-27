@@ -1,12 +1,15 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use listenook_core::{
-    LlmProviderSettings, TranslationStatus,
+    Change, Document, LlmProviderSettings, TranslationStatus,
     ai::{
-        Ask,
+        Ask, Task,
         ads::Scan,
         brief::{Brief, BriefRequest},
-        translate::Translation,
+        translate::{self, Translation},
     },
 };
 use nsh_core::prelude::*;
@@ -223,50 +226,57 @@ pub(crate) fn start_translation(id: &str, target: &str, only: Option<Vec<String>
     if total == 0 {
         return;
     }
-    store.update_job(&id, |job| job.apply(listenook_core::Change::BeginTranslation(&target, &settings.model, total)));
+    store.update_job(&id, |job| job.apply(Change::BeginTranslation(&target, &settings.model, total)));
     store.run_for(&translation_key(&id), async move {
-        let mut translation = match translation {
-            Ok(translation) => translation,
-            Err(code) => {
-                store.update_job(&id, |job| {
-                    job.apply(listenook_core::Change::EndTranslation(TranslationStatus::Failed, Some(code.to_owned())))
-                });
-                return;
-            }
-        };
-        let mut error = None::<String>;
-        while let Some(ask) = translation.ask() {
-            let reply = match complete(&settings, &ask).await {
-                Ok(reply) => reply,
-                Err(failure) => {
-                    error = Some(recoded(failure, "translation_"));
-                    break;
-                }
-            };
-            let lines = translation.answer(&reply);
-            let done = translation.translated();
-            store.update_job(&id, |job| job.apply(listenook_core::Change::AddTranslations(lines, done)));
+        match translation {
+            Ok(translation) => run(store, &id, translation, document).await,
+            Err(code) => store.update_job(&id, |job| {
+                job.apply(Change::EndTranslation(TranslationStatus::Failed, Some(code.to_owned())))
+            }),
         }
-        store.update_job(&id, |job| {
-            let (status, code) = translation.outcome(error.clone(), job.document().as_deref());
-            job.apply(listenook_core::Change::EndTranslation(status, code));
-        });
     });
 }
 
 /// One sentence translated on its own, for the editor to show before anything is saved.
 pub(crate) async fn translate_line(text: &str, target: &str) -> Result<String, String> {
     let settings = store().settings().llm_provider_settings;
-    let mut translation = Translation::line(text, target).map_err(str::to_owned)?;
-    let ask = translation.ask().ok_or("translation_incomplete_response")?;
-    let reply = complete(&settings, &ask).await.map_err(|failure| recoded(failure, "translation_"))?;
-    translation.answer(&reply).pop().map(|(_, line)| line).ok_or_else(|| "translation_incomplete_response".into())
+    let ask = Translation::line(text, target).map_err(str::to_owned)?;
+    let reply = complete(&settings, &ask).await.map_err(|failure| recoded(failure, Translation::ERRORS))?;
+    translate::line_in(&reply).ok_or_else(|| "translation_incomplete_response".into())
+}
+
+/// Has the model do `task` for the job `id`, begun with its transcript `document`: each
+/// question sent and its reply passed back, and the job told how it goes.
+async fn run<T: Task>(store: Store, id: &str, mut task: T, document: Arc<Document>) {
+    let settings = store.settings().llm_provider_settings;
+    let mut error = None;
+    while let Some((ask, progress)) = task.ask() {
+        if let Some(change) = progress {
+            store.update_job(id, |job| job.apply(change));
+        }
+        let answered = match complete(&settings, &ask).await {
+            Ok(reply) => task.answer(&reply).map_err(str::to_owned),
+            Err(failure) => Err(recoded(failure, T::ERRORS)),
+        };
+        match answered {
+            Ok(Some(change)) => store.update_job(id, |job| job.apply(change)),
+            Ok(None) => {}
+            Err(code) => {
+                error = Some(code);
+                break;
+            }
+        }
+    }
+    store.update_job(id, |job| {
+        let document = job.document().unwrap_or(document);
+        job.apply(task.end(error, &document));
+    });
 }
 
 pub(crate) fn cancel_translation(id: &str) {
     let store = store();
     if store.cancel_work(&translation_key(id)) {
-        store.update_job(id, |job| job.apply(listenook_core::Change::StopTranslation));
+        store.update_job(id, |job| job.apply(Change::StopTranslation));
     }
 }
 
@@ -274,28 +284,12 @@ pub(crate) fn brief_key(id: &str) -> String {
     format!("{id}:brief")
 }
 
-async fn generate(store: Store, id: &str, request: BriefRequest) -> Result<(), String> {
-    let settings = store.settings().llm_provider_settings;
-    let document = store.job_now(id).and_then(|job| job.document()).ok_or("ai_brief_empty_transcript")?;
-    let title = store.job_now(id).map(|job| job.title()).unwrap_or_default();
-    let mut brief = Brief::new(request, (*document).clone(), &title)?;
-    while let Some(ask) = brief.ask() {
-        let (stage, counts) = brief.stage();
-        store.update_job(id, |job| job.apply(listenook_core::Change::BriefAt(stage, counts)));
-        let reply = complete(&settings, &ask).await.map_err(|failure| recoded(failure, "ai_brief_"))?;
-        brief.answer(&reply)?;
-    }
-    let made = brief.finish()?;
-    store.update_job(id, |job| job.apply(listenook_core::Change::BriefMade(made)));
-    Ok(())
-}
-
 pub(crate) fn start_brief(id: &str, request: BriefRequest) {
     let store = store();
     let id = id.to_owned();
     store.update_job(&id, |job| {
         let studying = !request.highlights.is_empty();
-        job.apply(listenook_core::Change::BeginBrief(
+        job.apply(Change::BeginBrief(
             &request.output_language,
             &request.model,
             request.sections.clone(),
@@ -304,8 +298,16 @@ pub(crate) fn start_brief(id: &str, request: BriefRequest) {
         ));
     });
     store.run_for(&brief_key(&id), async move {
-        if let Err(code) = generate(store, &id, request).await {
-            store.update_job(&id, |job| job.apply(listenook_core::Change::BriefFailed(code)));
+        let Some(job) = store.job_now(&id) else {
+            return;
+        };
+        let begun = job
+            .document()
+            .ok_or("ai_brief_empty_transcript")
+            .and_then(|document| Brief::new(request, (*document).clone(), &job.title()).map(|brief| (brief, document)));
+        match begun {
+            Ok((brief, document)) => run(store, &id, brief, document).await,
+            Err(code) => store.update_job(&id, |job| job.apply(Change::BriefFailed(code.to_owned()))),
         }
     });
 }
@@ -313,31 +315,12 @@ pub(crate) fn start_brief(id: &str, request: BriefRequest) {
 pub(crate) fn cancel_brief(id: &str) {
     let store = store();
     if store.cancel_work(&brief_key(id)) {
-        store.update_job(id, |job| job.apply(listenook_core::Change::BriefCancelled));
+        store.update_job(id, |job| job.apply(Change::BriefCancelled));
     }
 }
 
 pub(crate) fn ad_scan_key(id: &str) -> String {
     format!("{id}:ads")
-}
-
-async fn scan_for_ads(store: Store, id: &str) -> Result<(), String> {
-    let settings = store.settings().llm_provider_settings;
-    let document = store.job_now(id).and_then(|job| job.document()).ok_or("ad_scan_empty_transcript")?;
-    let title = store.job_now(id).map(|job| job.title()).unwrap_or_default();
-    let mut scan = Scan::new(&document, &title)?;
-    while let Some(ask) = scan.ask() {
-        let (done, total) = scan.progress();
-        store.update_job(id, |job| job.apply(listenook_core::Change::AdScanAt(done, total)));
-        let reply = complete(&settings, &ask).await.map_err(|failure| recoded(failure, "ad_scan_"))?;
-        scan.answer(&reply)?;
-    }
-    // Read again: the transcript may have changed while the model thought.
-    let document = store.job_now(id).and_then(|job| job.document()).unwrap_or(document);
-    let found = scan.findings(&document);
-    let (_, total) = scan.progress();
-    store.update_job(id, |job| job.apply(listenook_core::Change::AdsFound(found, total)));
-    Ok(())
 }
 
 /// Asks the AI where the ads are. What it finds waits in the job's
@@ -348,10 +331,18 @@ pub(crate) fn start_ad_scan(id: &str) {
     if store.job_now(&id).is_some_and(|job| job.is_scanning_for_ads()) {
         return;
     }
-    store.update_job(&id, |job| job.apply(listenook_core::Change::BeginAdScan));
+    store.update_job(&id, |job| job.apply(Change::BeginAdScan));
     store.run_for(&ad_scan_key(&id), async move {
-        if let Err(code) = scan_for_ads(store, &id).await {
-            store.update_job(&id, |job| job.apply(listenook_core::Change::AdScanFailed(code)));
+        let Some(job) = store.job_now(&id) else {
+            return;
+        };
+        let begun = job
+            .document()
+            .ok_or("ad_scan_empty_transcript")
+            .and_then(|document| Scan::new(&document, &job.title()).map(|scan| (scan, document)));
+        match begun {
+            Ok((scan, document)) => run(store, &id, scan, document).await,
+            Err(code) => store.update_job(&id, |job| job.apply(Change::AdScanFailed(code.to_owned()))),
         }
     });
 }
@@ -359,7 +350,7 @@ pub(crate) fn start_ad_scan(id: &str) {
 pub(crate) fn cancel_ad_scan(id: &str) {
     let store = store();
     if store.cancel_work(&ad_scan_key(id)) {
-        store.update_job(id, |job| job.apply(listenook_core::Change::ForgetAds));
+        store.update_job(id, |job| job.apply(Change::ForgetAds));
     }
 }
 
