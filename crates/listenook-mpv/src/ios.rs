@@ -49,6 +49,11 @@ define_class!(
 
         #[unsafe(method(enteringForeground:))]
         fn entering_foreground(&self, _note: &NSNotification) {
+            // MoltenVK leaves the layer one pixel large when it stops drawing with a picture
+            // still on its way to the screen, as in the background, and mpv reads the size it
+            // draws at from the layer as the picture comes back.
+            let layer = &self.ivars().layer;
+            layer.setDrawableSize(layer.bounds().size);
             self.show_picture(true);
         }
     }
