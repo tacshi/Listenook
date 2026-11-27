@@ -73,7 +73,19 @@ fn is_subtitle(path: &str) -> bool {
     SUBTITLE_EXTENSIONS.contains(&extension(path).as_str())
 }
 
-pub fn pairs_with(subtitle: &str, media: &str) -> bool {
+/// The subtitle files that go with the recording at `media`: those of `among`, and those
+/// beside it in its folder, named after it (`talk.srt`, `talk.en.vtt` for `talk.mp4`).
+pub fn paired(media: &str, among: &[String]) -> Vec<String> {
+    let beside = Path::new(media).parent().and_then(|folder| std::fs::read_dir(folder).ok());
+    let beside = beside.into_iter().flatten().flatten().filter_map(|entry| entry.path().to_str().map(str::to_owned));
+    let mut found: Vec<String> =
+        among.iter().cloned().chain(beside).filter(|path| is_subtitle(path) && pairs_with(path, media)).collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+fn pairs_with(subtitle: &str, media: &str) -> bool {
     let (subtitle, media) = (Path::new(subtitle), Path::new(media));
     if subtitle.parent() != media.parent() {
         return false;
@@ -87,6 +99,25 @@ pub fn pairs_with(subtitle: &str, media: &str) -> bool {
         let primary = suffix.replace('_', "-");
         base == media && LANGUAGE_SUFFIXES.contains(&primary.split('-').next().unwrap_or(""))
     })
+}
+
+/// The subtitle file at `path` as a transcript of a recording `duration_ms` long, if known:
+/// see [`import_subtitles`].
+pub fn read(path: &str, duration_ms: Option<i64>) -> Result<ImportedSubtitles, &'static str> {
+    let bytes = std::fs::read(path).map_err(|_| "subtitle_read_failed")?;
+    import_subtitles(&decode(&bytes), &extension(path), duration_ms)
+}
+
+/// The cues of the subtitle file at `path` as they show on screen: see [`import_cues`].
+pub(crate) fn read_cues(path: &str) -> Option<Vec<Cue>> {
+    let bytes = std::fs::read(path).ok()?;
+    let imported = import_cues(&decode(&bytes), &extension(path), None).ok()?;
+    let segments = imported.document.segments.into_iter();
+    Some(
+        segments
+            .map(|segment| Cue { start_ms: segment.start_ms, end_ms: segment.end_ms, text: segment.text })
+            .collect(),
+    )
 }
 
 pub fn decode(bytes: &[u8]) -> String {

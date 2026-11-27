@@ -3,7 +3,7 @@ use std::{path::Path, rc::Rc};
 use listenook_core::{
     format::{self, track_position},
     media::container,
-    media::subtitles::{self, Cue},
+    media::subtitles::Cue,
 };
 use nsh_base::theme;
 use nsh_core::{
@@ -37,40 +37,6 @@ struct Track {
     id: String,
     label: SharedString,
     cues: Rc<Vec<Cue>>,
-}
-
-fn find_tracks(video: &str) -> Vec<(String, String, Vec<Cue>)> {
-    let mut found = Vec::new();
-    let mut beside: Vec<String> = Path::new(video)
-        .parent()
-        .and_then(|folder| std::fs::read_dir(folder).ok())
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| entry.path().to_str().map(str::to_owned))
-        .filter(|path| subtitles::is(path, subtitles::Kind::Subtitles) && subtitles::pairs_with(path, video))
-        .collect();
-    beside.sort();
-    for path in beside {
-        let imported = std::fs::read(&path).ok().and_then(|bytes| {
-            subtitles::import_cues(&subtitles::decode(&bytes), &subtitles::extension(&path), None).ok()
-        });
-        if let Some(imported) = imported {
-            let cues = imported
-                .document
-                .segments
-                .into_iter()
-                .map(|segment| Cue { start_ms: segment.start_ms, end_ms: segment.end_ms, text: segment.text })
-                .collect();
-            let name = Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or(&path).to_owned();
-            found.push((format!("file:{path}"), name, cues));
-        }
-    }
-    let built_in = container::subtitles_in(Path::new(video));
-    for (index, track) in built_in.into_iter().enumerate() {
-        found.push((format!("embedded:{index}"), track.label, track.cues));
-    }
-    found
 }
 
 /// Plays the video at `path`: in a window of its own on a computer, in the app's on a phone or
@@ -222,10 +188,10 @@ pub(crate) fn player(path: &str) -> impl IntoElement {
     {
         let video = path.clone();
         spawn(async move {
-            let found = blocking(move || find_tracks(&video)).await.unwrap_or_default();
+            let found = blocking(move || container::subtitle_tracks(&video)).await.unwrap_or_default();
             let found: Vec<Track> = found
                 .into_iter()
-                .map(|(id, label, cues)| Track { id, label: label.into(), cues: Rc::new(cues) })
+                .map(|track| Track { id: track.id, label: track.label.into(), cues: Rc::new(track.cues) })
                 .collect();
             batch(|| {
                 if remembered.is_none() && chosen.get_untracked().is_none() {

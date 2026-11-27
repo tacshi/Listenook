@@ -18,10 +18,9 @@ use std::{
         mpsc,
     },
     thread::JoinHandle,
-    time::{Duration, Instant},
 };
 
-use listenook_core::media::capture::{self, Meter, Span, WavWriter};
+use listenook_core::media::capture::{self, Span, Tape};
 
 /// The longest recording: past it, recording stops by itself.
 pub(crate) const LONGEST_MS: u64 = 5 * 60 * 60 * 1000;
@@ -127,8 +126,8 @@ impl Take {
 
     /// A recording left in `path` by a run that ended before it was saved.
     pub(crate) fn left(path: &Path) -> Option<Take> {
-        let (levels, info) = capture::levels_of(path).ok()?;
-        (info.duration_ms() >= 1000).then(|| Take { path: path.to_owned(), levels, duration_ms: info.duration_ms() })
+        let (levels, duration_ms) = capture::levels_of(path).ok()?;
+        (duration_ms >= 1000).then(|| Take { path: path.to_owned(), levels, duration_ms })
     }
 }
 
@@ -148,7 +147,7 @@ impl Recorder {
             full: AtomicBool::new(false),
             levels: Mutex::new(Vec::new()),
         });
-        let mut wav = WavWriter::create(&path, rate, 2).map_err(|error| {
+        let mut tape = Tape::create(&path, rate).map_err(|error| {
             log::error!("capture: creating {}: {error}", path.display());
             "capture_failed"
         })?;
@@ -156,8 +155,8 @@ impl Recorder {
         let writer = std::thread::Builder::new()
             .name("capture-writer".into())
             .spawn(move || {
-                let result = write(&mut wav, frames, &writing);
-                let finished = wav.finish();
+                let result = write(&mut tape, frames, &writing);
+                let finished = tape.finish();
                 result.and(finished)
             })
             .map_err(|_| "capture_failed")?;
@@ -216,31 +215,21 @@ impl Drop for Recorder {
     }
 }
 
-fn write(wav: &mut WavWriter, frames: mpsc::Receiver<Vec<f32>>, shared: &Shared) -> std::io::Result<()> {
-    let mut meter = Meter::new(shared.rate, 2);
-    let (mut fresh, mut pcm) = (Vec::new(), Vec::new());
+fn write(tape: &mut Tape, frames: mpsc::Receiver<Vec<f32>>, shared: &Shared) -> std::io::Result<()> {
+    let mut fresh = Vec::new();
     let longest = LONGEST_MS * u64::from(shared.rate) / 1000;
-    let mut synced = Instant::now();
     for chunk in frames {
         if shared.paused.load(Ordering::Relaxed) || shared.full.load(Ordering::Relaxed) {
             continue;
         }
-        let room = (longest.saturating_sub(wav.frames()) * 2) as usize;
-        let chunk = &chunk[..chunk.len().min(room)];
-        meter.push(chunk, &mut fresh);
-        pcm.clear();
-        capture::pcm16(chunk, &mut pcm);
-        wav.write(&pcm)?;
-        shared.frames.store(wav.frames(), Ordering::Relaxed);
-        if wav.frames() >= longest {
+        let room = (longest.saturating_sub(tape.frames()) * 2) as usize;
+        tape.write(&chunk[..chunk.len().min(room)], &mut fresh)?;
+        shared.frames.store(tape.frames(), Ordering::Relaxed);
+        if tape.frames() >= longest {
             shared.full.store(true, Ordering::Relaxed);
         }
         if !fresh.is_empty() {
             shared.levels.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).append(&mut fresh);
-        }
-        if synced.elapsed() >= Duration::from_secs(1) {
-            wav.sync()?;
-            synced = Instant::now();
         }
     }
     Ok(())

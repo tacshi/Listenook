@@ -2,8 +2,9 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use super::{Ask, JsonQuestion};
+use super::{Ask, JsonQuestion, Task};
 use crate::{
+    Change,
     format::clock,
     models::{
         AiBrief, AiBriefSection, AiChapter, AiInsight, AiInsightType, AiLanguageNote, AiLanguageNoteKind,
@@ -232,34 +233,9 @@ impl Brief {
             .then(|| JsonQuestion::new(SYSTEM_PROMPT, synthesis_prompt(&self.request, study, &self.analyses)))
     }
 
-    /// What to ask the model next, or `None` once the brief can be [finished](Self::finish).
-    pub fn ask(&self) -> Option<Ask> {
-        self.question.as_ref().map(JsonQuestion::ask)
-    }
-
-    /// Takes the model's reply to [`ask`](Self::ask); `Err` with the code to show when it
-    /// answered twice with no JSON.
-    pub fn answer(&mut self, reply: &str) -> Result<(), &'static str> {
-        let Some(question) = &mut self.question else {
-            return Ok(());
-        };
-        let Some(value) = question.read(reply, decode_reply).map_err(|()| "ai_brief_invalid_response")? else {
-            return Ok(());
-        };
-        if self.study.is_none() {
-            self.studied.push(value);
-        } else if self.analyses.len() < self.chunks.len() {
-            self.analyses.push(value);
-        } else {
-            self.combined = Some(value);
-        }
-        self.question = self.next_question();
-        Ok(())
-    }
-
     /// Where it is: the stage's name and, while it studies or analyzes, the questions of
     /// that stage answered and how many it has.
-    pub fn stage(&self) -> (&'static str, Option<(u32, u32)>) {
+    fn stage(&self) -> (&'static str, Option<(u32, u32)>) {
         if self.study.is_none() {
             let batches = self.request.highlights.len().div_ceil(STUDY_BATCH);
             ("studying", Some((self.studied.len() as u32, batches as u32)))
@@ -271,12 +247,49 @@ impl Brief {
     }
 
     /// The brief, once every question is answered.
-    pub fn finish(&self) -> Result<AiBrief, &'static str> {
+    fn finish(&self) -> Result<AiBrief, &'static str> {
         let combined = if self.chunks.len() == 1 { self.analyses.first() } else { self.combined.as_ref() };
         let (Some(combined), Some(study)) = (combined, &self.study) else {
             return Err("ai_brief_invalid_response");
         };
         brief_from_json(combined, &self.request, study, &self.document)
+    }
+}
+
+impl Task for Brief {
+    const ERRORS: &'static str = "ai_brief_";
+
+    /// The questions of each stage, noting the stage first.
+    fn ask(&self) -> Option<(Ask, Option<Change<'static>>)> {
+        let (stage, counts) = self.stage();
+        self.question.as_ref().map(|question| (question.ask(), Some(Change::BriefAt(stage, counts))))
+    }
+
+    /// `Err` when it answered twice with no JSON.
+    fn answer(&mut self, reply: &str) -> Result<Option<Change<'static>>, &'static str> {
+        let Some(question) = &mut self.question else {
+            return Ok(None);
+        };
+        let Some(value) = question.read(reply, decode_reply).map_err(|()| "ai_brief_invalid_response")? else {
+            return Ok(None);
+        };
+        if self.study.is_none() {
+            self.studied.push(value);
+        } else if self.analyses.len() < self.chunks.len() {
+            self.analyses.push(value);
+        } else {
+            self.combined = Some(value);
+        }
+        self.question = self.next_question();
+        Ok(None)
+    }
+
+    /// The brief, made of the transcript it started from.
+    fn end(self, error: Option<String>, _: &Document) -> Change<'static> {
+        match error.map_or_else(|| self.finish().map_err(str::to_owned), Err) {
+            Ok(brief) => Change::BriefMade(brief),
+            Err(code) => Change::BriefFailed(code),
+        }
     }
 }
 
@@ -796,13 +809,13 @@ mod tests {
         let (marked_document, marked_request) = marked();
         let mut brief = Brief::new(marked_request, marked_document, "Standup").unwrap();
         assert_eq!(brief.stage(), ("studying", Some((0, 1))));
-        assert_eq!(brief.ask().unwrap().system, STUDY_SYSTEM_PROMPT);
+        assert_eq!(brief.ask().unwrap().0.system, STUDY_SYSTEM_PROMPT);
         brief.answer(&study_reply().to_string()).unwrap();
         assert_eq!(brief.stage(), ("analyzing", Some((0, 1))));
-        assert_eq!(brief.ask().unwrap().system, SYSTEM_PROMPT);
+        assert_eq!(brief.ask().unwrap().0.system, SYSTEM_PROMPT);
         let analysis = json!({"overview": "A standup.", "overview_evidence": ["segment-1"]});
         brief.answer(&analysis.to_string()).unwrap();
-        assert_eq!(brief.ask(), None);
+        assert!(brief.ask().is_none());
         assert_eq!(brief.finish().unwrap().overview, "A standup.");
         let mut none = request();
         none.sections.clear();

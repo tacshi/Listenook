@@ -2,8 +2,11 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::Ask;
-use crate::models::{Document, Segment, TranslationStatus, language_name};
+use super::{Ask, Task};
+use crate::{
+    Change,
+    models::{Document, Segment, TranslationStatus, language_name},
+};
 
 const BATCH_SEGMENTS: usize = 20;
 const BATCH_CHARACTERS: usize = 8000;
@@ -39,9 +42,11 @@ impl Translation {
         Self::of(batches(segments, only), target, only.is_none())
     }
 
-    /// The translation of one line on its own.
-    pub fn line(text: &str, target: &str) -> Result<Translation, &'static str> {
-        Self::of(vec![Batch { ids: vec![String::new()], texts: vec![text.to_owned()] }], target, false)
+    /// What to ask the model to translate one line on its own into `target`: its reply is
+    /// read by [`line_in`].
+    pub fn line(text: &str, target: &str) -> Result<Ask, &'static str> {
+        let line = Self::of(vec![Batch { ids: vec![String::new()], texts: vec![text.to_owned()] }], target, false)?;
+        line.next().ok_or("translation_incomplete_response")
     }
 
     fn of(batches: Vec<Batch>, target: &str, whole: bool) -> Result<Translation, &'static str> {
@@ -54,20 +59,15 @@ impl Translation {
         self.batches.iter().map(|batch| batch.ids.len() as u32).sum()
     }
 
-    /// The sentences translated so far.
-    pub fn translated(&self) -> u32 {
-        self.translated
-    }
-
     /// What to ask the model next, or `None` once every batch is answered.
-    pub fn ask(&self) -> Option<Ask> {
+    fn next(&self) -> Option<Ask> {
         let batch = self.batches.get(self.answered)?;
         Some(Ask { system: SYSTEM_PROMPT, prompt: user_prompt(&batch.texts, self.name), json: false })
     }
 
-    /// Takes the model's reply to [`ask`](Self::ask): each sentence it translated, by ID,
+    /// Takes the model's reply to [`next`](Self::next): each sentence it translated, by ID,
     /// with its translation.
-    pub fn answer(&mut self, reply: &str) -> Vec<(String, String)> {
+    fn read(&mut self, reply: &str) -> Vec<(String, String)> {
         let Some(batch) = self.batches.get(self.answered) else {
             return Vec::new();
         };
@@ -82,8 +82,8 @@ impl Translation {
 
     /// How it ended, having stopped at `error` or not, with what `document` holds now: its
     /// status, and the code to show for one that failed or left sentences out.
-    pub fn outcome(&self, error: Option<String>, document: Option<&Document>) -> (TranslationStatus, Option<String>) {
-        let untranslated = document.is_some_and(|d| d.segments.iter().any(|s| !s.skipped && !s.has_translation()));
+    fn outcome(&self, error: Option<String>, document: &Document) -> (TranslationStatus, Option<String>) {
+        let untranslated = document.segments.iter().any(|s| !s.skipped && !s.has_translation());
         let status = match (&error, self.translated) {
             (Some(_), 0) => TranslationStatus::Failed,
             (Some(_), _) => TranslationStatus::Partial,
@@ -94,6 +94,29 @@ impl Translation {
             error.or_else(|| (status == TranslationStatus::Partial).then(|| "translation_incomplete_response".into()));
         (status, code)
     }
+}
+
+impl Task for Translation {
+    const ERRORS: &'static str = "translation_";
+
+    fn ask(&self) -> Option<(Ask, Option<Change<'static>>)> {
+        self.next().map(|ask| (ask, None))
+    }
+
+    fn answer(&mut self, reply: &str) -> Result<Option<Change<'static>>, &'static str> {
+        let lines = self.read(reply);
+        Ok(Some(Change::AddTranslations(lines, self.translated)))
+    }
+
+    fn end(self, error: Option<String>, document: &Document) -> Change<'static> {
+        let (status, code) = self.outcome(error, document);
+        Change::EndTranslation(status, code)
+    }
+}
+
+/// The line the model translated in its `reply` to [`Translation::line`].
+pub fn line_in(reply: &str) -> Option<String> {
+    parse_reply(reply, 1).pop().flatten()
 }
 
 fn batches(segments: &[Segment], only: Option<&[String]>) -> Vec<Batch> {
@@ -202,8 +225,7 @@ mod tests {
 
     #[test]
     fn the_prompt_names_the_language_and_numbers_the_lines() {
-        let translation = Translation::line("Hi", "zh-Hans").unwrap();
-        let prompt = user_prompt(&["Hi".into(), "Bye".into()], translation.name);
+        let prompt = user_prompt(&["Hi".into(), "Bye".into()], language_name("zh-Hans").unwrap());
         assert!(prompt.starts_with("Translate each subtitle line into Simplified Chinese."));
         assert!(prompt.contains("Input:\n1. Hi\n2. Bye\n\nOutput exactly 2 numbered lines"));
         assert_eq!(Translation::line("Hi", "xx").unwrap_err(), "translation_invalid_language");

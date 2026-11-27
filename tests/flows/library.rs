@@ -315,11 +315,12 @@ fn a_recording_left_unsaved_is_offered_again_at_the_next_start() {
             fake_capture(root);
             let folder = root.join("temporary");
             std::fs::create_dir_all(&folder).unwrap();
-            let mut wav =
-                listenook_core::media::capture::WavWriter::create(&folder.join("capture-left.wav"), 8_000, 2).unwrap();
-            let sound: Vec<i16> = (0..8_000 * 3).flat_map(|at| [((at % 40) * 400) as i16; 2]).collect();
-            wav.write(&sound).unwrap();
-            wav.sync().unwrap();
+            // Written and never finished, as a run that stopped while recording leaves it.
+            let mut tape =
+                listenook_core::media::capture::Tape::create(&folder.join("capture-left.wav"), 8_000).unwrap();
+            let sound: Vec<f32> = (0..8_000 * 3).flat_map(|at| [((at % 40) * 400) as f32 / 32768.0; 2]).collect();
+            tape.write(&sound, &mut Vec::new()).unwrap();
+            drop(tape);
             std::fs::write(folder.join("capture-left.kept.wav"), b"half made").unwrap();
         },
         Vec::new(),
