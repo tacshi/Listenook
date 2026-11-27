@@ -607,8 +607,9 @@ fn slider_in(
         .h(px(20.0))
         .justify_center()
         .rounded_full()
-        .track_style(move |s| s.h(px(4.0)).rounded_full().bg(track))
-        .indicator_style(|s| s.h(px(4.0)))
+        // The track takes the presses: the slider's whole height, its line drawn in the middle.
+        .track_style(|s| s.h(px(20.0)).justify_center())
+        .indicator_style(move |s| s.h(px(4.0)).rounded_full().bg(track))
         .range_style(move |s| s.h(px(4.0)).rounded_full().bg(fill))
         .thumb_style(move |s| s.size(px(12.0)).rounded_full().bg(fill).shadow_sm().transition_transform())
 }
@@ -635,8 +636,9 @@ pub(super) fn range_slider(
         .accessibility_label(name.into())
         .h(px(24.0))
         .justify_center()
-        .track_style(|s| s.h(px(4.0)).rounded_full().bg(|| color(theme().input)))
-        .indicator_style(|s| s.h(px(4.0)))
+        // The track takes the presses: the slider's whole height, its line drawn in the middle.
+        .track_style(|s| s.h(px(24.0)).justify_center())
+        .indicator_style(|s| s.h(px(4.0)).rounded_full().bg(|| color(theme().input)))
         .range_style(|s| s.h(px(4.0)).rounded_full().bg(|| color(theme().primary)))
         .thumb_style(|s| s.w(px(8.0)).h(px(20.0)).rounded_full().bg(|| color(theme().primary)).shadow_sm())
 }
