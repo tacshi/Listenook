@@ -181,6 +181,8 @@ pub(crate) enum Action<'a> {
     SetImmersive(bool),
     OpenSettings(SettingsTab),
     RememberPosition(&'a str, Option<i64>),
+    /// The sentences the reader of `id` repeats, or none.
+    RememberRepeat(&'a str, Option<listenook_core::RepeatSpan>),
     Shelve(Shelf, &'a str, bool),
     AdoptShelves(&'a listenook_core::sync::Shelves),
     SetProgress(&'a str, &'a str, Option<f64>),
@@ -223,6 +225,7 @@ impl Store {
             Action::SetImmersive(on) => self.set_immersive(on),
             Action::OpenSettings(tab) => self.open_settings(tab),
             Action::RememberPosition(job_id, position) => self.remember_position(job_id, position),
+            Action::RememberRepeat(job_id, span) => self.remember_repeat(job_id, span),
             Action::Shelve(shelf, id, shown) => self.shelve(shelf, id, shown),
             Action::AdoptShelves(theirs) => self.adopt_shelves(theirs),
             Action::SetProgress(id, stage, fraction) => self.set_progress(id, stage, fraction),
@@ -582,6 +585,21 @@ impl Store {
         }
     }
 
+    /// The sentences the reader of `job_id` was repeating when last left.
+    pub(crate) fn remembered_repeat(&self, job_id: &str) -> Option<listenook_core::RepeatSpan> {
+        self.settings.with_untracked(|settings| settings.reader_repeats.get(job_id).cloned())
+    }
+
+    fn remember_repeat(&self, job_id: &str, span: Option<listenook_core::RepeatSpan>) {
+        if self.settings.with_untracked(|settings| settings.reader_repeats.get(job_id) == span.as_ref()) {
+            return;
+        }
+        self.update_settings(|settings| match span {
+            Some(span) => drop(settings.reader_repeats.insert(job_id.to_owned(), span)),
+            None => drop(settings.reader_repeats.remove(job_id)),
+        });
+    }
+
     pub(crate) fn played(&self) -> Vec<(String, String, i64)> {
         self.played.with(|played| {
             self.positions.with(|positions| {
@@ -842,6 +860,7 @@ impl Store {
     fn erase_job(&self, id: &str) {
         self.shelve(Shelf::Continue, id, true);
         self.shelve(Shelf::Recent, id, true);
+        self.remember_repeat(id, None);
         for key in [id.to_owned(), format!("{id}:translate"), format!("{id}:brief"), format!("{id}:ads")] {
             self.cancel_work(&key);
         }

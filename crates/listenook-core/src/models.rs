@@ -1084,6 +1084,40 @@ pub struct BriefAnchor {
     pub offset: f32,
 }
 
+/// The sentences the reader repeats, first and last, by their ids: kept for each recording,
+/// so a repeat left on is still on when the recording is opened again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepeatSpan {
+    pub first: String,
+    pub last: String,
+}
+
+impl RepeatSpan {
+    pub fn one(id: String) -> RepeatSpan {
+        RepeatSpan { first: id.clone(), last: id }
+    }
+
+    /// Its first and last sentence in `document`, in order: none once either is gone.
+    pub fn range_in(&self, document: &Document) -> Option<(usize, usize)> {
+        let at = |id: &str| document.segments.iter().position(|segment| segment.id == id);
+        let (first, last) = (at(&self.first)?, at(&self.last)?);
+        Some((first.min(last), first.max(last)))
+    }
+
+    /// Whether a reader opening `document` at `position_ms` takes the repeat up again: at a
+    /// place in it, the pause before it included (a repeat starts over where its first
+    /// sound starts, often a little ahead of the sentence's marked start), or at no place
+    /// (0). Opened elsewhere, as at a sentence a search found, the repeat would pull
+    /// playback away from there.
+    pub fn resumes_at(&self, document: &Document, position_ms: i64) -> bool {
+        self.range_in(document).is_some_and(|(first, last)| {
+            let from = first.checked_sub(1).map_or(0, |before| document.segments[before].end_ms);
+            let to = document.segments.get(last + 1).map_or(i64::MAX, |after| after.start_ms);
+            position_ms == 0 || (from..to).contains(&position_ms)
+        })
+    }
+}
+
 pub const DAILY_GOAL_MINUTES: u32 = 20;
 
 /// Whether a recording is hidden from a Home shelf, and when that was chosen: sync keeps the later choice.
@@ -1127,6 +1161,8 @@ pub struct Settings {
     pub shelf_marks: BTreeMap<String, Mark>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub brief_anchors: BTreeMap<String, BriefAnchor>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub reader_repeats: BTreeMap<String, RepeatSpan>,
     #[serde(default = "truthy")]
     pub auto_align_transcripts: bool,
     #[serde(deserialize_with = "goal_minutes")]
@@ -1161,6 +1197,7 @@ impl Default for Settings {
             recent_hidden: BTreeSet::new(),
             shelf_marks: BTreeMap::new(),
             brief_anchors: BTreeMap::new(),
+            reader_repeats: BTreeMap::new(),
             auto_align_transcripts: true,
             daily_goal_minutes: DAILY_GOAL_MINUTES,
             daily_goal_set_at: String::new(),
@@ -1261,6 +1298,21 @@ mod tests {
             })
             .collect();
         Document { segments, ..Default::default() }
+    }
+
+    #[test]
+    fn a_remembered_repeat_resumes_only_where_the_reader_opens_inside_it() {
+        let document = skipping(&[false; 5]);
+        let span = RepeatSpan { first: "s3".into(), last: "s1".into() };
+        assert_eq!(span.range_in(&document), Some((1, 3)), "in order, whichever end came first");
+        assert!(span.resumes_at(&document, 2500), "opened inside it");
+        assert!(span.resumes_at(&document, 950), "opened in the pause before it, where it starts over");
+        assert!(!span.resumes_at(&document, 850), "opened in the sentence before it");
+        assert!(span.resumes_at(&document, 0), "opened at no place in particular");
+        assert!(!span.resumes_at(&document, 4100), "opened at a sentence after it");
+        let gone = RepeatSpan::one("s9".into());
+        assert_eq!(gone.range_in(&document), None);
+        assert!(!gone.resumes_at(&document, 0), "its sentence is gone");
     }
 
     #[test]
