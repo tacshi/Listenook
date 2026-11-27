@@ -42,7 +42,7 @@ pub(super) fn live_wave(levels: Signal<Vec<f32>>, live: impl Fn() -> bool + 'sta
                 let shown = levels.with(|levels| {
                     let mut padded = vec![0.0; RECENT_LEVELS.saturating_sub(levels.len())];
                     padded.extend_from_slice(levels);
-                    capture::bars(&padded, 0, capture::levels_ms(&padded), count)
+                    capture::bars(&padded, count)
                 });
                 let ink = color(if live() {
                     tokens::ink(tokens::Ink::Recording)
@@ -128,7 +128,7 @@ pub(super) fn waveform(
                 painter = painter.fill();
 
                 let count = ((width + GAP) / (BAR + GAP)).floor().max(1.0) as usize;
-                let shown = capture::bars(&levels, 0, duration, count);
+                let shown = capture::bars(&levels, count);
                 let is_kept = |index: usize| {
                     let ms = ((index as f64 + 0.5) / count as f64 * duration as f64) as u64;
                     kept.iter().any(|span| span.contains(ms))

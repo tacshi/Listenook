@@ -1,11 +1,12 @@
-//! Recording what the computer plays: its loudness as it comes in, the silent
-//! stretches worth cutting out, the parts kept once it is trimmed, and the WAV
-//! files it is written to and spliced from.
+//! Recording what the computer plays: the [`Tape`] it is written to, its loudness as it
+//! comes in, the silent stretches worth cutting out, the parts kept once it is trimmed, and
+//! the WAV it is spliced from.
 
 use std::{
     fs::File,
     io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::Path,
+    time::{Duration, Instant},
 };
 
 /// Loudness is kept per 10 ms: 100 values a second.
@@ -47,9 +48,51 @@ impl Span {
     }
 }
 
+/// A recording as it is made: stereo float frames in, kept as 16-bit PCM in a WAV whose
+/// header is brought up to date every second, so the recording outlives a crash, and
+/// measured per 10 ms as they come.
+pub struct Tape {
+    wav: WavWriter,
+    meter: Meter,
+    pcm: Vec<i16>,
+    synced: Instant,
+}
+
+impl Tape {
+    /// A new recording at `path`, of stereo frames at `rate`.
+    pub fn create(path: &Path, rate: u32) -> io::Result<Tape> {
+        let wav = WavWriter::create(path, rate, 2)?;
+        Ok(Tape { wav, meter: Meter::new(rate, 2), pcm: Vec::new(), synced: Instant::now() })
+    }
+
+    /// Adds `frames` (whole frames, interleaved stereo), appending a level to `levels` for
+    /// each 10 ms they complete.
+    pub fn write(&mut self, frames: &[f32], levels: &mut Vec<f32>) -> io::Result<()> {
+        self.meter.push(frames, levels);
+        self.pcm.clear();
+        pcm16(frames, &mut self.pcm);
+        self.wav.write(&self.pcm)?;
+        if self.synced.elapsed() >= Duration::from_secs(1) {
+            self.wav.sync()?;
+            self.synced = Instant::now();
+        }
+        Ok(())
+    }
+
+    /// The frames written so far.
+    pub fn frames(&self) -> u64 {
+        self.wav.frames()
+    }
+
+    /// Ends the file; how many frames it holds.
+    pub fn finish(self) -> io::Result<u64> {
+        self.wav.finish()
+    }
+}
+
 /// The peak of interleaved frames per 10 ms, as they come in.
 #[derive(Debug, Clone)]
-pub struct Meter {
+struct Meter {
     channels: usize,
     window: usize,
     filled: usize,
@@ -57,7 +100,7 @@ pub struct Meter {
 }
 
 impl Meter {
-    pub fn new(rate: u32, channels: u16) -> Self {
+    fn new(rate: u32, channels: u16) -> Self {
         Self {
             channels: usize::from(channels.max(1)),
             window: (rate / LEVELS_PER_SECOND).max(1) as usize,
@@ -68,7 +111,7 @@ impl Meter {
 
     /// Adds `samples` (interleaved frames), appending a level to `levels`
     /// for each 10 ms they complete.
-    pub fn push(&mut self, samples: &[f32], levels: &mut Vec<f32>) {
+    fn push(&mut self, samples: &[f32], levels: &mut Vec<f32>) {
         for frame in samples.chunks_exact(self.channels) {
             let loudest = frame.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
             self.peak = self.peak.max(loudest);
@@ -93,13 +136,8 @@ pub fn stamp_at(time: std::time::SystemTime) -> String {
 }
 
 /// Converts float samples to 16-bit ones, appending them to `out`.
-pub fn pcm16(samples: &[f32], out: &mut Vec<i16>) {
+fn pcm16(samples: &[f32], out: &mut Vec<i16>) {
     out.extend(samples.iter().map(|sample| (sample * 32768.0).clamp(-32768.0, 32767.0) as i16));
-}
-
-/// How long `levels` last.
-pub fn levels_ms(levels: &[f32]) -> u64 {
-    levels.len() as u64 * LEVEL_MS
 }
 
 /// Whether anything louder than silence was heard.
@@ -183,19 +221,17 @@ pub fn next_kept(kept: &[Span], position_ms: u64) -> Option<u64> {
     kept.iter().find(|span| span.end_ms > position_ms).map(|span| span.start_ms.max(position_ms))
 }
 
-/// The loudness of `levels` from `start_ms` to `end_ms` as `count` bars,
-/// each the peak of its stretch on a decibel scale: 0 for silence, 1 for
-/// full scale.
-pub fn bars(levels: &[f32], start_ms: u64, end_ms: u64, count: usize) -> Vec<f32> {
-    if count == 0 || end_ms <= start_ms || levels.is_empty() {
+/// The loudness of the whole of `levels` as `count` bars, each the peak of its stretch on a
+/// decibel scale: 0 for silence, 1 for full scale.
+pub fn bars(levels: &[f32], count: usize) -> Vec<f32> {
+    if count == 0 || levels.is_empty() {
         return vec![0.0; count];
     }
-    let (first, last) = (start_ms / LEVEL_MS, end_ms.div_ceil(LEVEL_MS));
-    let span = (last - first) as f64;
+    let span = levels.len() as f64;
     (0..count)
         .map(|bar| {
-            let from = first + (span * bar as f64 / count as f64) as u64;
-            let to = (first + (span * (bar + 1) as f64 / count as f64) as u64).max(from + 1);
+            let from = (span * bar as f64 / count as f64) as u64;
+            let to = ((span * (bar + 1) as f64 / count as f64) as u64).max(from + 1);
             let peak =
                 (from..to).filter_map(|index| levels.get(index as usize)).fold(0.0_f32, |peak, level| peak.max(*level));
             loudness(peak)
@@ -213,7 +249,7 @@ pub fn loudness(peak: f32) -> f32 {
 }
 
 /// A 16-bit PCM WAV file written as it is recorded.
-pub struct WavWriter {
+struct WavWriter {
     file: BufWriter<File>,
     channels: u16,
     rate: u32,
@@ -221,7 +257,7 @@ pub struct WavWriter {
 }
 
 impl WavWriter {
-    pub fn create(path: &Path, rate: u32, channels: u16) -> io::Result<Self> {
+    fn create(path: &Path, rate: u32, channels: u16) -> io::Result<Self> {
         let mut writer = Self { file: BufWriter::new(File::create(path)?), channels: channels.max(1), rate, frames: 0 };
         writer.header()?;
         Ok(writer)
@@ -246,7 +282,7 @@ impl WavWriter {
     }
 
     /// Appends interleaved samples (whole frames).
-    pub fn write(&mut self, samples: &[i16]) -> io::Result<()> {
+    fn write(&mut self, samples: &[i16]) -> io::Result<()> {
         let mut bytes = Vec::with_capacity(samples.len() * 2);
         for sample in samples {
             bytes.extend_from_slice(&sample.to_le_bytes());
@@ -256,13 +292,13 @@ impl WavWriter {
         Ok(())
     }
 
-    pub fn frames(&self) -> u64 {
+    fn frames(&self) -> u64 {
         self.frames
     }
 
     /// Writes what is buffered and the sizes into the header, so the file
     /// plays as far as it goes should the app stop before [`Self::finish`].
-    pub fn sync(&mut self) -> io::Result<()> {
+    fn sync(&mut self) -> io::Result<()> {
         self.file.seek(SeekFrom::Start(0))?;
         self.header()?;
         self.file.seek(SeekFrom::End(0))?;
@@ -270,7 +306,7 @@ impl WavWriter {
     }
 
     /// Ends the file; how many frames it holds.
-    pub fn finish(mut self) -> io::Result<u64> {
+    fn finish(mut self) -> io::Result<u64> {
         self.sync()?;
         self.file.get_ref().sync_all()?;
         Ok(self.frames)
@@ -345,8 +381,8 @@ pub fn wav_info(reader: &mut (impl Read + Seek)) -> io::Result<WavInfo> {
 }
 
 /// The levels of the 16-bit WAV at `path` (a recording left by a run that
-/// ended before it was saved), and what it holds.
-pub fn levels_of(path: &Path) -> io::Result<(Vec<f32>, WavInfo)> {
+/// ended before it was saved), and how long it lasts.
+pub fn levels_of(path: &Path) -> io::Result<(Vec<f32>, u64)> {
     let mut reader = BufReader::new(File::open(path)?);
     let info = wav_info(&mut reader)?;
     if info.bits != 16 {
@@ -367,7 +403,7 @@ pub fn levels_of(path: &Path) -> io::Result<(Vec<f32>, WavInfo)> {
         meter.push(&samples, &mut levels);
         left -= take as u64;
     }
-    Ok((levels, info))
+    Ok((levels, info.duration_ms()))
 }
 
 /// Copies the `spans` of the 16-bit WAV at `from` into a new one at `to`,
@@ -480,13 +516,29 @@ mod tests {
 
     #[test]
     fn bars_show_each_stretch_s_peak_on_a_decibel_scale() {
-        let shown = bars(&levels(&[(0.0, 1_000), (1.0, 1_000), (0.1, 1_000), (0.0, 1_000)]), 0, 4_000, 4);
+        let shown = bars(&levels(&[(0.0, 1_000), (1.0, 1_000), (0.1, 1_000), (0.0, 1_000)]), 4);
         assert_eq!(shown[0], 0.0);
         assert_eq!(shown[1], 1.0);
         assert!((shown[2] - 0.6).abs() < 0.01, "{shown:?}");
         assert_eq!(shown[3], 0.0);
-        assert_eq!(bars(&[], 0, 1_000, 3), vec![0.0; 3]);
-        assert_eq!(bars(&levels(&[(1.0, 100)]), 0, 100, 40).len(), 40);
+        assert_eq!(bars(&[], 3), vec![0.0; 3]);
+        assert_eq!(bars(&levels(&[(1.0, 100)]), 40).len(), 40);
+    }
+
+    #[test]
+    fn a_tape_keeps_what_it_is_given_and_measures_it() {
+        let path = std::env::temp_dir().join(format!("listenook-tape-{}.wav", std::process::id()));
+        let mut tape = Tape::create(&path, 1_000).unwrap();
+        let mut levels = Vec::new();
+        let loud: Vec<f32> = (0..1_000).flat_map(|_| [0.5, -0.5]).collect();
+        tape.write(&loud[..1_004], &mut levels).unwrap();
+        tape.write(&loud[1_004..], &mut levels).unwrap();
+        assert_eq!((tape.frames(), levels.len()), (1_000, 100));
+        assert!(levels.iter().all(|level| (level - 0.5).abs() < 1e-3));
+        assert_eq!(tape.finish().unwrap(), 1_000);
+        let (read, duration_ms) = levels_of(&path).unwrap();
+        assert_eq!((read.len(), duration_ms), (100, 1_000));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -506,8 +558,8 @@ mod tests {
         writer.write(&samples[2_000..]).unwrap();
         assert_eq!(writer.finish().unwrap(), 3_000);
 
-        let (levels, info) = levels_of(&whole).unwrap();
-        assert_eq!((info.rate, info.channels, info.duration_ms()), (1_000, 2, 3_000));
+        let (levels, duration_ms) = levels_of(&whole).unwrap();
+        assert_eq!(duration_ms, 3_000);
         assert_eq!(levels.len(), 300);
 
         let frames = splice(&whole, &[Span::new(0, 500), Span::new(2_000, 2_600)], &cut).unwrap();
