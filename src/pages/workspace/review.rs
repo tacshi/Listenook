@@ -7,7 +7,8 @@ use crate::pages::media::{MediaRef, media_ref};
 use listenook_core::activity::Kind;
 use listenook_core::transcript::structure::{self, Edit};
 use listenook_core::{
-    ContentMode, Document, Job, Segment, playback, playback::Loudness, transcript::dictation, transcript::highlights,
+    ContentMode, Document, Job, RepeatSpan, Segment, playback, playback::Loudness, transcript::dictation,
+    transcript::highlights,
 };
 use nsh_core::prelude::*;
 
@@ -38,18 +39,6 @@ pub(super) struct Editing {
     pub(super) segment_id: String,
     pub(super) original: bool,
     pub(super) translation: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Span {
-    pub(super) first: String,
-    pub(super) last: String,
-}
-
-impl Span {
-    fn one(id: String) -> Span {
-        Span { first: id.clone(), last: id }
-    }
 }
 
 /// What happens when playback reaches the end of what is playing.
@@ -155,7 +144,7 @@ pub(super) struct Review {
     pub(super) mode: Signal<ContentMode>,
     pub(super) searching: Signal<bool>,
     pub(super) query: Signal<String>,
-    pub(super) repeating: Signal<Option<Span>>,
+    pub(super) repeating: Signal<Option<RepeatSpan>>,
     /// The first sentence of a stretch to skip, while its last is picked.
     pub(super) skip_from: Signal<Option<String>>,
     /// The sentence a drag on a repeat button started from, while the
@@ -355,7 +344,7 @@ impl Review {
     }
 
     /// The stretch of sentences repeating, if any.
-    pub(super) fn repeating(&self) -> Option<Span> {
+    pub(super) fn repeating(&self) -> Option<RepeatSpan> {
         self.repeating.get()
     }
 
@@ -575,6 +564,13 @@ impl Review {
             && store
                 .setting(|s| s.extra.get("reader_brief_open").and_then(serde_json::Value::as_bool))
                 .unwrap_or(false);
+        // A repeat left on, through a pause or a quit, is on again where it can be.
+        let remembered_repeat = store.remembered_repeat(id).filter(|span| {
+            job.with_untracked(|job| {
+                let document = job.as_ref().and_then(|job| job.document());
+                document.is_some_and(|document| span.resumes_at(&document, position_ms.get_untracked()))
+            })
+        });
         let query = signal(String::new());
         let searching = signal(false);
         let loudness = signal(None::<Rc<Loudness>>);
@@ -652,7 +648,7 @@ impl Review {
             mode: signal(if has_translation { remembered_mode } else { ContentMode::Original }),
             searching,
             query,
-            repeating: signal(None),
+            repeating: signal(remembered_repeat),
             skip_from: signal(None),
             drag_anchor: signal(None),
             rows: stored(Vec::new()),
@@ -717,6 +713,15 @@ impl Review {
                     review.hushed.set(false);
                 }
             });
+        });
+        // Practice moves the repeat from sentence to sentence and ends it when it stops: only
+        // the learner's own repeat is kept.
+        let job_id = id.to_owned();
+        effect(move || {
+            let span = review.repeating.get();
+            if review.practice.get() == Practice::None {
+                untracked(|| store.act(crate::state::Action::RememberRepeat(&job_id, span)));
+            }
         });
         review
     }
@@ -941,12 +946,7 @@ impl Review {
 
     pub(super) fn repeat_range(&self) -> Option<(usize, usize)> {
         let span = self.repeating.get()?;
-        self.job.with(|job| {
-            let segments = &job.as_ref()?.document()?.segments;
-            let first = segments.iter().position(|segment| segment.id == span.first)?;
-            let last = segments.iter().position(|segment| segment.id == span.last)?;
-            Some((first.min(last), first.max(last)))
-        })
+        self.job.with(|job| span.range_in(job.as_ref()?.document()?.as_ref()))
     }
 
     pub(super) fn repeats(&self, index: usize) -> bool {
@@ -1092,7 +1092,7 @@ impl Review {
         batch(|| {
             self.stop_at.set(None);
             if self.repeating.get_untracked().is_some() && !inside {
-                self.repeating.set(Some(Span::one(segment.id.clone())));
+                self.repeating.set(Some(RepeatSpan::one(segment.id.clone())));
                 self.reps.set(0);
             }
             self.revealed.set(None);
@@ -1150,7 +1150,7 @@ impl Review {
     fn start_repeat(&self, index: usize, segment: Segment, restart: bool) {
         let here = self.current.get_untracked() == Some(index);
         batch(|| {
-            self.repeating.set(Some(Span::one(segment.id)));
+            self.repeating.set(Some(RepeatSpan::one(segment.id)));
             self.reps.set(0);
             self.stop_at.set(None);
         });
@@ -1170,13 +1170,13 @@ impl Review {
 
     pub(super) fn repeat_one(&self, index: usize) {
         if let Some(segment) = self.segment_now(index) {
-            self.repeating.set(Some(Span::one(segment.id)));
+            self.repeating.set(Some(RepeatSpan::one(segment.id)));
         }
     }
 
     fn set_repeat(&self, first: usize, last: usize) {
         if let (Some(first), Some(last)) = (self.segment_now(first), self.segment_now(last)) {
-            self.repeating.set(Some(Span { first: first.id, last: last.id }));
+            self.repeating.set(Some(RepeatSpan { first: first.id, last: last.id }));
         }
     }
 
@@ -1373,14 +1373,14 @@ impl Review {
         };
         self.cancel_wait();
         batch(|| {
-            self.repeating.set(Some(Span::one(segment.id)));
+            self.repeating.set(Some(RepeatSpan::one(segment.id)));
             self.reps.set(0);
             self.stop_at.set(None);
             self.paused.set(false);
         });
     }
 
-    pub(super) fn end_hold(&self, before: Option<Span>) {
+    pub(super) fn end_hold(&self, before: Option<RepeatSpan>) {
         batch(|| {
             self.repeating.set(before);
             self.reps.set(0);

@@ -1322,7 +1322,7 @@ fn transport(review: Review, hud: Signal<bool>) -> impl IntoElement {
 }
 
 struct Hold {
-    before: Option<review::Span>,
+    before: Option<listenook_core::RepeatSpan>,
     last: std::time::Instant,
     repeated: bool,
 }
