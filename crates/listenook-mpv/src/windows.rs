@@ -473,12 +473,7 @@ fn draw(target: &Mutex<Target>, wake: &Wake, hold: &Hold) {
 impl Video {
     pub(crate) fn make(cx: ComponentContext) -> Box<dyn NativeComponent> {
         let emit: Emit = Arc::new(move |name, data| cx.emit(name, data));
-        // mpv hands a frame to be drawn `video-timing-offset` (50 ms) before it is due, and
-        // drawing it then waits until it is (`MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME`): some
-        // 26 ms a frame, which held up the drawing thread and so most new sizes past
-        // `FRAME_WAIT`. Handed over when due, a frame is drawn at once and still shown at the
-        // vertical blank after it is due.
-        let mut options = vec![("vo", "libmpv".into()), ("video-timing-offset", "0".into())];
+        let mut options = vec![("vo", "libmpv".into())];
         options.extend(shader_cache().map(|dir| ("gpu-shader-cache-dir", dir)));
         let screen = Screen { options, wid: None, keep: Box::new(()), before_playing: None };
         let player = Player::new(screen, emit);

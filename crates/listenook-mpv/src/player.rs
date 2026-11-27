@@ -243,6 +243,12 @@ impl Output {
     ) -> Result<crate::render::Render, String> {
         let mpv = self.mpv().ok_or("mpv did not start")?;
         let render = crate::render::Render::new(&mpv, api, on_frame, self.picture.clone())?;
+        // mpv hands a frame to be drawn `video-timing-offset` (50 ms) before it is due, and
+        // drawing it then waits until it is (`MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME`): some
+        // 26–30 ms a frame, which held up the thread drawing it (macOS's and Linux's main
+        // thread; on Windows, most new sizes past `FRAME_WAIT`). Handed over when due, a frame
+        // is drawn at once and still shown at the vertical blank after it is due.
+        mpv.set_text("video-timing-offset", "0");
         // A file loaded before there was anything to draw into plays without its picture until
         // the video output starts again.
         mpv.set_text("vo", "libmpv");
